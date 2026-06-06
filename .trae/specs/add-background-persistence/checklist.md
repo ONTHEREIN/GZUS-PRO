@@ -1,0 +1,26 @@
+- [x] PermissionService.checkAutoStart() 能正确检测自启动权限状态
+- [x] PermissionService.checkBatteryOptimization() 能正确检测电池优化状态
+- [x] PermissionService.checkNotificationPermission() 能正确检测通知权限状态
+- [x] PermissionService.openAutoStartSettings() 能跳转至厂商自启动设置页面
+- [x] PermissionService.openBatteryOptimizationSettings() 能跳转至电池优化设置页面
+- [x] BackgroundGuidePage 正确显示三个权限卡片
+- [x] BackgroundGuidePage 实时显示权限状态（已开启/未开启）
+- [x] BackgroundGuidePage 「打开自启动设置」按钮能正常跳转
+- [x] BackgroundGuidePage 「关闭电池优化」按钮能正常跳转
+- [x] BackgroundGuidePage 「打开通知权限」按钮能触发系统权限弹窗
+- [x] BackgroundGuidePage 「已完成配置」按钮在三个权限全部通过时可点击
+- [x] BackgroundGuidePage 「暂不配置」链接能跳过引导并保存状态
+- [x] background_guide_completed 标志正确持久化到 SharedPreferences
+- [x] BackgroundService.enableForegroundService() 能启动前台服务
+- [x] 前台服务显示持久通知（标题「GZUS-PRO 正在运行」）
+- [x] BackgroundService.disableForegroundService() 能停止前台服务
+- [x] 隐藏最近任务入口功能正常工作
+- [x] MainActivity.kt 正确实现所有 MethodChannel 处理器
+- [x] 自启动权限检测兼容华为、小米、OPPO、vivo 等厂商
+- [x] BackgroundService.kt 正确实现前台服务
+- [x] AndroidManifest.xml 包含 FOREGROUND_SERVICE 权限
+- [x] AndroidManifest.xml 包含 REQUEST_IGNORE_BATTERY_OPTIMIZATIONS 权限
+- [x] AndroidManifest.xml 包含 BackgroundService 服务声明
+- [x] main.dart 登录成功后正确判断是否跳转引导页
+- [x] 引导页完成后正确启动前台保活服务
+- [x] 设置页面包含「重新配置后台权限」入口

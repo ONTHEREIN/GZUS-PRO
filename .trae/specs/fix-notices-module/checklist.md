@@ -1,0 +1,13 @@
+- [x] AcademicClient Protocol 包含 `get_notices` 方法声明
+- [x] `_query_notices` 关键步骤有 logging 日志输出
+- [x] `_proxy_response` 在 `proxy_request` 不可用时给出友好错误信息
+- [x] `_run_academic_call` 区分 `MissingProxySlotError` 返回 501 而非 502
+- [x] `_query_notices` 检测到登录页 HTML 时抛出 `AuthenticationError`
+- [x] `is_notice_section` 支持更多标记（xwgg、gggl）
+- [x] `section_title` 支持更多标题元素（panel-title、widget-title、span.title）
+- [x] `extract_notice_sections` 支持 panel/widget-box 结构
+- [x] `extract_notice_items_from_node` 支持 table 内链接提取
+- [x] 新增 panel 结构 HTML 解析测试通过
+- [x] 新增登录页检测测试通过
+- [x] 新增 MissingProxySlotError 场景测试通过
+- [x] 全部已有测试仍然通过

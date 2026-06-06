@@ -62,22 +62,6 @@ Response:
 
 `ssoCode` 只能使用一次，过期或重复提交会返回 400。
 
-### `POST /auth/mobile-cookie-login`
-
-移动端 WebView 登录完成后提交教务系统 cookie。后端用 SDK `user_login_with_cookies` 验证并创建应用会话。
-
-Request:
-
-```json
-{"account":"20240001","cookies":"JSESSIONID=..."}
-```
-
-Response:
-
-```json
-{"status":"ok","sessionId":"...","studentName":"张三"}
-```
-
 ### `POST /auth/logout`
 
 销毁应用会话和服务端学校系统 cookies。
@@ -93,3 +77,14 @@ Response:
 - `GET /notices`
 
 `exams`、`attendance`、`credits`、`notices` 使用 `school-sdk` 登录后的 `proxy_request` 补齐。`notices` 会读取教务首页通知/消息区，并在存在“更多”入口时继续抓取列表页。
+
+## Ecard
+
+后端通过环境变量 `ECARD_OPENID` / `ECARD_UNIONID` 调用融校云接口；前端不会接触或展示这些值。
+
+- `GET /ecard/rooms`：宿舍选择列表，仅返回校区、楼栋、房号，不返回余额。
+- `POST /ecard/binding`：绑定当前登录学号的宿舍。
+- `GET /ecard/summary`：当前绑定宿舍的电费、冷水、热水余额。
+- `POST /ecard/refresh`：立即刷新余额。
+- `PATCH /ecard/reminder`：设置每日提醒开关和低电阈值。
+- `GET /ecard/consumption`：一卡通消费记录；接口受限时返回 `status=limited`。

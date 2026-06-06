@@ -1,0 +1,18 @@
+- [x] cas_auto_login.py 使用 httpx 纯 HTTP 请求完成 CAS 登录
+- [x] CAS 登录页 HTML 可正确解析出隐藏字段和验证码 URL
+- [x] 验证码图片可通过 HTTP 下载并传入 ddddocr 识别
+- [x] POST 登录表单后可正确跟随重定向获取 cookies
+- [x] 验证码识别失败时自动重试（最多 3 次）
+- [x] 账密错误时立即返回错误，不重试验证码
+- [x] 可通过 jwxt cookies 导航到 ehall 获取 ehall cookies 和 auth token
+- [x] agent-browser 相关代码已全部移除
+- [x] AppSession 可加密存储凭据
+- [x] /auth/auto-login 端点登录成功后返回 credentialToken
+- [x] /auth/relogin 端点可使用 credentialToken 自动重登
+- [x] LoginPage 只显示账号密码输入框和单一登录按钮
+- [x] 验证码手动输入 UI 已移除
+- [x] WebView 登录入口已移除
+- [x] ApiClient 401 时自动重登并重试请求
+- [x] MobileSsoLoginPage 已移除
+- [x] 后端 ruff check 通过
+- [x] Flutter flutter analyze 通过

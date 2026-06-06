@@ -1,0 +1,15 @@
+- [ ] Android build.gradle.kts 包含 Bugly 依赖
+- [ ] Android AndroidManifest.xml 包含 Bugly 所需权限
+- [ ] Android MainActivity.kt 包含 Bugly 初始化代码
+- [ ] Android Bugly 配置了正确的 App ID 和渠道
+- [ ] iOS Podfile 包含 Bugly 依赖
+- [ ] iOS Info.plist 包含 Bugly 配置
+- [ ] iOS AppDelegate.swift 包含 Bugly 初始化代码
+- [ ] iOS Bugly 配置了正确的 App ID 和渠道
+- [ ] Flutter bugly_service.dart 包含全局异常捕获
+- [ ] Flutter bugly_service.dart 包含用户标识设置方法
+- [ ] Flutter main.dart 集成了 Bugly 初始化
+- [ ] Flutter main.dart 登录成功后设置 Bugly 用户标识
+- [ ] Flutter main.dart 登出时清空 Bugly 用户标识
+- [ ] 调试模式下 Bugly 不上报真实数据
+- [ ] 发布模式下 Bugly 正常上报数据

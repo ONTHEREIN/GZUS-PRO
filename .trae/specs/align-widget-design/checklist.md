@@ -1,0 +1,12 @@
+- [x] 桌面 Widget 布局包含 icon + title + badge 三段式 header，与首页 `_HomeCard` 一致
+- [x] 桌面 Widget 卡片圆角为 16dp，与首页卡片对齐
+- [x] 桌面 Widget 字号体系（18sp 标题粗体、13sp 正文、13sp meta 粗体、12sp detail、11sp badge 粗体）与首页对齐
+- [x] 桌面 Widget 内边距 16dp，与首页卡片对齐
+- [x] 浅色模式下桌面 Widget 配色与首页 Material 3 浅色方案近似
+- [x] 深色模式下桌面 Widget 配色自动切换为深色方案
+- [x] 四种 Widget 各自显示对应图标（时钟/时间线/水滴/路线）
+- [x] "下一节课"桌面 Widget 内容层次（课程名→时间地点→教师状态）与首页卡片一致
+- [x] "今日课表"桌面 Widget 内容层次（标题含数量→课程列表→周次）与首页卡片一致
+- [x] "生活缴费"桌面 Widget 内容层次（宿舍名→三项数值→更新时间）与首页卡片一致
+- [x] "办事大厅"桌面 Widget 内容层次（业务名→状态节点→进度日期）与首页卡片一致
+- [x] `_HomeWidgetBridge.update()` 传递的字段与桌面 Widget 新布局匹配

@@ -1,0 +1,15 @@
+- [x] pyproject.toml 中已添加 ddddocr 和 Pillow 依赖
+- [x] captcha_ocr.py 中 CaptchaOcr 类可正确识别验证码图片
+- [x] cas_auto_login.py 中 CasAutoLogin 类可自动完成 CAS 登录全流程
+- [x] agent-browser 可正确打开 CAS 登录页面并填写账密
+- [x] 验证码图片可被正确截取并传入 ddddocr 识别
+- [x] 验证码识别失败时可自动重试（最多 3 次）
+- [x] /auth/auto-login 端点可正确接收请求并返回 AuthResponse 格式响应
+- [x] 自动登录成功后可正确创建 session 并返回 sessionId
+- [x] 自动登录失败时返回 HTTP 401 并包含具体错误原因
+- [x] ApiClient.autoLogin() 方法可正确调用后端端点
+- [x] MobileSsoLoginPage 中有一键登录按钮
+- [x] 一键登录过程中显示进度状态
+- [x] 一键登录失败时显示错误信息并提供回退选项
+- [x] 后端 ruff check 通过（新文件无错误，已有文件有预存问题）
+- [x] Flutter flutter analyze 通过

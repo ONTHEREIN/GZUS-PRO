@@ -4,9 +4,11 @@ import requests
 
 from app.school_client import (
     AuthenticationError,
+    MissingProxySlotError,
     SchoolSdkClient,
     default_academic_period,
     ensure_grade_list,
+    extract_notice_detail,
     extract_notice_sections,
     normalize_attendance_item,
     normalize_credit_item,
@@ -24,7 +26,7 @@ class ProxyOnlyUser:
 
     def proxy_request(self, method, url_or_endpoint, **kwargs):
         self.calls.append((method, url_or_endpoint, kwargs))
-        if "index_initMenu" in url_or_endpoint:
+        if "index_cxNews" in url_or_endpoint:
             return FakeTextResponse(
                 """
                 <div id="newsnotice">
@@ -69,6 +71,12 @@ class FakeResponse:
 class FakeTextResponse:
     def __init__(self, text):
         self.text = text
+
+
+class FakeBinaryResponse:
+    def __init__(self, content, content_type="image/png"):
+        self.content = content
+        self.headers = {"content-type": content_type}
 
 
 class CookieUser:
@@ -135,10 +143,19 @@ def test_grade_mapping_dict_is_flattened_without_empty_placeholder():
 
 
 def test_normalize_attendance_and_credit():
-    attendance = normalize_attendance_item({"kcmc": "高数", "cs_01": 10, "cs_04": 1})
+    attendance = normalize_attendance_item(
+        {
+            "kcmc": "高数",
+            "cs_01": 10,
+            "cs_04": 1,
+            "records": [{"kqrq": "2026-06-03", "kqzt": "旷课", "jc": "第1-2节"}],
+        }
+    )
     credit = normalize_credit_item({"xh": "20240001", "zdxf": "120", "sxxf_01": 40})
     assert attendance["normal"] == 10
     assert attendance["absent"] == 1
+    assert attendance["records"][0]["date"] == "2026-06-03"
+    assert attendance["records"][0]["status"] == "absent"
     assert credit["studentId"] == "20240001"
     assert credit["requiredEarned"] == 40
 
@@ -223,7 +240,7 @@ def test_notices_use_index_and_more_page_proxy_request():
 
     assert [item["title"] for item in notices] == ["全部通知一", "全部通知二", "选课提醒"]
     assert notices[0]["category"] == "通知公告"
-    assert user.calls[0][1] == "/jwglxt/xtgl/index_initMenu.html"
+    assert user.calls[0][1] == "/jwglxt/xtgl/index_cxNews.html"
     assert user.calls[1][1] == "/jwglxt/xtgl/xwgg_cxXwgg.html"
 
 
@@ -260,6 +277,35 @@ def test_cookie_login_applies_all_cookies_to_user_session(monkeypatch):
     )
 
 
+def test_get_info_fetches_photo_with_normalized_student_id(monkeypatch):
+    class InfoProxyUser:
+        def __init__(self):
+            self.calls = []
+
+        def get_info(self):
+            return {"student_number": "NEY250101", "name": "测试学生"}
+
+        def proxy_request(self, method, url_or_endpoint, **kwargs):
+            self.calls.append((method, url_or_endpoint, kwargs))
+            return FakeBinaryResponse(b"\x89PNG\r\n\x1a\navatar")
+
+    user = InfoProxyUser()
+    client = SchoolSdkClient("https://jwxt.seig.edu.cn/jwglxt")
+    client._client = user
+    client._account = "phone-login-account"
+    monkeypatch.setattr(
+        "app.school_client._normalize_image_to_png",
+        lambda content, content_type: (None, content_type),
+    )
+
+    info = client.get_info()
+
+    assert info["studentId"] == "NEY250101"
+    assert info["photoDataUrl"].startswith("data:image/png;base64,")
+    photo_call = next(call for call in user.calls if "photo_cxXszp4" in call[1])
+    assert photo_call[2]["params"]["xh_id"] == "NEY250101"
+
+
 def test_proxy_json_decode_failure_becomes_authentication_error():
     client = SchoolSdkClient("https://jwxt.seig.edu.cn/jwglxt")
     client._proxy_response = lambda *args, **kwargs: InvalidJsonResponse()
@@ -270,3 +316,134 @@ def test_proxy_json_decode_failure_becomes_authentication_error():
         assert str(exc) == "教务系统会话已失效，请重新登录"
     else:
         raise AssertionError("expected AuthenticationError")
+
+
+def test_extract_notice_sections_panel_structure():
+    sections = extract_notice_sections(
+        """
+        <div class="panel">
+          <div class="panel-heading"><span class="panel-title">通知公告</span></div>
+          <div class="panel-body">
+            <ul><li><a href="/jwglxt/notice/1.html">Panel通知</a><span>2026-05-20</span></li></ul>
+          </div>
+        </div>
+        """,
+        "https://jwxt.seig.edu.cn/jwglxt/xtgl/index_initMenu.html",
+    )
+
+    assert len(sections) == 1
+    assert sections[0]["category"] == "通知公告"
+    assert sections[0]["items"][0]["title"] == "Panel通知"
+
+
+def test_extract_notice_sections_widget_box_structure():
+    sections = extract_notice_sections(
+        """
+        <div class="widget-box">
+          <div class="widget-title"><span>新闻动态</span></div>
+          <div class="widget-content">
+            <a href="/jwglxt/news/1.html">Widget新闻</a><span>2026-05-21</span>
+          </div>
+        </div>
+        """,
+        "https://jwxt.seig.edu.cn/jwglxt/xtgl/index_initMenu.html",
+    )
+
+    assert len(sections) == 1
+    assert sections[0]["category"] == "新闻动态"
+    assert sections[0]["items"][0]["title"] == "Widget新闻"
+
+
+def test_query_notices_detects_login_page():
+    class LoginProxyUser:
+        def proxy_request(self, method, url_or_endpoint, **kwargs):
+            return FakeTextResponse(
+                '<html><form action="login_slogin.html"><input name="password"/></form></html>'
+            )
+
+    client = SchoolSdkClient("https://jwxt.seig.edu.cn/jwglxt")
+    client._client = LoginProxyUser()
+
+    try:
+        client.get_notices()
+        raise AssertionError("expected AuthenticationError")
+    except AuthenticationError as exc:
+        assert "会话已失效" in str(exc)
+
+
+def test_query_notices_raises_missing_proxy_slot():
+    class NoProxyUser:
+        pass
+
+    client = SchoolSdkClient("https://jwxt.seig.edu.cn/jwglxt")
+    client._client = NoProxyUser()
+
+    try:
+        client.get_notices()
+        raise AssertionError("expected MissingProxySlotError")
+    except MissingProxySlotError as exc:
+        assert "不支持" in str(exc)
+
+
+def test_academic_client_protocol_includes_get_notices():
+    from app.sessions import AcademicClient
+
+    method_names = [name for name in dir(AcademicClient) if not name.startswith("_")]
+    assert "get_notices" in method_names
+    assert "get_notice_detail" in method_names
+
+
+def test_extract_notice_detail_parses_article_content():
+    html = """
+    <html>
+    <body>
+    <h1>关于期末考试安排的通知</h1>
+    <span class="date">2026-05-28</span>
+    <div class="article-content">
+        <p>各位同学：</p>
+        <p>本学期期末考试将于2026年6月15日开始，请做好复习准备。</p>
+        <p>具体安排请查看教务系统。</p>
+    </div>
+    </body>
+    </html>
+    """
+    result = extract_notice_detail(html, "https://jwxt.seig.edu.cn/jwglxt/notice/1.html")
+    assert result["title"] == "关于期末考试安排的通知"
+    assert result["date"] == "2026-05-28"
+    assert "期末考试" in result["contentHtml"]
+    assert "各位同学" in result["contentHtml"]
+    assert result["url"] == "https://jwxt.seig.edu.cn/jwglxt/notice/1.html"
+
+
+def test_get_notice_detail_uses_proxy_request():
+    class DetailProxyUser:
+        def proxy_request(self, method, url_or_endpoint, **kwargs):
+            return FakeTextResponse(
+                '<html><h2>测试通知详情</h2>'
+                '<div id="content"><p>这是通知正文内容</p></div></html>'
+            )
+
+    client = SchoolSdkClient("https://jwxt.seig.edu.cn/jwglxt")
+    client._client = DetailProxyUser()
+
+    detail = client.get_notice_detail("https://jwxt.seig.edu.cn/jwglxt/notice/1.html")
+
+    assert detail["title"] == "测试通知详情"
+    assert "通知正文内容" in detail["contentHtml"]
+
+
+def test_get_notice_detail_detects_login_page():
+    class LoginProxyUser:
+        def proxy_request(self, method, url_or_endpoint, **kwargs):
+            return FakeTextResponse(
+                '<html><form action="login_slogin.html"><input name="password"/></form></html>'
+            )
+
+    client = SchoolSdkClient("https://jwxt.seig.edu.cn/jwglxt")
+    client._client = LoginProxyUser()
+
+    try:
+        client.get_notice_detail("https://jwxt.seig.edu.cn/jwglxt/notice/1.html")
+        raise AssertionError("expected AuthenticationError")
+    except AuthenticationError as exc:
+        assert "会话已失效" in str(exc)

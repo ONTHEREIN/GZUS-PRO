@@ -1,0 +1,17 @@
+- [x] BackgroundService.onTaskRemoved() 能在用户划掉后台后 1 秒内尝试重启服务
+- [x] BackgroundService.onTaskRemoved() 同时设置了 AlarmManager 5 秒兜底重启
+- [x] AlarmManager 心跳以 5 分钟间隔周期触发，使用 setExactAndAllowWhileIdle
+- [x] AlarmManager 心跳在服务启动时注册，在服务停止（ACTION_STOP）时取消
+- [x] AlarmManager PendingIntent 使用 FLAG_IMMUTABLE，兼容 Android 12+
+- [x] KeepAliveReceiver 收到心跳广播后能检测服务是否运行，未运行则重启
+- [x] KeepAliveReceiver 在无有效 sessionId/apiBaseUrl 时不启动服务
+- [x] KeepAliveReceiver 每次触发后重新注册下一次心跳
+- [x] AndroidManifest.xml 包含 SCHEDULE_EXACT_ALARM 权限
+- [x] AndroidManifest.xml 包含 KeepAliveReceiver 声明
+- [x] 轮询失败时指数退避：30s → 60s → 120s → 300s
+- [x] 轮询成功后间隔重置为 30 秒
+- [x] 服务重启后 appForeground 被正确设为 false（App 不在前台时）
+- [x] Flutter 端 _initPushServices 每次都传入最新 apiBaseUrl 和 sessionId
+- [x] 用户登出时 AlarmManager 心跳被正确取消
+- [x] 用户划掉后台后，5 分钟内 BackgroundService 能自动恢复运行
+- [x] 服务恢复后能正常轮询 /push/poll 并弹出 Native 通知

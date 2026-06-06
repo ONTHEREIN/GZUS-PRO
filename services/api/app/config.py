@@ -1,12 +1,17 @@
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
 
 
 class Settings(BaseSettings):
     jw_base_url: str = "https://jwxt.seig.edu.cn/jwglxt"
     ehall_base_url: str = "https://ehall.gzus.edu.cn"
+    ehall_staff_sync_url: str = ""
+    ehall_staff_json_path: str = ""
     cas_login_url: str = "https://cas.gzus.edu.cn/lyuapServer/login"
     ehall_service_url: str = "http://ehall.gzus.edu.cn/shiro-cas"
     jwxt_sso_service_url: str = "https://jwxt.seig.edu.cn/sso/lyiotlogin"
@@ -19,8 +24,29 @@ class Settings(BaseSettings):
     session_ttl_seconds: int = 7200
     sso_ttl_seconds: int = 300
     request_timeout_seconds: int = 15
+    jpush_app_key: str = ""
+    jpush_master_secret: str = ""
+    push_poll_interval_seconds: int = 1800
+    ws_heartbeat_seconds: int = 30
+    debug: bool = False
+    database_url: str = "sqlite+aiosqlite:///./gzus_pro.db"
+    ehall_session_ttl_hours: int = 24
+    ecard_base_url: str = "https://ecarduser.gzus.edu.cn"
+    ecard_openid: str = ""
+    ecard_unionid: str = ""
+    ecard_secret: str = ""
+    ecard_verify_tls: bool = True
+    ecard_daily_reminder_hour: int = 8
+    ecard_daily_reminder_minute: int = 0
+    ehall_csrf_key: str = ""
+    app_latest_version: str = "0.0.1"
+    app_latest_build: int = 1
+    app_min_supported_version: str = "0.0.1"
+    app_download_url: str = ""
+    app_release_notes: str = ""
+    credential_encryption_key: str = "default-dev-key-change-in-production"
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(env_file=ENV_FILE, env_file_encoding="utf-8")
 
     @property
     def cors_origin_list(self) -> list[str]:

@@ -1,11 +1,85 @@
 import 'dart:convert';
+import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
+
+import 'persistent_cache.dart';
 
 const apiBaseUrl = String.fromEnvironment(
   'API_BASE_URL',
   defaultValue: 'http://127.0.0.1:8000',
 );
+
+class DataSourceInfo {
+  const DataSourceInfo({
+    this.fromCache = false,
+    this.fromLocalCache = false,
+    this.cachedAt,
+    this.isOffline = false,
+    this.needsRelogin = false,
+  });
+
+  final bool fromCache;
+  final bool fromLocalCache;
+  final DateTime? cachedAt;
+  final bool isOffline;
+  final bool needsRelogin;
+
+  String get displayText {
+    if (needsRelogin) return '需重新登录才能更新';
+    if (fromLocalCache) return isOffline ? '离线缓存' : '本地缓存';
+    if (fromCache) return '更新失败，显示上次数据';
+    return '';
+  }
+
+  bool get isStale => fromCache || fromLocalCache;
+}
+
+class DataResult<T> {
+  const DataResult({required this.data, this.source = const DataSourceInfo()});
+
+  final T data;
+  final DataSourceInfo source;
+}
+
+class CacheEntry<T> {
+  final T data;
+  final DateTime expiry;
+
+  CacheEntry(this.data, this.expiry);
+}
+
+class RequestCache {
+  final Map<String, CacheEntry<dynamic>> _cache = {};
+  final Duration defaultTtl;
+
+  RequestCache({this.defaultTtl = const Duration(minutes: 5)});
+
+  T? get<T>(String key) {
+    final entry = _cache[key];
+    if (entry == null) return null;
+    if (DateTime.now().isAfter(entry.expiry)) {
+      _cache.remove(key);
+      return null;
+    }
+    return entry.data as T;
+  }
+
+  void set<T>(String key, T data, [Duration? ttl]) {
+    final expiry = DateTime.now().add(ttl ?? defaultTtl);
+    _cache[key] = CacheEntry<dynamic>(data, expiry);
+  }
+
+  void clear() {
+    _cache.clear();
+  }
+
+  void remove(String key) {
+    _cache.remove(key);
+  }
+}
 
 class ApiException implements Exception {
   ApiException(this.message, {this.statusCode});
@@ -22,23 +96,36 @@ class LoginResult {
     required this.status,
     this.sessionId,
     this.studentName,
+    this.studentId,
     this.captchaToken,
     this.captchaImage,
+    this.loginMethod,
+    this.credentialToken,
   });
 
   factory LoginResult.fromJson(Map<String, dynamic> json) => LoginResult(
         status: json['status'] as String,
         sessionId: json['sessionId'] as String?,
         studentName: json['studentName'] as String?,
+        studentId: json['studentId'] as String?,
         captchaToken: json['captchaToken'] as String?,
         captchaImage: json['captchaImage'] as String?,
+        loginMethod: json['loginMethod'] as String?,
+        credentialToken: json['credentialToken'] as String?,
       );
 
   final String status;
   final String? sessionId;
   final String? studentName;
+  final String? studentId;
   final String? captchaToken;
   final String? captchaImage;
+
+  /// 登录方式: "password" 表示教务系统账密登录, "sso" 表示办事大厅一键登录
+  final String? loginMethod;
+
+  /// 用于自动重新登录的凭证令牌
+  final String? credentialToken;
 }
 
 class StudentInfo {
@@ -168,6 +255,35 @@ class ExamItem {
   final String? type;
 }
 
+class AcademicPeriod {
+  const AcademicPeriod(this.year, this.term);
+
+  final int year;
+  final int term;
+
+  String get label => '$year-${year + 1}-$term';
+}
+
+class PeriodExam {
+  PeriodExam(this.period, this.exam);
+
+  final AcademicPeriod period;
+  final ExamItem exam;
+  int retakeIndex = 0;
+
+  bool get isRetake => retakeIndex > 0;
+  String get displayName => isRetake && !exam.courseName.contains('补')
+      ? '${exam.courseName}（补）'
+      : exam.courseName;
+  String get examKind => isRetake ? '第${_cnNumber(retakeIndex)}次补考' : '普通考试';
+}
+
+String _cnNumber(int value) {
+  const numbers = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十'];
+  if (value >= 0 && value < numbers.length) return numbers[value];
+  return '$value';
+}
+
 class GradeItem {
   GradeItem.fromJson(Map<String, dynamic> json)
       : courseName = json['courseName'] as String? ?? '',
@@ -206,7 +322,11 @@ class AttendanceItem {
         leaveEarly = json['leaveEarly'] as int? ?? 0,
         absent = json['absent'] as int? ?? 0,
         leave = json['leave'] as int? ?? 0,
-        total = json['total'] as int? ?? 0;
+        total = json['total'] as int? ?? 0,
+        records = (json['records'] as List<dynamic>? ?? const [])
+            .whereType<Map<String, dynamic>>()
+            .map((item) => AttendanceRecord.fromJson(item))
+            .toList();
 
   final String courseName;
   final String? courseCode;
@@ -218,6 +338,60 @@ class AttendanceItem {
   final int absent;
   final int leave;
   final int total;
+  final List<AttendanceRecord> records;
+
+  String get compareKey => '${courseCode ?? ''}|$courseName';
+
+  int countFor(String status) {
+    switch (status) {
+      case 'late':
+        return late;
+      case 'leaveEarly':
+        return leaveEarly;
+      case 'absent':
+        return absent;
+      case 'leave':
+        return leave;
+      case 'normal':
+        return normal;
+      default:
+        return 0;
+    }
+  }
+
+  Map<String, dynamic> toSnapshotJson() => {
+        'courseName': courseName,
+        'courseCode': courseCode,
+        'normal': normal,
+        'late': late,
+        'leaveEarly': leaveEarly,
+        'absent': absent,
+        'leave': leave,
+        'total': total,
+      };
+}
+
+class AttendanceRecord {
+  AttendanceRecord.fromJson(Map<String, dynamic> json)
+      : date = json['date'] as String?,
+        status = json['status'] as String? ?? 'normal',
+        statusLabel = json['statusLabel'] as String?,
+        count = json['count'] as int? ?? 1,
+        time = json['time'] as String?,
+        remark = json['remark'] as String?;
+
+  final String? date;
+  final String status;
+  final String? statusLabel;
+  final int count;
+  final String? time;
+  final String? remark;
+
+  String get normalizedDate {
+    final value = date?.trim() ?? '';
+    if (value.length >= 10) return value.substring(0, 10);
+    return value;
+  }
 }
 
 class CreditItem {
@@ -260,10 +434,10 @@ class CreditItem {
 class NoticeItem {
   NoticeItem.fromJson(Map<String, dynamic> json)
       : category = json['category'] as String? ?? '通知',
-        title = json['title'] as String? ?? '',
+        title = _noticeTitleFromJson(json),
         date = json['date'] as String?,
         url = json['url'] as String?,
-        summary = json['summary'] as String?;
+        summary = _noticeSummaryFromJson(json);
 
   final String category;
   final String title;
@@ -272,16 +446,757 @@ class NoticeItem {
   final String? summary;
 }
 
+String _noticeTitleFromJson(Map<String, dynamic> json) {
+  final direct = _firstText(json, const [
+    'title',
+    'noticeTitle',
+    'name',
+    'subject',
+    'bt',
+    'xxbt',
+  ]);
+  if (direct != null) return direct;
+
+  final summary = _noticeSummaryFromJson(json);
+  if (summary == null) return '';
+  return summary.split(RegExp(r'[\r\n]')).first.trim();
+}
+
+String? _noticeSummaryFromJson(Map<String, dynamic> json) {
+  return _firstText(json, const [
+    'summary',
+    'contentSummary',
+    'content_summary',
+    'description',
+    'desc',
+  ]);
+}
+
+String? _firstText(Map<String, dynamic> json, List<String> keys) {
+  for (final key in keys) {
+    final value = json[key];
+    if (value == null) continue;
+    final text = value.toString().trim();
+    if (text.isNotEmpty) return text;
+  }
+  return null;
+}
+
+class NoticeDetail {
+  NoticeDetail.fromJson(Map<String, dynamic> json)
+      : title = json['title'] as String? ?? '',
+        date = json['date'] as String?,
+        contentHtml = json['contentHtml'] as String? ?? '',
+        url = json['url'] as String? ?? '';
+
+  final String title;
+  final String? date;
+  final String contentHtml;
+  final String url;
+}
+
+class LeavePreviewResponse {
+  LeavePreviewResponse.fromJson(Map<String, dynamic> json)
+      : status = json['status'] as String? ?? 'ok',
+        hasMissingFields = json['hasMissingFields'] as bool? ?? false,
+        items = (json['items'] as List<dynamic>? ?? const [])
+            .cast<Map<String, dynamic>>()
+            .map((item) => LeaveCourseItem.fromJson(item))
+            .toList();
+
+  final String status;
+  final bool hasMissingFields;
+  final List<LeaveCourseItem> items;
+}
+
+class LeaveCourseItem {
+  LeaveCourseItem.fromJson(Map<String, dynamic> json)
+      : courseName = json['courseName'] as String? ?? '',
+        courseCode = json['courseCode'] as String?,
+        teachingClassCode = json['teachingClassCode'] as String?,
+        courseNature = json['courseNature'] as String?,
+        credit = json['credit'] as String?,
+        classTime = json['classTime'] as String? ?? '',
+        classTimes = (json['classTimes'] as List<dynamic>? ?? const [])
+            .map((item) => item.toString())
+            .toList(),
+        absenceCount = json['absenceCount'] as int? ?? 0,
+        teacher = json['teacher'] as String?,
+        missingFields = (json['missingFields'] as List<dynamic>? ?? const [])
+            .map((item) => item.toString())
+            .toList();
+
+  final String courseName;
+  final String? courseCode;
+  final String? teachingClassCode;
+  final String? courseNature;
+  final String? credit;
+  final String classTime;
+  final List<String> classTimes;
+  final int absenceCount;
+  final String? teacher;
+  final List<String> missingFields;
+}
+
+class LeaveFillResponse {
+  LeaveFillResponse.fromJson(Map<String, dynamic> json)
+      : status = json['status'] as String? ?? 'needs_manual',
+        message = json['message'] as String? ?? '',
+        formUrl = json['formUrl'] as String?,
+        fillScript = json['fillScript'] as String?,
+        handlerScript = json['handlerScript'] as String?,
+        unmatchedTeachers =
+            (json['unmatchedTeachers'] as List<dynamic>? ?? const [])
+                .map((item) => item.toString())
+                .toList(),
+        matchedTeachers =
+            (json['matchedTeachers'] as List<dynamic>? ?? const [])
+                .cast<Map<String, dynamic>>()
+                .map((item) => MatchedTeacherItem.fromJson(item))
+                .toList(),
+        teacherCandidates =
+            (json['teacherCandidates'] as List<dynamic>? ?? const [])
+                .cast<Map<String, dynamic>>()
+                .map((item) => TeacherCandidateGroup.fromJson(item))
+                .toList(),
+        attachmentUploaded = json['attachmentUploaded'] as bool? ?? false,
+        items = (json['items'] as List<dynamic>? ?? const [])
+            .cast<Map<String, dynamic>>()
+            .map((item) => LeaveCourseItem.fromJson(item))
+            .toList();
+
+  final String status;
+  final String message;
+  final String? formUrl;
+  final String? fillScript;
+  final String? handlerScript;
+  final List<String> unmatchedTeachers;
+  final List<MatchedTeacherItem> matchedTeachers;
+  final List<TeacherCandidateGroup> teacherCandidates;
+  final bool attachmentUploaded;
+  final List<LeaveCourseItem> items;
+
+  String? get combinedScript {
+    final fill = fillScript?.trim();
+    final handler = handlerScript?.trim();
+    if ((fill == null || fill.isEmpty) &&
+        (handler == null || handler.isEmpty)) {
+      return null;
+    }
+    return '''
+(async () => {
+  const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  function notice(message) {
+    let box = document.getElementById('gzus-leave-automation-status');
+    if (!box) {
+      box = document.createElement('div');
+      box.id = 'gzus-leave-automation-status';
+      box.style.cssText = 'position:fixed;z-index:999999;right:16px;top:56px;max-width:360px;padding:10px 12px;background:#1677ff;color:#fff;border-radius:6px;font-size:14px;line-height:1.5;box-shadow:0 4px 14px rgba(0,0,0,.2)';
+      document.body.appendChild(box);
+    }
+    box.textContent = message;
+  }
+  function installDialogBypass() {
+    if (window.__gzusLeaveDialogBypassInstalled) return;
+    window.__gzusLeaveDialogBypassInstalled = true;
+    window.__gzusLeaveAlerts = [];
+    window.__gzusLeaveNativeAlert = window.alert;
+    window.__gzusLeaveNativeConfirm = window.confirm;
+    window.alert = (message) => {
+      window.__gzusLeaveAlerts.push(String(message ?? ''));
+      console.warn('[GZUS leave alert]', message);
+    };
+    window.confirm = (message) => {
+      window.__gzusLeaveAlerts.push(String(message ?? ''));
+      console.warn('[GZUS leave confirm]', message);
+      return true;
+    };
+  }
+  function visible(el) {
+    if (!el) return false;
+    const style = getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden') return false;
+    const rect = el.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  }
+  function refreshAttachmentList() {
+    try {
+      if (typeof LoadAttachments === 'function') LoadAttachments('file1');
+    } catch (_) {}
+    const frame = document.getElementById('fileframe_file1') || document.querySelector('iframe[id^="fileframe"]');
+    if (frame?.src) {
+      const base = frame.src.replace(/([?&])reload=1(&|\$)/, '\$1').replace(/[?&]\$/, '');
+      frame.src = base + (base.includes('?') ? '&' : '?') + 'reload=1&_=' + Date.now();
+    }
+  }
+  function clickHandleButton() {
+    const button = document.querySelector('a.submitbtn[onclick*="prepareSubmit"], a.submitbtn');
+    if (!button) return false;
+    button.click();
+    return true;
+  }
+  function handlerReady() {
+    return Boolean(
+      document.getElementById('WF_T10004') ||
+      [...document.querySelectorAll('td,div,span,label')]
+        .some((el) => visible(el) && /任课教师审批|辅导员审批/.test(el.innerText || ''))
+    );
+  }
+  function cleanEasyUiMasks() {
+    document.querySelectorAll('.window-mask').forEach((mask) => {
+      mask.style.display = 'none';
+      mask.style.pointerEvents = 'none';
+    });
+    document.querySelectorAll('.panel.window').forEach((panel) => {
+      const title = panel.querySelector('.panel-title,.window-header')?.innerText || '';
+      if (title && !title.includes('处理文档')) {
+        panel.style.display = 'none';
+      }
+    });
+  }
+  function findFinalSubmitButton() {
+    cleanEasyUiMasks();
+    const candidates = [
+      ...document.querySelectorAll('a,button,input[type="button"],input[type="submit"]')
+    ].filter((el) => {
+      const text = (el.innerText || el.value || '').trim();
+      if (text !== '提交') return false;
+      if (!visible(el)) return false;
+      const href = el.getAttribute('href') || '';
+      return !href.includes('javascript:history');
+    });
+    return candidates[0] || null;
+  }
+
+  installDialogBypass();
+  notice('正在填写请假表单...');
+  ${fill ?? ''}
+  refreshAttachmentList();
+  await delay(1000);
+  notice('附件已上传，正在点击办理...');
+  if (!clickHandleButton()) {
+    notice('未找到办理按钮，请手动点击办理。');
+    return;
+  }
+  for (let i = 0; i < 60 && !handlerReady(); i += 1) {
+    await delay(500);
+  }
+  notice('正在选择任课教师经办人...');
+  ${handler ?? ''}
+  await delay(800);
+  cleanEasyUiMasks();
+  const finalSubmit = findFinalSubmitButton();
+  if (finalSubmit) {
+    try { finalSubmit.scrollIntoView({ block: 'center' }); } catch (_) {}
+    finalSubmit.style.outline = '3px solid #ff4d4f';
+    finalSubmit.style.outlineOffset = '2px';
+    notice('已停在最终提交前。请检查后手动点击“提交”。');
+    return;
+  }
+  notice('已选择经办人。未定位到最终提交按钮，请检查处理文档窗口。');
+})();
+''';
+  }
+}
+
+class MatchedTeacherItem {
+  MatchedTeacherItem({
+    required this.teacher,
+    required this.userid,
+    required this.cnName,
+    this.courseName,
+  });
+
+  MatchedTeacherItem.fromJson(Map<String, dynamic> json)
+      : teacher = json['teacher'] as String? ?? '',
+        userid = json['userid'] as String? ?? '',
+        cnName = json['cnName'] as String? ?? '',
+        courseName = json['courseName'] as String?;
+
+  final String teacher;
+  final String userid;
+  final String cnName;
+  final String? courseName;
+
+  Map<String, dynamic> toJson() => {
+        'teacher': teacher,
+        'userid': userid,
+        'cnName': cnName,
+        if (courseName != null) 'courseName': courseName,
+      };
+}
+
+class StaffCandidateItem {
+  StaffCandidateItem.fromJson(Map<String, dynamic> json)
+      : userid = json['userid'] as String? ?? '',
+        cnName = json['cnName'] as String? ?? '',
+        folderName = json['folderName'] as String?;
+
+  final String userid;
+  final String cnName;
+  final String? folderName;
+}
+
+class TeacherCandidateGroup {
+  TeacherCandidateGroup.fromJson(Map<String, dynamic> json)
+      : teacher = json['teacher'] as String? ?? '',
+        candidates = (json['candidates'] as List<dynamic>? ?? const [])
+            .cast<Map<String, dynamic>>()
+            .map((item) => StaffCandidateItem.fromJson(item))
+            .toList();
+
+  final String teacher;
+  final List<StaffCandidateItem> candidates;
+}
+
+class EhallAffairItem {
+  EhallAffairItem.fromJson(Map<String, dynamic> json)
+      : id = json['id'] as String?,
+        title = json['title'] as String? ?? '',
+        department = json['department'] as String?,
+        type = json['type'] as String?,
+        tags = (json['tags'] as List<dynamic>? ?? const [])
+            .map((item) => item.toString())
+            .where((item) => item.isNotEmpty)
+            .toList(),
+        summary = json['summary'] as String?,
+        url = json['url'] as String?;
+
+  final String? id;
+  final String title;
+  final String? department;
+  final String? type;
+  final List<String> tags;
+  final String? summary;
+  final String? url;
+}
+
+class EhallApplicationItem {
+  EhallApplicationItem.fromJson(Map<String, dynamic> json)
+      : id = json['id'] as String?,
+        title = json['title'] as String? ?? '',
+        department = json['department'] as String?,
+        type = json['type'] as String?,
+        tags = (json['tags'] as List<dynamic>? ?? const [])
+            .map((item) => item.toString())
+            .where((item) => item.isNotEmpty)
+            .toList(),
+        summary = json['summary'] as String?,
+        url = json['url'] as String?;
+
+  final String? id;
+  final String title;
+  final String? department;
+  final String? type;
+  final List<String> tags;
+  final String? summary;
+  final String? url;
+}
+
+class EhallProgressItem {
+  EhallProgressItem.fromJson(Map<String, dynamic> json)
+      : id = json['id'] as String?,
+        title = json['title'] as String? ?? '',
+        category = json['category'] as String? ?? '',
+        status = json['status'] as String? ?? 'unknown',
+        statusLabel = json['statusLabel'] as String? ?? '',
+        date = json['date'] as String?,
+        summary = json['summary'] as String?,
+        currentNode = json['currentNode'] as String?,
+        handler = json['handler'] as String?,
+        progress = _intValue(json['progress']),
+        url = json['url'] as String?;
+
+  final String? id;
+  final String title;
+  final String category;
+  final String status;
+  final String statusLabel;
+  final String? date;
+  final String? summary;
+  final String? currentNode;
+  final String? handler;
+  final int? progress;
+  final String? url;
+}
+
+class EhallProgressCategory {
+  EhallProgressCategory.fromJson(Map<String, dynamic> json)
+      : label = json['label'] as String? ?? '',
+        count = _intValue(json['count']) ?? 0;
+
+  final String label;
+  final int count;
+}
+
+class EhallProgressOverview {
+  EhallProgressOverview({
+    required this.categories,
+    required this.items,
+  });
+
+  EhallProgressOverview.fromJson(Map<String, dynamic> json)
+      : categories = (json['categories'] as List<dynamic>? ?? const [])
+            .whereType<Map<String, dynamic>>()
+            .map((item) => EhallProgressCategory.fromJson(item))
+            .where((item) => item.label.isNotEmpty)
+            .toList(),
+        items = (json['items'] as List<dynamic>? ?? const [])
+            .whereType<Map<String, dynamic>>()
+            .map((item) => EhallProgressItem.fromJson(item))
+            .toList();
+
+  factory EhallProgressOverview.fromItems(List<EhallProgressItem> items) {
+    const labels = ['待办', '申请', '已办', '关注', '待阅', '已阅', '草稿'];
+    return EhallProgressOverview(
+      categories: [
+        for (final label in labels)
+          EhallProgressCategory.fromJson({
+            'label': label,
+            'count': items.where((item) => item.category == label).length,
+          }),
+      ],
+      items: items,
+    );
+  }
+
+  final List<EhallProgressCategory> categories;
+  final List<EhallProgressItem> items;
+
+  int countFor(String label) {
+    for (final category in categories) {
+      if (category.label == label) return category.count;
+    }
+    return items.where((item) => item.category == label).length;
+  }
+}
+
+class EcardRoomItem {
+  EcardRoomItem.fromJson(Map<String, dynamic> json)
+      : id = json['id'] as String? ?? '',
+        schoolArea = json['schoolArea'] as String? ?? '',
+        building = json['building'] as String? ?? '',
+        room = json['room'] as String? ?? '',
+        displayName = json['displayName'] as String? ?? '';
+
+  final String id;
+  final String schoolArea;
+  final String building;
+  final String room;
+  final String displayName;
+}
+
+class EcardSummary {
+  EcardSummary.fromJson(Map<String, dynamic> json)
+      : status = json['status'] as String? ?? 'not_bound',
+        roomId = json['roomId'] as String?,
+        roomDisplay = json['roomDisplay'] as String?,
+        powerBalance = _doubleFromJson(json['powerBalance']),
+        powerUnit = json['powerUnit'] as String? ?? '度',
+        powerText = json['powerText'] as String?,
+        coldWaterBalance = _doubleFromJson(json['coldWaterBalance']),
+        coldWaterUnit = json['coldWaterUnit'] as String? ?? '吨',
+        coldWaterText = json['coldWaterText'] as String?,
+        hotWaterBalance = _doubleFromJson(json['hotWaterBalance']),
+        hotWaterUnit = json['hotWaterUnit'] as String? ?? '元',
+        hotWaterText = json['hotWaterText'] as String?,
+        reminderEnabled = json['reminderEnabled'] as bool? ?? true,
+        lowPowerThreshold = _doubleFromJson(json['lowPowerThreshold']) ?? 30.0,
+        updatedAt = json['updatedAt'] as String?;
+
+  final String status;
+  final String? roomId;
+  final String? roomDisplay;
+  final double? powerBalance;
+  final String powerUnit;
+  final String? powerText;
+  final double? coldWaterBalance;
+  final String coldWaterUnit;
+  final String? coldWaterText;
+  final double? hotWaterBalance;
+  final String hotWaterUnit;
+  final String? hotWaterText;
+  final bool reminderEnabled;
+  final double lowPowerThreshold;
+  final String? updatedAt;
+
+  bool get isBound => status == 'ok';
+  bool get isLowPower =>
+      powerBalance != null && powerBalance! < lowPowerThreshold;
+  bool get isCriticalPower => powerBalance != null && powerBalance! < 10;
+}
+
+class EcardConsumptionResponse {
+  EcardConsumptionResponse.fromJson(Map<String, dynamic> json)
+      : status = json['status'] as String? ?? 'limited',
+        message = json['message'] as String?,
+        items = (json['items'] as List<dynamic>? ?? const [])
+            .cast<Map<String, dynamic>>()
+            .map((item) => EcardConsumptionItem.fromJson(item))
+            .toList();
+
+  final String status;
+  final String? message;
+  final List<EcardConsumptionItem> items;
+}
+
+class EcardConsumptionItem {
+  EcardConsumptionItem.fromJson(Map<String, dynamic> json)
+      : title = json['title'] as String? ?? '',
+        amount = json['amount'] as String? ?? '',
+        time = json['time'] as String? ?? '';
+
+  final String title;
+  final String amount;
+  final String time;
+}
+
+double? _doubleFromJson(dynamic value) {
+  if (value is num) return value.toDouble();
+  if (value is String && value.trim().isNotEmpty && value != 'null') {
+    return double.tryParse(value);
+  }
+  return null;
+}
+
+class AppVersionInfo {
+  AppVersionInfo.fromJson(Map<String, dynamic> json)
+      : latestVersion = json['latest_version'] as String? ?? '',
+        latestBuild = json['latest_build'] as int? ?? 0,
+        downloadUrl = json['download_url'] as String? ?? '',
+        releaseNotes = json['release_notes'] as String? ?? '',
+        updateAvailable = json['update_available'] as bool? ?? false,
+        forceUpdate = json['force_update'] as bool? ?? false,
+        minSupportedVersion = json['min_supported_version'] as String? ?? '';
+
+  final String latestVersion;
+  final int latestBuild;
+  final String downloadUrl;
+  final String releaseNotes;
+  final bool updateAvailable;
+  final bool forceUpdate;
+  final String minSupportedVersion;
+}
+
 class ApiClient {
-  ApiClient({http.Client? httpClient, this.baseUrl = apiBaseUrl})
-      : _http = httpClient ?? http.Client();
+  ApiClient(
+      {http.Client? httpClient, this.baseUrl = apiBaseUrl, RequestCache? cache})
+      : _http = httpClient ?? http.Client(),
+        _cache = cache ?? RequestCache();
 
   final http.Client _http;
   final String baseUrl;
+  final RequestCache _cache;
+  final Map<String, Future<void>> _backgroundRefreshes = {};
+  final Map<String, DateTime> _backgroundRefreshAt = {};
   String? sessionId;
+  String? _studentId;
+  PersistentCache? _persistentCache;
+  String? _credentialToken;
+
+  /// 当自动重新登录失败时调用的回调，UI 层可用来导航到登录页
+  void Function()? onReloginFailed;
+
+  static const Duration _backgroundRefreshCooldown = Duration(minutes: 5);
+
+  String get namespace => _studentId ?? sessionId ?? 'default';
+  String? get studentId => _studentId;
 
   void useSession(String? value) {
+    if (sessionId != value) _cache.clear();
     sessionId = value;
+  }
+
+  void setStudentId(String? value) {
+    if (_studentId != value) {
+      _studentId = value;
+      _persistentCache = null;
+    }
+  }
+
+  Future<PersistentCache> _getPersistentCache() async {
+    if (_persistentCache == null) {
+      _persistentCache = PersistentCache(namespace: namespace);
+      await _persistentCache!.init();
+    }
+    return _persistentCache!;
+  }
+
+  DataSourceInfo _localSource(DateTime? cachedAt) => DataSourceInfo(
+        fromLocalCache: true,
+        cachedAt: cachedAt,
+      );
+
+  DataSourceInfo _offlineSource(DateTime? cachedAt, ApiException error) =>
+      DataSourceInfo(
+        fromLocalCache: true,
+        cachedAt: cachedAt,
+        isOffline: true,
+        needsRelogin: error.statusCode == 401,
+      );
+
+  Map<String, dynamic>? _cachedObject(PersistentCache cache, String key) {
+    final cached = cache.getRaw(key);
+    return cached is Map<String, dynamic> ? cached : null;
+  }
+
+  List<Map<String, dynamic>>? _cachedList(PersistentCache cache, String key) {
+    final cached = cache.getRaw(key);
+    if (cached is! List<dynamic>) return null;
+    final result = <Map<String, dynamic>>[];
+    for (final item in cached) {
+      if (item is! Map<String, dynamic>) return null;
+      result.add(item);
+    }
+    return result;
+  }
+
+  void _queueBackgroundRefresh(
+    String cacheKey,
+    Future<void> Function() refresh,
+  ) {
+    if (_backgroundRefreshes.containsKey(cacheKey)) return;
+    final lastRefresh = _backgroundRefreshAt[cacheKey];
+    if (lastRefresh != null &&
+        DateTime.now().difference(lastRefresh) < _backgroundRefreshCooldown) {
+      return;
+    }
+    _backgroundRefreshAt[cacheKey] = DateTime.now();
+    late final Future<void> refreshFuture;
+    refreshFuture = refresh().catchError((_) {}).whenComplete(() {
+      if (_backgroundRefreshes[cacheKey] == refreshFuture) {
+        _backgroundRefreshes.remove(cacheKey);
+      }
+    });
+    _backgroundRefreshes[cacheKey] = refreshFuture;
+  }
+
+  Future<DataResult<T>> _cacheFirstObject<T>({
+    required String cacheKey,
+    required Future<Map<String, dynamic>> Function() fetch,
+    required T Function(Map<String, dynamic>) fromJson,
+    bool forceRefresh = false,
+    Duration? memoryTtl,
+  }) async {
+    final pcache = await _getPersistentCache();
+
+    Future<DataResult<T>> fetchAndCache() async {
+      final data = await fetch();
+      _cache.set(cacheKey, data, memoryTtl);
+      await pcache.set(cacheKey, data);
+      return DataResult<T>(data: fromJson(data));
+    }
+
+    if (!forceRefresh) {
+      final cached = _cachedObject(pcache, cacheKey);
+      if (cached != null) {
+        _cache.set(cacheKey, cached, memoryTtl);
+        _queueBackgroundRefresh(cacheKey, () async {
+          await fetchAndCache();
+        });
+        return DataResult<T>(
+          data: fromJson(cached),
+          source: _localSource(pcache.getCachedAt(cacheKey)),
+        );
+      }
+      final memCached = _cache.get<Map<String, dynamic>>(cacheKey);
+      if (memCached != null) {
+        return DataResult<T>(
+          data: fromJson(memCached),
+          source: _localSource(pcache.getCachedAt(cacheKey)),
+        );
+      }
+    }
+
+    try {
+      return await fetchAndCache();
+    } on ApiException catch (e) {
+      final cached = _cachedObject(pcache, cacheKey);
+      if (cached != null) {
+        return DataResult<T>(
+          data: fromJson(cached),
+          source: _offlineSource(pcache.getCachedAt(cacheKey), e),
+        );
+      }
+      final memCached = _cache.get<Map<String, dynamic>>(cacheKey);
+      if (memCached != null) {
+        return DataResult<T>(
+          data: fromJson(memCached),
+          source: DataSourceInfo(
+            fromCache: true,
+            needsRelogin: e.statusCode == 401,
+          ),
+        );
+      }
+      rethrow;
+    }
+  }
+
+  Future<DataResult<List<T>>> _cacheFirstList<T>({
+    required String cacheKey,
+    required Future<List<Map<String, dynamic>>> Function() fetch,
+    required T Function(Map<String, dynamic>) fromJson,
+    bool forceRefresh = false,
+    Duration? memoryTtl,
+  }) async {
+    final pcache = await _getPersistentCache();
+
+    Future<DataResult<List<T>>> fetchAndCache() async {
+      final data = await fetch();
+      _cache.set(cacheKey, data, memoryTtl);
+      await pcache.set(cacheKey, data);
+      return DataResult<List<T>>(
+        data: data.map((item) => fromJson(item)).toList(),
+      );
+    }
+
+    if (!forceRefresh) {
+      final cached = _cachedList(pcache, cacheKey);
+      if (cached != null) {
+        _cache.set(cacheKey, cached, memoryTtl);
+        _queueBackgroundRefresh(cacheKey, () async {
+          await fetchAndCache();
+        });
+        return DataResult<List<T>>(
+          data: cached.map((item) => fromJson(item)).toList(),
+          source: _localSource(pcache.getCachedAt(cacheKey)),
+        );
+      }
+      final memCached = _cache.get<List<dynamic>>(cacheKey);
+      if (memCached != null) {
+        return DataResult<List<T>>(
+          data: memCached
+              .map((item) => fromJson(item as Map<String, dynamic>))
+              .toList(),
+          source: _localSource(pcache.getCachedAt(cacheKey)),
+        );
+      }
+    }
+
+    try {
+      return await fetchAndCache();
+    } on ApiException catch (e) {
+      final cached = _cachedList(pcache, cacheKey);
+      if (cached != null) {
+        return DataResult<List<T>>(
+          data: cached.map((item) => fromJson(item)).toList(),
+          source: _offlineSource(pcache.getCachedAt(cacheKey), e),
+        );
+      }
+      final memCached = _cache.get<List<dynamic>>(cacheKey);
+      if (memCached != null) {
+        return DataResult<List<T>>(
+          data: memCached
+              .map((item) => fromJson(item as Map<String, dynamic>))
+              .toList(),
+          source: DataSourceInfo(
+            fromCache: true,
+            needsRelogin: e.statusCode == 401,
+          ),
+        );
+      }
+      rethrow;
+    }
   }
 
   String lySsoStartUrl({required String returnUrl}) {
@@ -296,6 +1211,7 @@ class ApiClient {
     });
     final result = LoginResult.fromJson(response);
     sessionId = result.sessionId;
+    _cache.clear();
     return result;
   }
 
@@ -306,6 +1222,7 @@ class ApiClient {
     });
     final result = LoginResult.fromJson(response);
     sessionId = result.sessionId;
+    _cache.clear();
     return result;
   }
 
@@ -313,82 +1230,384 @@ class ApiClient {
     final response = await _post('/auth/ly/complete', {'ssoCode': ssoCode});
     final result = LoginResult.fromJson(response);
     sessionId = result.sessionId;
+    _cache.clear();
     return result;
   }
 
-  Future<LoginResult> mobileCookieLogin(String account, String cookies) async {
-    final response = await _post('/auth/mobile-cookie-login', {
+  Future<LoginResult> autoLogin(String account, String password) async {
+    final response = await _post('/auth/auto-login', {
       'account': account,
-      'cookies': cookies,
+      'password': password,
     });
     final result = LoginResult.fromJson(response);
     sessionId = result.sessionId;
+    _cache.clear();
+    if (result.credentialToken != null) {
+      _credentialToken = result.credentialToken;
+    }
     return result;
   }
 
   Future<void> logout() async {
     await _post('/auth/logout', {});
     sessionId = null;
+    _credentialToken = null;
+    _cache.clear();
   }
 
-  Future<StudentInfo> me() async => StudentInfo.fromJson(await _get('/me'));
+  Future<LoginResult> relogin() async {
+    if (_credentialToken == null) {
+      throw ApiException('No saved credentials for relogin', statusCode: 401);
+    }
+    final response = await _post('/auth/relogin', {
+      'credentialToken': _credentialToken,
+    });
+    final result = LoginResult.fromJson(response);
+    sessionId = result.sessionId;
+    _cache.clear();
+    return result;
+  }
 
-  Future<ScheduleResult> schedule(
-      {required int year, required int term}) async {
-    final data = await _getList('/schedule?year=$year&term=$term');
-    return ScheduleResult(
-      raw: data,
-      items: data.map((item) => ScheduleCourse.fromJson(item)).toList(),
+  Future<void> loadSavedCredentials() async {
+    final prefs = await SharedPreferences.getInstance();
+    _credentialToken = prefs.getString('auth.credentialToken');
+  }
+
+  Future<DataResult<StudentInfo>> me({bool forceRefresh = false}) =>
+      _cacheFirstObject<StudentInfo>(
+        cacheKey: 'me',
+        fetch: () => _get('/me'),
+        fromJson: (json) => StudentInfo.fromJson(json),
+        forceRefresh: forceRefresh,
+      );
+
+  Future<DataResult<ScheduleResult>> schedule(
+      {required int year, required int term, bool forceRefresh = false}) async {
+    final cacheKey = 'schedule_${year}_$term';
+    return _cacheFirstList<ScheduleCourse>(
+      cacheKey: cacheKey,
+      fetch: () => _getList('/schedule?year=$year&term=$term'),
+      fromJson: (json) => ScheduleCourse.fromJson(json),
+      forceRefresh: forceRefresh,
+    ).then(
+      (result) => DataResult<ScheduleResult>(
+        data: ScheduleResult(
+          raw: result.data.map((item) => item.raw).toList(),
+          items: result.data,
+        ),
+        source: result.source,
+      ),
     );
   }
 
-  Future<List<ExamItem>> exams({required int year, required int term}) async {
-    final data = await _getList('/exams?year=$year&term=$term');
-    return data.map((item) => ExamItem.fromJson(item)).toList();
+  Future<DataResult<List<ExamItem>>> exams(
+          {required int year, required int term, bool forceRefresh = false}) =>
+      _cacheFirstList<ExamItem>(
+        cacheKey: 'exams_${year}_$term',
+        fetch: () => _getList('/exams?year=$year&term=$term'),
+        fromJson: (json) => ExamItem.fromJson(json),
+        forceRefresh: forceRefresh,
+      );
+
+  Future<DataResult<List<GradeItem>>> grades(
+          {required int year, required int term, bool forceRefresh = false}) =>
+      _cacheFirstList<GradeItem>(
+        cacheKey: 'grades_${year}_$term',
+        fetch: () => _getList('/grades?year=$year&term=$term'),
+        fromJson: (json) => GradeItem.fromJson(json),
+        forceRefresh: forceRefresh,
+      );
+
+  Future<DataResult<AttendanceResponse>> attendance(
+          {required int year, required int term, bool forceRefresh = false}) =>
+      _cacheFirstObject<AttendanceResponse>(
+        cacheKey: 'attendance_${year}_$term',
+        fetch: () => _get('/attendance?year=$year&term=$term'),
+        fromJson: (json) => AttendanceResponse.fromJson(json),
+        forceRefresh: forceRefresh,
+      );
+
+  Future<DataResult<List<CreditItem>>> credits({bool forceRefresh = false}) =>
+      _cacheFirstList<CreditItem>(
+        cacheKey: 'credits',
+        fetch: () => _getList('/credits'),
+        fromJson: (json) => CreditItem.fromJson(json),
+        forceRefresh: forceRefresh,
+      );
+
+  Future<DataResult<List<NoticeItem>>> notices({bool forceRefresh = false}) =>
+      _cacheFirstList<NoticeItem>(
+        cacheKey: 'notices',
+        fetch: () => _getList('/notices'),
+        fromJson: (json) => NoticeItem.fromJson(json),
+        forceRefresh: forceRefresh,
+        memoryTtl: const Duration(minutes: 2),
+      );
+
+  Future<DataResult<NoticeDetail>> fetchNoticeDetail(
+    String url, {
+    bool forceRefresh = false,
+  }) =>
+      _cacheFirstObject<NoticeDetail>(
+        cacheKey: 'notice_detail_${Uri.encodeComponent(url)}',
+        fetch: () => _get('/notices/detail?url=${Uri.encodeComponent(url)}'),
+        fromJson: (json) => NoticeDetail.fromJson(json),
+        forceRefresh: forceRefresh,
+      );
+
+  Future<LeavePreviewResponse> previewLeave({
+    required int year,
+    required int term,
+    required DateTime startDate,
+    required DateTime endDate,
+    required DateTime firstWeekStart,
+  }) async {
+    final data = await _post('/ehall/leave/preview', {
+      'year': year,
+      'term': term,
+      'startDate': _dateOnly(startDate),
+      'endDate': _dateOnly(endDate),
+      'firstWeekStart': _dateOnly(firstWeekStart),
+    });
+    return LeavePreviewResponse.fromJson(data);
   }
 
-  Future<List<GradeItem>> grades({required int year, required int term}) async {
-    final data = await _getList('/grades?year=$year&term=$term');
-    return data.map((item) => GradeItem.fromJson(item)).toList();
+  Future<LeaveFillResponse> fillLeave({
+    required int year,
+    required int term,
+    required DateTime startDate,
+    required DateTime endDate,
+    required DateTime firstWeekStart,
+    required String reason,
+    required String attachmentName,
+    required Uint8List attachmentBytes,
+    List<MatchedTeacherItem> teacherHandlers = const [],
+  }) async {
+    final data = await _post('/ehall/leave/fill', {
+      'year': year,
+      'term': term,
+      'startDate': _dateOnly(startDate),
+      'endDate': _dateOnly(endDate),
+      'firstWeekStart': _dateOnly(firstWeekStart),
+      'reason': reason,
+      'attachmentName': attachmentName,
+      'attachmentContentBase64': base64Encode(attachmentBytes),
+      if (teacherHandlers.isNotEmpty)
+        'teacherHandlers':
+            teacherHandlers.map((item) => item.toJson()).toList(),
+    });
+    return LeaveFillResponse.fromJson(data);
   }
 
-  Future<AttendanceResponse> attendance(
-      {required int year, required int term}) async {
-    return AttendanceResponse.fromJson(
-        await _get('/attendance?year=$year&term=$term'));
+  Future<bool> uploadLeaveAttachment({
+    required String docUnid,
+    required String processId,
+    required String nodeName,
+    required String localStore,
+    required String attachmentName,
+    required Uint8List attachmentBytes,
+  }) async {
+    final data = await _post('/ehall/leave/attachment', {
+      'docUnid': docUnid,
+      'processId': processId,
+      'nodeName': nodeName,
+      'localStore': localStore,
+      'attachmentName': attachmentName,
+      'attachmentContentBase64': base64Encode(attachmentBytes),
+    });
+    return data['uploaded'] as bool? ?? false;
   }
 
-  Future<List<CreditItem>> credits() async {
-    final data = await _getList('/credits');
-    return data.map((item) => CreditItem.fromJson(item)).toList();
+  Future<List<EhallAffairItem>> ehallAffairs(
+          {bool forceRefresh = false}) async =>
+      (await _cacheFirstList<EhallAffairItem>(
+        cacheKey: 'ehall_affairs',
+        fetch: () => _getList('/ehall/affairs'),
+        fromJson: (json) => EhallAffairItem.fromJson(json),
+        forceRefresh: forceRefresh,
+        memoryTtl: const Duration(minutes: 10),
+      ))
+          .data;
+
+  Future<List<EhallApplicationItem>> ehallApplications(
+          {bool forceRefresh = false}) async =>
+      (await _cacheFirstList<EhallApplicationItem>(
+        cacheKey: 'ehall_applications',
+        fetch: () => _getList('/ehall/applications'),
+        fromJson: (json) => EhallApplicationItem.fromJson(json),
+        forceRefresh: forceRefresh,
+        memoryTtl: const Duration(minutes: 10),
+      ))
+          .data;
+
+  Future<EhallProgressOverview> ehallProgressOverview(
+          {bool forceRefresh = false}) async =>
+      (await _cacheFirstObject<EhallProgressOverview>(
+        cacheKey: 'ehall_progress_overview',
+        fetch: () => _get('/ehall/progress'),
+        fromJson: (json) => EhallProgressOverview.fromJson(json),
+        forceRefresh: forceRefresh,
+        memoryTtl: const Duration(minutes: 5),
+      ))
+          .data;
+
+  Future<List<EhallProgressItem>> ehallProgress(
+          {bool forceRefresh = false}) async =>
+      (await ehallProgressOverview(forceRefresh: forceRefresh)).items;
+
+  Future<List<EcardRoomItem>> ecardRooms({bool forceRefresh = false}) async =>
+      (await _cacheFirstList<EcardRoomItem>(
+        cacheKey: 'ecard_rooms',
+        fetch: () => _getList('/ecard/rooms'),
+        fromJson: (json) => EcardRoomItem.fromJson(json),
+        forceRefresh: forceRefresh,
+        memoryTtl: const Duration(minutes: 30),
+      ))
+          .data;
+
+  Future<DataResult<EcardSummary>> ecardSummary({bool forceRefresh = false}) =>
+      _cacheFirstObject<EcardSummary>(
+        cacheKey: 'ecard_summary',
+        fetch: () => _get('/ecard/summary'),
+        fromJson: (json) => EcardSummary.fromJson(json),
+        forceRefresh: forceRefresh,
+      );
+
+  Future<EcardSummary> bindEcardRoom(EcardRoomItem room) async {
+    final data = await _post('/ecard/binding', {
+      'roomId': room.id,
+      'roomDisplay': room.displayName,
+    });
+    _cache.remove('ecard_rooms');
+    _cache.set('ecard_summary', data);
+    final pcache = await _getPersistentCache();
+    await pcache.set('ecard_summary', data);
+    return EcardSummary.fromJson(data);
   }
 
-  Future<List<NoticeItem>> notices() async {
-    final data = await _getList('/notices');
-    return data.map((item) => NoticeItem.fromJson(item)).toList();
+  Future<EcardSummary> refreshEcard() async {
+    final data = await _post('/ecard/refresh', {});
+    _cache.set('ecard_summary', data);
+    final pcache = await _getPersistentCache();
+    await pcache.set('ecard_summary', data);
+    return EcardSummary.fromJson(data);
+  }
+
+  Future<EcardSummary> updateEcardReminder({
+    bool? enabled,
+    double? lowPowerThreshold,
+  }) async {
+    final data = await _patch('/ecard/reminder', {
+      if (enabled != null) 'enabled': enabled,
+      if (lowPowerThreshold != null) 'lowPowerThreshold': lowPowerThreshold,
+    });
+    _cache.set('ecard_summary', data);
+    final pcache = await _getPersistentCache();
+    await pcache.set('ecard_summary', data);
+    return EcardSummary.fromJson(data);
+  }
+
+  Future<EcardConsumptionResponse> ecardConsumption(
+          {String? month, bool forceRefresh = false}) async =>
+      (await _cacheFirstObject<EcardConsumptionResponse>(
+        cacheKey:
+            month == null ? 'ecard_consumption' : 'ecard_consumption_$month',
+        fetch: () => _get(month == null
+            ? '/ecard/consumption'
+            : '/ecard/consumption?month=$month'),
+        fromJson: (json) => EcardConsumptionResponse.fromJson(json),
+        forceRefresh: forceRefresh,
+      ))
+          .data;
+
+  Future<void> registerPush(String registrationId,
+      {String platform = 'android'}) async {
+    await _post('/push/register', {
+      'registrationId': registrationId,
+      'platform': platform,
+    });
+  }
+
+  Future<void> unregisterPush() async {
+    await _post('/push/unregister', {});
+  }
+
+  Future<AppVersionInfo> checkUpdate({
+    String platform = 'android',
+    String currentVersion = '',
+    int currentBuild = 0,
+  }) async {
+    final data = await _get(
+        '/app/version?platform=$platform&current_version=${Uri.encodeComponent(currentVersion)}&current_build=$currentBuild');
+    return AppVersionInfo.fromJson(data);
   }
 
   Future<Map<String, dynamic>> _get(String path) async {
-    final response =
-        await _http.get(Uri.parse('$baseUrl$path'), headers: _headers());
-    return _decodeObject(response);
+    return _withReloginRetry(
+      () async {
+        final response =
+            await _http.get(Uri.parse('$baseUrl$path'), headers: _headers());
+        return _decodeObject(response);
+      },
+    );
   }
 
   Future<List<Map<String, dynamic>>> _getList(String path) async {
-    final response =
-        await _http.get(Uri.parse('$baseUrl$path'), headers: _headers());
-    final decoded = _decode(response);
-    return (decoded as List<dynamic>).cast<Map<String, dynamic>>();
+    return _withReloginRetry(
+      () async {
+        final response =
+            await _http.get(Uri.parse('$baseUrl$path'), headers: _headers());
+        final decoded = _decode(response);
+        return (decoded as List<dynamic>).cast<Map<String, dynamic>>();
+      },
+    );
   }
 
   Future<Map<String, dynamic>> _post(
       String path, Map<String, dynamic> body) async {
-    final response = await _http.post(
-      Uri.parse('$baseUrl$path'),
-      headers: _headers(),
-      body: jsonEncode(body),
+    return _withReloginRetry(
+      () async {
+        final response = await _http.post(
+          Uri.parse('$baseUrl$path'),
+          headers: _headers(),
+          body: jsonEncode(body),
+        );
+        return _decodeObject(response);
+      },
     );
-    return _decodeObject(response);
+  }
+
+  Future<Map<String, dynamic>> _patch(
+      String path, Map<String, dynamic> body) async {
+    return _withReloginRetry(
+      () async {
+        final response = await _http.patch(
+          Uri.parse('$baseUrl$path'),
+          headers: _headers(),
+          body: jsonEncode(body),
+        );
+        return _decodeObject(response);
+      },
+    );
+  }
+
+  /// 在收到 401 时自动尝试 relogin 并重试原始请求
+  Future<T> _withReloginRetry<T>(Future<T> Function() request) async {
+    try {
+      return await request();
+    } on ApiException catch (e) {
+      if (e.statusCode == 401 && _credentialToken != null) {
+        try {
+          await relogin();
+          return await request();
+        } catch (_) {
+          _credentialToken = null;
+          onReloginFailed?.call();
+          rethrow;
+        }
+      }
+      rethrow;
+    }
   }
 
   Map<String, String> _headers() => {
@@ -422,4 +1641,171 @@ class ApiClient {
     }
     return decoded;
   }
+}
+
+String _dateOnly(DateTime date) =>
+    '${date.year.toString().padLeft(4, '0')}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+
+const icsScheduleTimes = [
+  ('09:00', '09:40'),
+  ('09:40', '10:20'),
+  ('10:40', '11:20'),
+  ('11:20', '12:00'),
+  ('12:30', '13:10'),
+  ('13:10', '13:50'),
+  ('14:00', '14:40'),
+  ('14:40', '15:20'),
+  ('15:30', '16:10'),
+  ('16:10', '16:50'),
+  ('17:00', '17:40'),
+  ('17:40', '18:20'),
+  ('19:00', '19:40'),
+  ('19:40', '20:20'),
+  ('20:30', '21:10'),
+  ('21:10', '21:50'),
+];
+
+List<int> parseWeeks(String? weeks) {
+  if (weeks == null || weeks.trim().isEmpty) return [];
+  final normalized = weeks
+      .replaceAll('（', '(')
+      .replaceAll('）', ')')
+      .replaceAll('，', ',')
+      .replaceAll('；', ';')
+      .replaceAll('、', ',');
+  final result = <int>{};
+  for (final segment in normalized.split(RegExp(r'[,;]'))) {
+    final text = segment.trim();
+    if (text.isEmpty) continue;
+    final oddOnly = text.contains('单');
+    final evenOnly = text.contains('双');
+    final ranges = RegExp(r'(\d+)\s*-\s*(\d+)').allMatches(text).toList();
+    if (ranges.isNotEmpty) {
+      for (final match in ranges) {
+        final start = int.tryParse(match.group(1)!);
+        final end = int.tryParse(match.group(2)!);
+        if (start != null && end != null) {
+          for (var w = start; w <= end; w++) {
+            if (oddOnly && w.isEven) continue;
+            if (evenOnly && w.isOdd) continue;
+            result.add(w);
+          }
+        }
+      }
+      continue;
+    }
+    for (final match in RegExp(r'\d+').allMatches(text)) {
+      final w = int.tryParse(match.group(0)!);
+      if (w != null) {
+        if (oddOnly && w.isEven) continue;
+        if (evenOnly && w.isOdd) continue;
+        result.add(w);
+      }
+    }
+  }
+  return result.toList()..sort();
+}
+
+String generateIcs({
+  required List<ScheduleCourse> courses,
+  required DateTime firstWeekStart,
+  required int year,
+  required int term,
+}) {
+  final lines = <String>[];
+  lines.add('BEGIN:VCALENDAR');
+  lines.add('PRODID:-//GZUS-PRO//Schedule//CN');
+  lines.add('VERSION:2.0');
+  for (final course in courses) {
+    if (course.weekday == null ||
+        course.startSection == null ||
+        course.endSection == null) {
+      continue;
+    }
+    final weeks = parseWeeks(course.weeks);
+    final startTime = icsScheduleTimes[course.startSection! - 1].$1;
+    final endTime = icsScheduleTimes[course.endSection! - 1].$2;
+    for (final week in weeks) {
+      final date = firstWeekStart
+          .add(Duration(days: (week - 1) * 7 + (course.weekday! - 1)));
+      final dateStr =
+          '${date.year}${date.month.toString().padLeft(2, '0')}${date.day.toString().padLeft(2, '0')}';
+      lines.add('BEGIN:VEVENT');
+      lines.add(
+          'UID:gzus-${course.name.hashCode.abs()}-$week-${course.weekday}@gzus-pro');
+      lines.add('DTSTART:${dateStr}T${startTime.replaceAll(':', '')}00');
+      lines.add('DTEND:${dateStr}T${endTime.replaceAll(':', '')}00');
+      lines.add('SUMMARY:${course.name}');
+      if (course.classroom != null && course.classroom!.isNotEmpty) {
+        lines.add('LOCATION:${course.classroom}');
+      }
+      if (course.teacher != null && course.teacher!.isNotEmpty) {
+        lines.add('DESCRIPTION:教师: ${course.teacher}');
+      }
+      lines.add('END:VEVENT');
+    }
+  }
+  lines.add('END:VCALENDAR');
+  return lines.join('\r\n');
+}
+
+String generateExamIcs({
+  required List<PeriodExam> exams,
+  required int year,
+  required int term,
+}) {
+  final lines = <String>[];
+  lines.add('BEGIN:VCALENDAR');
+  lines.add('PRODID:-//GZUS-PRO//Exams//CN');
+  lines.add('VERSION:2.0');
+  for (final pe in exams) {
+    final exam = pe.exam;
+    lines.add('BEGIN:VEVENT');
+    lines.add(
+        'UID:gzus-exam-${exam.courseName.hashCode.abs()}-${pe.period.year}-${pe.period.term}@gzus-pro');
+    lines.add('SUMMARY:${exam.courseName} 考试');
+    final parsed = _parseExamDateTime(exam.time);
+    if (parsed != null) {
+      lines.add('DTSTART:${parsed.$1}');
+      lines.add('DTEND:${parsed.$2}');
+    }
+    if (exam.location != null && exam.location!.isNotEmpty) {
+      lines.add('LOCATION:${exam.location}');
+    }
+    final descParts = <String>[];
+    if (exam.time != null) descParts.add('时间: ${exam.time}');
+    if (exam.type != null) descParts.add('类型: ${exam.type}');
+    if (exam.seat != null) descParts.add('座位: ${exam.seat}');
+    if (descParts.isNotEmpty) {
+      lines.add('DESCRIPTION:${descParts.join(' \\n ')}');
+    }
+    lines.add('END:VEVENT');
+  }
+  lines.add('END:VCALENDAR');
+  return lines.join('\r\n');
+}
+
+(String, String)? _parseExamDateTime(String? time) {
+  if (time == null) return null;
+  final dateMatch =
+      RegExp(r'(\d{4})[年/\-.](\d{1,2})[月/\-.](\d{1,2})').firstMatch(time);
+  if (dateMatch == null) return null;
+  final year = int.tryParse(dateMatch.group(1)!);
+  final month = int.tryParse(dateMatch.group(2)!);
+  final day = int.tryParse(dateMatch.group(3)!);
+  if (year == null || month == null || day == null) return null;
+  final dateStr =
+      '$year${month.toString().padLeft(2, '0')}${day.toString().padLeft(2, '0')}';
+  final timeMatch = RegExp(r'(\d{1,2}):(\d{2})').allMatches(time).toList();
+  if (timeMatch.length >= 2) {
+    final sh = int.tryParse(timeMatch[0].group(1)!) ?? 0;
+    final sm = int.tryParse(timeMatch[0].group(2)!) ?? 0;
+    final eh = int.tryParse(timeMatch[1].group(1)!) ?? 0;
+    final em = int.tryParse(timeMatch[1].group(2)!) ?? 0;
+    return (
+      '${dateStr}T${sh.toString().padLeft(2, '0')}${sm.toString().padLeft(2, '0')}00',
+      '${dateStr}T${eh.toString().padLeft(2, '0')}${em.toString().padLeft(2, '0')}00',
+    );
+  }
+  return ('${dateStr}T090000', '${dateStr}T110000');
 }

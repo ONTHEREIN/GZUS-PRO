@@ -1,0 +1,9 @@
+- [ ] 登录页头部使用 ListTile 布局展示 Logo 和应用名称
+- [ ] 应用名称使用 headlineSmall 样式
+- [ ] 表单卡片使用 Card 组件，设置 elevation: 2
+- [ ] 卡片圆角使用 16dp
+- [ ] 主要登录按钮使用 56dp 高度
+- [ ] 次要登录按钮使用 48dp 高度
+- [ ] 警告提示使用 Card 组件，背景使用 errorContainer
+- [ ] 错误提示使用 Card 组件，图标使用 Icons.error_outline
+- [ ] flutter analyze 通过，无编译错误

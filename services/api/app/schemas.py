@@ -1,4 +1,5 @@
 from typing import Literal
+from datetime import date
 
 from pydantic import BaseModel, Field
 
@@ -17,17 +18,71 @@ class SsoCompleteRequest(BaseModel):
     sso_code: str = Field(alias="ssoCode", min_length=1)
 
 
-class MobileCookieLoginRequest(BaseModel):
-    account: str = Field(min_length=1)
-    cookies: str = Field(min_length=1)
+class PushRegisterRequest(BaseModel):
+    registration_id: str = Field(alias="registrationId", min_length=1)
+    platform: str = "android"
+
+
+class EcardBindingRequest(BaseModel):
+    room_id: str = Field(alias="roomId", min_length=1)
+    room_display: str = Field(alias="roomDisplay", min_length=1)
+
+
+class EcardReminderRequest(BaseModel):
+    enabled: bool | None = None
+    low_power_threshold: float | None = Field(default=None, alias="lowPowerThreshold", ge=0)
+
+
+class EcardRoomItem(BaseModel):
+    id: str
+    school_area: str = Field(alias="schoolArea")
+    building: str
+    room: str
+    display_name: str = Field(alias="displayName")
+
+
+class EcardSummary(BaseModel):
+    status: Literal["ok", "not_bound"]
+    room_id: str | None = Field(default=None, alias="roomId")
+    room_display: str | None = Field(default=None, alias="roomDisplay")
+    power_balance: float | str | None = Field(default=None, alias="powerBalance")
+    power_unit: str = Field(default="度", alias="powerUnit")
+    power_text: str | None = Field(default=None, alias="powerText")
+    cold_water_balance: float | str | None = Field(default=None, alias="coldWaterBalance")
+    cold_water_unit: str = Field(default="吨", alias="coldWaterUnit")
+    cold_water_text: str | None = Field(default=None, alias="coldWaterText")
+    hot_water_balance: float | str | None = Field(default=None, alias="hotWaterBalance")
+    hot_water_unit: str = Field(default="元", alias="hotWaterUnit")
+    hot_water_text: str | None = Field(default=None, alias="hotWaterText")
+    reminder_enabled: bool = Field(default=True, alias="reminderEnabled")
+    low_power_threshold: float = Field(default=30, alias="lowPowerThreshold")
+    updated_at: str | None = Field(default=None, alias="updatedAt")
+
+
+class EcardConsumptionItem(BaseModel):
+    title: str
+    amount: str = ""
+    time: str = ""
+
+
+class EcardConsumptionResponse(BaseModel):
+    status: Literal["ok", "limited"]
+    message: str | None = None
+    items: list[EcardConsumptionItem] = []
 
 
 class AuthResponse(BaseModel):
     status: Literal["ok", "captcha_required"]
     session_id: str | None = Field(default=None, alias="sessionId")
     student_name: str | None = Field(default=None, alias="studentName")
+    student_id: str | None = Field(default=None, alias="studentId")
     captcha_token: str | None = Field(default=None, alias="captchaToken")
     captcha_image: str | None = Field(default=None, alias="captchaImage")
+    credential_token: str | None = Field(default=None, alias="credentialToken")
+
+
+class ReloginRequest(BaseModel):
+    credential_token: str = Field(alias="credentialToken", min_length=1)
 
 
 class StudentInfo(BaseModel):
@@ -70,6 +125,15 @@ class GradeItem(BaseModel):
     term: str | None = None
 
 
+class AttendanceRecord(BaseModel):
+    date: str | None = None
+    status: str = "normal"
+    status_label: str | None = Field(default=None, alias="statusLabel")
+    count: int = 1
+    time: str | None = None
+    remark: str | None = None
+
+
 class AttendanceItem(BaseModel):
     course_name: str = Field(alias="courseName")
     course_code: str | None = Field(default=None, alias="courseCode")
@@ -81,6 +145,7 @@ class AttendanceItem(BaseModel):
     absent: int = 0
     leave: int = 0
     total: int = 0
+    records: list[AttendanceRecord] = []
 
 
 class AttendanceResponse(BaseModel):
@@ -113,7 +178,159 @@ class NoticeItem(BaseModel):
     date: str | None = None
     url: str | None = None
     summary: str | None = None
+    content_summary: str | None = None
+
+
+class NoticeDetail(BaseModel):
+    title: str = ""
+    date: str | None = None
+    content_html: str = Field(default="", alias="contentHtml")
+    url: str
+
+
+class EhallAffairItem(BaseModel):
+    id: str | None = None
+    title: str
+    department: str | None = None
+    type: str | None = None
+    tags: list[str] = []
+    summary: str | None = None
+    url: str | None = None
+
+
+class EhallApplicationItem(EhallAffairItem):
+    pass
+
+
+class EhallProgressItem(BaseModel):
+    id: str | None = None
+    title: str
+    category: str
+    status: str
+    status_label: str = Field(alias="statusLabel")
+    date: str | None = None
+    summary: str | None = None
+    current_node: str | None = Field(default=None, alias="currentNode")
+    handler: str | None = None
+    progress: int | None = None
+    url: str | None = None
+
+
+class EhallProgressCategory(BaseModel):
+    label: str
+    count: int = 0
+
+
+class EhallProgressOverview(BaseModel):
+    categories: list[EhallProgressCategory] = Field(default_factory=list)
+    items: list[EhallProgressItem] = Field(default_factory=list)
+
+
+class LeavePreviewRequest(BaseModel):
+    year: int
+    term: int
+    start_date: date = Field(alias="startDate")
+    end_date: date = Field(alias="endDate")
+    first_week_start: date | None = Field(default=None, alias="firstWeekStart")
+
+
+class TeacherHandlerSelection(BaseModel):
+    teacher: str
+    userid: str
+    cn_name: str = Field(alias="cnName")
+    course_name: str | None = Field(default=None, alias="courseName")
+
+
+class LeaveFillRequest(LeavePreviewRequest):
+    reason: str = Field(min_length=1)
+    attachment_name: str = Field(alias="attachmentName", min_length=1)
+    attachment_content_base64: str = Field(alias="attachmentContentBase64", min_length=1)
+    teacher_handlers: list[TeacherHandlerSelection] = Field(
+        default=[], alias="teacherHandlers"
+    )
+
+
+class LeaveAttachmentUploadRequest(BaseModel):
+    doc_unid: str = Field(alias="docUnid", min_length=1)
+    process_id: str = Field(default="", alias="processId")
+    node_name: str = Field(default="申请人", alias="nodeName")
+    local_store: str = Field(default="0", alias="localStore")
+    attachment_name: str = Field(alias="attachmentName", min_length=1)
+    attachment_content_base64: str = Field(alias="attachmentContentBase64", min_length=1)
+
+
+class LeaveCourseItem(BaseModel):
+    course_name: str = Field(alias="courseName")
+    course_code: str | None = Field(default=None, alias="courseCode")
+    teaching_class_code: str | None = Field(default=None, alias="teachingClassCode")
+    course_nature: str | None = Field(default=None, alias="courseNature")
+    credit: str | None = None
+    class_time: str = Field(alias="classTime")
+    class_times: list[str] = Field(default=[], alias="classTimes")
+    absence_count: int = Field(alias="absenceCount")
+    teacher: str | None = None
+    missing_fields: list[str] = Field(default=[], alias="missingFields")
+
+
+class LeavePreviewResponse(BaseModel):
+    status: Literal["ok"]
+    items: list[LeaveCourseItem]
+    has_missing_fields: bool = Field(alias="hasMissingFields")
+
+
+class StaffCandidateItem(BaseModel):
+    userid: str
+    cn_name: str = Field(alias="cnName")
+    folder_name: str | None = Field(default=None, alias="folderName")
+
+
+class MatchedTeacherItem(BaseModel):
+    teacher: str
+    userid: str
+    cn_name: str = Field(alias="cnName")
+    course_name: str | None = Field(default=None, alias="courseName")
+
+
+class TeacherCandidateGroup(BaseModel):
+    teacher: str
+    candidates: list[StaffCandidateItem] = []
+
+
+class LeaveFillResponse(BaseModel):
+    status: Literal["filled", "needs_manual", "no_ehall_session"]
+    message: str
+    items: list[LeaveCourseItem] = []
+    unmatched_teachers: list[str] = Field(default=[], alias="unmatchedTeachers")
+    matched_teachers: list[MatchedTeacherItem] = Field(default=[], alias="matchedTeachers")
+    teacher_candidates: list[TeacherCandidateGroup] = Field(default=[], alias="teacherCandidates")
+    form_url: str | None = Field(default=None, alias="formUrl")
+    fill_script: str | None = Field(default=None, alias="fillScript")
+    handler_script: str | None = Field(default=None, alias="handlerScript")
+    attachment_uploaded: bool = Field(default=False, alias="attachmentUploaded")
 
 
 class ErrorResponse(BaseModel):
     detail: str
+
+
+class EhallLoginRequest(BaseModel):
+    account: str = Field(min_length=1)
+    password: str = Field(min_length=1)
+
+
+class AutoLoginRequest(BaseModel):
+    account: str = Field(min_length=1)
+    password: str = Field(min_length=1)
+
+
+class EhallLoginResponse(BaseModel):
+    status: Literal["ok", "error"]
+    message: str | None = None
+    session_id: int | None = Field(default=None, alias="sessionId")
+
+
+class EhallSessionStatus(BaseModel):
+    status: Literal["valid", "expired", "not_found"]
+    account: str | None = None
+    expires_at: str | None = Field(default=None, alias="expiresAt")
+    last_used_at: str | None = Field(default=None, alias="lastUsedAt")

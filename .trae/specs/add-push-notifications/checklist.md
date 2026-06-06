@@ -1,0 +1,28 @@
+- [x] Settings 中包含极光推送和 WebSocket 配置项（jpush_app_key, jpush_master_secret, push_poll_interval_seconds, ws_heartbeat_seconds, debug）
+- [x] .env.example 中包含新增环境变量示例
+- [x] schemas.py 中包含 PushRegisterRequest schema
+- [x] POST /push/register 接口能正确存储 Registration ID 与会话的关联
+- [x] POST /push/unregister 接口能正确移除 Registration ID
+- [x] AppSession 包含 push_registration_id 和 push_platform 字段
+- [x] push.py 中 send_push() 能正确调用 JPush REST API 发送推送
+- [x] 极光推送 API 调用失败时记录日志但不抛异常
+- [x] WebSocket 端点 /ws/notifications 能验证会话并维持连接
+- [x] ConnectionManager 正确维护 session_id → WebSocket 映射
+- [x] WebSocket 心跳机制正常工作，会话过期时以 code 4001 关闭连接
+- [x] 定时任务能轮询活跃会话的通知列表并检测新增
+- [x] 新增通知同时通过 WebSocket 和极光推送发送
+- [x] 定时任务在 main.py lifespan 中正确启动
+- [x] pubspec.yaml 包含 jpush_flutter、flutter_local_notifications、web_socket_channel 依赖
+- [x] AndroidManifest.xml 包含推送权限和极光 meta-data
+- [x] Android minSdk 调整为 21
+- [x] iOS AppDelegate.swift 注册极光推送和 APNs
+- [x] 本地通知服务能正确初始化、展示通知、处理点击回调
+- [x] 极光推送服务能正确初始化、监听事件、管理 Token
+- [x] WebSocket 服务能正确连接、接收消息、自动重连、登出断开
+- [x] 登录流程集成推送注册和 WebSocket 连接
+- [x] 登出流程集成推送注销和 WebSocket 断开
+- [x] App 从后台恢复时检查 WebSocket 连接状态
+- [x] 后端推送路由单元测试通过
+- [x] 后端 WebSocket 端点测试通过
+- [x] 后端极光推送模块测试通过（mock JPush API）
+- [x] 后端定时任务测试通过

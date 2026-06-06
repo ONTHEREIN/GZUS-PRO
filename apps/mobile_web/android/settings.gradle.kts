@@ -12,8 +12,9 @@ pluginManagement {
 
     repositories {
         maven { url = uri("https://mirrors.tuna.tsinghua.edu.cn/flutter/download.flutter.io") }
-        maven { url = uri("https://mirrors.tuna.tsinghua.edu.cn/maven/google/") }
-        maven { url = uri("https://mirrors.tuna.tsinghua.edu.cn/maven/maven2/") }
+        maven { url = uri("https://mirrors.tuna.tsinghua.edu.cn/google/maven2/") }
+        maven { url = uri("https://mirrors.tuna.tsinghua.edu.cn/maven-central/") }
+        maven { url = uri("https://mirrors.tuna.tsinghua.edu.cn/gradle-plugin/") }
         maven { url = uri("https://storage.flutter-io.cn/download.flutter.io") }
         google()
         mavenCentral()

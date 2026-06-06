@@ -5,6 +5,8 @@ from app.school_client import AuthenticationError
 
 
 class FakeClient:
+    _account = "20240001"
+
     def get_info(self):
         return {
             "studentId": "20240001",
@@ -32,6 +34,9 @@ class FakeClient:
     def get_notices(self):
         return [{"category": "通知公告", "title": "测试通知", "date": "2026-05-22"}]
 
+    def get_notice_detail(self, url):
+        return {"title": "测试通知详情", "date": "2026-05-22", "contentHtml": "<p>正文内容</p>", "url": url}
+
     def logout(self):
         pass
 
@@ -39,6 +44,30 @@ class FakeClient:
 class ExpiredClient(FakeClient):
     def get_schedule(self, year, term):
         raise AuthenticationError("教务系统会话已失效，请重新登录")
+
+
+class FakeEhallClient:
+    def get_notice_items(self):
+        return [
+            {
+                "category": "办事大厅·申请",
+                "title": "网上申请",
+                "date": "2026-06-01",
+                "summary": "待提交",
+            }
+        ]
+
+    def get_affairs(self):
+        return [
+            {
+                "id": "affair-1",
+                "title": "学生请假",
+                "department": "学生处",
+                "type": "学生服务",
+                "tags": ["请假"],
+                "url": "https://ehall.gzus.edu.cn/#/affairs/copyAllAffairs/guide/affair-1?id=bsdt",
+            }
+        ]
 
 
 def client_with_session():
@@ -75,6 +104,50 @@ def test_attendance_and_credits():
     assert notices[0]["title"] == "测试通知"
 
 
+def test_notices_merge_ehall_tasks():
+    app = create_app()
+    session = app.state.sessions.create(
+        FakeClient(),
+        "测试学生",
+        ehall_client=FakeEhallClient(),
+    )
+    client = TestClient(app)
+
+    notices = client.get("/notices", headers={"X-Session-Id": session.id}).json()
+
+    assert [item["title"] for item in notices] == ["测试通知", "网上申请"]
+    assert notices[1]["category"] == "办事大厅·申请"
+
+
+def test_ehall_tasks_route_returns_ehall_items():
+    app = create_app()
+    session = app.state.sessions.create(
+        FakeClient(),
+        "测试学生",
+        ehall_client=FakeEhallClient(),
+    )
+    client = TestClient(app)
+
+    tasks = client.get("/ehall/tasks", headers={"X-Session-Id": session.id}).json()
+
+    assert tasks[0]["title"] == "网上申请"
+
+
+def test_ehall_affairs_route_returns_business_items():
+    app = create_app()
+    session = app.state.sessions.create(
+        FakeClient(),
+        "测试学生",
+        ehall_client=FakeEhallClient(),
+    )
+    client = TestClient(app)
+
+    affairs = client.get("/ehall/affairs", headers={"X-Session-Id": session.id}).json()
+
+    assert affairs[0]["title"] == "学生请假"
+    assert affairs[0]["department"] == "学生处"
+
+
 def test_academic_authentication_error_returns_json_401():
     app = create_app()
     session = app.state.sessions.create(ExpiredClient(), "测试学生")
@@ -84,3 +157,129 @@ def test_academic_authentication_error_returns_json_401():
 
     assert response.status_code == 401
     assert response.json()["detail"] == "教务系统会话已失效，请重新登录"
+
+
+def test_notice_detail_route():
+    client, headers = client_with_session()
+    response = client.get(
+        "/notices/detail?url=https://jwxt.seig.edu.cn/jwglxt/notice/1.html",
+        headers=headers,
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["title"] == "测试通知详情"
+    assert data["contentHtml"] == "<p>正文内容</p>"
+    assert data["url"] == "https://jwxt.seig.edu.cn/jwglxt/notice/1.html"
+
+
+class FailingClient(FakeClient):
+    def get_info(self):
+        raise RuntimeError("学校系统 502")
+
+    def get_schedule(self, year, term):
+        raise RuntimeError("学校系统 502")
+
+    def get_exams(self, year, term):
+        raise RuntimeError("学校系统 502")
+
+    def get_grades(self, year, term):
+        raise RuntimeError("学校系统 502")
+
+    def get_attendance(self, year, term):
+        raise RuntimeError("学校系统 502")
+
+    def get_credits(self):
+        raise RuntimeError("学校系统 502")
+
+    def get_notices(self):
+        raise RuntimeError("学校系统 502")
+
+    def get_notice_detail(self, url):
+        raise RuntimeError("学校系统 502")
+
+
+class AuthFailClient(FakeClient):
+    def get_schedule(self, year, term):
+        raise AuthenticationError("会话已失效")
+
+
+def test_cache_fallback_on_502():
+    app = create_app()
+    with TestClient(app) as client:
+        ok_session = app.state.sessions.create(FakeClient(), "测试学生")
+        headers = {"X-Session-Id": ok_session.id}
+
+        client.get("/me", headers=headers)
+        client.get("/schedule", headers=headers)
+        client.get("/credits", headers=headers)
+
+        fail_session = app.state.sessions.create(FailingClient(), "测试学生")
+        fail_headers = {"X-Session-Id": fail_session.id}
+
+        me_resp = client.get("/me", headers=fail_headers)
+        assert me_resp.status_code == 200
+        assert me_resp.headers.get("X-Data-Source") == "cache"
+        assert me_resp.json()["name"] == "测试学生"
+
+        schedule_resp = client.get("/schedule", headers=fail_headers)
+        assert schedule_resp.status_code == 200
+        assert schedule_resp.headers.get("X-Data-Source") == "cache"
+        assert schedule_resp.json()[0]["name"] == "高等数学"
+
+        credits_resp = client.get("/credits", headers=fail_headers)
+        assert credits_resp.status_code == 200
+        assert credits_resp.headers.get("X-Data-Source") == "cache"
+        assert credits_resp.json()[0]["totalCredit"] == "120"
+
+
+class FailingClientNoAccount(FakeClient):
+    _account = "99999999"
+
+    def get_info(self):
+        raise RuntimeError("学校系统 502")
+
+    def get_schedule(self, year, term):
+        raise RuntimeError("学校系统 502")
+
+    def get_exams(self, year, term):
+        raise RuntimeError("学校系统 502")
+
+    def get_grades(self, year, term):
+        raise RuntimeError("学校系统 502")
+
+    def get_attendance(self, year, term):
+        raise RuntimeError("学校系统 502")
+
+    def get_credits(self):
+        raise RuntimeError("学校系统 502")
+
+    def get_notices(self):
+        raise RuntimeError("学校系统 502")
+
+    def get_notice_detail(self, url):
+        raise RuntimeError("学校系统 502")
+
+
+def test_no_cache_returns_502():
+    app = create_app()
+    with TestClient(app) as client:
+        fail_session = app.state.sessions.create(FailingClientNoAccount(), "测试学生")
+        headers = {"X-Session-Id": fail_session.id}
+
+        resp = client.get("/me", headers=headers)
+        assert resp.status_code == 502
+
+
+def test_401_not_cached():
+    app = create_app()
+    with TestClient(app) as client:
+        ok_session = app.state.sessions.create(FakeClient(), "测试学生")
+        ok_headers = {"X-Session-Id": ok_session.id}
+
+        client.get("/schedule", headers=ok_headers)
+
+        auth_fail_session = app.state.sessions.create(AuthFailClient(), "测试学生")
+        auth_headers = {"X-Session-Id": auth_fail_session.id}
+
+        resp = client.get("/schedule", headers=auth_headers)
+        assert resp.status_code == 401

@@ -1,0 +1,9 @@
+- [x] ICS 生成函数 `generateIcs` 能正确将 ScheduleCourse 列表转换为符合 RFC 5545 的 ICS 字符串
+- [x] 周次解析支持 "1-16"、"1-8,10-16"、"1-16单"、"1-16双" 等格式
+- [x] 日期时间计算正确：firstWeekStart + week + weekday + scheduleTimes 得到准确的 DTSTART/DTEND
+- [x] 课表工具弹窗中显示「导出日历」按钮
+- [x] 移动端点击导出后调起系统分享面板
+- [x] Web 端点击导出后触发浏览器下载，文件名格式为 `课表_{学年}_{学期}.ics`
+- [x] 无课表数据时导出按钮置灰
+- [x] 导出过程中按钮显示加载状态，防止重复点击
+- [x] `flutter analyze` 无错误

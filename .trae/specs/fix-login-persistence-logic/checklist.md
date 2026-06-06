@@ -1,0 +1,9 @@
+- [x] _startMobileSso 传递 api 参数给 MobileSsoLoginPage
+- [x] _startMobileSso 处理 usedAutoLogin 分支，自动登录成功时直接使用 autoLoginResult
+- [x] _startMobileSso WebView 登录时传递 ehallCookies 和 ehallAuthToken 给 mobileCookieLogin
+- [x] _saveMobileSsoCookies 保存 auth.ehallAuthToken
+- [x] _clearSavedSession 清除 auth.ehallAuthToken
+- [x] mobile_sso_io.dart _EhallWebViewPage 注入持久化的 ehallAuthToken 到 sessionStorage
+- [x] mobile_sso_stub.dart MobileCookieLoginResult 与 io 版本一致
+- [x] mobile_sso_stub.dart MobileSsoLoginPage 添加 api 参数
+- [x] flutter analyze 通过

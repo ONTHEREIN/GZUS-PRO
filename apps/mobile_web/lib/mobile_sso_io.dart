@@ -1,211 +1,270 @@
 import 'dart:convert';
 
-import 'package:fluent_ui/fluent_ui.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
-const _lyMobileSsoUrl =
-    'https://cas.gzus.edu.cn/lyuapServer/login?service=https%3A%2F%2Fjwxt.seig.edu.cn%2Fsso%2Flyiotlogin';
-const _jwxtCookieUrls = [
-  'https://jwxt.seig.edu.cn',
-  'https://jwxt.seig.edu.cn/',
-  'https://jwxt.seig.edu.cn/sso/lyiotlogin',
-  'https://jwxt.seig.edu.cn/jwglxt/',
-  'https://jwxt.seig.edu.cn/jwglxt/xtgl/index_initMenu.html',
-];
+import 'api_client.dart';
 
-class MobileCookieLoginResult {
-  const MobileCookieLoginResult({required this.account, required this.cookies});
+const _desktopBrowserUserAgent =
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+    '(KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36';
 
-  final String account;
-  final String cookies;
+Future<bool> openAuthenticatedEhallUrl(
+  BuildContext context,
+  String url, {
+  String? fillScript,
+  ApiClient? api,
+  String? attachmentName,
+  Uint8List? attachmentBytes,
+}) async {
+  final uri = Uri.tryParse(url);
+  if (uri == null) return false;
+  if (!context.mounted) return false;
+  await Navigator.of(context).push(
+    MaterialPageRoute(
+      builder: (_) => _EhallWebViewPage(
+        initialUrl: url,
+        fillScript: fillScript,
+        api: api,
+        attachmentName: attachmentName,
+        attachmentBytes: attachmentBytes,
+      ),
+    ),
+  );
+  return true;
 }
 
-class MobileSsoLoginPage extends StatefulWidget {
-  const MobileSsoLoginPage({super.key, required this.account});
+Future<void> clearMobileSsoCookies() {
+  return WebViewCookieManager().clearCookies();
+}
 
-  final String account;
+class _EhallWebViewPage extends StatefulWidget {
+  const _EhallWebViewPage({
+    required this.initialUrl,
+    this.fillScript,
+    this.api,
+    this.attachmentName,
+    this.attachmentBytes,
+  });
+
+  final String initialUrl;
+  final String? fillScript;
+  final ApiClient? api;
+  final String? attachmentName;
+  final Uint8List? attachmentBytes;
 
   @override
-  State<MobileSsoLoginPage> createState() => _MobileSsoLoginPageState();
+  State<_EhallWebViewPage> createState() => _EhallWebViewPageState();
 }
 
-class _MobileSsoLoginPageState extends State<MobileSsoLoginPage> {
+class _EhallWebViewPageState extends State<_EhallWebViewPage> {
+  late final WebViewController controller;
   final cookieManager = WebViewCookieManager();
-  WebViewController? controller;
-  bool finishing = false;
-  bool cookiesCleared = false;
-  String statusText = '正在打开办事大厅登录页面';
-  String? error;
+  bool loading = true;
+  bool scriptInjected = false;
+  bool scriptApplied = false;
+  String? loadError;
 
   @override
   void initState() {
     super.initState();
-    _start();
-  }
-
-  Future<void> _start() async {
-    try {
-      await cookieManager.clearCookies();
-      cookiesCleared = false;
-      final nextController = WebViewController()
-        ..setJavaScriptMode(JavaScriptMode.unrestricted)
-        ..setNavigationDelegate(
-          NavigationDelegate(
-            onPageStarted: (url) => _observeUrl(url, pageFinished: false),
-            onPageFinished: (url) => _observeUrl(url, pageFinished: true),
-            onUrlChange: (change) {
-              final url = change.url;
-              if (url != null) _observeUrl(url, pageFinished: false);
-            },
-            onWebResourceError: (webError) {
-              if (!mounted || finishing) return;
-              setState(() => error = '登录页面加载失败：${webError.description}');
-            },
-          ),
-        )
-        ..loadRequest(Uri.parse(_lyMobileSsoUrl));
-      if (!mounted) return;
-      setState(() {
-        controller = nextController;
-        error = null;
-      });
-    } catch (exc) {
-      if (!mounted) return;
-      setState(() => error = '无法打开登录页面：$exc');
-    }
-  }
-
-  void _observeUrl(String url, {required bool pageFinished}) {
-    final uri = Uri.tryParse(url);
-    if (!mounted || uri == null || finishing) {
-      return;
-    }
-    if (uri.host == 'cas.gzus.edu.cn') {
-      setState(() => statusText = '请在办事大厅页面完成登录');
-      if (pageFinished) _prefillCasAccount();
-      return;
-    }
-    if (uri.host == 'jwxt.seig.edu.cn') {
-      setState(() => statusText = '正在进入教务系统');
-    }
-    if (uri.host == 'jwxt.seig.edu.cn' && pageFinished) {
-      _handleJwxtUrl(url);
-    }
-  }
-
-  Future<void> _prefillCasAccount() async {
-    final currentController = controller;
-    if (currentController == null) return;
-    final account = jsonEncode(widget.account);
-    for (var attempt = 0; attempt < 12; attempt++) {
-      if (finishing || !mounted) return;
-      try {
-        final result = await currentController.runJavaScriptReturningResult('''
-(() => {
-  const input = document.getElementById('userName')
-    || document.querySelector('input[name="username"], input[type="text"]');
-  if (!input) return false;
-  if (input.value) return true;
-  input.value = $account;
-  input.dispatchEvent(new Event('input', {bubbles: true}));
-  input.dispatchEvent(new Event('change', {bubbles: true}));
-  return input.value === $account;
-})();
-''');
-        if (result == true || result.toString() == 'true') return;
-      } catch (_) {
-        // The CAS page can still be used manually when script injection is blocked.
-        return;
-      }
-      await Future<void>.delayed(const Duration(milliseconds: 300));
-    }
-  }
-
-  Future<void> _handleJwxtUrl(String url) async {
-    if (finishing) return;
-    finishing = true;
-    if (mounted) {
-      setState(() {
-        statusText = '正在获取教务系统登录状态';
-        error = null;
-      });
-    }
-    try {
-      final cookieHeader = await _readJwxtCookies(url);
-      if (cookieHeader.isEmpty) {
-        throw StateError('未获取到教务系统 cookie');
-      }
-      await _clearTemporaryCookies();
-      if (!mounted) return;
-      Navigator.of(context).pop(
-        MobileCookieLoginResult(account: widget.account, cookies: cookieHeader),
+    controller = WebViewController()
+      ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..setUserAgent(_desktopBrowserUserAgent)
+      ..setNavigationDelegate(
+        NavigationDelegate(
+          onPageStarted: (_) => setState(() {
+            loading = true;
+            loadError = null;
+          }),
+          onPageFinished: (_) {
+            setState(() => loading = false);
+            _injectFillScript();
+          },
+          onWebResourceError: (webError) {
+            if (webError.isForMainFrame != true) return;
+            if (!mounted) return;
+            setState(() {
+              loading = false;
+              loadError = '办事大厅页面加载失败，请复制脚本后用浏览器打开';
+            });
+          },
+        ),
       );
-    } catch (exc) {
-      finishing = false;
-      if (!mounted) return;
-      setState(() => error = '获取教务系统 cookie 失败：$exc');
-    }
+    _loadInitialUrl();
+    _showFallbackIfStillBlank();
   }
 
-  Future<String> _readJwxtCookies(String currentUrl) async {
-    final urls = <String>[
-      currentUrl,
-      ..._jwxtCookieUrls,
-    ];
-    for (var attempt = 0; attempt < 6; attempt++) {
-      final cookiesByName = <String, String>{};
-      for (final url in urls) {
-        final uri = Uri.tryParse(url);
-        if (uri == null) continue;
-        final cookies = await cookieManager.platform.getCookies(uri);
-        for (final cookie in cookies) {
-          if (cookie.name.isNotEmpty && cookie.value.isNotEmpty) {
-            cookiesByName[cookie.name] = cookie.value;
-          }
+  Future<void> _showFallbackIfStillBlank() async {
+    if (widget.fillScript == null || widget.fillScript!.isEmpty) return;
+    await Future<void>.delayed(const Duration(seconds: 18));
+    if (!mounted || scriptApplied || loadError != null) return;
+    setState(() {
+      loadError = '手机 WebView 无法渲染办事大厅，请复制脚本后在电脑或浏览器执行';
+      loading = false;
+    });
+  }
+
+  Future<void> _injectFillScript() async {
+    final script = widget.fillScript;
+    if (scriptInjected || script == null || script.isEmpty) return;
+    final uri = Uri.tryParse(widget.initialUrl);
+    if (uri?.host != 'ehall.gzus.edu.cn') return;
+    scriptInjected = true;
+    final ready = await _waitForLeaveForm();
+    if (!ready) {
+      if (!mounted) return;
+      setState(() {
+        loadError = '表单尚未加载完成，请复制脚本后用浏览器打开';
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('表单尚未加载完成，请稍后复制脚本手动执行')),
+      );
+      return;
+    }
+    try {
+      if (widget.api != null &&
+          widget.attachmentName != null &&
+          widget.attachmentBytes != null) {
+        final uploaded = await _uploadAttachmentFromLoadedForm();
+        if (!uploaded) {
+          if (!mounted) return;
+          setState(() {
+            loadError = '附件上传失败，已停止自动办理';
+          });
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('附件上传失败，未点击办理')),
+          );
+          return;
         }
       }
-      final scriptCookies = await _readDocumentCookies();
-      for (final entry in scriptCookies.entries) {
-        cookiesByName.putIfAbsent(entry.key, () => entry.value);
-      }
-      final cookieHeader = _selectCookieHeader(cookiesByName);
-      if (cookieHeader.isNotEmpty) return cookieHeader;
-      await Future<void>.delayed(const Duration(milliseconds: 350));
-    }
-    return '';
-  }
-
-  Future<Map<String, String>> _readDocumentCookies() async {
-    final currentController = controller;
-    if (currentController == null) return const {};
-    try {
-      final value = await currentController
-          .runJavaScriptReturningResult('document.cookie');
-      return _parseCookieString(_normalizeJavaScriptString(value));
+      await controller.runJavaScript(script);
+      scriptApplied = true;
+      if (mounted) setState(() => loadError = null);
     } catch (_) {
-      return const {};
+      if (!mounted) return;
+      setState(() {
+        loadError = '自动填表脚本执行失败，请复制脚本手动执行';
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('自动填表脚本执行失败，请复制脚本手动执行')),
+      );
     }
   }
 
-  String _selectCookieHeader(Map<String, String> cookies) {
-    MapEntry<String, String>? jsession;
-    for (final entry in cookies.entries) {
-      if (entry.key.toUpperCase() == 'JSESSIONID') {
-        jsession = entry;
-        break;
+  Future<bool> _uploadAttachmentFromLoadedForm() async {
+    final fields = await _readLeaveUploadFields();
+    if (fields == null || fields.docUnid.isEmpty) return false;
+    try {
+      return await widget.api!.uploadLeaveAttachment(
+        docUnid: fields.docUnid,
+        processId: fields.processId,
+        nodeName: fields.nodeName,
+        localStore: fields.localStore,
+        attachmentName: widget.attachmentName!,
+        attachmentBytes: widget.attachmentBytes!,
+      );
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<_LeaveUploadFields?> _readLeaveUploadFields() async {
+    for (var attempt = 0; attempt < 30; attempt++) {
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      try {
+        final raw = await controller.runJavaScriptReturningResult(r"""
+(() => JSON.stringify({
+  docUnid: document.getElementById('WF_DocUnid')?.value || '',
+  processId: document.getElementById('WF_Processid')?.value || '',
+  nodeName: document.getElementById('WF_CurrentNodeName')?.value || '申请人',
+  localStore: document.getElementById('localStore') ? '1' : '0'
+}))()
+""");
+        final decoded = _decodeWebViewJson(raw);
+        if (decoded == null) continue;
+        final fields = _LeaveUploadFields.fromJson(decoded);
+        if (fields.docUnid.isNotEmpty) return fields;
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  Map<String, dynamic>? _decodeWebViewJson(Object raw) {
+    try {
+      var text = raw.toString();
+      if (text.startsWith('"') && text.endsWith('"')) {
+        text = jsonDecode(text) as String;
+      }
+      final decoded = jsonDecode(text);
+      if (decoded is Map<String, dynamic>) return decoded;
+      if (decoded is Map) return decoded.cast<String, dynamic>();
+    } catch (_) {}
+    return null;
+  }
+
+  Future<bool> _waitForLeaveForm() async {
+    for (var attempt = 0; attempt < 30; attempt++) {
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      try {
+        final result = await controller.runJavaScriptReturningResult("""
+(() => Boolean(
+  document.getElementById('KSSJ') ||
+  document.querySelector('[name="KSSJ"]') ||
+  document.getElementById('QJLY') ||
+  document.querySelector('[name="QJLY"]')
+))()
+""");
+        if (result == true || result.toString() == 'true') return true;
+      } catch (_) {}
+    }
+    return false;
+  }
+
+  Future<void> _loadInitialUrl() async {
+    final uri = Uri.tryParse(widget.initialUrl);
+    if (uri == null || uri.host.isEmpty) return;
+    final prefs = await SharedPreferences.getInstance();
+    final header = prefs.getString('auth.ehallCookies');
+    if (uri.host == 'ehall.gzus.edu.cn' &&
+        header != null &&
+        header.isNotEmpty) {
+      for (final entry in _parseCookieHeader(header).entries) {
+        await cookieManager.setCookie(
+          WebViewCookie(
+            name: entry.key,
+            value: entry.value,
+            domain: uri.host,
+            path: '/',
+          ),
+        );
       }
     }
-    final entries = [
-      if (jsession != null) jsession,
-      ...cookies.entries
-          .where((entry) => entry.key.toUpperCase() != 'JSESSIONID'),
-    ];
-    return entries.map((entry) => '${entry.key}=${entry.value}').join('; ');
+    await controller.loadRequest(uri);
+    // 注入持久化的 ehall auth token 到 sessionStorage
+    if (uri.host == 'ehall.gzus.edu.cn') {
+      final authToken = prefs.getString('auth.ehallAuthToken');
+      if (authToken != null && authToken.isNotEmpty) {
+        await controller.runJavaScript('''
+(() => {
+  try {
+    const existing = sessionStorage.getItem('userLogin');
+    if (!existing) {
+      sessionStorage.setItem('userLogin', JSON.stringify({ tokenId: ${jsonEncode(authToken)} }));
+    }
+  } catch (e) {}
+})()
+''');
+      }
+    }
   }
 
-  Map<String, String> _parseCookieString(String value) {
+  Map<String, String> _parseCookieHeader(String header) {
     final cookies = <String, String>{};
-    for (final part in value.split(';')) {
+    for (final part in header.split(';')) {
       final trimmed = part.trim();
       final separator = trimmed.indexOf('=');
       if (separator <= 0 || separator == trimmed.length - 1) continue;
@@ -215,104 +274,90 @@ class _MobileSsoLoginPageState extends State<MobileSsoLoginPage> {
     return cookies;
   }
 
-  String _normalizeJavaScriptString(Object? value) {
-    if (value == null) return '';
-    final text = value.toString();
-    if (text.length >= 2 && text.startsWith('"') && text.endsWith('"')) {
-      try {
-        return jsonDecode(text) as String;
-      } catch (_) {
-        return text.substring(1, text.length - 1).replaceAll(r'\"', '"');
-      }
-    }
-    return text;
+  Future<void> _openInExternalBrowser() async {
+    final uri = Uri.tryParse(widget.initialUrl);
+    if (uri == null) return;
+    await launchUrl(uri, mode: LaunchMode.externalApplication);
   }
 
-  Future<void> _clearTemporaryCookies() async {
-    if (cookiesCleared) return;
-    cookiesCleared = true;
-    await cookieManager.clearCookies();
-  }
-
-  @override
-  void dispose() {
-    if (!cookiesCleared) {
-      cookieManager.clearCookies();
-      cookiesCleared = true;
-    }
-    super.dispose();
-  }
-
-  Future<void> _retry() async {
-    if (finishing) return;
-    setState(() {
-      error = null;
-      statusText = '正在重新打开办事大厅登录页面';
-    });
-    await _start();
-  }
-
-  void _cancel() {
-    _clearTemporaryCookies();
-    Navigator.of(context).pop();
+  Future<void> _copyFillScript() async {
+    final script = widget.fillScript;
+    if (script == null || script.isEmpty) return;
+    await Clipboard.setData(ClipboardData(text: script));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('脚本已复制')),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    final currentController = controller;
-    return ScaffoldPage(
-      header: PageHeader(
-        title: const Text('办事大厅统一登录'),
-        leading: IconButton(
-          icon: const Icon(FluentIcons.back),
-          onPressed: _cancel,
-        ),
-        commandBar: error == null
-            ? null
-            : Button(
-                onPressed: _retry,
-                child: const _SsoButtonLabel(
-                  icon: FluentIcons.refresh,
-                  label: '重试',
+    final host = Uri.tryParse(widget.initialUrl)?.host;
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(host == null || host.isEmpty ? '网页' : host),
+        actions: [
+          if (loading)
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 16),
+              child: Center(
+                child: SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
                 ),
               ),
-      ),
-      content: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-            child: InfoBar(
-              severity:
-                  error == null ? InfoBarSeverity.info : InfoBarSeverity.error,
-              title: Text(error ?? statusText),
             ),
-          ),
-          Expanded(
-            child: currentController == null
-                ? const Center(child: ProgressRing())
-                : WebViewWidget(controller: currentController),
-          ),
+        ],
+      ),
+      body: Column(
+        children: [
+          if (loadError != null)
+            MaterialBanner(
+              content: Text(loadError!),
+              leading: Icon(
+                Icons.error_outline,
+                color: Theme.of(context).colorScheme.error,
+              ),
+              actions: [
+                TextButton(
+                  onPressed:
+                      widget.fillScript == null || widget.fillScript!.isEmpty
+                          ? null
+                          : _copyFillScript,
+                  child: const Text('复制脚本'),
+                ),
+                TextButton(
+                  onPressed: _openInExternalBrowser,
+                  child: const Text('浏览器打开'),
+                ),
+              ],
+            ),
+          Expanded(child: WebViewWidget(controller: controller)),
         ],
       ),
     );
   }
 }
 
-class _SsoButtonLabel extends StatelessWidget {
-  const _SsoButtonLabel({required this.icon, required this.label});
+class _LeaveUploadFields {
+  const _LeaveUploadFields({
+    required this.docUnid,
+    required this.processId,
+    required this.nodeName,
+    required this.localStore,
+  });
 
-  final IconData icon;
-  final String label;
+  factory _LeaveUploadFields.fromJson(Map<String, dynamic> json) =>
+      _LeaveUploadFields(
+        docUnid: json['docUnid'] as String? ?? '',
+        processId: json['processId'] as String? ?? '',
+        nodeName: json['nodeName'] as String? ?? '申请人',
+        localStore: json['localStore'] as String? ?? '0',
+      );
 
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(icon, size: 14),
-        const SizedBox(width: 6),
-        Text(label),
-      ],
-    );
-  }
+  final String docUnid;
+  final String processId;
+  final String nodeName;
+  final String localStore;
 }

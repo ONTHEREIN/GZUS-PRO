@@ -1,7 +1,7 @@
 name: gzus_pro_mobile_web
 description: Flutter mobile and web client for GZUS teaching affairs assistant.
 publish_to: "none"
-version: 0.1.0+1
+version: 0.0.1+1
 
 environment:
   sdk: ">=3.4.0 <4.0.0"
@@ -9,16 +9,35 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  fluent_ui: ^4.9.2
   http: ^1.2.2
   shared_preferences: ^2.3.2
   web: ^1.1.1
   webview_flutter: ^4.13.1
+  share_plus: ^10.1.4
+  url_launcher: ^6.3.1
+  flutter_local_notifications: ^18.0.0
+  web_socket_channel: ^3.0.1
+  file_picker: ^8.3.7
+  image_picker: ^1.1.2
+  in_app_update_me: ^1.1.1
+  package_info_plus: ^8.0.0
+
+dependency_overrides:
+  package_info_plus: ^8.0.0
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^4.0.0
+  flutter_launcher_icons: ^0.14.3
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  remove_alpha_ios: true
+  image_path: "assets/icon.png"
+  adaptive_icon_background: "#3593FC"
+  adaptive_icon_foreground: "assets/icon.png"
 
 flutter:
   uses-material-design: true

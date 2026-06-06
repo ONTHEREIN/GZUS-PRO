@@ -1,21 +1,20 @@
-import 'package:fluent_ui/fluent_ui.dart';
+import 'package:flutter/material.dart';
+import 'dart:typed_data';
+import 'package:url_launcher/url_launcher.dart';
 
-class MobileCookieLoginResult {
-  const MobileCookieLoginResult({required this.account, required this.cookies});
+import 'api_client.dart';
 
-  final String account;
-  final String cookies;
+Future<bool> openAuthenticatedEhallUrl(
+  BuildContext context,
+  String url, {
+  String? fillScript,
+  ApiClient? api,
+  String? attachmentName,
+  Uint8List? attachmentBytes,
+}) {
+  final uri = Uri.tryParse(url);
+  if (uri == null) return Future.value(false);
+  return launchUrl(uri, mode: LaunchMode.inAppBrowserView);
 }
 
-class MobileSsoLoginPage extends StatelessWidget {
-  const MobileSsoLoginPage({super.key, required this.account});
-
-  final String account;
-
-  @override
-  Widget build(BuildContext context) {
-    return const ScaffoldPage(
-      content: Center(child: Text('当前平台不支持办事大厅统一登录')),
-    );
-  }
-}
+Future<void> clearMobileSsoCookies() async {}

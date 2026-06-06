@@ -1,13 +1,13 @@
+# Flutter / Dart
 .dart_tool/
 .flutter-plugins
 .flutter-plugins-dependencies
 .packages
 build/
 coverage/
-.server-logs/
-.gradle-home/
 .pub-cache/
 
+# Python
 __pycache__/
 .pytest_cache/
 .ruff_cache/
@@ -15,5 +15,48 @@ __pycache__/
 *.pyc
 *.egg-info/
 
+# Environment & secrets
 .env
 .DS_Store
+
+# Database files (contain user data)
+*.db
+*.sqlite
+*.sqlite3
+
+# Log files
+*.log
+.server-logs/
+
+# Gradle
+.gradle-home/
+
+# Android SDK (large binaries, should not be in repo)
+android-sdk/
+
+# Debug / test screenshots and UI dumps
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.webp
+ui*.xml
+phone_ui_*.xml
+widget_*.xml
+widget_*.focus.txt
+
+# Test / debug artifacts
+login_test.json
+pair_input.txt
+leave_note.txt
+build_log.txt
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+Thumbs.db
+Desktop.ini

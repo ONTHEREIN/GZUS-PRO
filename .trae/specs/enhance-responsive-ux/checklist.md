@@ -1,0 +1,26 @@
+- [x] MarqueeText 组件实现：文字超出时自动滚动，未超出时静态显示
+- [x] NavTabConfig 数据模型和 NavPreferences 服务实现
+- [x] MobileNavBar 根据用户配置动态渲染 Tab，末尾固定"更多"
+- [x] MorePage 网格布局展示非底栏功能入口，支持点击导航
+- [x] MorePage 编辑模式：拖拽排序、增删 Tab、恢复默认
+- [x] 底栏偏好持久化到 SharedPreferences
+- [x] DashboardShell 根据配置动态构建页面列表
+- [x] 后端 NoticeItem schema 新增 content_summary 字段
+- [x] 后端通知列表接口并发获取详情摘要，最大并发 5，总超时 10 秒
+- [x] 前端 NoticeItem 新增 contentSummary 字段
+- [x] NoticeCard 优先展示 contentSummary，回退到 summary
+- [x] 考勤页宽屏多栏布局（左侧总览 + 右侧列表）
+- [x] 考试页宽屏多栏布局（左侧筛选 + 右侧列表）
+- [x] 成绩页宽屏多栏布局（左侧统计 + 右侧列表）
+- [x] 学分页宽屏多栏布局（左侧进度 + 右侧详情）
+- [x] 通知页宽屏主从布局（左侧列表 + 右侧详情）
+- [x] 考试时间使用 primary 颜色 + 加粗 + schedule 图标
+- [x] 考试地点使用 tertiary 颜色 + 加粗 + location_on 图标
+- [x] 考勤页排序功能：按正常/迟到/早退/旷课/请假次数正倒序
+- [x] 考勤页筛选功能：仅显示有迟到/早退/旷课/请假的课程
+- [x] 考勤页排序按钮显示当前排序状态
+- [x] 考试页按学期正倒序排序切换按钮
+- [x] 成绩页点击考试标签跳转到考试页面并定位高亮
+- [x] 无对应考试时显示 SnackBar 提示
+- [x] flutter analyze 通过
+- [x] flutter build web 构建成功
