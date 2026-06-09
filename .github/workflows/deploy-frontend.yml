@@ -3,6 +3,7 @@ name: Deploy Frontend to Cloudflare Pages
 on:
   push:
     branches: [ master ]
+  workflow_dispatch:
 
 permissions:
   contents: read
