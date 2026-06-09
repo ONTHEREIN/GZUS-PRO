@@ -2201,7 +2201,7 @@ class ApiClient {
         final url = _requireBaseUrl();
         final response = await _http
             .get(Uri.parse('$url$path'), headers: _headers())
-            .timeout(_connectTimeout, onTimeout: (sink) => sink.close())
+            .timeout(_connectTimeout)
             .timeout(_requestTimeout);
         return _decodeObject(response);
       },
@@ -2214,7 +2214,7 @@ class ApiClient {
         final url = _requireBaseUrl();
         final response = await _http
             .get(Uri.parse('$url$path'), headers: _headers())
-            .timeout(_connectTimeout, onTimeout: (sink) => sink.close())
+            .timeout(_connectTimeout)
             .timeout(_requestTimeout);
         final decoded = _decode(response);
         if (decoded is! List<dynamic>) {
@@ -2236,7 +2236,7 @@ class ApiClient {
               headers: _headers(),
               body: jsonEncode(body),
             )
-            .timeout(_connectTimeout, onTimeout: (sink) => sink.close())
+            .timeout(_connectTimeout)
             .timeout(_requestTimeout);
         return _decodeObject(response);
       },
@@ -2254,7 +2254,7 @@ class ApiClient {
               headers: _headers(),
               body: jsonEncode(body),
             )
-            .timeout(_connectTimeout, onTimeout: (sink) => sink.close())
+            .timeout(_connectTimeout)
             .timeout(_requestTimeout);
         return _decodeObject(response);
       },
