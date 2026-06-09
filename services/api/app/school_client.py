@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import base64
-import importlib
 import logging
 import re
 import time
@@ -537,20 +536,13 @@ class SchoolSdkClient:
         apply_school_sdk_import_patches()
         apply_school_sdk_patches()
         apply_school_sdk_info_patch()
-        candidates = [
-            ("school_sdk", "SchoolClient"),
-            ("school_sdk.client", "SchoolClient"),
-            ("new_school_sdk", "SchoolClient"),
-        ]
-        for module_name, class_name in candidates:
-            try:
-                module = importlib.import_module(module_name)
-            except ModuleNotFoundError:
-                continue
-            client_cls = getattr(module, class_name, None)
-            if client_cls is not None:
-                return client_cls
-        raise AuthenticationError("未安装 school-sdk，请运行 pip install -e '.[school]'")
+        try:
+            from app.vendor.school_sdk.client import SchoolClient as Sc
+            return Sc
+        except ModuleNotFoundError:
+            raise AuthenticationError(
+                "未安装 school-sdk，请检查 app/vendor/school_sdk/ 目录是否存在"
+            )
 
     def _build_client(self, client_cls: Any) -> Any:
         parsed = urlparse(self.base_url)

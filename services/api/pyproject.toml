@@ -19,6 +19,9 @@ dependencies = [
   "rsa>=4.9.0",
   "pywebpush>=1.14.0",
   "slowapi>=0.1.0",
+  "requests>=2.31.0",
+  "pyquery>=2.0.0",
+  "fake-headers>=1.0.0",
 ]
 
 [project.optional-dependencies]
@@ -26,9 +29,6 @@ dev = [
   "pytest>=8.2.0",
   "pytest-asyncio>=0.23.0",
   "ruff>=0.5.0",
-]
-school = [
-  "school-sdk",
 ]
 
 [tool.pytest.ini_options]

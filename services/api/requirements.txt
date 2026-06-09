@@ -13,3 +13,6 @@ cryptography>=42.0.0
 rsa>=4.9.0
 pywebpush>=1.14.0
 slowapi>=0.1.9
+requests>=2.31.0
+pyquery>=2.0.0
+fake-headers>=1.0.0

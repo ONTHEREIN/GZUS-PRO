@@ -42,7 +42,7 @@ def apply_school_sdk_patches() -> bool:
 
     apply_school_sdk_import_patches()
     try:
-        from school_sdk.client.api.schedule_parse import ScheduleParse
+        from app.vendor.school_sdk.client.api.schedule_parse import ScheduleParse
     except ModuleNotFoundError:
         return False
 
@@ -84,7 +84,7 @@ def apply_school_sdk_info_patch() -> bool:
     """
     apply_school_sdk_import_patches()
     try:
-        from school_sdk.client.api.user_info import Info
+        from app.vendor.school_sdk.client.api.user_info import Info
     except ModuleNotFoundError:
         return False
 
