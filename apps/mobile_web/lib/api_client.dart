@@ -2044,6 +2044,28 @@ class ApiClient {
     return _currentBaseUrl;
   }
 
+  /// 预热 Vercel Serverless 函数（冷启动可能 30s+）
+  Future<void> warmup() async {
+    final url = _resolveBaseUrl();
+    int attempt = 0;
+    while (attempt < 3) {
+      attempt++;
+      try {
+        final response = await _http
+            .get(Uri.parse('$url/health'), headers: _headers())
+            .timeout(const Duration(seconds: 35));
+        if (response.statusCode == 200) return;
+      } on TimeoutException {
+        continue;
+      } on http.ClientException {
+        continue;
+      } on SocketException {
+        continue;
+      }
+      await Future<void>.delayed(const Duration(seconds: 2));
+    }
+  }
+
   /// 在收到 401 时自动尝试 relogin 并重试原始请求
   Future<T> _withReloginRetry<T>(Future<T> Function() request) async {
     return _withFallback(request, tried: {});

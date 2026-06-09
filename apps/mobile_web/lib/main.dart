@@ -304,6 +304,7 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
     }
 
     try {
+      await api.warmup();
       final result = await api.me();
       final info = result.data;
       final guideCompleted =
@@ -345,6 +346,7 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
 
   Future<void> _tryBackgroundRefresh(SharedPreferences prefs) async {
     try {
+      await api.warmup();
       final result = await api.me();
       if (!mounted) return;
       setState(() {
