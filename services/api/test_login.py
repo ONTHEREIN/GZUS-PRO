@@ -152,7 +152,7 @@ def main():
             print(f"Response length: {len(r4.text)}")
 
             # Check all cookies
-            print(f"\nAll cookies after redirect:")
+            print("\nAll cookies after redirect:")
             for cookie in client.cookies.jar:
                 print(f"  {cookie.domain} | {cookie.name} = {_redact(cookie.value)}")
 

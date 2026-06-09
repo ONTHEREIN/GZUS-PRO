@@ -1728,13 +1728,13 @@ class ApiClient {
         fetch: () async {
           final uri = _weatherUri(lat, lon);
           final response =
-              await _http.get(uri).timeout(const Duration(seconds: 10));
+              await _http.get(uri, headers: _weatherHeaders()).timeout(const Duration(seconds: 10));
           final body = utf8.decode(response.bodyBytes);
           final decoded = jsonDecode(body);
           if (decoded is! Map<String, dynamic>) {
             throw ApiException('天气 API 返回了意外的数据格式');
           }
-          return decoded;
+          return _convertWttrIn(decoded);
         },
         fromJson: (json) => WeatherData.fromJson(json),
         forceRefresh: forceRefresh,
@@ -1742,19 +1742,185 @@ class ApiClient {
       );
 
   Uri _weatherUri(double? lat, double? lon) {
-    final query = StringBuffer('forecast=true');
-    if (lat != null && lon != null) {
-      query.write(
-          '&lat=${lat.toStringAsFixed(4)}&lon=${lon.toStringAsFixed(4)}');
-    }
-    return Uri.parse('https://api.uapis.cn/api/weather?$query');
+    final location = (lat != null && lon != null)
+        ? '${lat.toStringAsFixed(2)},${lon.toStringAsFixed(2)}'
+        : 'Guangzhou';
+    return Uri.parse('https://wttr.in/$location?format=j1');
   }
+
+  Map<String, String> _weatherHeaders() => {
+        'Accept': 'application/json',
+        'User-Agent': 'GZUS-PRO/1.0',
+      };
 
   String _weatherCacheKey(double? lat, double? lon) {
     if (lat != null && lon != null) {
       return 'weather_${lat.toStringAsFixed(2)}_${lon.toStringAsFixed(2)}';
     }
     return 'weather';
+  }
+
+  static const _weatherCodeCn = <String, String>{
+    '113': '晴',
+    '116': '多云',
+    '119': '阴',
+    '122': '阴',
+    '143': '雾',
+    '176': '小雨',
+    '179': '小雪',
+    '182': '雨夹雪',
+    '185': '雨夹雪',
+    '200': '雷阵雨',
+    '227': '小雪',
+    '230': '中雪',
+    '248': '雾',
+    '260': '冻雾',
+    '263': '小雨',
+    '266': '小雨',
+    '281': '冻雨',
+    '284': '冻雨',
+    '293': '小雨',
+    '296': '小雨',
+    '299': '中雨',
+    '302': '中雨',
+    '305': '大雨',
+    '308': '暴雨',
+    '311': '冻雨',
+    '314': '冻雨',
+    '317': '雨夹雪',
+    '320': '大雪',
+    '323': '小雪',
+    '326': '小雪',
+    '329': '中雪',
+    '332': '中雪',
+    '335': '大雪',
+    '338': '暴雪',
+    '350': '冰雹',
+    '353': '小雨',
+    '356': '大雨',
+    '359': '暴雨',
+    '362': '雨夹雪',
+    '365': '雨夹雪',
+    '368': '小雪',
+    '371': '中雪',
+    '374': '冰雹',
+    '377': '冰雹',
+    '386': '雷阵雨',
+    '389': '雷暴',
+    '392': '雷阵雪',
+    '395': '雷暴雪',
+  };
+
+  String _weatherCodeToCn(String code) =>
+      _weatherCodeCn[code] ?? '多云';
+
+  Map<String, dynamic> _convertWttrIn(Map<String, dynamic> data) {
+    final current = (data['current_condition'] as List<dynamic>?)
+            ?.whereType<Map<String, dynamic>>()
+            .firstOrNull ??
+        {};
+    final nearest = (data['nearest_area'] as List<dynamic>?)
+            ?.whereType<Map<String, dynamic>>()
+            .firstOrNull ??
+        {};
+    final forecastList =
+        (data['weather'] as List<dynamic>?)?.whereType<Map<String, dynamic>>().toList() ?? [];
+
+    final weatherCode = current['weatherCode'] as String? ?? '116';
+    final weatherCn = _weatherCodeToCn(weatherCode);
+
+    final areaName = (nearest['areaName'] as List<dynamic>?)
+            ?.whereType<Map<String, dynamic>>()
+            .first['value'] as String? ??
+        '';
+    final region = (nearest['region'] as List<dynamic>?)
+            ?.whereType<Map<String, dynamic>>()
+            .first['value'] as String? ??
+        '';
+    final country = (nearest['country'] as List<dynamic>?)
+            ?.whereType<Map<String, dynamic>>()
+            .first['value'] as String? ??
+        '';
+
+    final windDir = current['winddir16Point'] as String? ?? '';
+    final windSpeed = current['windspeedKmph'] as String? ?? '0';
+    final windPower = _windSpeedToPower(windSpeed);
+
+    final forecast = <Map<String, dynamic>>[];
+    for (final day in forecastList) {
+      final date = day['date'] as String? ?? '';
+      final week = _dateToWeek(date);
+      final maxTemp = day['maxtempC'] as String? ?? '0';
+      final minTemp = day['mintempC'] as String? ?? '0';
+      final hourly = (day['hourly'] as List<dynamic>?)
+              ?.whereType<Map<String, dynamic>>()
+              .toList() ??
+          [];
+      final midDay = hourly.isNotEmpty
+          ? hourly[hourly.length ~/ 2]
+          : <String, dynamic>{};
+      final dayWeatherCode = midDay['weatherCode'] as String? ?? '116';
+      forecast.add({
+        'date': date,
+        'week': week,
+        'temp_max': double.tryParse(maxTemp) ?? 0,
+        'temp_min': double.tryParse(minTemp) ?? 0,
+        'weather_day': _weatherCodeToCn(dayWeatherCode),
+      });
+    }
+
+    final today = forecastList.isNotEmpty ? forecastList[0] : <String, dynamic>{};
+    final todayMax = today['maxtempC'] as String? ?? '0';
+    final todayMin = today['mintempC'] as String? ?? '0';
+
+    return {
+      'province': region,
+      'city': areaName,
+      'district': areaName.isNotEmpty ? areaName : country,
+      'weather': weatherCn,
+      'weather_icon': weatherCode,
+      'temperature': double.tryParse(current['temp_C'] as String? ?? '0') ?? 0,
+      'wind_direction': _windDirToCn(windDir),
+      'wind_power': windPower,
+      'humidity': int.tryParse(current['humidity'] as String? ?? '0') ?? 0,
+      'temp_max': double.tryParse(todayMax),
+      'temp_min': double.tryParse(todayMin),
+      'forecast': forecast,
+    };
+  }
+
+  String _windSpeedToPower(String speedKmph) {
+    final speed = int.tryParse(speedKmph) ?? 0;
+    if (speed < 6) return '1级';
+    if (speed < 12) return '2级';
+    if (speed < 20) return '3级';
+    if (speed < 29) return '4级';
+    if (speed < 39) return '5级';
+    if (speed < 50) return '6级';
+    if (speed < 62) return '7级';
+    return '8级+';
+  }
+
+  String _windDirToCn(String dir) {
+    const map = {
+      'N': '北风', 'NNE': '北东北风', 'NE': '东北风', 'ENE': '东东北风',
+      'E': '东风', 'ESE': '东东南风', 'SE': '东南风', 'SSE': '南东南风',
+      'S': '南风', 'SSW': '南西南风', 'SW': '西南风', 'WSW': '西西南风',
+      'W': '西风', 'WNW': '西西北风', 'NW': '西北风', 'NNW': '北西北风',
+    };
+    return map[dir] ?? dir;
+  }
+
+  String _dateToWeek(String dateStr) {
+    const weekdays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+    final parts = dateStr.split('-');
+    if (parts.length != 3) return '';
+    final date = DateTime(
+      int.tryParse(parts[0]) ?? 2024,
+      int.tryParse(parts[1]) ?? 1,
+      int.tryParse(parts[2]) ?? 1,
+    );
+    return weekdays[date.weekday % 7];
   }
 
   Future<DataResult<List<NoticeItem>>> notices(

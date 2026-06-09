@@ -340,7 +340,7 @@ void main() {
       'auth.credentialToken': 'expired-token',
       'auth.rememberPassword': true,
       'auth.account': '2024000000',
-      'auth.password': 'secret',
+      'auth.password': 'legacy-password',
     });
     var autoLoginCalled = false;
     final api = ApiClient(
@@ -374,7 +374,7 @@ void main() {
 
   test('api stores remembered account without password', () async {
     SharedPreferences.setMockInitialValues({
-      'auth.password': 'legacy-secret',
+      'auth.password': 'legacy-password',
     });
     final api = ApiClient(httpClient: MockClient((request) async {
       return http.Response('not found', 404);
@@ -382,7 +382,7 @@ void main() {
 
     await api.savePasswordCredentials(
       '2024000000',
-      'new-secret',
+      'sample-password',
       remember: true,
     );
     final prefs = await SharedPreferences.getInstance();

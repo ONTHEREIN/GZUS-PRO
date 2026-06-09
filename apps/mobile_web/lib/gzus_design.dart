@@ -34,14 +34,10 @@ class GzusRadii {
   static const xl = 24.0;
 }
 
-ThemeData gzusTheme(Brightness brightness, {double navBarHeight = 76}) {
+ThemeData gzusTheme(Brightness brightness, {double navBarHeight = 76, Color seedColor = GzusColors.blue}) {
   final isDark = brightness == Brightness.dark;
   final scheme = ColorScheme.fromSeed(
-    seedColor: GzusColors.blue,
-    primary: isDark ? const Color(0xFF72A7FF) : GzusColors.blue,
-    secondary: isDark ? const Color(0xFF5EEAD4) : GzusColors.green,
-    tertiary: isDark ? const Color(0xFFFBBF24) : GzusColors.amber,
-    error: isDark ? const Color(0xFFF87171) : GzusColors.red,
+    seedColor: seedColor,
     brightness: brightness,
   );
   final textColor = isDark ? const Color(0xFFF5F7FA) : GzusColors.ink;
@@ -50,6 +46,8 @@ ThemeData gzusTheme(Brightness brightness, {double navBarHeight = 76}) {
   final surfaceSoft =
       isDark ? GzusColors.darkSurfaceSoft : GzusColors.surfaceSoft;
   final border = isDark ? GzusColors.darkBorder : GzusColors.border;
+
+  final seedSoft = seedColor.withValues(alpha: 0.10);
 
   return ThemeData(
     useMaterial3: true,
@@ -120,7 +118,7 @@ ThemeData gzusTheme(Brightness brightness, {double navBarHeight = 76}) {
     navigationBarTheme: NavigationBarThemeData(
       height: navBarHeight,
       backgroundColor: surface.withValues(alpha: 0.96),
-      indicatorColor: GzusColors.blueSoft,
+      indicatorColor: seedSoft,
       labelTextStyle: WidgetStateProperty.all(
         TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: textColor),
       ),
@@ -134,7 +132,7 @@ ThemeData gzusTheme(Brightness brightness, {double navBarHeight = 76}) {
     navigationRailTheme: NavigationRailThemeData(
       backgroundColor: isDark ? GzusColors.darkCanvas : GzusColors.canvas,
       indicatorColor:
-          isDark ? scheme.primary.withValues(alpha: 0.18) : GzusColors.blueSoft,
+          isDark ? scheme.primary.withValues(alpha: 0.18) : seedSoft,
       selectedIconTheme: IconThemeData(color: scheme.primary),
       unselectedIconTheme: IconThemeData(color: muted),
       selectedLabelTextStyle:
@@ -192,7 +190,7 @@ ThemeData gzusTheme(Brightness brightness, {double navBarHeight = 76}) {
     chipTheme: ChipThemeData(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
       selectedColor:
-          isDark ? scheme.primary.withValues(alpha: 0.18) : GzusColors.blueSoft,
+          isDark ? scheme.primary.withValues(alpha: 0.18) : seedSoft,
       backgroundColor: surfaceSoft,
       side: BorderSide(color: border),
       labelStyle: TextStyle(fontWeight: FontWeight.w700, color: textColor),

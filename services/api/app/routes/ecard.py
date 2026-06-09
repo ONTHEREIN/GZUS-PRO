@@ -8,8 +8,6 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-logger = logging.getLogger(__name__)
-
 from app.database import EcardBinding, get_sync_session_factory
 from app.ecard_client import EcardApiError, EcardClient, EcardConfigurationError, EcardRoomRef
 from app.routes.deps import require_session
@@ -22,6 +20,8 @@ from app.schemas import (
 )
 from app.school_client import AuthenticationError
 from app.sessions import AppSession
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/ecard", tags=["ecard"])
 
@@ -109,7 +109,6 @@ def refresh_binding(binding: EcardBinding, student_id: str, client: EcardClient 
 
 @router.get("/rooms", response_model=list[EcardRoomItem])
 def rooms(session: AppSession = Depends(require_session)) -> list[dict[str, str]]:
-    _student_info(session)
     try:
         return _client().rooms()
     except EcardConfigurationError as exc:

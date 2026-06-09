@@ -51,13 +51,16 @@ class BackgroundService {
         'beforeEndMinutes': beforeEndMinutes,
         'firstWeekStart': firstWeekStart,
       });
-    } on PlatformException {}
+    } on PlatformException {
+      // Native bridge is unavailable on unsupported Android builds.
+    }
   }
 
   static Future<void> setAppForeground(bool foreground) async {
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
     try {
-      await _channel.invokeMethod('setAppForeground', {'foreground': foreground});
+      await _channel
+          .invokeMethod('setAppForeground', {'foreground': foreground});
     } on PlatformException {
       // Native bridge is unavailable on unsupported Android builds.
     }

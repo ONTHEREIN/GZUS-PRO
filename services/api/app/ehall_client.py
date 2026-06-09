@@ -7,8 +7,9 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 from html import unescape
-from urllib.parse import quote
+from threading import Lock
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -78,6 +79,7 @@ class EhallClient:
     def get_notice_items(self, page_size: int = 20) -> list[dict]:
         items: list[dict] = []
         seen: set[tuple[str, str, str]] = set()
+        seen_lock = Lock()
 
         def fetch_category(args: tuple[str, str]) -> list[dict]:
             category, endpoint = args
@@ -93,9 +95,10 @@ class EhallClient:
                 if item is None:
                     continue
                 key = (item["category"], item["title"], item.get("url") or "")
-                if key in seen:
-                    continue
-                seen.add(key)
+                with seen_lock:
+                    if key in seen:
+                        continue
+                    seen.add(key)
                 result.append(item)
             return result
 
@@ -121,7 +124,7 @@ class EhallClient:
         items: list[dict] = []
         counts: dict[str, int] = {category: 0 for category in TASK_CATEGORIES}
         seen: set[tuple[str, str, str]] = set()
-        counts_lock = None  # Only needed for thread safety
+        seen_lock = Lock()
 
         def fetch_category(args: tuple[str, str]) -> tuple[str, list[dict], int]:
             category, endpoint = args
@@ -139,9 +142,10 @@ class EhallClient:
                 if item is None:
                     continue
                 key = (item["category"], item["title"], item.get("url") or "")
-                if key in seen:
-                    continue
-                seen.add(key)
+                with seen_lock:
+                    if key in seen:
+                        continue
+                    seen.add(key)
                 result.append(item)
             return category, result, count
 

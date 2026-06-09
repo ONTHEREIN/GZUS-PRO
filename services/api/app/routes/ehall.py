@@ -4,8 +4,6 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.ehall_client import EhallAuthenticationError
-
-logger = logging.getLogger(__name__)
 from app.leave_service import (
     build_leave_fill_script,
     build_leave_handler_script,
@@ -26,6 +24,8 @@ from app.schemas import (
 )
 from app.sessions import AppSession
 from app.staff_service import ensure_staff_loaded, resolve_teacher
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/ehall", tags=["ehall"])
 

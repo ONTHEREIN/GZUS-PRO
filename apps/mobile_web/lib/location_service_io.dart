@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:convert';
+
 import 'package:flutter/services.dart';
 
 class LocationService {
@@ -7,7 +7,8 @@ class LocationService {
 
   static Future<({double lat, double lon})?> getCoarseLocation() async {
     try {
-      final result = await _channel.invokeMethod<Map<dynamic, dynamic>>('getCoarseLocation');
+      final result = await _channel
+          .invokeMethod<Map<dynamic, dynamic>>('getCoarseLocation');
       if (result == null) return null;
       final lat = result['lat'];
       final lon = result['lon'];

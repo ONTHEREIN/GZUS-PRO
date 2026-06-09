@@ -81,17 +81,31 @@ def apply_school_sdk_info_patch() -> bool:
     The JWXT V9 system uses different element IDs for some fields:
     - Major: #col_zyh_id instead of #col_zyfx_id
     - Department: #col_jg_id instead of #col_jg_id (same, but ensure fallback)
+
+    Patches both ``app.vendor.school_sdk`` and ``school_sdk`` copies of Info
+    because they may be loaded as separate modules.
     """
     apply_school_sdk_import_patches()
-    try:
-        from app.vendor.school_sdk.client.api.user_info import Info
-    except ModuleNotFoundError:
+
+    info_classes: list[type] = []
+    for module_path in (
+        "app.vendor.school_sdk.client.api.user_info",
+        "school_sdk.client.api.user_info",
+    ):
+        try:
+            mod = __import__(module_path, fromlist=["Info"])
+            cls = getattr(mod, "Info", None)
+            if cls is not None:
+                info_classes.append(cls)
+        except ModuleNotFoundError:
+            continue
+
+    if not info_classes:
         return False
 
-    if getattr(Info, _INFO_PATCH_MARKER, False):
+    # Only patch if at least one class hasn't been patched yet
+    if all(getattr(cls, _INFO_PATCH_MARKER, False) for cls in info_classes):
         return True
-
-    original_parse = getattr(Info, "_parse", None)
 
     def patched_parse(self: Any, html: str) -> dict:
         from pyquery import PyQuery as pq
@@ -119,6 +133,7 @@ def apply_school_sdk_info_patch() -> bool:
         }
         return info
 
-    Info._parse = patched_parse  # type: ignore[attr-defined]
-    setattr(Info, _INFO_PATCH_MARKER, True)
+    for cls in info_classes:
+        cls._parse = patched_parse  # type: ignore[attr-defined]
+        setattr(cls, _INFO_PATCH_MARKER, True)
     return True

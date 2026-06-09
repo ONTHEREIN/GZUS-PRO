@@ -129,6 +129,8 @@ class ScheduleCourse(BaseModel):
 
 class ExamItem(BaseModel):
     course_name: str = Field(alias="courseName")
+    date: str = ""
+    weekday: str = ""
     time: str | None = None
     location: str | None = None
     seat: str | None = None

@@ -4,7 +4,6 @@ import base64
 import logging
 import re
 import time
-from functools import lru_cache
 from json import JSONDecodeError
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -1183,9 +1182,25 @@ def normalize_schedule_course(value: Any) -> dict:
 
 def normalize_exam_item(value: Any) -> dict:
     data = as_dict(value)
+    time_val = pick(data, "time", "kssj", "examTime")
+    date_val = pick(data, "date", "examDate")
+    if not date_val and time_val and isinstance(time_val, str):
+        space_idx = time_val.find(" ")
+        if space_idx > 0:
+            date_val = time_val[:space_idx]
+    weekday_val = pick(data, "weekday", "weekDay", "xqj")
+    if not weekday_val and date_val and isinstance(date_val, str):
+        try:
+            dt = datetime.strptime(date_val, "%Y-%m-%d")
+            weekday_names = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+            weekday_val = weekday_names[dt.weekday()]
+        except ValueError:
+            pass
     return {
         "courseName": str(pick(data, "courseName", "name", "kcmc") or ""),
-        "time": pick(data, "time", "kssj", "examTime"),
+        "date": date_val or "",
+        "weekday": weekday_val or "",
+        "time": time_val,
         "location": pick(data, "location", "cdmc", "examPlace"),
         "seat": pick(data, "seat", "zwh", "seatNo"),
         "type": pick(data, "type", "kslx", "ksfs", "ksmc"),

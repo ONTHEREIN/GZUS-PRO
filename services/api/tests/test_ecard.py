@@ -16,7 +16,7 @@ class FakeSchoolClient:
 
 def test_calc_sign_sorts_and_excludes_token_sign():
     params = {"b": "2", "a": "1", "token": "test-token", "sign": "old"}
-    assert calc_sign(params, secret="greatge") == "12C3DE5975DA50A59D217B32A1DCEE1D"
+    assert calc_sign(params, secret="sample-signing-key") == "AEF5932236C4957DF1288BEFA61BD466"
 
 
 def test_rooms_do_not_expose_balances(monkeypatch):

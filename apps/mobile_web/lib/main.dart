@@ -60,8 +60,8 @@ void main() async {
   runApp(const OneGzusApp());
 }
 
-ThemeData _appTheme(Brightness brightness) {
-  return gzusTheme(brightness, navBarHeight: _mobileNavBarHeight);
+ThemeData _appTheme(Brightness brightness, {Color seedColor = GzusColors.blue}) {
+  return gzusTheme(brightness, navBarHeight: _mobileNavBarHeight, seedColor: seedColor);
 }
 
 class OneGzusApp extends StatefulWidget {
@@ -75,6 +75,7 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
   final api = ApiClient();
   final _navigatorKey = GlobalKey<NavigatorState>();
   ThemeMode themeMode = ThemeMode.system;
+  Color seedColor = GzusColors.blue;
   bool _systemDark = false;
   bool loggedIn = false;
   bool initializing = true;
@@ -102,6 +103,7 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
       if (loggedIn) _logout();
     };
     _loadThemePreference();
+    _loadSeedColorPreference();
     api.startWarmup();
     _bootstrapLoginState();
   }
@@ -172,6 +174,36 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
     await prefs.setString('theme.mode', mode.name);
   }
 
+  Future<void> _loadSeedColorPreference() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getString('theme.seedColor');
+    if (saved != null) {
+      final color = _colorFromHex(saved);
+      if (color != null && mounted && color != seedColor) {
+        setState(() => seedColor = color);
+      }
+    }
+  }
+
+  Future<void> _setSeedColor(Color color) async {
+    setState(() => seedColor = color);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('theme.seedColor', _colorToHex(color));
+  }
+
+  static Color? _colorFromHex(String hex) {
+    final buffer = StringBuffer();
+    if (hex.length == 6) buffer.write('FF');
+    buffer.write(hex.toUpperCase());
+    final value = int.tryParse(buffer.toString(), radix: 16);
+    if (value == null) return null;
+    return Color(value);
+  }
+
+  static String _colorToHex(Color color) {
+    return '${(color.r * 255.0).round().clamp(0, 255).toRadixString(16).padLeft(2, '0')}${(color.g * 255.0).round().clamp(0, 255).toRadixString(16).padLeft(2, '0')}${(color.b * 255.0).round().clamp(0, 255).toRadixString(16).padLeft(2, '0')}'.toUpperCase();
+  }
+
   /// 根据当前主题模式更新系统状态栏/导航栏图标颜色
   void _updateSystemUIOverlayStyle() {
     final isDark = themeMode == ThemeMode.dark ||
@@ -193,8 +225,8 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
       title: 'OneGZUS',
       debugShowCheckedModeBanner: false,
       themeMode: themeMode,
-      theme: _appTheme(Brightness.light),
-      darkTheme: _appTheme(Brightness.dark),
+      theme: _appTheme(Brightness.light, seedColor: seedColor),
+      darkTheme: _appTheme(Brightness.dark, seedColor: seedColor),
       home: initializing
           ? const LoadingPage()
           : !loggedIn
@@ -496,18 +528,24 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
   Future<void> _logout() async {
     if (_logoutInProgress || !loggedIn) return;
     _logoutInProgress = true;
-    loggedIn = false; // 立即标记为已登出，防止排队的 onSessionExpired 回调再次触发
     api.clearCredentials();
     WsService.disconnect();
 
     // 立即更新 UI 跳转到登录页，不等异步清理完成
-    if (!mounted) return;
+    if (!mounted) {
+      _logoutInProgress = false;
+      return;
+    }
     setState(() {
+      loggedIn = false;
       studentName = null;
       _backgroundGuideCompleted = false;
       _globalDataSource = const DataSourceInfo();
       loginMethod = null;
+      loginError = null;
     });
+    // 清除 Navigator 路由栈，确保 home 属性变化后能正确显示登录页
+    _navigatorKey.currentState?.popUntil((route) => route.isFirst);
 
     // 以下异步清理操作在后台执行，不阻塞 UI
     try {
@@ -571,6 +609,8 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
       studentName: studentName,
       themeMode: themeMode,
       onThemeChanged: _setThemeMode,
+      seedColor: seedColor,
+      onSeedColorChanged: _setSeedColor,
       onLogout: () {
         if (loggedIn) _logout();
       },
@@ -1255,6 +1295,68 @@ Uri _withoutSsoParams(Uri uri) {
   return uri.replace(queryParameters: query.isEmpty ? null : query);
 }
 
+class _SeedColorPicker extends StatelessWidget {
+  const _SeedColorPicker({
+    required this.selectedColor,
+    required this.onColorSelected,
+  });
+
+  final Color selectedColor;
+  final ValueChanged<Color> onColorSelected;
+
+  static const _presets = <Color>[
+    Color(0xFF2563EB), // 蓝色
+    Color(0xFF059669), // 绿色
+    Color(0xFF7C3AED), // 紫色
+    Color(0xFFEA580C), // 橙色
+    Color(0xFFDC2626), // 红色
+    Color(0xFF0891B2), // 青色
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      spacing: 16,
+      runSpacing: 12,
+      alignment: WrapAlignment.center,
+      children: _presets.map((color) {
+        final isSelected = color.toARGB32() == selectedColor.toARGB32();
+        return GestureDetector(
+          onTap: () => onColorSelected(color),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: color,
+              shape: BoxShape.circle,
+              border: isSelected
+                  ? Border.all(
+                      color: color,
+                      width: 3,
+                      strokeAlign: BorderSide.strokeAlignOutside,
+                    )
+                  : null,
+              boxShadow: isSelected
+                  ? [
+                      BoxShadow(
+                        color: color.withValues(alpha: 0.4),
+                        blurRadius: 8,
+                        offset: const Offset(0, 2),
+                      ),
+                    ]
+                  : null,
+            ),
+            child: isSelected
+                ? const Icon(Icons.check, color: Colors.white, size: 20)
+                : null,
+          ),
+        );
+      }).toList(),
+    );
+  }
+}
+
 class DashboardShell extends StatefulWidget {
   const DashboardShell({
     super.key,
@@ -1263,6 +1365,8 @@ class DashboardShell extends StatefulWidget {
     required this.themeMode,
     required this.onThemeChanged,
     required this.onLogout,
+    this.seedColor = GzusColors.blue,
+    this.onSeedColorChanged,
     this.onSettingsPressed,
     this.dataSource = const DataSourceInfo(),
     this.loginMethod,
@@ -1272,6 +1376,8 @@ class DashboardShell extends StatefulWidget {
   final String? studentName;
   final ThemeMode themeMode;
   final ValueChanged<ThemeMode> onThemeChanged;
+  final Color seedColor;
+  final ValueChanged<Color>? onSeedColorChanged;
   final VoidCallback onLogout;
   final VoidCallback? onSettingsPressed;
   final DataSourceInfo dataSource;
@@ -1897,6 +2003,8 @@ class _DashboardShellState extends State<DashboardShell> {
             term: term,
             themeMode: widget.themeMode,
             onThemeChanged: widget.onThemeChanged,
+            seedColor: widget.seedColor,
+            onSeedColorChanged: widget.onSeedColorChanged,
             onLogout: widget.onLogout,
             onYearChanged: (v) => _setAcademicPeriod(v, term),
             onTermChanged: (v) => _setAcademicPeriod(year, v),
@@ -3688,63 +3796,36 @@ class _AsyncModuleCard<T> extends StatelessWidget {
 }
 
 /// 骨架屏占位组件
-class _ShimmerPlaceholder extends StatefulWidget {
+class _ShimmerPlaceholder extends StatelessWidget {
   const _ShimmerPlaceholder();
-
-  @override
-  State<_ShimmerPlaceholder> createState() => _ShimmerPlaceholderState();
-}
-
-class _ShimmerPlaceholderState extends State<_ShimmerPlaceholder>
-    with SingleTickerProviderStateMixin {
-  late final _controller = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 1200),
-  )..repeat();
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
 
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final baseColor =
-        isDark ? GzusColors.darkSurfaceSoft : GzusColors.surfaceSoft;
-    final highlightColor = isDark ? GzusColors.darkBorder : GzusColors.border;
+    final color = isDark ? GzusColors.darkSurfaceSoft : GzusColors.surfaceSoft;
 
-    return AnimatedBuilder(
-      animation: _controller,
-      builder: (context, child) {
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _shimmerLine(baseColor, highlightColor, 0.6, _controller.value),
-            const SizedBox(height: 10),
-            _shimmerLine(baseColor, highlightColor, 0.9, _controller.value),
-            const SizedBox(height: 10),
-            _shimmerLine(baseColor, highlightColor, 0.4, _controller.value),
-            const SizedBox(height: 10),
-            _shimmerLine(baseColor, highlightColor, 0.7, _controller.value),
-          ],
-        );
-      },
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _placeholderLine(color, 0.6),
+        const SizedBox(height: 10),
+        _placeholderLine(color, 0.9),
+        const SizedBox(height: 10),
+        _placeholderLine(color, 0.4),
+        const SizedBox(height: 10),
+        _placeholderLine(color, 0.7),
+      ],
     );
   }
 
-  Widget _shimmerLine(
-      Color base, Color highlight, double widthFactor, double value) {
-    // 从左到右的高光扫过效果
-    final shimmerColor = Color.lerp(base, highlight, (value * 2 - 1).abs());
+  Widget _placeholderLine(Color color, double widthFactor) {
     return FractionallySizedBox(
       widthFactor: widthFactor,
       alignment: Alignment.centerLeft,
       child: Container(
         height: 14,
         decoration: BoxDecoration(
-          color: shimmerColor,
+          color: color,
           borderRadius: BorderRadius.circular(4),
         ),
       ),
@@ -4882,11 +4963,11 @@ class _WeatherHomeCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final w = weather;
     if (w == null) {
-      return _HomeCard(
+      return const _HomeCard(
         title: '今日天气',
         icon: Icons.wb_sunny,
         badge: '--',
-        child: const Center(child: Text('天气数据加载失败')),
+        child: Center(child: Text('天气数据加载失败')),
       );
     }
 
@@ -5137,7 +5218,7 @@ class _GradesHomeCard extends StatelessWidget {
                             decoration: BoxDecoration(
                               color: _gpaTagColor(
                                       gpa, Theme.of(context).colorScheme)
-                                  .withOpacity(0.12),
+                                  .withValues(alpha: 0.12),
                               borderRadius: BorderRadius.circular(12),
                             ),
                             child: Text(gpa.toStringAsFixed(1),
@@ -5164,7 +5245,15 @@ class _ExamCountdownHomeCard extends StatelessWidget {
   final List<ExamItem>? exams;
   final VoidCallback onTap;
 
-  int _calcCountdown(String dateStr) {
+  String _examDateStr(ExamItem e) {
+    if (e.date.isNotEmpty) return e.date;
+    final t = e.time ?? '';
+    final spaceIdx = t.indexOf(' ');
+    return spaceIdx > 0 ? t.substring(0, spaceIdx) : t;
+  }
+
+  int _calcCountdown(ExamItem e) {
+    final dateStr = _examDateStr(e);
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     final target = DateTime.tryParse(dateStr);
@@ -5173,8 +5262,8 @@ class _ExamCountdownHomeCard extends StatelessWidget {
   }
 
   List<ExamItem> _upcoming(List<ExamItem> list) {
-    return list.where((e) => _calcCountdown(e.date) >= 0).toList()
-      ..sort((a, b) => a.date.compareTo(b.date));
+    return list.where((e) => _calcCountdown(e) >= 0).toList()
+      ..sort((a, b) => _examDateStr(a).compareTo(_examDateStr(b)));
   }
 
   @override
@@ -5195,8 +5284,8 @@ class _ExamCountdownHomeCard extends StatelessWidget {
               separatorBuilder: (_, __) => const SizedBox(height: 10),
               itemBuilder: (context, i) {
                 final exam = upcoming[i];
-                final days = _calcCountdown(exam.date);
-                final dateObj = DateTime.tryParse(exam.date);
+                final days = _calcCountdown(exam);
+                final dateObj = DateTime.tryParse(_examDateStr(exam));
                 final day = dateObj?.day ?? 0;
                 final month = dateObj?.month ?? 0;
                 final isUrgent = days <= 3;
@@ -5209,16 +5298,21 @@ class _ExamCountdownHomeCard extends StatelessWidget {
                         ? Theme.of(context)
                             .colorScheme
                             .errorContainer
-                            .withOpacity(0.3)
+                            .withValues(alpha: 0.3)
                         : Theme.of(context)
                             .colorScheme
                             .surfaceContainerHighest
-                            .withOpacity(0.4),
+                            .withValues(alpha: 0.4),
                     borderRadius: BorderRadius.circular(12),
                     border: Border.all(
                       color: isUrgent
-                          ? Theme.of(context).colorScheme.error.withOpacity(0.3)
-                          : Theme.of(context).dividerColor.withOpacity(0.3),
+                          ? Theme.of(context)
+                              .colorScheme
+                              .error
+                              .withValues(alpha: 0.3)
+                          : Theme.of(context)
+                              .dividerColor
+                              .withValues(alpha: 0.3),
                     ),
                   ),
                   child: Row(
@@ -5231,11 +5325,11 @@ class _ExamCountdownHomeCard extends StatelessWidget {
                               ? Theme.of(context)
                                   .colorScheme
                                   .error
-                                  .withOpacity(0.12)
+                                  .withValues(alpha: 0.12)
                               : Theme.of(context)
                                   .colorScheme
                                   .primary
-                                  .withOpacity(0.1),
+                                  .withValues(alpha: 0.1),
                           borderRadius: BorderRadius.circular(10),
                         ),
                         child: Column(
@@ -13982,6 +14076,8 @@ class MorePage extends StatefulWidget {
     this.term = 1,
     this.themeMode = ThemeMode.system,
     this.onThemeChanged,
+    this.seedColor = GzusColors.blue,
+    this.onSeedColorChanged,
     this.onLogout,
     this.onYearChanged,
     this.onTermChanged,
@@ -14000,6 +14096,8 @@ class MorePage extends StatefulWidget {
   final int term;
   final ThemeMode themeMode;
   final ValueChanged<ThemeMode>? onThemeChanged;
+  final Color seedColor;
+  final ValueChanged<Color>? onSeedColorChanged;
   final VoidCallback? onLogout;
   final ValueChanged<int>? onYearChanged;
   final ValueChanged<int>? onTermChanged;
@@ -14312,6 +14410,29 @@ class _MorePageState extends State<MorePage> {
                                   selected: {widget.themeMode},
                                   onSelectionChanged: (s) =>
                                       widget.onThemeChanged?.call(s.first),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      if (widget.onSeedColorChanged != null)
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Row(
+                                children: [
+                                  Icon(Icons.color_lens, size: 20),
+                                  SizedBox(width: 12),
+                                  Text('主题色'),
+                                ],
+                              ),
+                              const SizedBox(height: 12),
+                              Center(
+                                child: _SeedColorPicker(
+                                  selectedColor: widget.seedColor,
+                                  onColorSelected: widget.onSeedColorChanged!,
                                 ),
                               ),
                             ],

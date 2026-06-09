@@ -25,14 +25,9 @@ class FtpUploadClient {
     fun listDirectory(args: Map<*, *>): List<Map<String, Any>> {
         val path = normalizeDirectory(args["path"]?.toString() ?: "/")
         return withClient(args) { ftp ->
-            // 优先尝试 CWD 切换（兼容 Windows FTP 不支持绝对路径 LIST）
-            val cwdOk = ftp.changeWorkingDirectory(path)
-            val files = if (cwdOk) {
-                ftp.listFiles()
-            } else {
-                // CWD 失败，回退到直接 listFiles(path)（兼容不支持 CWD 的服务端）
-                ftp.listFiles(path)
-            }
+            // 直接用 listFiles(path) 列出指定目录，避免 CWD 改变工作目录后
+            // 被动模式数据连接路径解析不一致导致返回空列表
+            val files = ftp.listFiles(path)
             if (files == null || files.isEmpty()) {
                 return@withClient emptyList()
             }
@@ -42,7 +37,7 @@ class FtpUploadClient {
                     mapOf(
                         "name" to file.name,
                         "path" to childPath(path, file.name),
-                        "isDirectory" to file.isDirectory,
+                        "isDirectory" to (file.isDirectory || file.type == FTPFile.UNKNOWN_TYPE && file.name.isNotEmpty()),
                         "size" to safeSize(file)
                     )
                 }
