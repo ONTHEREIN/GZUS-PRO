@@ -49,6 +49,12 @@ class Settings(BaseSettings):
     web_push_vapid_public_key: str = ""
     web_push_vapid_private_key: str = ""
     web_push_vapid_subject: str = "mailto:example@example.com"
+    app_latest_version: str = "0.0.1"
+    app_latest_build: str = "1"
+    app_min_supported_version: str = "0.0.1"
+    app_min_supported_build: str = "1"
+    app_download_url: str = ""
+    app_release_notes: str = ""
 
     model_config = SettingsConfigDict(env_file=ENV_FILE, env_file_encoding="utf-8")
 

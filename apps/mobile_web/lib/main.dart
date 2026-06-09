@@ -39,10 +39,8 @@ import 'web_pwa_cache.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // 启用 Android Edge-to-Edge（小白条沉浸式）
-  try {
-    AndroidEdgeToEdge.enable();
-  } catch (_) {}
+  // 启用 Android Edge-to-Edge（Flutter 3.44+ 自动启用，无需手动调用）
+  // AndroidEdgeToEdge.enable(); // 已移除 - Flutter 默认启用
 
   // 设置默认系统 UI 样式（透明状态栏 + 导航栏）
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
