@@ -35,6 +35,9 @@ String _normalizeSingle(String url) {
 }
 
 String _defaultApiBaseUrl() {
+  if (kIsWeb) {
+    return 'https://api-one-zeta-dc0jrazxzq.vercel.app';
+  }
   if (defaultTargetPlatform == TargetPlatform.android) {
     return 'http://10.0.2.2:8000,http://127.0.0.1:8000';
   }
@@ -1972,7 +1975,7 @@ class ApiClient {
     return data;
   }
 
-  static const Duration _requestTimeout = Duration(seconds: 15);
+  static const Duration _requestTimeout = Duration(seconds: 45);
 
   Future<Map<String, dynamic>> _get(String path) async {
     return _withReloginRetry(
