@@ -39,6 +39,20 @@ import 'web_pwa_cache.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
+  // 启用 Android Edge-to-Edge（小白条沉浸式）
+  try {
+    AndroidEdgeToEdge.enable();
+  } catch (_) {}
+
+  // 设置默认系统 UI 样式（透明状态栏 + 导航栏）
+  SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
+    statusBarColor: Colors.transparent,
+    statusBarIconBrightness: Brightness.dark,
+    systemNavigationBarColor: Colors.transparent,
+    systemNavigationBarDividerColor: Colors.transparent,
+    systemNavigationBarIconBrightness: Brightness.dark,
+  ));
+
   // 设置 Bugly 全局异常捕获
   BuglyService.setupErrorHandling();
 
@@ -133,6 +147,7 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
             Brightness.dark;
     if (dark != _systemDark) {
       setState(() => _systemDark = dark);
+      _updateSystemUIOverlayStyle();
     }
   }
 
@@ -148,12 +163,28 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
         setState(() => themeMode = mode);
       }
     }
+    _updateSystemUIOverlayStyle();
   }
 
   Future<void> _setThemeMode(ThemeMode mode) async {
     setState(() => themeMode = mode);
+    _updateSystemUIOverlayStyle();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('theme.mode', mode.name);
+  }
+
+  /// 根据当前主题模式更新系统状态栏/导航栏图标颜色
+  void _updateSystemUIOverlayStyle() {
+    final isDark = themeMode == ThemeMode.dark ||
+        (themeMode == ThemeMode.system && _systemDark);
+    SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      statusBarIconBrightness: isDark ? Brightness.light : Brightness.dark,
+      systemNavigationBarColor: Colors.transparent,
+      systemNavigationBarDividerColor: Colors.transparent,
+      systemNavigationBarIconBrightness:
+          isDark ? Brightness.light : Brightness.dark,
+    ));
   }
 
   @override

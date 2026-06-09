@@ -5,6 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>OneGZUS | 软帮手</title>
   <meta name="description" content="OneGZUS - 软帮手。课表、成绩、考勤、水电费、请假、考试提醒，一个 App 搞定全部教务事务。">
+
+  <!-- Open Graph -->
+  <meta property="og:title" content="OneGZUS | 软帮手 - 广州软件学院教务助手">
+  <meta property="og:description" content="课表、成绩、考勤、水电费、请假、考试提醒，一个 App 搞定全部教务事务。">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://github.com/ONTHEREIN/GZUS-PRO">
+  <meta name="twitter:card" content="summary_large_image">
+
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
@@ -54,15 +62,9 @@
     }
 
     [data-theme="dark"] {
-      --bg: #0f0f0e;
-      --surface: #1a1a18;
-      --ink: #f0eeea;
-      --muted: #8a8884;
-      --subtle: #2a2a28;
-      --accent: #6a9bcc;
-      --accent-soft: #1a2535;
-      --success: #5a8c6a;
-      --warning: #c9a04a;
+      --bg: #0f0f0e; --surface: #1a1a18; --ink: #f0eeea; --muted: #8a8884;
+      --subtle: #2a2a28; --accent: #6a9bcc; --accent-soft: #1a2535;
+      --success: #5a8c6a; --warning: #c9a04a;
       --shadow-sm: 0 1px 3px rgba(0,0,0,0.2);
       --shadow-md: 0 4px 20px rgba(0,0,0,0.3);
       --shadow-lg: 0 12px 40px rgba(0,0,0,0.4);
@@ -70,15 +72,9 @@
     }
 
     [data-theme="light"] {
-      --bg: #faf9f5;
-      --surface: #ffffff;
-      --ink: #141413;
-      --muted: #8a8986;
-      --subtle: #e8e6dc;
-      --accent: #1e3a5f;
-      --accent-soft: #e8eef5;
-      --success: #3d6b4f;
-      --warning: #b8860b;
+      --bg: #faf9f5; --surface: #ffffff; --ink: #141413; --muted: #8a8986;
+      --subtle: #e8e6dc; --accent: #1e3a5f; --accent-soft: #e8eef5;
+      --success: #3d6b4f; --warning: #b8860b;
       --shadow-sm: 0 1px 3px rgba(0,0,0,0.04);
       --shadow-md: 0 4px 20px rgba(0,0,0,0.06);
       --shadow-lg: 0 12px 40px rgba(0,0,0,0.08);
@@ -107,6 +103,17 @@
         animation-iteration-count: 1 !important;
         transition-duration: 0.01ms !important;
       }
+    }
+
+    /* Scroll progress */
+    .scroll-progress {
+      position: fixed;
+      top: 0; left: 0;
+      height: 2px;
+      background: linear-gradient(90deg, var(--accent), var(--success));
+      z-index: 10001;
+      width: 0%;
+      transition: width 0.1s linear;
     }
 
     /* Skip link */
@@ -398,6 +405,32 @@
     .theme-toggle:hover { color: var(--ink); background: rgba(0,0,0,0.04); }
 
     /* ================================================================
+       TOAST
+       ================================================================ */
+    .toast-container {
+      position: fixed;
+      bottom: 32px;
+      left: 50%;
+      transform: translateX(-50%) translateY(100px);
+      z-index: 10002;
+      background: var(--ink);
+      color: white;
+      padding: 14px 28px;
+      border-radius: var(--radius-sm);
+      font-size: 0.9rem;
+      font-weight: 600;
+      box-shadow: var(--shadow-lg);
+      opacity: 0;
+      transition: all 0.5s var(--spring);
+      pointer-events: none;
+      white-space: nowrap;
+    }
+    .toast-container.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+
+    /* ================================================================
        HERO
        ================================================================ */
     .hero {
@@ -511,6 +544,21 @@
       border: 1px solid var(--subtle);
     }
     .btn-secondary:hover { border-color: var(--muted); transform: translateY(-1px); }
+
+    /* Coming soon badge on button */
+    .btn[data-soon]::after {
+      content: '即将上线';
+      position: absolute;
+      top: -6px;
+      right: -6px;
+      background: var(--warning);
+      color: white;
+      font-size: 0.55rem;
+      font-weight: 700;
+      padding: 2px 6px;
+      border-radius: 6px;
+      letter-spacing: 0.02em;
+    }
 
     /* Magnetic button effect layer */
     .magnetic-wrap {
@@ -633,6 +681,22 @@
       text-transform: uppercase;
       letter-spacing: 0.08em;
       margin-bottom: 16px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .section-tag::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent);
+      transform: translateX(-100%);
+      animation: shimmer 3s infinite;
+    }
+
+    @keyframes shimmer {
+      0% { transform: translateX(-100%); }
+      50%, 100% { transform: translateX(100%); }
     }
 
     .section-header h2 {
@@ -1053,11 +1117,27 @@
       font-weight: 600;
       text-decoration: none;
       transition: all 0.3s var(--spring);
+      cursor: pointer;
+      position: relative;
     }
 
     .download-btn:hover {
       background: rgba(255,255,255,0.15);
       transform: translateY(-2px);
+    }
+
+    .download-btn[data-soon]::after {
+      content: '即将上线';
+      position: absolute;
+      top: -8px;
+      right: -8px;
+      background: var(--warning);
+      color: white;
+      font-size: 0.55rem;
+      font-weight: 700;
+      padding: 2px 6px;
+      border-radius: 6px;
+      letter-spacing: 0.02em;
     }
 
     /* ================================================================
@@ -1170,10 +1250,14 @@
       .download-section { padding: 40px 24px; }
       .footer-top { grid-template-columns: 1fr; gap: 32px; }
       .footer-bottom { flex-direction: column; gap: 12px; text-align: center; }
+      .toast-container { white-space: normal; text-align: center; max-width: 90vw; }
     }
   </style>
 </head>
 <body>
+
+  <!-- Scroll progress -->
+  <div class="scroll-progress" id="scrollProgress"></div>
 
   <!-- Skip link -->
   <a href="#main" class="skip-link">跳转到主要内容</a>
@@ -1182,6 +1266,9 @@
   <div class="page-loader" id="loader">
     <div class="loader-ring"></div>
   </div>
+
+  <!-- Toast -->
+  <div class="toast-container" id="toast">即将上线，敬请期待</div>
 
   <!-- Mobile menu overlay -->
   <div class="mobile-menu" id="mobileMenu">
@@ -1205,7 +1292,7 @@
         <i class="ph ph-download-simple"></i>
         下载
       </a>
-      <a href="https://github.com" target="_blank" class="mobile-nav-link">
+      <a href="https://github.com/ONTHEREIN/GZUS-PRO" target="_blank" class="mobile-nav-link">
         <i class="ph ph-github-logo"></i>
         GitHub
       </a>
@@ -1226,7 +1313,7 @@
         <button class="theme-toggle" id="themeToggle" aria-label="切换深色模式">
           <i class="ph ph-moon" id="themeIcon"></i>
         </button>
-        <a href="https://github.com" class="nav-cta" target="_blank">
+        <a href="https://github.com/ONTHEREIN/GZUS-PRO" class="nav-cta" target="_blank">
           <i class="ph ph-github-logo"></i>
           GitHub
         </a>
@@ -1498,15 +1585,15 @@
         <h2>准备好告别教务系统的反复切换了吗？</h2>
         <p>Web 版无需下载，打开即用。Android 版下载 APK 安装。</p>
         <div class="download-options">
-          <a href="#" class="download-btn magnetic-wrap">
+          <button class="download-btn magnetic-wrap" data-soon id="btnWeb">
             <i class="ph ph-globe"></i>
             Web 版直接访问
-          </a>
-          <a href="#" class="download-btn magnetic-wrap">
+          </button>
+          <button class="download-btn magnetic-wrap" data-soon id="btnAndroid">
             <i class="ph ph-download-simple"></i>
             下载 Android 版
-          </a>
-          <a href="https://github.com" class="download-btn magnetic-wrap" target="_blank">
+          </button>
+          <a href="https://github.com/ONTHEREIN/GZUS-PRO" class="download-btn magnetic-wrap" target="_blank">
             <i class="ph ph-github-logo"></i>
             查看源码
           </a>
@@ -1591,9 +1678,9 @@
         </div>
         <div class="footer-col">
           <h4>关于</h4>
-          <a href="https://github.com" target="_blank">GitHub</a>
-          <a href="#">问题反馈</a>
-          <a href="./docs/privacy.html">隐私政策</a>
+          <a href="https://github.com/ONTHEREIN/GZUS-PRO" target="_blank">GitHub</a>
+          <a href="https://github.com/ONTHEREIN/GZUS-PRO/issues" target="_blank">问题反馈</a>
+          <a href="./privacy.html">隐私政策</a>
         </div>
       </div>
       <div class="footer-bottom">
@@ -1613,6 +1700,17 @@
         document.getElementById('nav').classList.add('loaded');
       }, 400);
     });
+
+    /* ================================================================
+       SCROLL PROGRESS
+       ================================================================ */
+    const scrollProgress = document.getElementById('scrollProgress');
+    window.addEventListener('scroll', () => {
+      const scrollTop = window.scrollY;
+      const docHeight = document.documentElement.scrollHeight - window.innerHeight;
+      const progress = docHeight > 0 ? (scrollTop / docHeight) * 100 : 0;
+      scrollProgress.style.width = progress + '%';
+    }, { passive: true });
 
     /* ================================================================
        THEME TOGGLE
@@ -1646,6 +1744,21 @@
       setTheme(next);
       localStorage.setItem('gzus-theme', next);
     });
+
+    /* ================================================================
+       TOAST
+       ================================================================ */
+    const toast = document.getElementById('toast');
+    let toastTimeout;
+    function showToast(msg) {
+      toast.textContent = msg;
+      toast.classList.add('show');
+      clearTimeout(toastTimeout);
+      toastTimeout = setTimeout(() => toast.classList.remove('show'), 2500);
+    }
+
+    document.getElementById('btnWeb').addEventListener('click', () => showToast('Web 版即将上线，敬请期待'));
+    document.getElementById('btnAndroid').addEventListener('click', () => showToast('Android 版即将上线，敬请期待'));
 
     /* ================================================================
        MOBILE MENU
