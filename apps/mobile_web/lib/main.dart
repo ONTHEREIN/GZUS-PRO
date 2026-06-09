@@ -1526,47 +1526,44 @@ class _DashboardShellState extends State<DashboardShell> {
                             children: [
                               _FrostedBanner(
                                 padding:
-                                    const EdgeInsets.fromLTRB(14, 10, 14, 10),
-                                child: SizedBox(
-                                  height: 120,
-                                  child: Row(
-                                    children: [
-                                      Expanded(
-                                        child: Column(
-                                          mainAxisAlignment:
-                                              MainAxisAlignment.center,
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.center,
-                                          children: [
-                                            Text(
-                                              widget.studentName ?? 'OneGZUS',
-                                              maxLines: 1,
-                                              overflow: TextOverflow.ellipsis,
-                                              style: Theme.of(context)
-                                                  .textTheme
-                                                  .titleMedium,
-                                            ),
-                                            const SizedBox(height: 4),
-                                            Text(
-                                              '软帮手',
-                                              maxLines: 1,
-                                              overflow: TextOverflow.ellipsis,
-                                              style: Theme.of(context)
-                                                  .textTheme
-                                                  .displaySmall
-                                                  ?.copyWith(
-                                                    fontWeight: FontWeight.w900,
-                                                    letterSpacing: 4.0,
-                                                    color: Theme.of(context)
-                                                        .colorScheme
-                                                        .primary,
-                                                  ),
-                                            ),
-                                          ],
-                                        ),
+                                    const EdgeInsets.fromLTRB(14, 2, 14, 2),
+                                child: Row(
+                                  children: [
+                                    Expanded(
+                                      child: Column(
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.center,
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.center,
+                                        children: [
+                                          Text(
+                                            widget.studentName ?? 'OneGZUS',
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: Theme.of(context)
+                                                .textTheme
+                                                .bodySmall
+                                                ?.copyWith(
+                                                  fontSize: 1,
+                                                  height: 0.1,
+                                                ),
+                                          ),
+                                          Text(
+                                            '软帮手',
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: Theme.of(context)
+                                                .textTheme
+                                                .bodySmall
+                                                ?.copyWith(
+                                                  fontSize: 1,
+                                                  height: 0.1,
+                                                ),
+                                          ),
+                                        ],
                                       ),
-                                    ],
-                                  ),
+                                    ),
+                                  ],
                                 ),
                               ),
                               if (_mobileHeaderToolsVisible) ...[
