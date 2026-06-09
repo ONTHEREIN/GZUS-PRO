@@ -61,7 +61,7 @@
 无需下载，浏览器打开即用：
 
 ```
-https://your-github-pages-url.github.io
+https://onegzus-onweb.pages.dev
 ```
 
 支持手机浏览器，可添加到主屏幕获得类似原生 App 的体验。
@@ -85,7 +85,7 @@ Android 版支持 4 类桌面组件：
 - **生活缴费**：显示电费、冷水、热水余额
 - **业务进度**：显示请假/办事大厅审批状态
 
-添加方法：在 Android 桌面长按空白处，进入“小组件/Widget”，找到 OneGZUS 后拖到桌面。打开 App 并刷新首页后，组件会同步最新数据。
+添加方法：在 Android 桌面长按空白处，进入"小组件/Widget"，找到 OneGZUS 后拖到桌面。打开 App 并刷新首页后，组件会同步最新数据。
 
 ### iOS
 
@@ -115,7 +115,7 @@ A: 欢迎通过 GitHub Issues 提交反馈，或直接联系开发者。
 
 - **前端**: Flutter 3.x，一套代码构建 Web + Android + iOS
 - **后端**: FastAPI + Python，高性能异步 API 服务
-- **部署**: 支持 Vercel + GitHub Pages 零成本部署
+- **部署**: 支持 Cloudflare Pages + Vercel 零成本部署
 
 详细开发文档和部署指南请参考 [**deploy-free.md**](./deploy-free.md)。
 
@@ -123,11 +123,21 @@ A: 欢迎通过 GitHub Issues 提交反馈，或直接联系开发者。
 
 ```
 OneGZUS/
-├── apps/mobile_web/      # Flutter 前端
-├── services/api/         # FastAPI 后端
-├── docs/                 # 文档与隐私政策
-└── website/              # 项目展示网站
+├── apps/mobile_web/          # Flutter 前端
+├── services/api/             # FastAPI 后端
+├── docs/                     # 文档与隐私政策
+├── website/                  # 项目介绍网站
+└── .github/workflows/        # CI/CD 部署配置
 ```
+
+## 部署架构
+
+| 服务 | 平台 | 项目名 | 说明 |
+|------|------|--------|------|
+| 项目介绍页 | Cloudflare Pages | `intro-onegzus` | 静态介绍网站，部署 `website/` |
+| Web 应用 | Cloudflare Pages | `onegzus-onweb` | Flutter Web 前端，部署 `apps/mobile_web/build/web` |
+
+> 推送至 `master` 分支后，GitHub Actions 会自动构建并部署到 Cloudflare Pages。
 
 ## 免责声明
 

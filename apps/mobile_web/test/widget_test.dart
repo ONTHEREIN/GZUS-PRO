@@ -303,6 +303,38 @@ void main() {
     expect(result.source.displayText, '教务系统会话已失效，请重新登录');
   });
 
+  test('api requests do not wait for warmup', () async {
+    SharedPreferences.setMockInitialValues({});
+    final healthRelease = Completer<void>();
+    final api = ApiClient(
+      baseUrl: 'https://api.example.test',
+      httpClient: MockClient((request) async {
+        if (request.url.path == '/health') {
+          await healthRelease.future;
+          return http.Response(jsonEncode({'status': 'ok'}), 200);
+        }
+        if (request.url.path == '/me') {
+          return http.Response.bytes(
+            utf8.encode(jsonEncode({
+              'studentId': '2540232101',
+              'name': '服务器学生',
+            })),
+            200,
+          );
+        }
+        return http.Response('not found', 404);
+      }),
+    );
+
+    api.startWarmup();
+    final result = await api
+        .me(forceRefresh: true)
+        .timeout(const Duration(milliseconds: 500));
+    healthRelease.complete();
+
+    expect(result.data.name, '服务器学生');
+  });
+
   test('api refreshes expired credential token with saved password', () async {
     SharedPreferences.setMockInitialValues({
       'auth.credentialToken': 'expired-token',

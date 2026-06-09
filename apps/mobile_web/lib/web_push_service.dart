@@ -22,6 +22,10 @@ abstract class WebPushService {
   Future<bool> isSupported();
   
   Future<bool> isSubscribed();
+
+  /// Returns browser notification permission status: 'granted', 'denied', or 'default'.
+  /// Does NOT trigger a permission prompt.
+  Future<String> getPermissionStatus();
   
   Future<bool> requestPermission();
   

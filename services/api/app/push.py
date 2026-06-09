@@ -5,7 +5,6 @@ import logging
 from datetime import datetime, timezone
 
 import httpx
-from pywebpush import webpush, WebPushException
 
 from app.config import get_settings
 from app.database import WebPushSubscription, get_sync_session_factory
@@ -41,6 +40,8 @@ def send_web_push_to_student(student_id: str, title: str, body: str, extras: dic
     """
     if not is_web_push_enabled():
         return
+
+    from pywebpush import WebPushException, webpush
 
     settings = get_settings()
     factory = get_sync_session_factory()

@@ -35,16 +35,16 @@ String _normalizeSingle(String url) {
 }
 
 String _defaultApiBaseUrl() {
-  // 所有平台默认使用云端后端，本地地址作为回退
-  const cloudUrl = 'https://api-one-zeta-dc0jrazxzq.vercel.app';
+  if (kReleaseMode) return '';
+
+  // 开发环境默认使用本地后端；生产构建必须显式传 API_BASE_URL。
   if (kIsWeb) {
-    return cloudUrl;
+    return 'http://127.0.0.1:8000';
   }
   if (defaultTargetPlatform == TargetPlatform.android) {
-    // 云端优先，模拟器地址回退（仅开发调试用）
-    return '$cloudUrl,http://10.0.2.2:8000';
+    return 'http://10.0.2.2:8000';
   }
-  return '$cloudUrl,http://127.0.0.1:8000';
+  return 'http://127.0.0.1:8000';
 }
 
 class DataSourceInfo {
@@ -323,7 +323,8 @@ class ScheduleResult {
 
 class ExamItem {
   ExamItem.fromJson(Map<String, dynamic> json)
-      : courseName = json['courseName'] as String? ?? json['name'] as String? ?? '',
+      : courseName =
+            json['courseName'] as String? ?? json['name'] as String? ?? '',
         name = json['name'] as String? ?? json['courseName'] as String? ?? '',
         date = json['date'] as String? ?? '',
         time = json['time'] as String? ?? '',
@@ -417,7 +418,8 @@ class WeatherData {
   final double? tempMin;
   final List<WeatherForecast> forecast;
 
-  String get location => district.isNotEmpty ? district : (city.isNotEmpty ? city : province);
+  String get location =>
+      district.isNotEmpty ? district : (city.isNotEmpty ? city : province);
 }
 
 class WeatherForecast {
@@ -1073,8 +1075,10 @@ class EcardSummary {
         hotWaterText = json['hotWaterText'] as String?,
         reminderEnabled = json['reminderEnabled'] as bool? ?? true,
         lowPowerThreshold = _doubleFromJson(json['lowPowerThreshold']) ?? 30.0,
-        lowColdWaterThreshold = _doubleFromJson(json['lowColdWaterThreshold']) ?? 5.0,
-        lowHotWaterThreshold = _doubleFromJson(json['lowHotWaterThreshold']) ?? 10.0,
+        lowColdWaterThreshold =
+            _doubleFromJson(json['lowColdWaterThreshold']) ?? 5.0,
+        lowHotWaterThreshold =
+            _doubleFromJson(json['lowHotWaterThreshold']) ?? 10.0,
         reminderTimes = (json['reminderTimes'] as List<dynamic>?)
                 ?.map((e) => e.toString())
                 .toList() ??
@@ -1155,7 +1159,7 @@ class ApiClient {
         _cache = cache ?? RequestCache() {
     final raw = baseUrl ?? apiBaseUrl;
     _candidates = _buildCandidates(raw);
-    this.baseUrl = _candidates.first;
+    this.baseUrl = _candidates.isEmpty ? '' : _candidates.first;
     _currentBaseUrl = this.baseUrl;
   }
 
@@ -1511,6 +1515,7 @@ class ApiClient {
   }
 
   Future<bool> checkHealth() async {
+    if (_candidates.isEmpty) return false;
     for (final candidate in _candidates) {
       try {
         final response = await _http
@@ -1714,9 +1719,8 @@ class ApiClient {
         cacheKey: _weatherCacheKey(lat, lon),
         fetch: () async {
           final uri = _weatherUri(lat, lon);
-          final response = await _http
-              .get(uri)
-              .timeout(const Duration(seconds: 10));
+          final response =
+              await _http.get(uri).timeout(const Duration(seconds: 10));
           final body = utf8.decode(response.bodyBytes);
           final decoded = jsonDecode(body);
           if (decoded is! Map<String, dynamic>) {
@@ -1732,7 +1736,8 @@ class ApiClient {
   Uri _weatherUri(double? lat, double? lon) {
     final query = StringBuffer('forecast=true');
     if (lat != null && lon != null) {
-      query.write('&lat=${lat.toStringAsFixed(4)}&lon=${lon.toStringAsFixed(4)}');
+      query.write(
+          '&lat=${lat.toStringAsFixed(4)}&lon=${lon.toStringAsFixed(4)}');
     }
     return Uri.parse('https://api.uapis.cn/api/weather?$query');
   }
@@ -1919,8 +1924,10 @@ class ApiClient {
     final data = await _patch('/ecard/reminder', {
       if (enabled != null) 'enabled': enabled,
       if (lowPowerThreshold != null) 'lowPowerThreshold': lowPowerThreshold,
-      if (lowColdWaterThreshold != null) 'lowColdWaterThreshold': lowColdWaterThreshold,
-      if (lowHotWaterThreshold != null) 'lowHotWaterThreshold': lowHotWaterThreshold,
+      if (lowColdWaterThreshold != null)
+        'lowColdWaterThreshold': lowColdWaterThreshold,
+      if (lowHotWaterThreshold != null)
+        'lowHotWaterThreshold': lowHotWaterThreshold,
       if (reminderTimes != null) 'reminderTimes': reminderTimes,
       if (reminderItems != null) 'reminderItems': reminderItems,
     });
@@ -1983,7 +1990,7 @@ class ApiClient {
   Future<Map<String, dynamic>> _get(String path) async {
     return _withReloginRetry(
       () async {
-        final url = _resolveBaseUrl();
+        final url = _requireBaseUrl();
         final response = await _http
             .get(Uri.parse('$url$path'), headers: _headers())
             .timeout(_requestTimeout);
@@ -1995,7 +2002,7 @@ class ApiClient {
   Future<List<Map<String, dynamic>>> _getList(String path) async {
     return _withReloginRetry(
       () async {
-        final url = _resolveBaseUrl();
+        final url = _requireBaseUrl();
         final response = await _http
             .get(Uri.parse('$url$path'), headers: _headers())
             .timeout(_requestTimeout);
@@ -2012,7 +2019,7 @@ class ApiClient {
       String path, Map<String, dynamic> body) async {
     return _withReloginRetry(
       () async {
-        final url = _resolveBaseUrl();
+        final url = _requireBaseUrl();
         final response = await _http
             .post(
               Uri.parse('$url$path'),
@@ -2029,7 +2036,7 @@ class ApiClient {
       String path, Map<String, dynamic> body) async {
     return _withReloginRetry(
       () async {
-        final url = _resolveBaseUrl();
+        final url = _requireBaseUrl();
         final response = await _http
             .patch(
               Uri.parse('$url$path'),
@@ -2047,47 +2054,45 @@ class ApiClient {
     return _currentBaseUrl;
   }
 
+  String _requireBaseUrl() {
+    final url = _resolveBaseUrl();
+    if (url.isEmpty) {
+      throw ApiException('未配置 API_BASE_URL，请使用 Vercel 后端地址重新构建应用');
+    }
+    return url;
+  }
+
   Future<void>? _warmupFuture;
   bool _warmedUp = false;
 
   void startWarmup() {
+    if (_candidates.isEmpty) return;
     if (_warmedUp || _warmupFuture != null) return;
     _warmupFuture = _doWarmup();
   }
 
   Future<void> _doWarmup() async {
-    final url = _resolveBaseUrl();
-    int attempt = 0;
-    while (attempt < 3) {
-      attempt++;
-      try {
-        final response = await _http
-            .get(Uri.parse('$url/health'), headers: _headers())
-            .timeout(const Duration(seconds: 35));
-        if (response.statusCode == 200) {
-          _warmedUp = true;
-          return;
+    try {
+      for (final candidate in _candidates) {
+        try {
+          final response = await _http
+              .get(Uri.parse('$candidate/health'), headers: _headers())
+              .timeout(const Duration(seconds: 5));
+          if (response.statusCode == 200) {
+            _currentBaseUrl = candidate;
+            return;
+          }
+        } on TimeoutException {
+          continue;
+        } on http.ClientException {
+          continue;
+        } on SocketException {
+          continue;
         }
-      } on TimeoutException {
-        continue;
-      } on http.ClientException {
-        continue;
-      } on SocketException {
-        continue;
       }
-      await Future<void>.delayed(const Duration(seconds: 2));
+    } finally {
+      _warmedUp = true;
     }
-    _warmedUp = true;
-  }
-
-  Future<void> _ensureWarmedUp() async {
-    if (_warmedUp) return;
-    if (_warmupFuture != null) {
-      await _warmupFuture;
-      return;
-    }
-    startWarmup();
-    await _warmupFuture!;
   }
 
   /// 在收到 401 时自动尝试 relogin 并重试原始请求
@@ -2101,7 +2106,6 @@ class ApiClient {
     required Set<String> tried,
   }) async {
     try {
-      await _ensureWarmedUp();
       return await request();
     } on ApiException catch (e) {
       if (e.statusCode == 401) {

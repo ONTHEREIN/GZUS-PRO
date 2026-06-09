@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     cors_origins: str = Field(
         default="http://localhost:3000,http://localhost:5173,http://localhost:8080,http://127.0.0.1:8080,http://192.168.6.230:8080"
     )
-    cors_origin_regex: str = r"^https?://(localhost|127\.0\.0\.1|192\.168\.\d{1,3}\.\d{1,3})(:\d+)?$"
+    cors_origin_regex: str = r"^https?://(localhost|127\.0\.0\.1|192\.168\.\d{1,3}\.\d{1,3})(:\d+)?$|^https://[a-z0-9-]+\.(pages\.dev|vercel\.app)$"
     session_ttl_seconds: int = 7200
     sso_ttl_seconds: int = 300
     request_timeout_seconds: int = 15

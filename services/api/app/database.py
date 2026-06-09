@@ -203,6 +203,7 @@ def get_async_engine():
 def get_sync_session_factory() -> sessionmaker[Session]:
     global _session_factory
     if _session_factory is None:
+        init_db()
         _session_factory = sessionmaker(bind=get_sync_engine(), expire_on_commit=False)
     return _session_factory
 

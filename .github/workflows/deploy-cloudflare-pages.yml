@@ -15,7 +15,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Deploy
-        run: npx wrangler@latest pages deploy website --project-name=onegzus --branch=master --commit-dirty=true
+        run: npx wrangler@latest pages deploy website --project-name=intro-onegzus --branch=master --commit-dirty=true
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

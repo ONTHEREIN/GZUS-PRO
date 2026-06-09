@@ -37,7 +37,7 @@ jobs:
           flutter build web --release --base-href "/" --dart-define=API_BASE_URL="$API_BASE_URL"
 
       - name: Deploy to Cloudflare Pages
-        run: npx wrangler@latest pages deploy apps/mobile_web/build/web --project-name=onegzus --commit-dirty=true
+        run: npx wrangler@latest pages deploy apps/mobile_web/build/web --project-name=onegzus-onweb --commit-dirty=true
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

@@ -861,8 +861,8 @@ class _LoginPageState extends State<LoginPage>
                                       BorderRadius.circular(GzusRadii.sm),
                                   onTap: loading
                                       ? null
-                                      : () => setState(() =>
-                                          agreedToTerms = !agreedToTerms),
+                                      : () => setState(
+                                          () => agreedToTerms = !agreedToTerms),
                                   child: Padding(
                                     padding:
                                         const EdgeInsets.symmetric(vertical: 4),
@@ -890,8 +890,7 @@ class _LoginPageState extends State<LoginPage>
                                                         .onSurface,
                                                   ),
                                               children: [
-                                                const TextSpan(
-                                                    text: '我已阅读并同意'),
+                                                const TextSpan(text: '我已阅读并同意'),
                                                 TextSpan(
                                                   text: '《用户服务协议》',
                                                   style: TextStyle(
@@ -903,13 +902,12 @@ class _LoginPageState extends State<LoginPage>
                                                   ),
                                                   recognizer:
                                                       TapGestureRecognizer()
-                                                        ..onTap =
-                                                            () => _showAgreement(
-                                                                  context,
-                                                                  title:
-                                                                      '用户服务协议',
-                                                                  type: 'terms',
-                                                                ),
+                                                        ..onTap = () =>
+                                                            _showAgreement(
+                                                              context,
+                                                              title: '用户服务协议',
+                                                              type: 'terms',
+                                                            ),
                                                 ),
                                                 const TextSpan(text: ' 和 '),
                                                 TextSpan(
@@ -923,14 +921,12 @@ class _LoginPageState extends State<LoginPage>
                                                   ),
                                                   recognizer:
                                                       TapGestureRecognizer()
-                                                        ..onTap =
-                                                            () => _showAgreement(
-                                                                  context,
-                                                                  title:
-                                                                      '隐私政策',
-                                                                  type:
-                                                                      'privacy',
-                                                                ),
+                                                        ..onTap = () =>
+                                                            _showAgreement(
+                                                              context,
+                                                              title: '隐私政策',
+                                                              type: 'privacy',
+                                                            ),
                                                 ),
                                               ],
                                             ),
@@ -1186,8 +1182,7 @@ OneGZUS 隐私政策（摘要）
 
   @override
   Widget build(BuildContext context) {
-    final content =
-        type == 'terms' ? _termsOfServiceText : _privacyPolicyText;
+    final content = type == 'terms' ? _termsOfServiceText : _privacyPolicyText;
 
     return SingleChildScrollView(
       controller: scrollController,
@@ -2731,6 +2726,8 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
+  static const _homeLoadTimeout = Duration(seconds: 18);
+
   late Future<_HomeDashboardData> _dataFuture;
   List<String> _moduleOrder =
       HomePreferences.defaultModules.map((item) => item.id).toList();
@@ -2773,7 +2770,12 @@ class _HomePageState extends State<HomePage> {
         StudentInfo(studentId: '', name: 'OneGZUS'),
       ),
       _safeLoad(
-        widget.api.schedule(year: widget.year, term: widget.term, forceRefresh: forceRefresh).then((r) => r.data),
+        widget.api
+            .schedule(
+                year: widget.year,
+                term: widget.term,
+                forceRefresh: forceRefresh)
+            .then((r) => r.data),
         ScheduleResult(items: const [], raw: const []),
       ),
       _safeLoad(
@@ -2781,7 +2783,12 @@ class _HomePageState extends State<HomePage> {
         const <NoticeItem>[],
       ),
       _safeLoad(
-        widget.api.attendance(year: widget.year, term: widget.term, forceRefresh: forceRefresh).then((r) => r.data),
+        widget.api
+            .attendance(
+                year: widget.year,
+                term: widget.term,
+                forceRefresh: forceRefresh)
+            .then((r) => r.data),
         AttendanceResponse.fromJson({'status': 'empty', 'items': []}),
       ),
       _safeLoad(
@@ -2802,37 +2809,51 @@ class _HomePageState extends State<HomePage> {
       ),
       _safeLoad(_getLocationWithPermission(), null),
       _safeLoad(
-        widget.api.grades(year: widget.year, term: widget.term, forceRefresh: forceRefresh).then((r) => r.data),
+        widget.api
+            .grades(
+                year: widget.year,
+                term: widget.term,
+                forceRefresh: forceRefresh)
+            .then((r) => r.data),
         const <GradeItem>[],
       ),
       _safeLoad(
-        widget.api.exams(year: widget.year, term: widget.term, forceRefresh: forceRefresh).then((r) => r.data),
+        widget.api
+            .exams(
+                year: widget.year,
+                term: widget.term,
+                forceRefresh: forceRefresh)
+            .then((r) => r.data),
         const <ExamItem>[],
       ),
     ]);
 
-    final info             = results[0] as StudentInfo;
-    final schedule         = results[1] as ScheduleResult;
-    final notices          = results[2] as List<NoticeItem>;
-    final attendance       = results[3] as AttendanceResponse;
-    final credits          = results[4] as List<CreditItem>;
-    final ecard            = results[5] as EcardSummary;
-    final apps             = results[6] as List<EhallApplicationItem>;
+    final info = results[0] as StudentInfo;
+    final schedule = results[1] as ScheduleResult;
+    final notices = results[2] as List<NoticeItem>;
+    final attendance = results[3] as AttendanceResponse;
+    final credits = results[4] as List<CreditItem>;
+    final ecard = results[5] as EcardSummary;
+    final apps = results[6] as List<EhallApplicationItem>;
     final progressOverview = results[7] as EhallProgressOverview;
-    final loc              = results[8] as ({double lat, double lon})?;
+    final loc = results[8] as ({double lat, double lon})?;
 
     // Wave 2 — weather depends on location
     final weather = await _safeLoad(
-      widget.api.weather(forceRefresh: forceRefresh, lat: loc?.lat, lon: loc?.lon).then((r) => r.data),
+      widget.api
+          .weather(forceRefresh: forceRefresh, lat: loc?.lat, lon: loc?.lon)
+          .then((r) => r.data),
       null,
     );
     final WeatherData? effectiveWeather = weather ?? await _loadLocalWeather();
     if (weather != null) _saveLocalWeather(weather);
 
-    final grades        = results[9] as List<GradeItem>;
-    final exams         = results[10] as List<ExamItem>;
-    final List<GradeItem> effectiveGrades = grades.isNotEmpty ? grades : await _loadLocalGrades();
-    final List<ExamItem>  effectiveExams  = exams.isNotEmpty  ? exams  : await _loadLocalExams();
+    final grades = results[9] as List<GradeItem>;
+    final exams = results[10] as List<ExamItem>;
+    final List<GradeItem> effectiveGrades =
+        grades.isNotEmpty ? grades : await _loadLocalGrades();
+    final List<ExamItem> effectiveExams =
+        exams.isNotEmpty ? exams : await _loadLocalExams();
     final data = _HomeDashboardData(
       info: info,
       courses: schedule.items,
@@ -2856,7 +2877,7 @@ class _HomePageState extends State<HomePage> {
 
   Future<T> _safeLoad<T>(Future<T> future, T fallback) async {
     try {
-      return await future;
+      return await future.timeout(_homeLoadTimeout);
     } catch (exc) {
       return fallback;
     }
@@ -2890,7 +2911,8 @@ class _HomePageState extends State<HomePage> {
     final forecastDays = <Map<String, String>>[];
     for (var i = 1; i <= 4; i++) {
       final d = now.add(Duration(days: i));
-      final dateStr = '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+      final dateStr =
+          '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
       forecastDays.add({
         'date': dateStr,
         'week': weekdays[d.weekday % 7],
@@ -2973,14 +2995,62 @@ class _HomePageState extends State<HomePage> {
 
   List<GradeItem> _defaultGrades() {
     const defaults = [
-      {'courseName': '数据结构与算法', 'score': '92', 'credit': '4.0', 'gradePoint': '4.0', 'term': ''},
-      {'courseName': '操作系统原理', 'score': '88', 'credit': '3.5', 'gradePoint': '3.7', 'term': ''},
-      {'courseName': '计算机网络', 'score': '85', 'credit': '3.0', 'gradePoint': '3.7', 'term': ''},
-      {'courseName': '数据库系统概论', 'score': '90', 'credit': '3.0', 'gradePoint': '4.0', 'term': ''},
-      {'courseName': '软件工程', 'score': '87', 'credit': '2.5', 'gradePoint': '3.7', 'term': ''},
-      {'courseName': '人工智能导论', 'score': '94', 'credit': '2.0', 'gradePoint': '4.0', 'term': ''},
-      {'courseName': '编译原理', 'score': '78', 'credit': '3.0', 'gradePoint': '3.0', 'term': ''},
-      {'courseName': '计算机图形学', 'score': '82', 'credit': '2.0', 'gradePoint': '3.3', 'term': ''},
+      {
+        'courseName': '数据结构与算法',
+        'score': '92',
+        'credit': '4.0',
+        'gradePoint': '4.0',
+        'term': ''
+      },
+      {
+        'courseName': '操作系统原理',
+        'score': '88',
+        'credit': '3.5',
+        'gradePoint': '3.7',
+        'term': ''
+      },
+      {
+        'courseName': '计算机网络',
+        'score': '85',
+        'credit': '3.0',
+        'gradePoint': '3.7',
+        'term': ''
+      },
+      {
+        'courseName': '数据库系统概论',
+        'score': '90',
+        'credit': '3.0',
+        'gradePoint': '4.0',
+        'term': ''
+      },
+      {
+        'courseName': '软件工程',
+        'score': '87',
+        'credit': '2.5',
+        'gradePoint': '3.7',
+        'term': ''
+      },
+      {
+        'courseName': '人工智能导论',
+        'score': '94',
+        'credit': '2.0',
+        'gradePoint': '4.0',
+        'term': ''
+      },
+      {
+        'courseName': '编译原理',
+        'score': '78',
+        'credit': '3.0',
+        'gradePoint': '3.0',
+        'term': ''
+      },
+      {
+        'courseName': '计算机图形学',
+        'score': '82',
+        'credit': '2.0',
+        'gradePoint': '3.3',
+        'term': ''
+      },
     ];
     return defaults.map((e) => GradeItem.fromJson(e)).toList();
   }
@@ -5862,6 +5932,7 @@ class _BusinessFilters extends StatelessWidget {
 }
 
 enum _FtpQueueStatus { pending, uploading, done, failed }
+
 enum _FtpDownloadStatus { pending, downloading, done, failed }
 
 class _FtpQueuedFile {
@@ -6247,7 +6318,8 @@ class _FtpUploadPageState extends State<FtpUploadPage> {
               for (final entry in dirs) ...[
                 ListTile(
                   dense: true,
-                  leading: const Icon(Icons.folder_outlined, color: GzusColors.amber),
+                  leading: const Icon(Icons.folder_outlined,
+                      color: GzusColors.amber),
                   title: Text(entry.name),
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () => _openDirectory(entry.path),
@@ -6265,12 +6337,14 @@ class _FtpUploadPageState extends State<FtpUploadPage> {
                       color: scheme.primary,
                       size: 22,
                     ),
-                    title: Text(entry.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+                    title: Text(entry.name,
+                        maxLines: 1, overflow: TextOverflow.ellipsis),
                     subtitle: Text(_formatFtpSize(entry.size)),
                     trailing: IconButton(
                       icon: const Icon(Icons.download_outlined, size: 20),
                       tooltip: '下载',
-                      onPressed: _downloading ? null : () => _downloadFile(entry),
+                      onPressed:
+                          _downloading ? null : () => _downloadFile(entry),
                     ),
                   ),
                   const Divider(height: 1),
@@ -6291,7 +6365,13 @@ class _FtpUploadPageState extends State<FtpUploadPage> {
       'xls' || 'xlsx' => Icons.table_chart_outlined,
       'ppt' || 'pptx' => Icons.slideshow_outlined,
       'zip' || 'rar' || '7z' || 'tar' || 'gz' => Icons.folder_zip_outlined,
-      'jpg' || 'jpeg' || 'png' || 'gif' || 'bmp' || 'webp' => Icons.image_outlined,
+      'jpg' ||
+      'jpeg' ||
+      'png' ||
+      'gif' ||
+      'bmp' ||
+      'webp' =>
+        Icons.image_outlined,
       'mp4' || 'avi' || 'mkv' || 'mov' => Icons.videocam_outlined,
       'mp3' || 'wav' || 'flac' || 'aac' => Icons.audiotrack_outlined,
       'txt' || 'md' || 'log' => Icons.article_outlined,
@@ -6401,7 +6481,8 @@ class _FtpUploadPageState extends State<FtpUploadPage> {
             Row(
               children: [
                 Expanded(
-                  child: Text('下载记录', style: Theme.of(context).textTheme.titleMedium),
+                  child: Text('下载记录',
+                      style: Theme.of(context).textTheme.titleMedium),
                 ),
                 TextButton(
                   onPressed: () => setState(() => _downloads.clear()),
@@ -6825,7 +6906,8 @@ class _FtpDownloadTile extends StatelessWidget {
       _FtpDownloadStatus.done => GzusColors.green,
       _FtpDownloadStatus.failed => Theme.of(context).colorScheme.error,
       _FtpDownloadStatus.downloading => Theme.of(context).colorScheme.primary,
-      _FtpDownloadStatus.pending => Theme.of(context).colorScheme.onSurfaceVariant,
+      _FtpDownloadStatus.pending =>
+        Theme.of(context).colorScheme.onSurfaceVariant,
     };
     final label = switch (item.status) {
       _FtpDownloadStatus.done => '已下载',

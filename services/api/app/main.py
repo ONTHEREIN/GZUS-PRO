@@ -1,4 +1,5 @@
 import asyncio
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -16,20 +17,24 @@ from app.routes import academic, auth, ecard, ehall, push
 from app.sessions import SessionStore
 from app.ws import ConnectionManager, ws_router
 
+IS_VERCEL = os.environ.get("VERCEL") == "1"
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    init_db()
-    poller_task = asyncio.create_task(run_notice_poller(app))
-    ecard_task = asyncio.create_task(run_ecard_reminder_poller(app))
-    exam_task = asyncio.create_task(run_exam_reminder_poller(app))
-    grade_task = asyncio.create_task(run_grade_update_poller(app))
+    if not IS_VERCEL:
+        init_db()
+        poller_task = asyncio.create_task(run_notice_poller(app))
+        ecard_task = asyncio.create_task(run_ecard_reminder_poller(app))
+        exam_task = asyncio.create_task(run_exam_reminder_poller(app))
+        grade_task = asyncio.create_task(run_grade_update_poller(app))
     await app.state.sessions.start_cleanup_task()
     yield
-    poller_task.cancel()
-    ecard_task.cancel()
-    exam_task.cancel()
-    grade_task.cancel()
+    if not IS_VERCEL:
+        poller_task.cancel()
+        ecard_task.cancel()
+        exam_task.cancel()
+        grade_task.cancel()
     app.state.sessions.stop_cleanup_task()
 
 

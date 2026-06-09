@@ -19,6 +19,15 @@ window.gzusWebPushIsSubscribed = async function(callback) {
   }
 };
 
+window.gzusWebPushGetPermissionStatus = function() {
+  try {
+    if (typeof Notification === 'undefined') return 'denied';
+    return Notification.permission;
+  } catch (e) {
+    return 'denied';
+  }
+};
+
 window.gzusWebPushRequestPermission = async function(callback) {
   try {
     const permission = await Notification.requestPermission();

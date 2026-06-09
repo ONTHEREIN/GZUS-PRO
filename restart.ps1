@@ -18,8 +18,8 @@ Get-Process -Name dart,dartvm,dartaotruntime -ErrorAction SilentlyContinue | For
 
 Start-Sleep -Seconds 2
 
-Write-Host "[2/4] Starting backend (uvicorn --host 0.0.0.0)..." -ForegroundColor Cyan
-Start-Process PowerShell -ArgumentList "-NoExit", "-Command", "cd '$ProjectRoot\services\api'; .\.venv\Scripts\Activate.ps1; uvicorn app.main:app --reload --host 0.0.0.0"
+Write-Host "[2/4] Starting backend (uvicorn --reload-dir app --host 0.0.0.0)..." -ForegroundColor Cyan
+Start-Process PowerShell -ArgumentList "-NoExit", "-Command", "cd '$ProjectRoot\services\api'; .\.venv\Scripts\Activate.ps1; uvicorn app.main:app --reload --reload-dir app --reload-exclude .venv --host 0.0.0.0"
 Write-Host "  Backend started in new window." -ForegroundColor Green
 
 Start-Sleep -Seconds 3
