@@ -14,6 +14,9 @@ class WebPushServiceStub implements WebPushService {
   Future<bool> requestPermission() async => false;
 
   @override
+  Future<String> getPermissionStatus() async => 'denied';
+
+  @override
   Future<void> subscribe(
     String publicKey, {
     required String apiBaseUrl,

@@ -18,6 +18,9 @@ external void gzusWebPushIsSubscribed(Function callback);
 external void gzusWebPushRequestPermission(Function callback);
 
 @JS()
+external String gzusWebPushGetPermissionStatus();
+
+@JS()
 external void gzusWebPushSubscribe(
   String publicKey,
   String apiBaseUrl,
@@ -111,6 +114,16 @@ class WebPushServiceImpl implements WebPushService {
       return await _callbackBool(gzusWebPushRequestPermission);
     } catch (_) {
       return false;
+    }
+  }
+
+  @override
+  Future<String> getPermissionStatus() async {
+    await _initCompleter.future;
+    try {
+      return gzusWebPushGetPermissionStatus();
+    } catch (_) {
+      return 'denied';
     }
   }
 

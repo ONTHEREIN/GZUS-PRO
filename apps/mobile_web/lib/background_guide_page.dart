@@ -55,10 +55,12 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
     if (kIsWeb) {
       final webPush = WebPushService.instance;
       await webPush.init();
+      // Check both: browser permission status AND push subscription status
+      final permStatus = await webPush.getPermissionStatus();
       _webPushSubscribed = await webPush.isSubscribed();
       if (!mounted) return;
       setState(() {
-        _notificationGranted = _webPushSubscribed;
+        _notificationGranted = permStatus == 'granted';
         _checking = false;
       });
     } else {
@@ -81,7 +83,7 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
   }
 
   bool get _allGranted => kIsWeb
-      ? _webPushSubscribed
+      ? (_notificationGranted && _webPushSubscribed)
       : (_autoStartGranted &&
           _batteryOptimizationDisabled &&
           _notificationGranted &&
