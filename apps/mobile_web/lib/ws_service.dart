@@ -28,7 +28,8 @@ class WsService {
 
   static Future<void> connect() async {
     if (_baseUrl == null || _sessionId == null) {
-      debugPrint('[WsService] Cannot connect: baseUrl=$_baseUrl, sessionId=$_sessionId');
+      debugPrint(
+          '[WsService] Cannot connect: baseUrl=${_baseUrl ?? "unset"}, hasSession=${_sessionId != null}');
       return;
     }
     if (_isPaused) {
@@ -40,7 +41,7 @@ class WsService {
     _cancelReconnect();
     try {
       final wsUrl = _buildWsUrl(_baseUrl!);
-      debugPrint('[WsService] Connecting to $wsUrl');
+      debugPrint('[WsService] Connecting to ${_redactWsUrl(wsUrl)}');
       final channel = WebSocketChannel.connect(
         Uri.parse(wsUrl),
         protocols: null,
@@ -71,14 +72,16 @@ class WsService {
   }
 
   static void pause() {
-    debugPrint('[WsService] pause() called, _isPaused=$_isPaused, _channel=${_channel != null ? "connected" : "null"}');
+    debugPrint(
+        '[WsService] pause() called, _isPaused=$_isPaused, _channel=${_channel != null ? "connected" : "null"}');
     _isPaused = true;
     _cancelReconnect();
     _subscription?.cancel();
     _subscription = null;
     _channel?.sink.close();
     _channel = null;
-    debugPrint('[WsService] pause() completed, _channel=${_channel != null ? "connected" : "null"}');
+    debugPrint(
+        '[WsService] pause() completed, _channel=${_channel != null ? "connected" : "null"}');
   }
 
   static void resume() {
@@ -102,11 +105,17 @@ class WsService {
     return '${wsUri.replace(path: '${wsUri.path}/ws/notifications')}?sessionId=$_sessionId';
   }
 
+  static String _redactWsUrl(String url) {
+    final uri = Uri.parse(url);
+    return uri.replace(queryParameters: {'sessionId': '[REDACTED]'}).toString();
+  }
+
   static void _onMessage(dynamic data) {
     if (data is! String) return;
     try {
       final msg = jsonDecode(data) as Map<String, dynamic>;
-      debugPrint('[WsService] Received message: $msg');
+      debugPrint(
+          '[WsService] Received message type=${msg['type'] ?? 'unknown'}');
       unawaited(handleNotificationMessage(msg));
     } catch (e) {
       debugPrint('[WsService] Failed to parse message: $e');
@@ -117,7 +126,8 @@ class WsService {
       Map<String, dynamic> msg) async {
     final title = msg['title'] as String? ?? 'OneGZUS';
     final body = msg['body'] as String? ?? '';
-    debugPrint('[WsService] Showing notification: title=$title, body=$body');
+    debugPrint(
+        '[WsService] Showing notification: type=${msg['type'] ?? 'unknown'}, bodyLength=${body.length}');
     final extras = _extrasForMessage(msg);
     final notificationId = notificationIdForMessage(msg);
     LiveActivityController.instance.show(
@@ -148,7 +158,8 @@ class WsService {
           extras['progressStartTime'] ??
           DateTime.now().millisecondsSinceEpoch,
     );
-    debugPrint('[WsService] Posting LiveUpdate: style=$style, endTimeMillis=$endTimeMillis, shortCriticalText=${msg['shortCriticalText']}');
+    debugPrint(
+        '[WsService] Posting LiveUpdate: style=$style, endTimeMillis=$endTimeMillis');
     final posted = style == 'progress' && endTimeMillis > 0
         ? await LiveUpdateService.postTimedProgressLiveUpdate(
             id: notificationId,
@@ -156,8 +167,7 @@ class WsService {
             body: body,
             startTimeMillis: startTimeMillis,
             endTimeMillis: endTimeMillis,
-            shortCriticalText:
-                msg['shortCriticalText'] as String? ?? '动态',
+            shortCriticalText: msg['shortCriticalText'] as String? ?? '动态',
             extras: extras,
             ongoing: msg['ongoing'] as bool? ?? true,
           )
@@ -235,7 +245,8 @@ class WsService {
   }
 
   static void _onDone() {
-    debugPrint('[WsService] Stream closed, intentionalClose=$_intentionalClose, isPaused=$_isPaused');
+    debugPrint(
+        '[WsService] Stream closed, intentionalClose=$_intentionalClose, isPaused=$_isPaused');
     _subscription = null;
     _channel = null;
     if (!_intentionalClose && !_isPaused) {

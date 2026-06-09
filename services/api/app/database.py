@@ -129,11 +129,13 @@ def _validate_database_url(raw_url: str) -> None:
                            "Example: postgresql://user:pass@127.0.0.1:5432/dbname")
     if raw_url.startswith(("postgres://", "postgresql://", "postgresql+asyncpg://")):
         return
-    # SQLite is allowed as a fallback for development/testing only
     if raw_url.startswith(("sqlite://", "sqlite+aiosqlite://")):
-        import warnings
-        warnings.warn("Using SQLite — switch to PostgreSQL for production.", UserWarning, stacklevel=2)
-        return
+        if ":memory:" in raw_url:
+            return
+        raise RuntimeError(
+            "SQLite file databases are not supported because they can contain local user data. "
+            "Use PostgreSQL for deployment or sqlite:///:memory: for tests."
+        )
     raise RuntimeError(
         "DATABASE_URL must be a PostgreSQL or SQLite connection string. "
         f"Got: {raw_url[:50]}..."

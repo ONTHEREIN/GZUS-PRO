@@ -15,7 +15,7 @@ class FakeSchoolClient:
 
 
 def test_calc_sign_sorts_and_excludes_token_sign():
-    params = {"b": "2", "a": "1", "token": "secret", "sign": "old"}
+    params = {"b": "2", "a": "1", "token": "test-token", "sign": "old"}
     assert calc_sign(params, secret="greatge") == "12C3DE5975DA50A59D217B32A1DCEE1D"
 
 

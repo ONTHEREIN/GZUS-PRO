@@ -1,5 +1,6 @@
 from fastapi.testclient import TestClient
 
+from app.config import get_settings
 from app.main import create_app
 
 
@@ -17,3 +18,39 @@ def test_localhost_random_port_preflight_is_allowed():
 
     assert response.status_code == 200
     assert response.headers["access-control-allow-origin"] == "http://localhost:19231"
+
+
+def test_security_headers_are_set():
+    client = TestClient(create_app())
+
+    response = client.get("/health")
+
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["x-frame-options"] == "DENY"
+    assert response.headers["referrer-policy"] == "strict-origin-when-cross-origin"
+
+
+def test_ly_sso_start_sanitizes_external_return_url():
+    app = create_app()
+    client = TestClient(app)
+
+    response = client.get(
+        "/auth/ly/start",
+        params={"return_url": "https://evil.example/callback"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code in {302, 307}
+    assert list(app.state.ly_sso_states.values()) == [get_settings().frontend_base_url]
+
+
+def test_ly_sso_callback_rejects_unknown_state():
+    client = TestClient(create_app())
+
+    response = client.get(
+        "/auth/ly/callback",
+        params={"ticket": "ST-1", "state": "missing"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 400

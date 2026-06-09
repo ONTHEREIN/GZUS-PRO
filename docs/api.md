@@ -9,7 +9,7 @@
 Request:
 
 ```json
-{"account":"20240001","password":"secret"}
+{"account":"20240000","password":"<password>"}
 ```
 
 Response:

@@ -1,19 +1,19 @@
 from __future__ import annotations
 
 import base64
-import hashlib
 import logging
 import re
 import time
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, parse_qsl, urlencode, urlparse, urlunparse
 
 import httpx
 
 from app.captcha_ocr import captcha_ocr
 
 logger = logging.getLogger(__name__)
+_SENSITIVE_QUERY_KEYS = {"ticket", "token", "tgt", "password"}
 
 DEFAULT_CAS_URL = (
     "https://cas.gzus.edu.cn/lyuapServer/login"
@@ -23,6 +23,17 @@ DEFAULT_EHALL_URL = "https://ehall.gzus.edu.cn"
 
 # Allow many retries since OCR can be unreliable
 MAX_CAPTCHA_RETRIES = 15
+
+
+def _redact_url(url: str) -> str:
+    parsed = urlparse(url)
+    if not parsed.query:
+        return url
+    query = [
+        (key, "[REDACTED]" if key.lower() in _SENSITIVE_QUERY_KEYS else value)
+        for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+    ]
+    return urlunparse(parsed._replace(query=urlencode(query)))
 
 # RSA public key components extracted from CAS frontend JS
 _RSA_PUBLIC_EXPONENT = 0x010001
@@ -337,7 +348,7 @@ class CasAutoLogin:
 
         timestamp = str(int(time.time() * 1000))
         token = _rsa_encrypt(f"{_RSA_TAG}{timestamp}")
-        logger.debug("Token input: %s, encrypted token length: %d", f"{_RSA_TAG}{timestamp}", len(token))
+        logger.debug("Encrypted token length: %d", len(token))
 
         tickets_url = f"{self._cas_base}/lyuapServer/v1/tickets"
         form_data = {
@@ -374,7 +385,7 @@ class CasAutoLogin:
                 if response.status_code == 201:
                     location = response.headers.get("location", "")
                     if location:
-                        logger.info("TGT location: %s", location)
+                        logger.info("TGT location received")
                         tgt = location.rsplit("/", 1)[-1] if "/" in location else ""
                         st_response = client.post(
                             location,
@@ -469,7 +480,7 @@ class CasAutoLogin:
         )
 
     def _follow_service_ticket(self, client: httpx.Client, url: str) -> None:
-        logger.debug("Following service URL with ticket: %s", url)
+        logger.debug("Following service URL: %s", _redact_url(url))
         try:
             response = client.get(url, follow_redirects=True)
             response.raise_for_status()
@@ -562,11 +573,11 @@ class CasAutoLogin:
                     ehall_ticket = st_response.text.strip()
                     if ehall_ticket:
                         redirect_url = f"{ehall_service_url}?ticket={ehall_ticket}"
-                        logger.info("Following ehall service URL: %s", redirect_url)
+                        logger.info("Following ehall service URL: %s", _redact_url(redirect_url))
                         client.get(redirect_url, follow_redirects=True)
                         ehall_sid = self._extract_ehall_sid(client)
                         if ehall_sid:
-                            logger.info("Got ehall sid via TGT: %s", ehall_sid[:20])
+                            logger.info("Got ehall sid via TGT")
             except Exception as exc:
                 logger.warning("Failed to get ehall session via TGT: %s", exc)
 

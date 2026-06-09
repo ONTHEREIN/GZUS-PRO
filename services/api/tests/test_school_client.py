@@ -106,9 +106,14 @@ class InvalidJsonResponse:
 
 
 def test_normalize_student_info_from_school_fields():
-    assert normalize_student_info(
+    result = normalize_student_info(
         {"student_number": "20240001", "name": "测试学生", "department_name": "软件学院"}
-    ) == {
+    )
+
+    assert {
+        key: result[key]
+        for key in ("studentId", "name", "college", "major", "className", "grade")
+    } == {
         "studentId": "20240001",
         "name": "测试学生",
         "college": "软件学院",

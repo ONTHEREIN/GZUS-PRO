@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, Request, Header
+from fastapi import APIRouter, Depends, HTTPException, Request, Header, status
 
 from app.config import get_settings
 from app.database import PushRegistration, WebPushSubscription, get_sync_session_factory
@@ -10,6 +10,14 @@ from app.sessions import AppSession
 router = APIRouter(prefix="/push", tags=["push"])
 
 
+class _TestPushClient:
+    def get_info(self) -> dict[str, str]:
+        return {"studentId": "test-student"}
+
+    def logout(self) -> None:
+        pass
+
+
 @router.get("/web/config", response_model=WebPushConfigResponse)
 def get_web_push_config() -> WebPushConfigResponse:
     settings = get_settings()
@@ -18,6 +26,14 @@ def get_web_push_config() -> WebPushConfigResponse:
         enabled=enabled,
         publicKey=settings.web_push_vapid_public_key if enabled else None
     )
+
+
+@router.post("/test-session")
+def create_test_session(request: Request) -> dict[str, str]:
+    if not get_settings().debug:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    session = request.app.state.sessions.create(_TestPushClient(), "测试用户")
+    return {"sessionId": session.id}
 
 
 @router.post("/web/register")

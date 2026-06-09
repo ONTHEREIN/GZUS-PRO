@@ -89,8 +89,12 @@ class CacheEntry<T> {
 class RequestCache {
   final Map<String, CacheEntry<dynamic>> _cache = {};
   final Duration defaultTtl;
+  final int maxEntries;
 
-  RequestCache({this.defaultTtl = const Duration(minutes: 5)});
+  RequestCache({
+    this.defaultTtl = const Duration(minutes: 5),
+    this.maxEntries = 128,
+  });
 
   T? get<T>(String key) {
     final entry = _cache[key];
@@ -103,6 +107,9 @@ class RequestCache {
   }
 
   void set<T>(String key, T data, [Duration? ttl]) {
+    if (!_cache.containsKey(key) && _cache.length >= maxEntries) {
+      _cache.remove(_cache.keys.first);
+    }
     final expiry = DateTime.now().add(ttl ?? defaultTtl);
     _cache[key] = CacheEntry<dynamic>(data, expiry);
   }
@@ -1187,8 +1194,8 @@ class ApiClient {
   PersistentCache? _persistentCache;
   Future<PersistentCache>? _persistentCacheFuture;
   String? _credentialToken;
-  String? _savedAccount;
-  String? _savedPassword;
+  String? _ehallCookies;
+  String? _ehallAuthToken;
 
   /// 当前使用的 baseUrl（可能因连接失败自动切换）
   String _currentBaseUrl = '';
@@ -1211,6 +1218,8 @@ class ApiClient {
 
   String get namespace => _studentId ?? sessionId ?? 'default';
   String? get studentId => _studentId;
+  String? get ehallCookies => _ehallCookies;
+  String? get ehallAuthToken => _ehallAuthToken;
 
   void useSession(String? value) {
     if (sessionId != value) _cache.clear();
@@ -1307,6 +1316,13 @@ class ApiClient {
     bool forceRefresh = false,
     Duration? memoryTtl,
   }) async {
+    if (!forceRefresh) {
+      final memCached = _cache.get<Map<String, dynamic>>(cacheKey);
+      if (memCached != null) {
+        return DataResult<T>(data: fromJson(memCached));
+      }
+    }
+
     final pcache = await _getPersistentCache();
 
     Future<DataResult<T>> fetchAndCache() async {
@@ -1325,13 +1341,6 @@ class ApiClient {
         });
         return DataResult<T>(
           data: fromJson(cached),
-          source: _localSource(pcache.getCachedAt(cacheKey)),
-        );
-      }
-      final memCached = _cache.get<Map<String, dynamic>>(cacheKey);
-      if (memCached != null) {
-        return DataResult<T>(
-          data: fromJson(memCached),
           source: _localSource(pcache.getCachedAt(cacheKey)),
         );
       }
@@ -1384,6 +1393,18 @@ class ApiClient {
     bool forceRefresh = false,
     Duration? memoryTtl,
   }) async {
+    if (!forceRefresh) {
+      final memCached = _cache.get<List<dynamic>>(cacheKey);
+      if (memCached != null) {
+        return DataResult<List<T>>(
+          data: memCached
+              .whereType<Map<String, dynamic>>()
+              .map((item) => fromJson(item))
+              .toList(),
+        );
+      }
+    }
+
     final pcache = await _getPersistentCache();
 
     Future<DataResult<List<T>>> fetchAndCache() async {
@@ -1404,15 +1425,6 @@ class ApiClient {
         });
         return DataResult<List<T>>(
           data: cached.map((item) => fromJson(item)).toList(),
-          source: _localSource(pcache.getCachedAt(cacheKey)),
-        );
-      }
-      final memCached = _cache.get<List<dynamic>>(cacheKey);
-      if (memCached != null) {
-        return DataResult<List<T>>(
-          data: memCached
-              .map((item) => fromJson(item as Map<String, dynamic>))
-              .toList(),
           source: _localSource(pcache.getCachedAt(cacheKey)),
         );
       }
@@ -1477,6 +1489,7 @@ class ApiClient {
     });
     final result = LoginResult.fromJson(response);
     sessionId = result.sessionId;
+    _captureTransientEhallAuth(result);
     _cache.clear();
     return result;
   }
@@ -1488,6 +1501,7 @@ class ApiClient {
     });
     final result = LoginResult.fromJson(response);
     sessionId = result.sessionId;
+    _captureTransientEhallAuth(result);
     _cache.clear();
     return result;
   }
@@ -1496,6 +1510,7 @@ class ApiClient {
     final response = await _post('/auth/ly/complete', {'ssoCode': ssoCode});
     final result = LoginResult.fromJson(response);
     sessionId = result.sessionId;
+    _captureTransientEhallAuth(result);
     _cache.clear();
     return result;
   }
@@ -1507,6 +1522,7 @@ class ApiClient {
     });
     final result = LoginResult.fromJson(response);
     sessionId = result.sessionId;
+    _captureTransientEhallAuth(result);
     _cache.clear();
     if (result.credentialToken != null) {
       _credentialToken = result.credentialToken;
@@ -1544,14 +1560,16 @@ class ApiClient {
     }
     sessionId = null;
     _credentialToken = null;
+    _ehallCookies = null;
+    _ehallAuthToken = null;
     _cache.clear();
   }
 
   /// 立即清除凭证，防止后续请求触发 relogin 重试
   void clearCredentials() {
     _credentialToken = null;
-    _savedAccount = null;
-    _savedPassword = null;
+    _ehallCookies = null;
+    _ehallAuthToken = null;
     _cache.clear();
   }
 
@@ -1561,21 +1579,14 @@ class ApiClient {
       try {
         return await _reloginWithCredentialToken(_credentialToken!);
       } on ApiException catch (exc) {
-        if (exc.statusCode != 401 || !_hasSavedPasswordCredentials) rethrow;
+        if (exc.statusCode == 401) {
+          await clearSavedCredentialToken();
+        }
+        rethrow;
       }
-    }
-    if (_hasSavedPasswordCredentials) {
-      final result = await autoLogin(_savedAccount!, _savedPassword!);
-      await saveCredentialToken(result.credentialToken);
-      await _saveEhallAuth(result);
-      return result;
     }
     throw ApiException('教务系统会话已失效，请重新登录', statusCode: 401);
   }
-
-  bool get _hasSavedPasswordCredentials =>
-      (_savedAccount?.isNotEmpty ?? false) &&
-      (_savedPassword?.isNotEmpty ?? false);
 
   Future<LoginResult> _reloginWithCredentialToken(
       String credentialToken) async {
@@ -1589,6 +1600,7 @@ class ApiClient {
     final decoded = _decode(response);
     final result = LoginResult.fromJson(decoded as Map<String, dynamic>);
     sessionId = result.sessionId;
+    _captureTransientEhallAuth(result);
     _cache.clear();
 
     await saveCredentialToken(result.credentialToken ?? credentialToken);
@@ -1603,6 +1615,12 @@ class ApiClient {
     await prefs.setString('auth.credentialToken', credentialToken);
   }
 
+  Future<void> clearSavedCredentialToken() async {
+    _credentialToken = null;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('auth.credentialToken');
+  }
+
   Future<void> savePasswordCredentials(
     String account,
     String password, {
@@ -1610,17 +1628,12 @@ class ApiClient {
   }) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('auth.rememberPassword', remember);
+    await prefs.remove('auth.password');
     if (!remember) {
-      _savedAccount = null;
-      _savedPassword = null;
       await prefs.remove('auth.account');
-      await prefs.remove('auth.password');
       return;
     }
-    _savedAccount = account;
-    _savedPassword = password;
     await prefs.setString('auth.account', account);
-    await prefs.setString('auth.password', password);
   }
 
   Future<void> _saveEhallAuth(LoginResult result) async {
@@ -1628,24 +1641,19 @@ class ApiClient {
     if (result.sessionId != null && result.sessionId!.isNotEmpty) {
       await prefs.setString('auth.sessionId', result.sessionId!);
     }
-    if (result.ehallCookies != null) {
-      await prefs.setString('auth.ehallCookies', result.ehallCookies!);
-    }
-    if (result.ehallAuthToken != null) {
-      await prefs.setString('auth.ehallAuthToken', result.ehallAuthToken!);
-    }
+    await prefs.remove('auth.ehallCookies');
+    await prefs.remove('auth.ehallAuthToken');
   }
 
   Future<void> loadSavedCredentials() async {
     final prefs = await SharedPreferences.getInstance();
     _credentialToken = prefs.getString('auth.credentialToken');
-    if (prefs.getBool('auth.rememberPassword') ?? false) {
-      _savedAccount = prefs.getString('auth.account');
-      _savedPassword = prefs.getString('auth.password');
-    } else {
-      _savedAccount = null;
-      _savedPassword = null;
-    }
+    await prefs.remove('auth.password');
+  }
+
+  void _captureTransientEhallAuth(LoginResult result) {
+    _ehallCookies = result.ehallCookies;
+    _ehallAuthToken = result.ehallAuthToken;
   }
 
   Future<DataResult<StudentInfo>> me({bool forceRefresh = false}) =>
@@ -2110,7 +2118,7 @@ class ApiClient {
     } on ApiException catch (e) {
       if (e.statusCode == 401) {
         await loadSavedCredentials();
-        if (_credentialToken == null && !_hasSavedPasswordCredentials) {
+        if (_credentialToken == null) {
           rethrow;
         }
         // --- Relogin with backoff ---

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
-from urllib.parse import quote as url_quote
+from urllib.parse import quote as url_quote, urlparse
 import logging
 import uuid
 
@@ -18,6 +18,28 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 class LySsoStartRequest(BaseModel):
     return_url: str = ""
+
+
+def _origin(url: str) -> str:
+    parsed = urlparse(url)
+    if not parsed.scheme or not parsed.netloc:
+        return ""
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
+def _safe_return_url(return_url: str) -> str:
+    settings = get_settings()
+    candidate = (return_url or "").strip()
+    if not candidate:
+        return settings.frontend_base_url
+    parsed = urlparse(candidate)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return settings.frontend_base_url
+    if _origin(candidate) == settings.frontend_origin:
+        return candidate
+    if parsed.hostname in {"localhost", "127.0.0.1"}:
+        return candidate
+    return settings.frontend_base_url
 
 
 def _build_client(request: Request) -> SchoolSdkClient:
@@ -83,8 +105,8 @@ def submit_captcha(payload: CaptchaRequest, request: Request) -> dict:
 @router.get("/ly/start")
 def ly_sso_start(return_url: str = "", request: Request = None):
     settings = get_settings()
-    state = uuid.uuid4().hex[:16]
-    request.app.state.ly_sso_states[state] = return_url
+    state = uuid.uuid4().hex
+    request.app.state.ly_sso_states[state] = _safe_return_url(return_url)
     callback = f"{settings.public_api_base_url}/auth/ly/callback"
     encoded_callback = url_quote(callback, safe="")
     sso_url = (
@@ -100,7 +122,8 @@ def ly_sso_callback(ticket: str = "", state: str = "", request: Request = None):
     if not ticket:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="缺少 ticket")
     settings = get_settings()
-    request.app.state.ly_sso_proxy_granting_tickets[state] = ticket
+    if not state or state not in request.app.state.ly_sso_states:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="SSO state 无效")
     return_url = request.app.state.ly_sso_states.pop(state, settings.frontend_base_url)
     return RedirectResponse(url=return_url)
 
@@ -148,10 +171,10 @@ def ly_sso_complete(payload: SsoCompleteRequest, request: Request) -> dict:
                         cookie_parts.append(f"{cookie.name}={cookie.value}")
             jwxt_cookies = "; ".join(cookie_parts)
     except Exception as exc:
-        logger.warning("SSO ticket exchange failed: %s", exc)
+        logger.warning("SSO ticket exchange failed: %s", type(exc).__name__)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"SSO 凭证兑换失败: {exc}",
+            detail="SSO 凭证兑换失败，请重新登录",
         ) from exc
 
     if not jwxt_cookies:
@@ -183,7 +206,9 @@ def relogin(payload: ReloginRequest, request: Request) -> dict:
 
     try:
         account, password = decrypt_credentials(
-            payload.credential_token, settings.credential_encryption_key
+            payload.credential_token,
+            settings.credential_encryption_key,
+            ttl_seconds=settings.ehall_session_ttl_hours * 3600,
         )
     except Exception as exc:
         raise HTTPException(status_code=401, detail="凭据已失效，请重新登录") from exc
@@ -229,8 +254,6 @@ def relogin(payload: ReloginRequest, request: Request) -> dict:
         "studentName": student_name,
         "studentId": student_id,
         "credentialToken": payload.credential_token,
-        "ehallCookies": result.ehall_cookies,
-        "ehallAuthToken": result.ehall_auth_token,
     }
 
 
@@ -293,8 +316,6 @@ def auto_login(payload: AutoLoginRequest, request: Request) -> dict:
         "studentName": student_name,
         "studentId": student_id,
         "credentialToken": cred_token,
-        "ehallCookies": result.ehall_cookies,
-        "ehallAuthToken": result.ehall_auth_token,
     }
 
 

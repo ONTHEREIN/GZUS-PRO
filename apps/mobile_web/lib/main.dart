@@ -489,12 +489,8 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
     if (result.loginMethod != null) {
       await prefs.setString('auth.loginMethod', result.loginMethod!);
     }
-    if (result.ehallCookies != null && result.ehallCookies!.isNotEmpty) {
-      await prefs.setString('auth.ehallCookies', result.ehallCookies!);
-    }
-    if (result.ehallAuthToken != null && result.ehallAuthToken!.isNotEmpty) {
-      await prefs.setString('auth.ehallAuthToken', result.ehallAuthToken!);
-    }
+    await prefs.remove('auth.ehallCookies');
+    await prefs.remove('auth.ehallAuthToken');
   }
 
   Future<void> _logout() async {
@@ -648,12 +644,12 @@ class _LoginPageState extends State<LoginPage>
     final prefs = await SharedPreferences.getInstance();
     final remember = prefs.getBool('auth.rememberPassword') ?? true;
     final account = prefs.getString('auth.account') ?? '';
-    final password = remember ? prefs.getString('auth.password') ?? '' : '';
+    await prefs.remove('auth.password');
     if (!mounted) return;
     setState(() {
       rememberPassword = remember;
       accountController.text = account;
-      passwordController.text = password;
+      passwordController.text = '';
     });
   }
 
@@ -851,7 +847,7 @@ class _LoginPageState extends State<LoginPage>
                                                   rememberPassword =
                                                       value ?? true),
                                         ),
-                                        const Text('记住密码'),
+                                        const Text('记住学号'),
                                       ],
                                     ),
                                   ),
@@ -1022,7 +1018,7 @@ class _LoginPageState extends State<LoginPage>
         account,
         password,
       );
-      TextInput.finishAutofillContext(shouldSave: true);
+      TextInput.finishAutofillContext(shouldSave: false);
       // Save credential token for auto-relogin
       if (result.credentialToken != null) {
         await widget.api.saveCredentialToken(result.credentialToken);
@@ -2726,9 +2722,19 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  static const _homeLoadTimeout = Duration(seconds: 18);
+  // 分模块异步加载的 Future
+  late Future<StudentInfo> _infoFuture;
+  late Future<ScheduleResult> _scheduleFuture;
+  late Future<List<NoticeItem>> _noticesFuture;
+  late Future<AttendanceResponse> _attendanceFuture;
+  late Future<List<CreditItem>> _creditsFuture;
+  late Future<EcardSummary> _ecardFuture;
+  late Future<List<EhallApplicationItem>> _appsFuture;
+  late Future<EhallProgressOverview> _progressFuture;
+  late Future<WeatherData?> _weatherFuture;
+  late Future<List<GradeItem>> _gradesFuture;
+  late Future<List<ExamItem>> _examsFuture;
 
-  late Future<_HomeDashboardData> _dataFuture;
   List<String> _moduleOrder =
       HomePreferences.defaultModules.map((item) => item.id).toList();
   Set<String> _hiddenModules = {};
@@ -2736,8 +2742,83 @@ class _HomePageState extends State<HomePage> {
   @override
   void initState() {
     super.initState();
-    _dataFuture = _loadData();
+    _initFutures();
     _loadPreferences();
+  }
+
+  void _initFutures({bool forceRefresh = false}) {
+    _infoFuture = _safeLoad(
+      widget.api.me(forceRefresh: forceRefresh).then((r) => r.data),
+      StudentInfo(studentId: '', name: 'OneGZUS'),
+    );
+    _scheduleFuture = _safeLoad(
+      widget.api
+          .schedule(
+              year: widget.year, term: widget.term, forceRefresh: forceRefresh)
+          .then((r) => r.data),
+      ScheduleResult(items: const [], raw: const []),
+    );
+    _noticesFuture = _safeLoad(
+      widget.api.notices(forceRefresh: forceRefresh).then((r) => r.data),
+      const <NoticeItem>[],
+    );
+    _attendanceFuture = _safeLoad(
+      widget.api
+          .attendance(
+              year: widget.year, term: widget.term, forceRefresh: forceRefresh)
+          .then((r) => r.data),
+      AttendanceResponse.fromJson({'status': 'empty', 'items': []}),
+    );
+    _creditsFuture = _safeLoad(
+      widget.api.credits(forceRefresh: forceRefresh).then((r) => r.data),
+      const <CreditItem>[],
+    );
+    _ecardFuture = _safeLoad(
+      widget.api.ecardSummary(forceRefresh: forceRefresh).then((r) => r.data),
+      EcardSummary.fromJson({'status': 'not_bound'}),
+    );
+    _appsFuture = _safeLoad(
+      widget.api.ehallApplications(forceRefresh: forceRefresh),
+      const <EhallApplicationItem>[],
+    );
+    _progressFuture = _safeLoad(
+      widget.api.ehallProgressOverview(forceRefresh: forceRefresh),
+      EhallProgressOverview.fromItems(const <EhallProgressItem>[]),
+    );
+    _weatherFuture = _loadWeather(forceRefresh: forceRefresh);
+    _gradesFuture = _safeLoad(
+      widget.api
+          .grades(
+              year: widget.year, term: widget.term, forceRefresh: forceRefresh)
+          .then((r) => r.data),
+      const <GradeItem>[],
+    ).then((grades) async {
+      if (grades.isNotEmpty) return grades;
+      return _loadLocalGrades();
+    });
+    _examsFuture = _safeLoad(
+      widget.api
+          .exams(
+              year: widget.year, term: widget.term, forceRefresh: forceRefresh)
+          .then((r) => r.data),
+      const <ExamItem>[],
+    ).then((exams) async {
+      if (exams.isNotEmpty) return exams;
+      return _loadLocalExams();
+    });
+  }
+
+  Future<WeatherData?> _loadWeather({bool forceRefresh = false}) async {
+    final loc = await _safeLoad(_getLocationWithPermission(), null);
+    final weather = await _safeLoad(
+      widget.api
+          .weather(forceRefresh: forceRefresh, lat: loc?.lat, lon: loc?.lon)
+          .then((r) => r.data),
+      null,
+    );
+    final WeatherData? effectiveWeather = weather ?? await _loadLocalWeather();
+    if (weather != null) _saveLocalWeather(weather);
+    return effectiveWeather;
   }
 
   @override
@@ -2747,7 +2828,7 @@ class _HomePageState extends State<HomePage> {
         oldWidget.term != widget.term ||
         oldWidget.currentWeek != widget.currentWeek ||
         oldWidget.firstWeekStart != widget.firstWeekStart) {
-      _dataFuture = _loadData();
+      _initFutures();
     }
   }
 
@@ -2762,123 +2843,10 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  Future<_HomeDashboardData> _loadData({bool forceRefresh = false}) async {
-    final results = await Future.wait([
-      // Wave 1 — 8 independent school API calls
-      _safeLoad(
-        widget.api.me(forceRefresh: forceRefresh).then((r) => r.data),
-        StudentInfo(studentId: '', name: 'OneGZUS'),
-      ),
-      _safeLoad(
-        widget.api
-            .schedule(
-                year: widget.year,
-                term: widget.term,
-                forceRefresh: forceRefresh)
-            .then((r) => r.data),
-        ScheduleResult(items: const [], raw: const []),
-      ),
-      _safeLoad(
-        widget.api.notices(forceRefresh: forceRefresh).then((r) => r.data),
-        const <NoticeItem>[],
-      ),
-      _safeLoad(
-        widget.api
-            .attendance(
-                year: widget.year,
-                term: widget.term,
-                forceRefresh: forceRefresh)
-            .then((r) => r.data),
-        AttendanceResponse.fromJson({'status': 'empty', 'items': []}),
-      ),
-      _safeLoad(
-        widget.api.credits(forceRefresh: forceRefresh).then((r) => r.data),
-        const <CreditItem>[],
-      ),
-      _safeLoad(
-        widget.api.ecardSummary(forceRefresh: forceRefresh).then((r) => r.data),
-        EcardSummary.fromJson({'status': 'not_bound'}),
-      ),
-      _safeLoad(
-        widget.api.ehallApplications(forceRefresh: forceRefresh),
-        const <EhallApplicationItem>[],
-      ),
-      _safeLoad(
-        widget.api.ehallProgressOverview(forceRefresh: forceRefresh),
-        EhallProgressOverview.fromItems(const <EhallProgressItem>[]),
-      ),
-      _safeLoad(_getLocationWithPermission(), null),
-      _safeLoad(
-        widget.api
-            .grades(
-                year: widget.year,
-                term: widget.term,
-                forceRefresh: forceRefresh)
-            .then((r) => r.data),
-        const <GradeItem>[],
-      ),
-      _safeLoad(
-        widget.api
-            .exams(
-                year: widget.year,
-                term: widget.term,
-                forceRefresh: forceRefresh)
-            .then((r) => r.data),
-        const <ExamItem>[],
-      ),
-    ]);
-
-    final info = results[0] as StudentInfo;
-    final schedule = results[1] as ScheduleResult;
-    final notices = results[2] as List<NoticeItem>;
-    final attendance = results[3] as AttendanceResponse;
-    final credits = results[4] as List<CreditItem>;
-    final ecard = results[5] as EcardSummary;
-    final apps = results[6] as List<EhallApplicationItem>;
-    final progressOverview = results[7] as EhallProgressOverview;
-    final loc = results[8] as ({double lat, double lon})?;
-
-    // Wave 2 — weather depends on location
-    final weather = await _safeLoad(
-      widget.api
-          .weather(forceRefresh: forceRefresh, lat: loc?.lat, lon: loc?.lon)
-          .then((r) => r.data),
-      null,
-    );
-    final WeatherData? effectiveWeather = weather ?? await _loadLocalWeather();
-    if (weather != null) _saveLocalWeather(weather);
-
-    final grades = results[9] as List<GradeItem>;
-    final exams = results[10] as List<ExamItem>;
-    final List<GradeItem> effectiveGrades =
-        grades.isNotEmpty ? grades : await _loadLocalGrades();
-    final List<ExamItem> effectiveExams =
-        exams.isNotEmpty ? exams : await _loadLocalExams();
-    final data = _HomeDashboardData(
-      info: info,
-      courses: schedule.items,
-      notices: notices,
-      attendance: attendance,
-      credits: credits,
-      ecard: ecard,
-      apps: apps,
-      progressOverview: progressOverview,
-      weather: effectiveWeather,
-      grades: effectiveGrades,
-      exams: effectiveExams,
-    );
-    await _HomeWidgetBridge.update(
-      data: data,
-      currentWeek: widget.currentWeek,
-      firstWeekStart: widget.firstWeekStart,
-    );
-    return data;
-  }
-
   Future<T> _safeLoad<T>(Future<T> future, T fallback) async {
     try {
-      return await future.timeout(_homeLoadTimeout);
-    } catch (exc) {
+      return await future;
+    } catch (_) {
       return fallback;
     }
   }
@@ -3144,146 +3112,277 @@ class _HomePageState extends State<HomePage> {
 
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<_HomeDashboardData>(
-      future: _dataFuture,
-      builder: (context, snapshot) {
-        final data = snapshot.data;
-        return PagePanel(
-          title: '首页',
-          icon: Icons.home,
-          expandChild: true,
-          trailing: TextButton.icon(
-            onPressed: () => _showCustomizeSheet(context),
-            icon: const Icon(Icons.tune, size: 18),
-            label: const Text('自定义'),
+    return PagePanel(
+      title: '首页',
+      icon: Icons.home,
+      expandChild: true,
+      trailing: TextButton.icon(
+        onPressed: () => _showCustomizeSheet(context),
+        icon: const Icon(Icons.tune, size: 18),
+        label: const Text('自定义'),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Expanded(
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final columns = constraints.maxWidth >= 980
+                    ? 3
+                    : constraints.maxWidth >= 640
+                        ? 2
+                        : 1;
+                final spacing = columns == 1 ? 10.0 : 12.0;
+                final visible = _moduleOrder
+                    .where((id) => !_hiddenModules.contains(id))
+                    .where((id) =>
+                        !widget.isPasswordLogin ||
+                        !HomePage.passwordRestrictedModules.contains(id))
+                    .toList();
+                return RefreshIndicator(
+                  onRefresh: () async {
+                    setState(() => _initFutures(forceRefresh: true));
+                    // 等待所有模块加载完成
+                    await Future.wait([
+                      _infoFuture,
+                      _scheduleFuture,
+                      _noticesFuture,
+                      _attendanceFuture,
+                      _creditsFuture,
+                      _ecardFuture,
+                      _appsFuture,
+                      _progressFuture,
+                      _weatherFuture,
+                      _gradesFuture,
+                      _examsFuture,
+                    ]).catchError((_) => []);
+                    // 更新桌面小组件
+                    _updateHomeWidget();
+                  },
+                  child: columns == 1
+                      ? ListView.separated(
+                          physics: const AlwaysScrollableScrollPhysics(),
+                          itemCount: visible.length + 1,
+                          separatorBuilder: (_, __) =>
+                              SizedBox(height: spacing),
+                          itemBuilder: (context, i) {
+                            if (i == visible.length) {
+                              return const SizedBox(height: 24);
+                            }
+                            return _StaggeredAppear(
+                              index: i,
+                              child: _homeModuleFor(visible[i]),
+                            );
+                          },
+                        )
+                      : GridView.builder(
+                          physics: const AlwaysScrollableScrollPhysics(),
+                          padding: const EdgeInsets.only(bottom: 24),
+                          gridDelegate:
+                              SliverGridDelegateWithFixedCrossAxisCount(
+                            crossAxisCount: columns,
+                            mainAxisSpacing: spacing,
+                            crossAxisSpacing: spacing,
+                            mainAxisExtent: 360,
+                          ),
+                          itemCount: visible.length,
+                          itemBuilder: (context, i) {
+                            return _StaggeredAppear(
+                              index: i,
+                              child: _homeModuleFor(visible[i]),
+                            );
+                          },
+                        ),
+                );
+              },
+            ),
           ),
-          child: data == null
-              ? const Center(child: CircularProgressIndicator())
-              : Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Expanded(
-                      child: LayoutBuilder(
-                        builder: (context, constraints) {
-                          final columns = constraints.maxWidth >= 980
-                              ? 3
-                              : constraints.maxWidth >= 640
-                                  ? 2
-                                  : 1;
-                          final spacing = columns == 1 ? 10.0 : 12.0;
-                          final visible = _moduleOrder
-                              .where((id) => !_hiddenModules.contains(id))
-                              .where((id) =>
-                                  !widget.isPasswordLogin ||
-                                  !HomePage.passwordRestrictedModules
-                                      .contains(id))
-                              .toList();
-                          return RefreshIndicator(
-                            onRefresh: () async {
-                              setState(() =>
-                                  _dataFuture = _loadData(forceRefresh: true));
-                              await _dataFuture;
-                            },
-                            child: columns == 1
-                                ? ListView.separated(
-                                    physics:
-                                        const AlwaysScrollableScrollPhysics(),
-                                    itemCount: visible.length + 1,
-                                    separatorBuilder: (_, __) =>
-                                        SizedBox(height: spacing),
-                                    itemBuilder: (context, i) {
-                                      if (i == visible.length) {
-                                        return const SizedBox(height: 24);
-                                      }
-                                      return _StaggeredAppear(
-                                        index: i,
-                                        child: _homeModuleFor(visible[i], data),
-                                      );
-                                    },
-                                  )
-                                : GridView.builder(
-                                    physics:
-                                        const AlwaysScrollableScrollPhysics(),
-                                    padding: const EdgeInsets.only(bottom: 24),
-                                    gridDelegate:
-                                        SliverGridDelegateWithFixedCrossAxisCount(
-                                      crossAxisCount: columns,
-                                      mainAxisSpacing: spacing,
-                                      crossAxisSpacing: spacing,
-                                      mainAxisExtent: 360,
-                                    ),
-                                    itemCount: visible.length,
-                                    itemBuilder: (context, i) {
-                                      return _StaggeredAppear(
-                                        index: i,
-                                        child: _homeModuleFor(visible[i], data),
-                                      );
-                                    },
-                                  ),
-                          );
-                        },
-                      ),
-                    ),
-                  ],
-                ),
-        );
-      },
+        ],
+      ),
     );
   }
 
-  Widget _homeModuleFor(String id, _HomeDashboardData data) {
-    final timedCourses = _homeTimedCourses(
-      data.courses,
-      currentWeek: widget.currentWeek,
-      firstWeekStart: widget.firstWeekStart,
-    );
+  Future<void> _updateHomeWidget() async {
+    try {
+      final results = await Future.wait([
+        _infoFuture,
+        _scheduleFuture,
+        _noticesFuture,
+        _attendanceFuture,
+        _creditsFuture,
+        _ecardFuture,
+        _appsFuture,
+        _progressFuture,
+        _weatherFuture,
+        _gradesFuture,
+        _examsFuture,
+      ]).catchError((_) => List.filled(11, null));
+      final data = _HomeDashboardData(
+        info: results[0] as StudentInfo? ??
+            StudentInfo(studentId: '', name: 'OneGZUS'),
+        courses: (results[1] as ScheduleResult?)?.items ?? const [],
+        notices: results[2] as List<NoticeItem>? ?? const [],
+        attendance: results[3] as AttendanceResponse? ??
+            AttendanceResponse.fromJson({'status': 'empty', 'items': []}),
+        credits: results[4] as List<CreditItem>? ?? const [],
+        ecard: results[5] as EcardSummary? ??
+            EcardSummary.fromJson({'status': 'not_bound'}),
+        apps: results[6] as List<EhallApplicationItem>? ?? const [],
+        progressOverview: results[7] as EhallProgressOverview? ??
+            EhallProgressOverview.fromItems(const []),
+        weather: results[8] as WeatherData?,
+        grades: results[9] as List<GradeItem>?,
+        exams: results[10] as List<ExamItem>?,
+      );
+      await _HomeWidgetBridge.update(
+        data: data,
+        currentWeek: widget.currentWeek,
+        firstWeekStart: widget.firstWeekStart,
+      );
+    } catch (_) {}
+  }
+
+  Widget _homeModuleFor(String id) {
     switch (id) {
       case 'nextClass':
-        return _NextClassHomeCard(
-            course: _nextTimedCourse(timedCourses),
-            onTap: () => widget.onNavigate('schedule'));
+        return _AsyncModuleCard<ScheduleResult>(
+          future: _scheduleFuture,
+          title: '下一节课',
+          icon: Icons.watch_later,
+          builder: (data) {
+            final timedCourses = _homeTimedCourses(
+              data.items,
+              currentWeek: widget.currentWeek,
+              firstWeekStart: widget.firstWeekStart,
+            );
+            return _NextClassHomeCard(
+              course: _nextTimedCourse(timedCourses),
+              onTap: () => widget.onNavigate('schedule'),
+            );
+          },
+        );
       case 'todayTimeline':
-        return _TodayTimelineHomeCard(
-            courses: _todayTimedCourses(timedCourses));
+        return _AsyncModuleCard<ScheduleResult>(
+          future: _scheduleFuture,
+          title: '今日时间线',
+          icon: Icons.view_timeline,
+          builder: (data) {
+            final timedCourses = _homeTimedCourses(
+              data.items,
+              currentWeek: widget.currentWeek,
+              firstWeekStart: widget.firstWeekStart,
+            );
+            return _TodayTimelineHomeCard(
+                courses: _todayTimedCourses(timedCourses));
+          },
+        );
       case 'weekGrid':
-        return _WeekGridHomeCard(
-          courses: data.courses
-              .where((item) => item.occursInWeek(widget.currentWeek))
-              .toList(),
+        return _AsyncModuleCard<ScheduleResult>(
+          future: _scheduleFuture,
+          title: '周课表',
+          icon: Icons.grid_view,
+          builder: (data) {
+            return _WeekGridHomeCard(
+              courses: data.items
+                  .where((item) => item.occursInWeek(widget.currentWeek))
+                  .toList(),
+            );
+          },
         );
       case 'dailyCourses':
-        return _DailyCoursesHomeCard(courses: _todayTimedCourses(timedCourses));
+        return _AsyncModuleCard<ScheduleResult>(
+          future: _scheduleFuture,
+          title: '今日课程',
+          icon: Icons.format_list_bulleted,
+          builder: (data) {
+            final timedCourses = _homeTimedCourses(
+              data.items,
+              currentWeek: widget.currentWeek,
+              firstWeekStart: widget.firstWeekStart,
+            );
+            return _DailyCoursesHomeCard(
+                courses: _todayTimedCourses(timedCourses));
+          },
+        );
       case 'utilities':
-        return _UtilitiesHomeCard(
-            summary: data.ecard, onTap: () => widget.onNavigate('ecard'));
+        return _AsyncModuleCard<EcardSummary>(
+          future: _ecardFuture,
+          title: '水电余额',
+          icon: Icons.water_drop,
+          builder: (data) => _UtilitiesHomeCard(
+              summary: data, onTap: () => widget.onNavigate('ecard')),
+        );
       case 'progress':
-        return _BusinessProgressHomeCard(
-            overview: data.progressOverview,
-            onTap: () => widget.onNavigate('business'));
+        return _AsyncModuleCard<EhallProgressOverview>(
+          future: _progressFuture,
+          title: '业务进度',
+          icon: Icons.route,
+          builder: (data) => _BusinessProgressHomeCard(
+              overview: data, onTap: () => widget.onNavigate('business')),
+        );
       case 'notifications':
-        return _NotificationsHomeCard(
-            notices: data.notices, onTap: () => widget.onNavigate('notices'));
+        return _AsyncModuleCard<List<NoticeItem>>(
+          future: _noticesFuture,
+          title: '通知摘要',
+          icon: Icons.notifications_active,
+          builder: (data) => _NotificationsHomeCard(
+              notices: data, onTap: () => widget.onNavigate('notices')),
+        );
       case 'attendance':
-        return _AttendanceHomeCard(
-            data: data.attendance,
-            onTap: () => widget.onNavigate('attendance'));
+        return _AsyncModuleCard<AttendanceResponse>(
+          future: _attendanceFuture,
+          title: '考勤统计',
+          icon: Icons.fact_check,
+          builder: (data) => _AttendanceHomeCard(
+              data: data, onTap: () => widget.onNavigate('attendance')),
+        );
       case 'credits':
-        return _CreditsHomeCard(
-            credits: data.credits, onTap: () => widget.onNavigate('credits'));
+        return _AsyncModuleCard<List<CreditItem>>(
+          future: _creditsFuture,
+          title: '学分进度',
+          icon: Icons.workspace_premium,
+          builder: (data) => _CreditsHomeCard(
+              credits: data, onTap: () => widget.onNavigate('credits')),
+        );
       case 'weather':
-        return _WeatherHomeCard(weather: data.weather);
+        return _AsyncModuleCard<WeatherData?>(
+          future: _weatherFuture,
+          title: '今日天气',
+          icon: Icons.wb_sunny,
+          builder: (data) => _WeatherHomeCard(weather: data),
+        );
       case 'grades':
-        return _GradesHomeCard(
-            grades: data.grades, onTap: () => widget.onNavigate('grades'));
+        return _AsyncModuleCard<List<GradeItem>>(
+          future: _gradesFuture,
+          title: '本学期成绩',
+          icon: Icons.school,
+          builder: (data) => _GradesHomeCard(
+              grades: data, onTap: () => widget.onNavigate('grades')),
+        );
       case 'examCountdown':
-        return _ExamCountdownHomeCard(
-            exams: data.exams, onTap: () => widget.onNavigate('exams'));
+        return _AsyncModuleCard<List<ExamItem>>(
+          future: _examsFuture,
+          title: '考试倒计时',
+          icon: Icons.timer,
+          builder: (data) => _ExamCountdownHomeCard(
+              exams: data, onTap: () => widget.onNavigate('exams')),
+        );
       case 'profile':
-        return _ProfileHomeCard(
-            info: data.info, onTap: () => widget.onNavigate('info'));
+        return _AsyncModuleCard<StudentInfo>(
+          future: _infoFuture,
+          title: '个人资料',
+          icon: Icons.badge,
+          builder: (data) => _ProfileHomeCard(
+              info: data, onTap: () => widget.onNavigate('info')),
+        );
       case 'apps':
-        return _AppsHomeCard(
-            apps: data.apps, onTap: () => widget.onNavigate('applications'));
+        return _AsyncModuleCard<List<EhallApplicationItem>>(
+          future: _appsFuture,
+          title: '常用服务',
+          icon: Icons.apps,
+          builder: (data) => _AppsHomeCard(
+              apps: data, onTap: () => widget.onNavigate('applications')),
+        );
       default:
         return const SizedBox.shrink();
     }
@@ -3540,6 +3639,116 @@ class _NotificationOpenBridge {
 
   static void openTab(String tabId) {
     _onOpenTab?.call(tabId);
+  }
+}
+
+/// 分模块异步加载的卡片包装器：加载中显示骨架屏，加载完成后显示实际内容
+class _AsyncModuleCard<T> extends StatelessWidget {
+  const _AsyncModuleCard({
+    required this.future,
+    required this.title,
+    required this.icon,
+    required this.builder,
+  });
+
+  final Future<T> future;
+  final String title;
+  final IconData icon;
+  final Widget Function(T data) builder;
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<T>(
+      future: future,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return _HomeCard(
+            title: title,
+            icon: icon,
+            child: const _ShimmerPlaceholder(),
+          );
+        }
+        final data = snapshot.data;
+        if (data == null) {
+          return _HomeCard(
+            title: title,
+            icon: icon,
+            child: const Center(
+              child: Padding(
+                padding: EdgeInsets.symmetric(vertical: 24),
+                child: Text('暂无数据', style: TextStyle(fontSize: 13)),
+              ),
+            ),
+          );
+        }
+        return builder(data);
+      },
+    );
+  }
+}
+
+/// 骨架屏占位组件
+class _ShimmerPlaceholder extends StatefulWidget {
+  const _ShimmerPlaceholder();
+
+  @override
+  State<_ShimmerPlaceholder> createState() => _ShimmerPlaceholderState();
+}
+
+class _ShimmerPlaceholderState extends State<_ShimmerPlaceholder>
+    with SingleTickerProviderStateMixin {
+  late final _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1200),
+  )..repeat();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final baseColor =
+        isDark ? GzusColors.darkSurfaceSoft : GzusColors.surfaceSoft;
+    final highlightColor = isDark ? GzusColors.darkBorder : GzusColors.border;
+
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, child) {
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _shimmerLine(baseColor, highlightColor, 0.6, _controller.value),
+            const SizedBox(height: 10),
+            _shimmerLine(baseColor, highlightColor, 0.9, _controller.value),
+            const SizedBox(height: 10),
+            _shimmerLine(baseColor, highlightColor, 0.4, _controller.value),
+            const SizedBox(height: 10),
+            _shimmerLine(baseColor, highlightColor, 0.7, _controller.value),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _shimmerLine(
+      Color base, Color highlight, double widthFactor, double value) {
+    // 从左到右的高光扫过效果
+    final shimmerColor = Color.lerp(base, highlight, (value * 2 - 1).abs());
+    return FractionallySizedBox(
+      widthFactor: widthFactor,
+      alignment: Alignment.centerLeft,
+      child: Container(
+        height: 14,
+        decoration: BoxDecoration(
+          color: shimmerColor,
+          borderRadius: BorderRadius.circular(4),
+        ),
+      ),
+    );
   }
 }
 

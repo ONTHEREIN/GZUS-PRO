@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -52,9 +53,6 @@ class AppSession:
     encrypted_credentials: str | None = None
 
 
-import hashlib
-
-
 def _get_fernet(key: str) -> Fernet:
     """Create a Fernet instance from a config key string."""
     raw = hashlib.sha256(key.encode("utf-8")).digest()
@@ -67,10 +65,10 @@ def encrypt_credentials(account: str, password: str, key: str) -> str:
     return f.encrypt(f"{account}:{password}".encode("utf-8")).decode("ascii")
 
 
-def decrypt_credentials(token: str, key: str) -> tuple[str, str]:
+def decrypt_credentials(token: str, key: str, ttl_seconds: int | None = None) -> tuple[str, str]:
     """Decrypt a token back into (account, password)."""
     f = _get_fernet(key)
-    plain = f.decrypt(token.encode("ascii")).decode("utf-8")
+    plain = f.decrypt(token.encode("ascii"), ttl=ttl_seconds).decode("utf-8")
     account, password = plain.split(":", 1)
     return account, password
 
@@ -96,16 +94,21 @@ class SessionStore:
         self._sessions[session.id] = session
         return session
 
-    def get(self, session_id: str) -> AppSession | None:
+    def get(self, session_id: str, *, touch: bool = True) -> AppSession | None:
         session = self._sessions.get(session_id)
         if session is None:
             return None
         if datetime.now() - session.created_at > self._ttl:
             self._remove(session.id)
             return None
-        # Refresh last active timestamp so we can detect stale sessions
-        session.last_active_at = datetime.now()
+        if touch:
+            self.touch(session.id)
         return session
+
+    def touch(self, session_id: str) -> None:
+        session = self._sessions.get(session_id)
+        if session is not None:
+            session.last_active_at = datetime.now()
 
     def remove(self, session_id: str) -> None:
         self._remove(session_id)

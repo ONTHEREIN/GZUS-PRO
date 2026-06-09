@@ -2,7 +2,6 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
@@ -227,20 +226,18 @@ class _EhallWebViewPageState extends State<_EhallWebViewPage> {
   Future<void> _loadInitialUrl() async {
     final uri = Uri.tryParse(widget.initialUrl);
     if (uri == null || uri.host.isEmpty) return;
-    final prefs = await SharedPreferences.getInstance();
-    await _injectSavedEhallCookies(prefs, uri);
+    await _injectEhallCookies(widget.api?.ehallCookies, uri);
     if (_isGzusHost(uri.host) && widget.fillScript == null) {
-      await _primeEhallAuthToken(prefs);
+      await _primeEhallAuthToken(widget.api?.ehallAuthToken);
     }
     await controller.loadRequest(uri);
   }
 
-  Future<void> _injectSavedEhallCookies(
-    SharedPreferences prefs,
+  Future<void> _injectEhallCookies(
+    String? header,
     Uri targetUri,
   ) async {
     if (!_isGzusHost(targetUri.host)) return;
-    final header = prefs.getString('auth.ehallCookies');
     if (header == null || header.isEmpty) return;
     final cookies = _parseCookieHeader(header);
     if (cookies.isEmpty) return;
@@ -275,8 +272,7 @@ class _EhallWebViewPageState extends State<_EhallWebViewPage> {
     return normalized == 'gzus.edu.cn' || normalized.endsWith('.gzus.edu.cn');
   }
 
-  Future<void> _primeEhallAuthToken(SharedPreferences prefs) async {
-    final authToken = prefs.getString('auth.ehallAuthToken');
+  Future<void> _primeEhallAuthToken(String? authToken) async {
     if (authToken == null || authToken.isEmpty) return;
     try {
       await controller.loadRequest(Uri.parse('https://ehall.gzus.edu.cn/'));

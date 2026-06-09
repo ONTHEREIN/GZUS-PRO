@@ -2,14 +2,17 @@
 from __future__ import annotations
 
 import base64
+import getpass
 import re
 import time
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import ddddocr
 import httpx
 
 CAS_BASE = "https://cas.gzus.edu.cn"
 SERVICE_URL = "https://jwxt.seig.edu.cn/sso/lyiotlogin"
+_SENSITIVE_QUERY_KEYS = {"ticket", "token", "tgt", "password"}
 
 RSA_EXPONENT = 0x010001
 RSA_MODULUS = int(
@@ -59,10 +62,27 @@ def solve_captcha(ocr_text: str) -> str | None:
     return None
 
 
+def _redact(value: str, keep: int = 6) -> str:
+    if not value:
+        return ""
+    if len(value) <= keep:
+        return "[REDACTED]"
+    return f"{value[:keep]}...[REDACTED]"
+
+
+def _redact_url(url: object) -> str:
+    parsed = urlparse(str(url))
+    query = [
+        (key, "[REDACTED]" if key.lower() in _SENSITIVE_QUERY_KEYS else value)
+        for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+    ]
+    return urlunparse(parsed._replace(query=urlencode(query)))
+
+
 def main():
     import sys
     account = sys.argv[1] if len(sys.argv) > 1 else input("Account: ")
-    password = sys.argv[2] if len(sys.argv) > 2 else input("Password: ")
+    password = sys.argv[2] if len(sys.argv) > 2 else getpass.getpass("Password: ")
 
     ocr = ddddocr.DdddOcr(show_ad=False)
 
@@ -107,7 +127,7 @@ def main():
 
             r3 = client.post(f"{CAS_BASE}/lyuapServer/v1/tickets", data=form_data, headers=headers)
             print(f"\nLogin response: status={r3.status_code}")
-            print(f"Body: {r3.text[:500]}")
+            print("Body: <redacted>")
 
             if r3.status_code not in (200, 201):
                 continue
@@ -120,27 +140,27 @@ def main():
 
             ticket = resp_data.get("ticket", "")
             tgt = resp_data.get("tgt", "")
-            print(f"\nLogin SUCCESS! ticket={ticket}, tgt={tgt}")
+            print(f"\nLogin SUCCESS! ticket={_redact(ticket)}, tgt={_redact(tgt)}")
 
             # Step: Follow service URL with ticket
             redirect_url = f"{SERVICE_URL}?ticket={ticket}"
-            print(f"\nFollowing: {redirect_url}")
+            print(f"\nFollowing: {_redact_url(redirect_url)}")
 
             r4 = client.get(redirect_url, follow_redirects=True)
             print(f"Status: {r4.status_code}")
-            print(f"Final URL: {r4.url}")
+            print(f"Final URL: {_redact_url(r4.url)}")
             print(f"Response length: {len(r4.text)}")
 
             # Check all cookies
             print(f"\nAll cookies after redirect:")
             for cookie in client.cookies.jar:
-                print(f"  {cookie.domain} | {cookie.name} = {cookie.value[:50]}...")
+                print(f"  {cookie.domain} | {cookie.name} = {_redact(cookie.value)}")
 
             # Check jwxt cookies specifically
             jwxt_cookies = []
             for cookie in client.cookies.jar:
                 if "jwxt" in (cookie.domain or ""):
-                    jwxt_cookies.append(f"{cookie.name}={cookie.value}")
+                    jwxt_cookies.append(f"{cookie.name}={_redact(cookie.value)}")
             print(f"\njwxt cookies: {'; '.join(jwxt_cookies) if jwxt_cookies else 'NONE'}")
 
             # Also try ehall
@@ -150,7 +170,7 @@ def main():
                 ehall_cookies = []
                 for cookie in client.cookies.jar:
                     if "ehall" in (cookie.domain or ""):
-                        ehall_cookies.append(f"{cookie.name}={cookie.value[:50]}")
+                        ehall_cookies.append(f"{cookie.name}={_redact(cookie.value)}")
                 print(f"ehall cookies: {'; '.join(ehall_cookies) if ehall_cookies else 'NONE'}")
             except Exception as e:
                 print(f"ehall error: {e}")

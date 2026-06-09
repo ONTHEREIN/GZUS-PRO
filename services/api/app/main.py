@@ -18,6 +18,19 @@ from app.sessions import SessionStore
 from app.ws import ConnectionManager, ws_router
 
 IS_VERCEL = os.environ.get("VERCEL") == "1"
+MAX_BODY_BYTES = 10 * 1024 * 1024
+
+
+def _security_headers(settings) -> dict[str, str]:
+    headers = {
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY",
+        "Referrer-Policy": "strict-origin-when-cross-origin",
+        "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+    }
+    if not settings.debug:
+        headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return headers
 
 
 @asynccontextmanager
@@ -44,23 +57,37 @@ def create_app() -> FastAPI:
     app.state.sessions = SessionStore(settings.session_ttl_seconds)
     app.state.pending_captcha = {}
     app.state.ly_sso_states = {}
-    app.state.ly_sso_proxy_granting_tickets = {}
-    app.state.ly_sso_results = {}
     app.state.ws_manager = ConnectionManager()
     app.state.notice_cache = NoticeCache()
     app.state.exam_reminder_cache = ExamReminderCache()
     app.state.grade_update_cache = GradeUpdateCache()
 
-    # Request body size limit (10 MB)
+    security_headers = _security_headers(settings)
+
     @app.middleware("http")
-    async def limit_body_size(request: Request, call_next):
+    async def security_and_body_limits(request: Request, call_next):
         content_length = request.headers.get("content-length")
-        if content_length and int(content_length) > 10 * 1024 * 1024:
-            return JSONResponse(
-                status_code=413,
-                content={"detail": "请求体过大，最大支持 10MB"},
-            )
-        return await call_next(request)
+        if content_length:
+            try:
+                size = int(content_length)
+            except ValueError:
+                response = JSONResponse(
+                    status_code=400,
+                    content={"detail": "Content-Length 无效"},
+                )
+            else:
+                if size > MAX_BODY_BYTES:
+                    response = JSONResponse(
+                        status_code=413,
+                        content={"detail": "请求体过大，最大支持 10MB"},
+                    )
+                else:
+                    response = await call_next(request)
+        else:
+            response = await call_next(request)
+        for key, value in security_headers.items():
+            response.headers.setdefault(key, value)
+        return response
 
     # Rate limiting
     app.state.limiter = limiter

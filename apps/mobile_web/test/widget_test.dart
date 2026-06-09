@@ -161,16 +161,15 @@ void main() {
     expect(controller.state.value.visible, isFalse);
   });
 
-  test('login result preserves ehall webview auth state', () {
+  test('login result accepts responses without ehall secrets', () {
     final result = LoginResult.fromJson({
       'status': 'ok',
       'sessionId': 'session-1',
-      'ehallCookies': 'sid=abc',
-      'ehallAuthToken': 'token-1',
     });
 
-    expect(result.ehallCookies, 'sid=abc');
-    expect(result.ehallAuthToken, 'token-1');
+    expect(result.sessionId, 'session-1');
+    expect(result.ehallCookies, isNull);
+    expect(result.ehallAuthToken, isNull);
   });
 
   test('attendance records parse day details', () {
@@ -284,7 +283,7 @@ void main() {
   test('api marks cached fallback as requiring relogin on 401', () async {
     SharedPreferences.setMockInitialValues({
       'pcache_default_me': jsonEncode({
-        'studentId': '2540232101',
+        'studentId': '2024000000',
         'name': '本地学生',
       }),
       'pcache_default_me_at': DateTime(2026, 6, 3, 10).toIso8601String(),
@@ -316,7 +315,7 @@ void main() {
         if (request.url.path == '/me') {
           return http.Response.bytes(
             utf8.encode(jsonEncode({
-              'studentId': '2540232101',
+              'studentId': '2024000000',
               'name': '服务器学生',
             })),
             200,
@@ -335,29 +334,19 @@ void main() {
     expect(result.data.name, '服务器学生');
   });
 
-  test('api refreshes expired credential token with saved password', () async {
+  test('api clears expired credential token without password fallback',
+      () async {
     SharedPreferences.setMockInitialValues({
       'auth.credentialToken': 'expired-token',
       'auth.rememberPassword': true,
-      'auth.account': '2540232101',
+      'auth.account': '2024000000',
       'auth.password': 'secret',
     });
-    var meCalls = 0;
     var autoLoginCalled = false;
     final api = ApiClient(
       httpClient: MockClient((request) async {
         if (request.url.path.endsWith('/me')) {
-          meCalls++;
-          if (meCalls == 1) {
-            return http.Response(jsonEncode({'detail': 'expired'}), 401);
-          }
-          return http.Response.bytes(
-            utf8.encode(jsonEncode({
-              'studentId': '2540232101',
-              'name': '服务器学生',
-            })),
-            200,
-          );
+          return http.Response(jsonEncode({'detail': 'expired'}), 401);
         }
         if (request.url.path.endsWith('/auth/relogin')) {
           return http.Response.bytes(
@@ -367,32 +356,40 @@ void main() {
         }
         if (request.url.path.endsWith('/auth/auto-login')) {
           autoLoginCalled = true;
-          final body = jsonDecode(request.body) as Map<String, dynamic>;
-          expect(body['account'], '2540232101');
-          expect(body['password'], 'secret');
-          return http.Response.bytes(
-            utf8.encode(jsonEncode({
-              'status': 'ok',
-              'sessionId': 'session-2',
-              'studentName': '服务器学生',
-              'studentId': '2540232101',
-              'credentialToken': 'fresh-token',
-            })),
-            200,
-          );
         }
         return http.Response('not found', 404);
       }),
     );
 
-    final result = await api.me(forceRefresh: true);
+    await expectLater(
+      api.me(forceRefresh: true),
+      throwsA(isA<ApiException>()),
+    );
     final prefs = await SharedPreferences.getInstance();
 
-    expect(result.data.name, '服务器学生');
-    expect(autoLoginCalled, isTrue);
-    expect(api.sessionId, 'session-2');
-    expect(prefs.getString('auth.credentialToken'), 'fresh-token');
-    expect(prefs.getString('auth.sessionId'), 'session-2');
+    expect(autoLoginCalled, isFalse);
+    expect(prefs.getString('auth.credentialToken'), isNull);
+    expect(prefs.getString('auth.password'), isNull);
+  });
+
+  test('api stores remembered account without password', () async {
+    SharedPreferences.setMockInitialValues({
+      'auth.password': 'legacy-secret',
+    });
+    final api = ApiClient(httpClient: MockClient((request) async {
+      return http.Response('not found', 404);
+    }));
+
+    await api.savePasswordCredentials(
+      '2024000000',
+      'new-secret',
+      remember: true,
+    );
+    final prefs = await SharedPreferences.getInstance();
+
+    expect(prefs.getBool('auth.rememberPassword'), isTrue);
+    expect(prefs.getString('auth.account'), '2024000000');
+    expect(prefs.getString('auth.password'), isNull);
   });
 
   testWidgets('renders login page', (tester) async {
@@ -408,7 +405,7 @@ void main() {
   });
 
   testWidgets('mobile sso is enabled without account', (tester) async {
-    SharedPreferences.setMockInitialValues({});
+    SharedPreferences.setMockInitialValues({'auth.agreedToTerms': true});
 
     await tester.pumpWidget(const OneGzusApp());
     await tester.pumpAndSettle();
@@ -677,6 +674,13 @@ void main() {
     await tester.tap(find.text('校本部 A2 A2-932'));
     await tester.pumpAndSettle();
 
+    await tester.scrollUntilVisible(
+      find.text('电费消费记录'),
+      300,
+      scrollable: find.byType(Scrollable).last,
+    );
+    await tester.pumpAndSettle();
+
     expect(find.text('电费消费记录'), findsOneWidget);
     expect(find.text('一卡通流水接口受限'), findsOneWidget);
   });
@@ -719,14 +723,14 @@ Future<void> _pumpDashboard(WidgetTester tester, Size size) async {
 }
 
 ApiClient _mockApi() {
-  return ApiClient(
+  final api = ApiClient(
     httpClient: MockClient((request) async {
       final path = request.url.path;
       Object body;
       switch (path) {
         case '/me':
           body = {
-            'studentId': '2540232101',
+            'studentId': '2024000000',
             'name': '测试学生',
             'college': '软件学院',
             'major': '软件工程',
@@ -740,7 +744,7 @@ ApiClient _mockApi() {
               'name': '移动应用开发',
               'teacher': '张老师',
               'classroom': 'A101',
-              'weekday': 1,
+              'weekday': DateTime.now().weekday,
               'startSection': 1,
               'endSection': 2,
               'weeks': '1-30',
@@ -796,7 +800,7 @@ ApiClient _mockApi() {
         case '/credits':
           body = [
             {
-              'studentId': '2540232101',
+              'studentId': '2024000000',
               'name': '测试学生',
               'major': '软件工程',
               'totalCredit': '160',
@@ -920,4 +924,7 @@ ApiClient _mockApi() {
       );
     }),
   );
+  api.useSession('test-session');
+  api.setStudentId('2024000000');
+  return api;
 }

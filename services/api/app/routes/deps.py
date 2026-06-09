@@ -18,7 +18,7 @@ def require_session(
 ) -> AppSession:
     if not x_session_id:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="缺少会话")
-    session = request.app.state.sessions.get(x_session_id)
+    session = request.app.state.sessions.get(x_session_id, touch=False)
     if session is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="会话已过期")
 
@@ -41,4 +41,5 @@ def require_session(
             detail="会话已过期，请重新登录",
         )
 
+    request.app.state.sessions.touch(session.id)
     return session

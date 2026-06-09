@@ -1,10 +1,15 @@
 """Direct API test with verbose output."""
 from __future__ import annotations
 
+import os
+
 import httpx
 
-account = "2540232101"
-password = "Limuliseig423."
+account = os.environ.get("GZUS_TEST_ACCOUNT")
+password = os.environ.get("GZUS_TEST_PASSWORD")
+
+if not account or not password:
+    raise SystemExit("Set GZUS_TEST_ACCOUNT and GZUS_TEST_PASSWORD to run this manual test.")
 
 r = httpx.post(
     "http://localhost:8000/auth/auto-login",
@@ -12,4 +17,15 @@ r = httpx.post(
     timeout=120,
 )
 print(f"Status: {r.status_code}")
-print(f"Body: {r.text}")
+try:
+    data = r.json()
+except ValueError:
+    print("Body: <non-json response>")
+else:
+    print(
+        {
+            "status": data.get("status"),
+            "hasSession": bool(data.get("sessionId")),
+            "hasCredentialToken": bool(data.get("credentialToken")),
+        }
+    )
