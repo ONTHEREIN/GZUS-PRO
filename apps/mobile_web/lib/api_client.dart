@@ -35,13 +35,16 @@ String _normalizeSingle(String url) {
 }
 
 String _defaultApiBaseUrl() {
+  // 所有平台默认使用云端后端，本地地址作为回退
+  const cloudUrl = 'https://api-one-zeta-dc0jrazxzq.vercel.app';
   if (kIsWeb) {
-    return 'https://api-one-zeta-dc0jrazxzq.vercel.app';
+    return cloudUrl;
   }
   if (defaultTargetPlatform == TargetPlatform.android) {
-    return 'http://10.0.2.2:8000,http://127.0.0.1:8000';
+    // 云端优先，模拟器地址回退（仅开发调试用）
+    return '$cloudUrl,http://10.0.2.2:8000';
   }
-  return 'http://127.0.0.1:8000,http://10.0.2.2:8000';
+  return '$cloudUrl,http://127.0.0.1:8000';
 }
 
 class DataSourceInfo {
@@ -2044,8 +2047,15 @@ class ApiClient {
     return _currentBaseUrl;
   }
 
-  /// 预热 Vercel Serverless 函数（冷启动可能 30s+）
-  Future<void> warmup() async {
+  Future<void>? _warmupFuture;
+  bool _warmedUp = false;
+
+  void startWarmup() {
+    if (_warmedUp || _warmupFuture != null) return;
+    _warmupFuture = _doWarmup();
+  }
+
+  Future<void> _doWarmup() async {
     final url = _resolveBaseUrl();
     int attempt = 0;
     while (attempt < 3) {
@@ -2054,7 +2064,10 @@ class ApiClient {
         final response = await _http
             .get(Uri.parse('$url/health'), headers: _headers())
             .timeout(const Duration(seconds: 35));
-        if (response.statusCode == 200) return;
+        if (response.statusCode == 200) {
+          _warmedUp = true;
+          return;
+        }
       } on TimeoutException {
         continue;
       } on http.ClientException {
@@ -2064,6 +2077,17 @@ class ApiClient {
       }
       await Future<void>.delayed(const Duration(seconds: 2));
     }
+    _warmedUp = true;
+  }
+
+  Future<void> _ensureWarmedUp() async {
+    if (_warmedUp) return;
+    if (_warmupFuture != null) {
+      await _warmupFuture;
+      return;
+    }
+    startWarmup();
+    await _warmupFuture!;
   }
 
   /// 在收到 401 时自动尝试 relogin 并重试原始请求
@@ -2077,6 +2101,7 @@ class ApiClient {
     required Set<String> tried,
   }) async {
     try {
+      await _ensureWarmedUp();
       return await request();
     } on ApiException catch (e) {
       if (e.statusCode == 401) {
