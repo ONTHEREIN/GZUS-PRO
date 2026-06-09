@@ -31,6 +31,10 @@ class EcardBindingRequest(BaseModel):
 class EcardReminderRequest(BaseModel):
     enabled: bool | None = None
     low_power_threshold: float | None = Field(default=None, alias="lowPowerThreshold", ge=0)
+    low_cold_water_threshold: float | None = Field(default=None, alias="lowColdWaterThreshold", ge=0)
+    low_hot_water_threshold: float | None = Field(default=None, alias="lowHotWaterThreshold", ge=0)
+    reminder_times: list[str] | None = Field(default=None, alias="reminderTimes", max_length=2)
+    reminder_items: list[str] | None = Field(default=None, alias="reminderItems")
 
 
 class EcardRoomItem(BaseModel):
@@ -43,6 +47,7 @@ class EcardRoomItem(BaseModel):
 
 class EcardSummary(BaseModel):
     status: Literal["ok", "not_bound"]
+    student_id: str | None = Field(default=None, alias="studentId")
     room_id: str | None = Field(default=None, alias="roomId")
     room_display: str | None = Field(default=None, alias="roomDisplay")
     power_balance: float | str | None = Field(default=None, alias="powerBalance")
@@ -56,6 +61,10 @@ class EcardSummary(BaseModel):
     hot_water_text: str | None = Field(default=None, alias="hotWaterText")
     reminder_enabled: bool = Field(default=True, alias="reminderEnabled")
     low_power_threshold: float = Field(default=30, alias="lowPowerThreshold")
+    low_cold_water_threshold: float = Field(default=5.0, alias="lowColdWaterThreshold")
+    low_hot_water_threshold: float = Field(default=10.0, alias="lowHotWaterThreshold")
+    reminder_times: list[str] = Field(default=["08:00"], alias="reminderTimes")
+    reminder_items: list[str] = Field(default=["power", "cold_water", "hot_water"], alias="reminderItems")
     updated_at: str | None = Field(default=None, alias="updatedAt")
 
 
@@ -79,6 +88,8 @@ class AuthResponse(BaseModel):
     captcha_token: str | None = Field(default=None, alias="captchaToken")
     captcha_image: str | None = Field(default=None, alias="captchaImage")
     credential_token: str | None = Field(default=None, alias="credentialToken")
+    ehall_cookies: str | None = Field(default=None, alias="ehallCookies")
+    ehall_auth_token: str | None = Field(default=None, alias="ehallAuthToken")
 
 
 class ReloginRequest(BaseModel):
@@ -87,11 +98,23 @@ class ReloginRequest(BaseModel):
 
 class StudentInfo(BaseModel):
     student_id: str = Field(alias="studentId")
-    name: str
+    name: str = ""
     college: str | None = None
     major: str | None = None
     class_name: str | None = Field(default=None, alias="className")
     grade: str | None = None
+    gender: str | None = None
+    id_number: str | None = Field(default=None, alias="idNumber")
+    birth_date: str | None = Field(default=None, alias="birthDate")
+    ethnicity: str | None = None
+    political_status: str | None = Field(default=None, alias="politicalStatus")
+    enroll_date: str | None = Field(default=None, alias="enrollDate")
+    native_place: str | None = Field(default=None, alias="nativePlace")
+    student_status: str | None = Field(default=None, alias="studentStatus")
+    education_level: str | None = Field(default=None, alias="educationLevel")
+    phone: str | None = None
+    email: str | None = None
+    address: str | None = None
     photo_data_url: str | None = Field(default=None, alias="photoDataUrl")
 
 
@@ -334,3 +357,19 @@ class EhallSessionStatus(BaseModel):
     account: str | None = None
     expires_at: str | None = Field(default=None, alias="expiresAt")
     last_used_at: str | None = Field(default=None, alias="lastUsedAt")
+
+
+class WebPushKeys(BaseModel):
+    p256dh: str
+    auth: str
+
+
+class WebPushSubscriptionRequest(BaseModel):
+    endpoint: str
+    keys: WebPushKeys
+    expiration_time: int | None = Field(default=None, alias="expirationTime")
+
+
+class WebPushConfigResponse(BaseModel):
+    enabled: bool
+    publicKey: str | None = None

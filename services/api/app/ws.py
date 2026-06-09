@@ -22,7 +22,9 @@ class ConnectionManager:
     def enqueue(self, session_id: str, message: dict) -> dict:
         queued = dict(message)
         queued.setdefault("id", uuid.uuid4().hex)
-        queued.setdefault("extras", _message_extras(queued))
+        extras = dict(queued.get("extras") or {})
+        extras.update(_message_extras(queued))
+        queued["extras"] = extras
         items = self.pending.setdefault(session_id, [])
         items.append(queued)
         if len(items) > 100:
@@ -59,10 +61,22 @@ ws_router = APIRouter()
 
 def _message_extras(message: dict) -> dict:
     extras = {}
-    if message.get("type") is not None:
-        extras["type"] = message["type"]
-    if message.get("url") is not None:
-        extras["url"] = message["url"]
+    for key in (
+        "type",
+        "url",
+        "courseName",
+        "studentId",
+        "liveUpdate",
+        "style",
+        "endTime",
+        "shortCriticalText",
+        "progressStartTime",
+        "progressMax",
+        "progressCurrent",
+        "progress",
+    ):
+        if message.get(key) is not None:
+            extras[key] = message[key]
     return extras
 
 

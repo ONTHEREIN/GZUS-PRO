@@ -1,8 +1,12 @@
-import pytest
-
 from app.push import send_push, send_push_to_all
 from app.ws import ConnectionManager
-from app.jobs import NoticeCache, run_notice_poller_once
+from app.jobs import (
+    NoticeCache,
+    changed_grade_items,
+    ecard_progress_current,
+    grade_snapshot,
+    run_notice_poller_once,
+)
 
 
 class TestConnectionManager:
@@ -32,6 +36,66 @@ class TestConnectionManager:
         messages = manager.drain("sid1")
         assert messages[0]["extras"] == {"type": "new_notice", "url": "/notice"}
         assert manager.drain("sid1") == []
+
+    def test_enqueue_preserves_live_update_fields_in_extras(self):
+        manager = ConnectionManager()
+        manager.enqueue(
+            "sid1",
+            {
+                "id": "exam_reminder:sid1:math",
+                "type": "exam_reminder",
+                "courseName": "高等数学",
+                "liveUpdate": True,
+                "style": "progress",
+                "endTime": 1780966800000,
+                "shortCriticalText": "考试",
+                "progressMax": 100,
+                "progressCurrent": 0,
+            },
+        )
+
+        message = manager.drain("sid1")[0]
+
+        assert message["id"] == "exam_reminder:sid1:math"
+        assert message["extras"]["type"] == "exam_reminder"
+        assert message["extras"]["courseName"] == "高等数学"
+        assert message["extras"]["liveUpdate"] is True
+        assert message["extras"]["style"] == "progress"
+        assert message["extras"]["endTime"] == 1780966800000
+        assert message["extras"]["progressMax"] == 100
+        assert message["extras"]["progressCurrent"] == 0
+
+
+class TestLiveUpdateHelpers:
+    def test_grade_snapshot_detects_new_and_changed_scores(self):
+        previous_items = [
+            {"term": "2025-2", "courseName": "高等数学", "score": "90", "gradePoint": "4.0"}
+        ]
+        current_items = [
+            {"term": "2025-2", "courseName": "高等数学", "score": "92", "gradePoint": "4.0"},
+            {"term": "2025-2", "courseName": "移动应用开发", "score": "95", "gradePoint": "4.3"},
+        ]
+
+        changed = changed_grade_items(current_items, grade_snapshot(previous_items))
+
+        assert [item["courseName"] for item in changed] == ["高等数学", "移动应用开发"]
+
+    def test_ecard_progress_uses_lowest_enabled_balance(self):
+        summary = {
+            "powerBalance": 15,
+            "coldWaterBalance": 2,
+            "hotWaterBalance": 10,
+        }
+
+        assert ecard_progress_current(summary, "power", 30, 10, 20, ["power"]) == 50
+        assert ecard_progress_current(
+            summary,
+            "daily",
+            30,
+            10,
+            20,
+            ["power", "cold_water", "hot_water"],
+        ) == 20
 
 
 class TestNoticeCache:
@@ -110,6 +174,15 @@ class TestNoticePoller:
         assert session_id == "sid1"
         assert message["type"] == "new_notice"
         assert message["body"] == "新通知"
+
+    async def test_notice_poller_ignores_garbled_items(self):
+        app = FakeApp()
+        await run_notice_poller_once(app)
+
+        app.session.client.items.insert(0, {"title": "æ–°é€šçŸ¥", "url": "/bad"})
+        await run_notice_poller_once(app)
+
+        assert app.state.ws_manager.sent == []
 
 
 class TestSendPush:

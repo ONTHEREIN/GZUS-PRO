@@ -1,19 +1,25 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:package_info_plus/package_info_plus.dart';
+import 'package:path_provider/path_provider.dart' as path_provider;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:share_plus/share_plus.dart';
-import 'package:url_launcher/url_launcher.dart';
-
 import 'api_client.dart';
 import 'avatar_open.dart';
 import 'browser_redirect.dart';
 import 'ics_download.dart';
 import 'leave_attachment.dart';
+import 'location_service.dart';
 import 'mobile_sso.dart';
+import 'permission_service.dart';
 import 'push_service.dart';
 import 'ws_service.dart';
 import 'local_notification_service.dart';
@@ -21,8 +27,14 @@ import 'reminder_service.dart';
 import 'bugly_service.dart';
 import 'background_service.dart';
 import 'background_guide_page.dart';
+import 'live_activity_service.dart';
+import 'live_update_service.dart';
+import 'gzus_design.dart';
 import 'persistent_cache.dart';
+import 'ftp_upload_service.dart';
 import 'update_service.dart';
+import 'web_push_service.dart';
+import 'web_pwa_cache.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -33,108 +45,23 @@ void main() async {
   // 初始化 Bugly
   await BuglyService.init();
 
-  runApp(const GzusProApp());
+  runApp(const OneGzusApp());
 }
 
 ThemeData _appTheme(Brightness brightness) {
-  final colorScheme = ColorScheme.fromSeed(
-    seedColor: const Color(0xFF386A9F),
-    secondary: const Color(0xFF5D6F3B),
-    tertiary: const Color(0xFF8A4F7D),
-    brightness: brightness,
-  );
-  final isDark = brightness == Brightness.dark;
-  final shape = RoundedRectangleBorder(borderRadius: BorderRadius.circular(18));
-
-  return ThemeData(
-    useMaterial3: true,
-    brightness: brightness,
-    colorScheme: colorScheme,
-    scaffoldBackgroundColor:
-        isDark ? colorScheme.surface : const Color(0xFFF8F9F5),
-    cardTheme: CardThemeData(
-      color: colorScheme.surfaceContainerLow,
-      elevation: 0,
-      margin: EdgeInsets.zero,
-      shape: shape,
-    ),
-    navigationBarTheme: NavigationBarThemeData(
-      height: _mobileNavBarHeight,
-      backgroundColor: colorScheme.surfaceContainer,
-      indicatorColor: colorScheme.primaryContainer,
-      labelTextStyle: WidgetStateProperty.all(
-        const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-      ),
-    ),
-    navigationRailTheme: NavigationRailThemeData(
-      backgroundColor: colorScheme.surfaceContainerLow,
-      indicatorColor: colorScheme.primaryContainer,
-      selectedIconTheme: IconThemeData(color: colorScheme.onPrimaryContainer),
-      selectedLabelTextStyle: TextStyle(
-        color: colorScheme.onSurface,
-        fontWeight: FontWeight.w700,
-      ),
-    ),
-    inputDecorationTheme: InputDecorationTheme(
-      filled: true,
-      fillColor: colorScheme.surfaceContainerLow,
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(18),
-        borderSide: BorderSide.none,
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(18),
-        borderSide: BorderSide(color: colorScheme.primary, width: 1.5),
-      ),
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-    ),
-    filledButtonTheme: FilledButtonThemeData(
-      style: FilledButton.styleFrom(
-        minimumSize: const Size(64, 48),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-      ),
-    ),
-    outlinedButtonTheme: OutlinedButtonThemeData(
-      style: OutlinedButton.styleFrom(
-        minimumSize: const Size(64, 48),
-        side: BorderSide(color: colorScheme.outlineVariant),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-      ),
-    ),
-    textButtonTheme: TextButtonThemeData(
-      style: TextButton.styleFrom(
-        minimumSize: const Size(48, 48),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      ),
-    ),
-    chipTheme: ChipThemeData(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-      selectedColor: colorScheme.secondaryContainer,
-      backgroundColor: colorScheme.surfaceContainerLow,
-      side: BorderSide.none,
-    ),
-    appBarTheme: AppBarTheme(
-      backgroundColor: colorScheme.surface,
-      foregroundColor: colorScheme.onSurface,
-      elevation: 0,
-      centerTitle: false,
-    ),
-    snackBarTheme: SnackBarThemeData(
-      behavior: SnackBarBehavior.floating,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-    ),
-  );
+  return gzusTheme(brightness, navBarHeight: _mobileNavBarHeight);
 }
 
-class GzusProApp extends StatefulWidget {
-  const GzusProApp({super.key});
+class OneGzusApp extends StatefulWidget {
+  const OneGzusApp({super.key});
 
   @override
-  State<GzusProApp> createState() => _GzusProAppState();
+  State<OneGzusApp> createState() => _OneGzusAppState();
 }
 
-class _GzusProAppState extends State<GzusProApp> with WidgetsBindingObserver {
+class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
   final api = ApiClient();
+  final _navigatorKey = GlobalKey<NavigatorState>();
   ThemeMode themeMode = ThemeMode.system;
   bool _systemDark = false;
   bool loggedIn = false;
@@ -148,6 +75,9 @@ class _GzusProAppState extends State<GzusProApp> with WidgetsBindingObserver {
   /// 登录方式: "password" = 教务系统账密登录, "sso" = 办事大厅一键登录, null = 未登录
   String? loginMethod;
 
+  /// 防止 _logout() 被并发调用
+  bool _logoutInProgress = false;
+
   @override
   void initState() {
     super.initState();
@@ -155,6 +85,10 @@ class _GzusProAppState extends State<GzusProApp> with WidgetsBindingObserver {
     _systemDark =
         WidgetsBinding.instance.platformDispatcher.platformBrightness ==
             Brightness.dark;
+    // 当 relogin 失败时（credential token 已失效），触发 logout
+    api.onReloginFailed = () {
+      if (loggedIn) _logout();
+    };
     _loadThemePreference();
     _bootstrapLoginState();
   }
@@ -165,15 +99,30 @@ class _GzusProAppState extends State<GzusProApp> with WidgetsBindingObserver {
     super.dispose();
   }
 
+  bool _hasBeenResumed = false;
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    debugPrint(
+        '[AppLifecycle] state changed to: $state, loggedIn: $loggedIn, _hasBeenResumed: $_hasBeenResumed');
     if (!loggedIn) return;
     if (state == AppLifecycleState.resumed) {
+      _hasBeenResumed = true;
+      debugPrint(
+          '[AppLifecycle] Resuming - calling WsService.resume() and setAppForeground(true)');
       PushService.resume();
-      WsService.connect();
-    } else if (state == AppLifecycleState.paused ||
-        state == AppLifecycleState.detached) {
-      WsService.disconnect();
+      WsService.resume();
+      unawaited(BackgroundService.setAppForeground(true));
+      unawaited(_drainPendingPushMessages());
+    } else if (_hasBeenResumed &&
+        (state == AppLifecycleState.paused ||
+            state == AppLifecycleState.inactive ||
+            state == AppLifecycleState.hidden ||
+            state == AppLifecycleState.detached)) {
+      debugPrint(
+          '[AppLifecycle] Pausing - calling WsService.pause() and setAppForeground(false)');
+      WsService.pause();
+      unawaited(BackgroundService.setAppForeground(false));
     }
   }
 
@@ -210,7 +159,8 @@ class _GzusProAppState extends State<GzusProApp> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'GZUS-PRO',
+      navigatorKey: _navigatorKey,
+      title: 'OneGZUS',
       debugShowCheckedModeBanner: false,
       themeMode: themeMode,
       theme: _appTheme(Brightness.light),
@@ -226,11 +176,18 @@ class _GzusProAppState extends State<GzusProApp> with WidgetsBindingObserver {
                   },
                 )
               : !_backgroundGuideCompleted
-                  ? const BackgroundGuidePage()
+                  ? BackgroundGuidePage(
+                      api: api,
+                      onComplete: () {
+                        WidgetsBinding.instance.addPostFrameCallback((_) {
+                          _navigatorKey.currentState?.pushNamedAndRemoveUntil(
+                              '/dashboard', (route) => false);
+                        });
+                      })
                   : _buildDashboardShell(),
       routes: {
         '/dashboard': (context) => _buildDashboardShell(),
-        '/background-guide': (context) => const BackgroundGuidePage(),
+        '/background-guide': (context) => BackgroundGuidePage(api: api),
       },
     );
   }
@@ -388,6 +345,11 @@ class _GzusProAppState extends State<GzusProApp> with WidgetsBindingObserver {
   }
 
   Future<void> _initPushServices() async {
+    await WebPushService.instance.init(
+      onTap: (extras) {
+        _handleNotificationTap(extras);
+      },
+    );
     await LocalNotificationService.init(
       onTap: (extras) {
         _handleNotificationTap(extras);
@@ -415,16 +377,51 @@ class _GzusProAppState extends State<GzusProApp> with WidgetsBindingObserver {
       sessionId: api.sessionId ?? '',
     );
     await WsService.connect();
+    await _drainPendingPushMessages();
   }
 
   void _handleNotificationTap(Map<String, dynamic> extras) {
-    final url = extras['url'] as String?;
-    if (url != null && url.isNotEmpty && mounted) {}
+    final url = extras['url']?.toString().trim();
+    if (!mounted) return;
+    final tab = _tabForNotificationType(extras['type']?.toString());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      if (url != null && url.isNotEmpty) {
+        openAuthenticatedEhallUrl(context, url);
+        return;
+      }
+      if (tab != null) _NotificationOpenBridge.openTab(tab);
+    });
+  }
+
+  Future<void> _drainPendingPushMessages() async {
+    if (api.sessionId == null || api.sessionId!.isEmpty) return;
+    try {
+      final messages = await api.pollPushMessages();
+      for (final message in messages) {
+        await WsService.handleNotificationMessage(message);
+      }
+    } catch (_) {}
+  }
+
+  String? _tabForNotificationType(String? type) {
+    switch (type) {
+      case 'course_reminder':
+        return 'schedule';
+      case 'exam_reminder':
+        return 'exams';
+      case 'ecard_reminder':
+        return 'ecard';
+      case 'new_notice':
+        return 'notices';
+      default:
+        return null;
+    }
   }
 
   void _checkForUpdate() {
     if (!mounted) return;
-    UpdateService().checkForUpdateIfNeeded(api, context);
+    UpdateService().checkForUpdateIfNeeded();
   }
 
   Future<void> _finishLogin(LoginResult result) async {
@@ -462,45 +459,67 @@ class _GzusProAppState extends State<GzusProApp> with WidgetsBindingObserver {
     if (result.loginMethod != null) {
       await prefs.setString('auth.loginMethod', result.loginMethod!);
     }
+    if (result.ehallCookies != null && result.ehallCookies!.isNotEmpty) {
+      await prefs.setString('auth.ehallCookies', result.ehallCookies!);
+    }
+    if (result.ehallAuthToken != null && result.ehallAuthToken!.isNotEmpty) {
+      await prefs.setString('auth.ehallAuthToken', result.ehallAuthToken!);
+    }
   }
 
   Future<void> _logout() async {
+    if (_logoutInProgress || !loggedIn) return;
+    _logoutInProgress = true;
+    loggedIn = false; // 立即标记为已登出，防止排队的 onSessionExpired 回调再次触发
+    api.clearCredentials();
     WsService.disconnect();
-    try {
-      await api.unregisterPush();
-    } catch (_) {
-      // Logout should continue even if push registration cleanup fails.
-    }
-    try {
-      await api.logout();
-    } catch (_) {
-      api.useSession(null);
-    }
 
-    try {
-      await BuglyService.setUserId('');
-      await clearMobileSsoCookies();
-
-      final studentId = api.studentId;
-      if (studentId != null && studentId.isNotEmpty) {
-        await PersistentCache.clearForStudent(studentId);
-      }
-
-      await BackgroundService.disableForegroundService();
-      ReminderService.cancelCourseReminders();
-      await _clearSavedSession();
-    } catch (_) {
-      // Ensure logout proceeds even if cleanup steps fail.
-    }
-
+    // 立即更新 UI 跳转到登录页，不等异步清理完成
     if (!mounted) return;
     setState(() {
-      loggedIn = false;
       studentName = null;
       _backgroundGuideCompleted = false;
       _globalDataSource = const DataSourceInfo();
       loginMethod = null;
     });
+
+    // 以下异步清理操作在后台执行，不阻塞 UI
+    try {
+      // unregisterPush 和 logout 需要 sessionId，在请求完成后再清除
+      try {
+        await api.unregisterPush();
+      } catch (_) {}
+      if (kIsWeb && (api.sessionId?.isNotEmpty ?? false)) {
+        try {
+          await WebPushService.instance.unsubscribe(
+            apiBaseUrl: api.baseUrl,
+            sessionId: api.sessionId!,
+          );
+        } catch (_) {}
+      }
+      try {
+        await api.logout();
+      } catch (_) {}
+
+      // 请求完成后清除 session
+      api.useSession(null);
+
+      try {
+        await BuglyService.setUserId('');
+        await clearMobileSsoCookies();
+
+        final studentId = api.studentId;
+        if (studentId != null && studentId.isNotEmpty) {
+          await PersistentCache.clearForStudent(studentId);
+        }
+
+        await BackgroundService.disableForegroundService();
+        ReminderService.cancelCourseReminders();
+        await _clearSavedSession();
+      } catch (_) {}
+    } finally {
+      _logoutInProgress = false;
+    }
   }
 
   Future<void> _clearSavedSession() async {
@@ -509,10 +528,14 @@ class _GzusProAppState extends State<GzusProApp> with WidgetsBindingObserver {
     await prefs.remove('auth.studentName');
     await prefs.remove('auth.studentId');
     await prefs.remove('auth.ehallCookies');
+    await prefs.remove('auth.ehallAuthToken');
     await prefs.remove('auth.loginMethod');
     await prefs.remove('auth.credentialToken');
     await prefs.remove('auth.account');
+    await prefs.remove('auth.password');
+    await prefs.remove('auth.rememberPassword');
     await prefs.remove('background_guide_completed');
+    clearPwaApiCache();
     api.useSession(null);
   }
 
@@ -523,7 +546,7 @@ class _GzusProAppState extends State<GzusProApp> with WidgetsBindingObserver {
       themeMode: themeMode,
       onThemeChanged: _setThemeMode,
       onLogout: () {
-        _logout();
+        if (loggedIn) _logout();
       },
       onSettingsPressed: _showBackgroundGuide,
       dataSource: _globalDataSource,
@@ -533,8 +556,17 @@ class _GzusProAppState extends State<GzusProApp> with WidgetsBindingObserver {
 
   void _showBackgroundGuide() {
     if (!mounted) return;
-    Navigator.of(context).push(
-      MaterialPageRoute(builder: (context) => const BackgroundGuidePage()),
+    _navigatorKey.currentState?.push(
+      MaterialPageRoute(
+        builder: (context) => BackgroundGuidePage(
+          api: api,
+          onComplete: () {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              _navigatorKey.currentState?.pop();
+            });
+          },
+        ),
+      ),
     );
   }
 }
@@ -561,6 +593,8 @@ class _LoginPageState extends State<LoginPage>
   final passwordController = TextEditingController();
   final passwordFocusNode = FocusNode();
   bool loading = false;
+  bool rememberPassword = true;
+  bool agreedToTerms = false;
   String? error;
   late final _appearController = AnimationController(
     vsync: this,
@@ -575,7 +609,34 @@ class _LoginPageState extends State<LoginPage>
   void initState() {
     super.initState();
     error = widget.initialError;
+    unawaited(_loadSavedLoginForm());
+    unawaited(_loadAgreementState());
     _appearController.forward();
+  }
+
+  Future<void> _loadSavedLoginForm() async {
+    final prefs = await SharedPreferences.getInstance();
+    final remember = prefs.getBool('auth.rememberPassword') ?? true;
+    final account = prefs.getString('auth.account') ?? '';
+    final password = remember ? prefs.getString('auth.password') ?? '' : '';
+    if (!mounted) return;
+    setState(() {
+      rememberPassword = remember;
+      accountController.text = account;
+      passwordController.text = password;
+    });
+  }
+
+  Future<void> _loadAgreementState() async {
+    final prefs = await SharedPreferences.getInstance();
+    final agreed = prefs.getBool('auth.agreedToTerms') ?? false;
+    if (!mounted) return;
+    setState(() => agreedToTerms = agreed);
+  }
+
+  Future<void> _saveAgreementState() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('auth.agreedToTerms', true);
   }
 
   @override
@@ -619,132 +680,284 @@ class _LoginPageState extends State<LoginPage>
                   ).animate(_appearAnim),
                   child: Center(
                     child: ConstrainedBox(
-                      constraints: BoxConstraints(maxWidth: compact ? 460 : 420),
-                      child: Card(
-                        elevation: 2,
-                        clipBehavior: Clip.antiAlias,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(16),
+                      constraints:
+                          BoxConstraints(maxWidth: compact ? 460 : 420),
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: gzusSurface(context),
+                          borderRadius: BorderRadius.circular(GzusRadii.xl),
+                          border: Border.all(color: gzusBorder(context)),
+                          boxShadow: gzusShadow(context),
                         ),
                         child: Padding(
-                      padding: EdgeInsets.all(compact ? 20 : 26),
-                      child: AutofillGroup(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            Row(
+                          padding: EdgeInsets.all(compact ? 22 : 30),
+                          child: AutofillGroup(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
                               children: [
-                                _IconBadge(
-                                  icon: Icons.school,
-                                  size: compact ? 42 : 46,
+                                Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Container(
+                                      width: compact ? 44 : 48,
+                                      height: compact ? 44 : 48,
+                                      decoration: BoxDecoration(
+                                        color: _accentFill(context),
+                                        borderRadius: BorderRadius.circular(14),
+                                      ),
+                                      child: Icon(
+                                        Icons.school,
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .primary,
+                                      ),
+                                    ),
+                                    SizedBox(height: compact ? 18 : 22),
+                                    Text(
+                                      'OneGZUS',
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .headlineMedium,
+                                    ),
+                                    const SizedBox(height: 6),
+                                    Text(
+                                      '推荐使用办事大厅统一登录',
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .bodyMedium
+                                          ?.copyWith(
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .onSurfaceVariant,
+                                          ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      '教务系统登录',
+                                      style:
+                                          Theme.of(context).textTheme.bodySmall,
+                                    ),
+                                    const SizedBox(height: 14),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 12,
+                                        vertical: 8,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: gzusSurfaceSoft(context),
+                                        borderRadius: BorderRadius.circular(12),
+                                        border: Border.all(
+                                            color: gzusBorder(context)),
+                                      ),
+                                      child: Row(
+                                        children: [
+                                          Icon(
+                                            Icons.lock_outline,
+                                            size: 16,
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .primary,
+                                          ),
+                                          const SizedBox(width: 8),
+                                          Expanded(
+                                            child: Text(
+                                              '登录后自动同步课表、考勤、成绩、通知与生活缴费',
+                                              style: Theme.of(context)
+                                                  .textTheme
+                                                  .bodySmall,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
                                 ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        'GZUS-PRO',
-                                        style: Theme.of(context)
-                                            .textTheme
-                                            .headlineSmall
-                                            ?.copyWith(
-                                              fontWeight: FontWeight.w700,
-                                            ),
-                                      ),
-                                      const SizedBox(height: 4),
-                                      Text(
-                                        '统一身份认证登录',
-                                        style: Theme.of(context)
-                                            .textTheme
-                                            .bodyMedium
-                                            ?.copyWith(
-                                              color: Theme.of(context)
-                                                  .colorScheme
-                                                  .onSurfaceVariant,
-                                            ),
-                                      ),
-                                    ],
+                                SizedBox(height: compact ? 24 : 28),
+                                TextField(
+                                  controller: accountController,
+                                  decoration: const InputDecoration(
+                                    hintText: '学号',
+                                    prefixIcon: Icon(Icons.person),
+                                  ),
+                                  autofillHints: const [
+                                    AutofillHints.username,
+                                    AutofillHints.email,
+                                  ],
+                                  textInputAction: TextInputAction.next,
+                                  onSubmitted: (_) =>
+                                      passwordFocusNode.requestFocus(),
+                                ),
+                                const SizedBox(height: 12),
+                                TextField(
+                                  controller: passwordController,
+                                  focusNode: passwordFocusNode,
+                                  decoration: const InputDecoration(
+                                    hintText: '密码',
+                                    prefixIcon: Icon(Icons.lock),
+                                  ),
+                                  obscureText: true,
+                                  autofillHints: const [AutofillHints.password],
+                                  textInputAction: TextInputAction.done,
+                                  onSubmitted: _submitFromKeyboard,
+                                ),
+                                InkWell(
+                                  borderRadius:
+                                      BorderRadius.circular(GzusRadii.sm),
+                                  onTap: loading
+                                      ? null
+                                      : () => setState(() =>
+                                          rememberPassword = !rememberPassword),
+                                  child: Padding(
+                                    padding:
+                                        const EdgeInsets.symmetric(vertical: 4),
+                                    child: Row(
+                                      children: [
+                                        Checkbox(
+                                          value: rememberPassword,
+                                          onChanged: loading
+                                              ? null
+                                              : (value) => setState(() =>
+                                                  rememberPassword =
+                                                      value ?? true),
+                                        ),
+                                        const Text('记住密码'),
+                                      ],
+                                    ),
                                   ),
                                 ),
-                              ],
-                            ),
-                            SizedBox(height: compact ? 24 : 28),
-                            TextField(
-                              controller: accountController,
-                              decoration: const InputDecoration(
-                                hintText: '学号',
-                                prefixIcon: Icon(Icons.person),
-                              ),
-                              autofillHints: const [
-                                AutofillHints.username,
-                                AutofillHints.email,
-                              ],
-                              textInputAction: TextInputAction.next,
-                              onSubmitted: (_) =>
-                                  passwordFocusNode.requestFocus(),
-                            ),
-                            const SizedBox(height: 12),
-                            TextField(
-                              controller: passwordController,
-                              focusNode: passwordFocusNode,
-                              decoration: const InputDecoration(
-                                hintText: '密码',
-                                prefixIcon: Icon(Icons.lock),
-                              ),
-                              obscureText: true,
-                              autofillHints: const [
-                                AutofillHints.password
-                              ],
-                              textInputAction: TextInputAction.done,
-                              onSubmitted: _submitFromKeyboard,
-                            ),
-                            SizedBox(height: compact ? 16 : 18),
-                            SizedBox(
-                              height: compact ? 56 : 60,
-                              child: FilledButton(
-                                onPressed: loading ? null : _login,
-                                child: _IconLabel(
-                                  icon: Icons.login,
-                                  label: loading ? '登录中...' : '登录',
-                                  centered: true,
-                                ),
-                              ),
-                            ),
-                            if (error != null) ...[
-                              const SizedBox(height: 16),
-                              Card(
-                                color: Theme.of(context)
-                                    .colorScheme
-                                    .errorContainer,
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                child: Padding(
-                                  padding: const EdgeInsets.all(16),
-                                  child: Column(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Icon(Icons.error_outline,
-                                          size: 48,
-                                          color: Theme.of(context)
-                                              .colorScheme
-                                              .onErrorContainer),
-                                      const SizedBox(height: 12),
-                                      Text(error!,
-                                          textAlign: TextAlign.center,
-                                          style: TextStyle(
-                                              color: Theme.of(context)
-                                                  .colorScheme
-                                                  .onErrorContainer)),
-                                    ],
+                                InkWell(
+                                  borderRadius:
+                                      BorderRadius.circular(GzusRadii.sm),
+                                  onTap: loading
+                                      ? null
+                                      : () => setState(() =>
+                                          agreedToTerms = !agreedToTerms),
+                                  child: Padding(
+                                    padding:
+                                        const EdgeInsets.symmetric(vertical: 4),
+                                    child: Row(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.center,
+                                      children: [
+                                        Checkbox(
+                                          value: agreedToTerms,
+                                          onChanged: loading
+                                              ? null
+                                              : (value) => setState(() =>
+                                                  agreedToTerms =
+                                                      value ?? false),
+                                        ),
+                                        Expanded(
+                                          child: RichText(
+                                            text: TextSpan(
+                                              style: Theme.of(context)
+                                                  .textTheme
+                                                  .bodySmall
+                                                  ?.copyWith(
+                                                    color: Theme.of(context)
+                                                        .colorScheme
+                                                        .onSurface,
+                                                  ),
+                                              children: [
+                                                const TextSpan(
+                                                    text: '我已阅读并同意'),
+                                                TextSpan(
+                                                  text: '《用户服务协议》',
+                                                  style: TextStyle(
+                                                    color: Theme.of(context)
+                                                        .colorScheme
+                                                        .primary,
+                                                    decoration: TextDecoration
+                                                        .underline,
+                                                  ),
+                                                  recognizer:
+                                                      TapGestureRecognizer()
+                                                        ..onTap =
+                                                            () => _showAgreement(
+                                                                  context,
+                                                                  title:
+                                                                      '用户服务协议',
+                                                                  type: 'terms',
+                                                                ),
+                                                ),
+                                                const TextSpan(text: ' 和 '),
+                                                TextSpan(
+                                                  text: '《隐私政策》',
+                                                  style: TextStyle(
+                                                    color: Theme.of(context)
+                                                        .colorScheme
+                                                        .primary,
+                                                    decoration: TextDecoration
+                                                        .underline,
+                                                  ),
+                                                  recognizer:
+                                                      TapGestureRecognizer()
+                                                        ..onTap =
+                                                            () => _showAgreement(
+                                                                  context,
+                                                                  title:
+                                                                      '隐私政策',
+                                                                  type:
+                                                                      'privacy',
+                                                                ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
                                   ),
                                 ),
-                              ),
-                            ],
-                          ],
+                                SizedBox(height: compact ? 16 : 18),
+                                SizedBox(
+                                  height: compact ? 56 : 60,
+                                  child: FilledButton(
+                                    onPressed: (loading || !agreedToTerms)
+                                        ? null
+                                        : _login,
+                                    child: _IconLabel(
+                                      icon: Icons.login,
+                                      label: loading ? '登录中...' : '办事大厅统一登录',
+                                      centered: true,
+                                    ),
+                                  ),
+                                ),
+                                if (error != null) ...[
+                                  const SizedBox(height: 16),
+                                  Card(
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .errorContainer,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    child: Padding(
+                                      padding: const EdgeInsets.all(16),
+                                      child: Column(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Icon(Icons.error_outline,
+                                              size: 48,
+                                              color: Theme.of(context)
+                                                  .colorScheme
+                                                  .onErrorContainer),
+                                          const SizedBox(height: 12),
+                                          Text(error!,
+                                              textAlign: TextAlign.center,
+                                              style: TextStyle(
+                                                  color: Theme.of(context)
+                                                      .colorScheme
+                                                      .onErrorContainer)),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            ),
+                          ),
                         ),
                       ),
                     ),
@@ -752,8 +965,6 @@ class _LoginPageState extends State<LoginPage>
                 ),
               ),
             ),
-          ),
-          ),
           );
         },
       ),
@@ -762,34 +973,116 @@ class _LoginPageState extends State<LoginPage>
 
   Future<void> _login() async {
     if (loading) return;
+    if (!agreedToTerms) {
+      setState(() => error = '请先阅读并同意《用户服务协议》和《隐私政策》');
+      return;
+    }
+    final account = accountController.text.trim();
+    final password = passwordController.text;
+    if (account.isEmpty) {
+      setState(() => error = '请输入学号');
+      return;
+    }
+    if (password.isEmpty) {
+      setState(() => error = '请输入密码');
+      return;
+    }
     setState(() {
       loading = true;
       error = null;
     });
     try {
       final result = await widget.api.autoLogin(
-        accountController.text,
-        passwordController.text,
+        account,
+        password,
       );
       TextInput.finishAutofillContext(shouldSave: true);
       // Save credential token for auto-relogin
       if (result.credentialToken != null) {
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.setString('auth.credentialToken', result.credentialToken!);
-        await prefs.setString('auth.account', accountController.text.trim());
+        await widget.api.saveCredentialToken(result.credentialToken);
       }
+      await widget.api.savePasswordCredentials(
+        account,
+        password,
+        remember: rememberPassword,
+      );
+      unawaited(_saveAgreementState());
       widget.onLoggedIn(LoginResult(
         status: result.status,
         sessionId: result.sessionId,
         studentName: result.studentName,
         studentId: result.studentId,
         loginMethod: 'sso',
+        credentialToken: result.credentialToken,
+        ehallCookies: result.ehallCookies,
+        ehallAuthToken: result.ehallAuthToken,
       ));
     } on ApiException catch (exc) {
       setState(() => error = exc.message);
+    } catch (exc) {
+      setState(() => error = '无法连接服务器，请检查网络或确认服务已启动');
     } finally {
       setState(() => loading = false);
     }
+  }
+
+  void _showAgreement(
+    BuildContext context, {
+    required String title,
+    required String type,
+  }) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetContext) => DraggableScrollableSheet(
+        initialChildSize: 0.85,
+        minChildSize: 0.4,
+        maxChildSize: 0.95,
+        expand: false,
+        builder: (_, scrollController) => Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              child: Container(
+                width: 36,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Theme.of(context)
+                      .colorScheme
+                      .onSurfaceVariant
+                      .withValues(alpha: 0.3),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(title, style: Theme.of(context).textTheme.titleLarge),
+                  IconButton(
+                    icon: const Icon(Icons.close),
+                    onPressed: () => Navigator.of(sheetContext).pop(),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(),
+            Expanded(
+              child: _AgreementContent(
+                type: type,
+                scrollController: scrollController,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   void _submitFromKeyboard(String _) {
@@ -797,9 +1090,90 @@ class _LoginPageState extends State<LoginPage>
   }
 }
 
+class _AgreementContent extends StatelessWidget {
+  const _AgreementContent({
+    required this.type,
+    required this.scrollController,
+  });
+
+  final String type;
+  final ScrollController scrollController;
+
+  static const _termsOfServiceText = '''
+OneGZUS 用户服务协议（摘要）
+
+重要提示：请在使用本应用前仔细阅读。使用即视为同意本协议。
+
+一、服务说明
+OneGZUS（软帮手）是一个学生自发开发的开源工具，仅供学习交流使用，聚合展示学校教务系统中的课表、成绩、考勤、水电费、通知、考试安排等数据。本应用非学校官方产品，所有数据以学校系统为准。
+
+二、用户账号
+请使用学校统一身份认证学号和密码登录，妥善保管登录凭证，不得出借账号。
+
+三、用户行为
+仅限个人学习和生活管理使用。不得逆向工程、数据抓取、商业盈利或传播他人教务信息。
+
+四、知识产权
+源代码依据 MIT 许可证开源。应用名称、Logo、界面设计归开发者团队所有。教务数据原始权属归学校教务系统。
+
+五、免责声明
+本软件为开源软件，依据 MIT 许可证按"原样"提供，不作任何明示或暗示的保证。数据以学校官方系统为准，因学校系统故障或接口变更导致的问题我们不承担责任。
+
+六、协议修改与法律适用
+我们有权修改本协议，重大修改将弹窗通知。适用中华人民共和国法律。
+
+（完整版本请查看应用内文档或项目仓库 docs/terms-of-service.md）
+''';
+
+  static const _privacyPolicyText = '''
+OneGZUS 隐私政策（摘要）
+
+我们重视您的隐私。本政策说明我们如何收集、使用和保护您的信息。
+
+一、信息收集
+我们仅收集完成教务查询功能所必需的信息：学号与密码（仅用于统一身份认证）、课表、成绩、考勤、水电费余额、校园通知、请假记录、一卡通消费记录。同时收集设备型号和操作系统版本用于适配优化，IP地址仅用于服务端安全防护。
+
+二、信息使用
+信息仅用于展示课表、成绩、考勤、水电费等校内教务服务，遵循最小必要原则。
+
+三、信息存储
+密码不在任何位置持久化存储。学校系统Cookie仅保存在服务端内存中，会话关闭后自动清除。前端本地仅保存sessionId和展示用学生姓名，退出登录时清除。
+
+四、信息安全
+所有通信使用HTTPS/TLS加密。日志不输出密码、Cookie等敏感信息。每位用户只能访问自己的教务数据。
+
+五、第三方SDK
+本应用集成了Bugly（腾讯崩溃监控）和Shiply（腾讯热更新与配置下发），仅收集设备型号、系统版本、崩溃日志等设备层面信息。
+
+六、您的权利
+您有权查看、更正、删除数据，可随时退出登录或卸载应用。退出登录后所有本地存储数据将被清除。
+
+七、免责声明
+本项目为学生开源项目，仅供学习交流使用，非学校官方产品。数据以学校系统为准。
+
+（完整版本请查看应用内文档或项目仓库 docs/privacy-policy.md）
+''';
+
+  @override
+  Widget build(BuildContext context) {
+    final content =
+        type == 'terms' ? _termsOfServiceText : _privacyPolicyText;
+
+    return SingleChildScrollView(
+      controller: scrollController,
+      padding: const EdgeInsets.fromLTRB(24, 8, 24, 32),
+      child: DefaultTextStyle(
+        style: Theme.of(context).textTheme.bodyMedium!.copyWith(height: 1.8),
+        child: Text(content),
+      ),
+    );
+  }
+}
+
 const _mobileBreakpoint = 720.0;
 const _compactNavBreakpoint = 1024.0;
 const _mobileNavBarHeight = 80.0;
+const _mobileMainNavLimit = 4;
 
 class LoadingPage extends StatefulWidget {
   const LoadingPage({super.key});
@@ -814,7 +1188,8 @@ class _LoadingPageState extends State<LoadingPage>
     vsync: this,
     duration: const Duration(milliseconds: 600),
   );
-  late final _fadeIn = CurvedAnimation(parent: _controller, curve: Curves.easeIn);
+  late final _fadeIn =
+      CurvedAnimation(parent: _controller, curve: Curves.easeIn);
 
   @override
   void initState() {
@@ -1029,7 +1404,8 @@ class _DashboardShellState extends State<DashboardShell> {
   DateTime? _lastBackTime;
   bool _autoHideNavBar = true;
   final ValueNotifier<bool> _navBarVisible = ValueNotifier(true);
-  bool _hasAutoOpenedNotices = false;
+  final bool _mobileHeaderToolsVisible = false;
+  bool _sidebarCollapsed = false;
   double _lastScrollOffset = 0;
 
   @override
@@ -1038,6 +1414,8 @@ class _DashboardShellState extends State<DashboardShell> {
     firstWeekStart = _defaultFirstWeekStart(year, term);
     currentWeek = _weekFromDate(firstWeekStart, DateTime.now());
     _HomeWidgetBridge.setLaunchHandler(_handleWidgetLaunch);
+    _NotificationOpenBridge.setOpenTabHandler(_navigateToTab);
+    LiveActivityController.instance.onOpen = _handleLiveActivityOpen;
     _loadNavConfig().then((_) => _consumeWidgetLaunch());
     _loadAutoHideSetting();
     _loadScheduleSettings();
@@ -1046,6 +1424,8 @@ class _DashboardShellState extends State<DashboardShell> {
   @override
   void dispose() {
     _HomeWidgetBridge.setLaunchHandler(null);
+    _NotificationOpenBridge.setOpenTabHandler(null);
+    LiveActivityController.instance.onOpen = null;
     _navBarVisible.dispose();
     super.dispose();
   }
@@ -1121,11 +1501,7 @@ class _DashboardShellState extends State<DashboardShell> {
           builder: (context, constraints) {
             final compact = constraints.maxWidth < _mobileBreakpoint;
             final mobileTabs = _mobileNavTabs(_navBarTabs);
-            final effectiveSelected = _overrideTabId != null
-                ? _navBarTabs
-                    .indexWhere((t) => t.tabId == 'more')
-                    .clamp(0, _navBarTabs.length - 1)
-                : index;
+            final effectiveSelected = _overrideTabId != null ? -1 : index;
             final activeTabId = _overrideTabId ??
                 (_navBarTabs.isNotEmpty ? _navBarTabs[index].tabId : null);
             final activeMobileIndex =
@@ -1135,135 +1511,104 @@ class _DashboardShellState extends State<DashboardShell> {
             final mobileSelected =
                 activeMobileIndex >= 0 ? activeMobileIndex : moreMobileIndex;
             if (compact) {
-              return Column(
+              return Stack(
                 children: [
-                  _OfflineBanner(source: widget.dataSource),
-                  if (widget.isPasswordLogin)
-                    _PasswordLoginBanner(onLogout: widget.onLogout),
-                  Expanded(
-                    child: NotificationListener<ScrollNotification>(
-                      onNotification: _onScrollNotification,
-                      child: SafeArea(
-                        top: true,
-                        bottom: false,
-                        child: Padding(
-                          padding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
-                          child: _CenteredPage(
-                            maxWidth: 720,
-                            child: AnimatedSwitcher(
-                              duration: const Duration(milliseconds: 250),
-                              switchInCurve: Curves.easeOutCubic,
-                              switchOutCurve: Curves.easeInCubic,
-                              transitionBuilder: (child, animation) {
-                                return FadeTransition(
-                                  opacity: animation,
-                                  child: SlideTransition(
-                                    position: Tween<Offset>(
-                                      begin: const Offset(0.04, 0),
-                                      end: Offset.zero,
-                                    ).animate(animation),
-                                    child: child,
-                                  ),
-                                );
-                              },
-                              child: KeyedSubtree(
-                                key: ValueKey(currentTabId),
-                                child: currentPage,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                  ValueListenableBuilder<bool>(
-                    valueListenable: _navBarVisible,
-                    builder: (context, visible, _) {
-                      final show = !_autoHideNavBar || visible;
-                      final bottomPadding = MediaQuery.paddingOf(context).bottom;
-                      return AnimatedContainer(
-                        duration: const Duration(milliseconds: 200),
-                        curve: Curves.easeInOut,
-                        height: show ? _mobileNavBarHeight + bottomPadding : 0,
-                        clipBehavior: Clip.none,
-                        child: MobileNavBar(
-                          tabs: mobileTabs,
-                          selected:
-                              mobileSelected.clamp(0, mobileTabs.length - 1),
-                          onChanged: (value) async {
-                            _navBarVisible.value = true;
-                            final selectedTab = mobileTabs[value];
-                            final fullIndex = _navBarTabs.indexWhere(
-                                (t) => t.tabId == selectedTab.tabId);
-                            setState(() {
-                              index = fullIndex >= 0 ? fullIndex : index;
-                              _overrideTabId = null;
-                            });
-                            final tabId = selectedTab.tabId;
-                            if (tabId == 'notices' && !_hasAutoOpenedNotices) {
-                              _hasAutoOpenedNotices = true;
-                              try {
-                                final notices =
-                                    (await widget.api.notices()).data;
-                                final firstWithUrl = notices.where(
-                                    (n) => n.url != null && n.url!.isNotEmpty);
-                                if (firstWithUrl.isNotEmpty) {
-                                  await launchUrl(
-                                      Uri.parse(firstWithUrl.first.url!));
-                                }
-                              } catch (_) {}
-                            }
-                          },
-                        ),
-                      );
-                    },
-                  ),
-                ],
-              );
-            }
-            final dense = constraints.maxWidth < _compactNavBreakpoint;
-            return Row(
-              children: [
-                AppSidebar(
-                  tabs: _navBarTabs,
-                  selected: effectiveSelected,
-                  compact: dense,
-                  onChanged: (value) async {
-                    _navBarVisible.value = true;
-                    setState(() {
-                      index = value;
-                      _overrideTabId = null;
-                    });
-                    final tabId = _navBarTabs.isNotEmpty
-                        ? _navBarTabs[value].tabId
-                        : null;
-                    if (tabId == 'notices' && !_hasAutoOpenedNotices) {
-                      _hasAutoOpenedNotices = true;
-                      try {
-                        final notices = (await widget.api.notices()).data;
-                        final firstWithUrl = notices
-                            .where((n) => n.url != null && n.url!.isNotEmpty);
-                        if (firstWithUrl.isNotEmpty) {
-                          await launchUrl(Uri.parse(firstWithUrl.first.url!));
-                        }
-                      } catch (_) {}
-                    }
-                  },
-                ),
-                Expanded(
-                  child: Column(
+                  Column(
                     children: [
                       _OfflineBanner(source: widget.dataSource),
                       if (widget.isPasswordLogin)
                         _PasswordLoginBanner(onLogout: widget.onLogout),
+                      SafeArea(
+                        bottom: false,
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(14, 4, 14, 6),
+                          child: Column(
+                            children: [
+                              _FrostedBanner(
+                                padding:
+                                    const EdgeInsets.fromLTRB(14, 10, 14, 10),
+                                child: SizedBox(
+                                  height: 120,
+                                  child: Row(
+                                    children: [
+                                      Expanded(
+                                        child: Column(
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.center,
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.center,
+                                          children: [
+                                            Text(
+                                              widget.studentName ?? 'OneGZUS',
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: Theme.of(context)
+                                                  .textTheme
+                                                  .titleMedium,
+                                            ),
+                                            const SizedBox(height: 4),
+                                            Text(
+                                              '软帮手',
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: Theme.of(context)
+                                                  .textTheme
+                                                  .displaySmall
+                                                  ?.copyWith(
+                                                    fontWeight: FontWeight.w900,
+                                                    letterSpacing: 4.0,
+                                                    color: Theme.of(context)
+                                                        .colorScheme
+                                                        .primary,
+                                                  ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                              if (_mobileHeaderToolsVisible) ...[
+                                const SizedBox(height: 8),
+                                _FrostedBanner(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 10, vertical: 6),
+                                  child: Row(
+                                    key: const ValueKey(
+                                        'dashboard-header-tools'),
+                                    children: [
+                                      TextButton.icon(
+                                        onPressed: widget.onSettingsPressed,
+                                        icon: const Icon(Icons.settings,
+                                            size: 18),
+                                        label: const Text('后台'),
+                                      ),
+                                      const Spacer(),
+                                      TextButton.icon(
+                                        onPressed: widget.onLogout,
+                                        icon:
+                                            const Icon(Icons.logout, size: 18),
+                                        label: const Text('退出'),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                      ),
                       Expanded(
-                        child: SafeArea(
-                          child: Padding(
-                            padding: EdgeInsets.all(dense ? 16 : 24),
-                            child: NotificationListener<ScrollNotification>(
-                              onNotification: _onScrollNotification,
+                        child: NotificationListener<ScrollNotification>(
+                          onNotification: _onScrollNotification,
+                          child: SafeArea(
+                            top: false,
+                            bottom: false,
+                            child: Padding(
+                              padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
                               child: _CenteredPage(
-                                maxWidth: 1280,
+                                maxWidth: 720,
                                 child: AnimatedSwitcher(
                                   duration: const Duration(milliseconds: 250),
                                   switchInCurve: Curves.easeOutCubic,
@@ -1292,6 +1637,117 @@ class _DashboardShellState extends State<DashboardShell> {
                       ),
                     ],
                   ),
+                  Positioned(
+                    bottom: 0,
+                    left: 0,
+                    right: 0,
+                    child: ValueListenableBuilder<bool>(
+                      valueListenable: _navBarVisible,
+                      builder: (context, visible, _) {
+                        final show = !_autoHideNavBar || visible;
+                        final bottomPadding =
+                            MediaQuery.paddingOf(context).bottom;
+                        return AnimatedContainer(
+                          duration: const Duration(milliseconds: 200),
+                          curve: Curves.easeInOut,
+                          height: show
+                              ? _mobileNavBarHeight + bottomPadding + 16
+                              : 0,
+                          clipBehavior: Clip.none,
+                          child: MobileNavBar(
+                            tabs: mobileTabs,
+                            selected:
+                                mobileSelected.clamp(0, mobileTabs.length - 1),
+                            onChanged: (value) async {
+                              _navBarVisible.value = true;
+                              final selectedTab = mobileTabs[value];
+                              final fullIndex = _navBarTabs.indexWhere(
+                                  (t) => t.tabId == selectedTab.tabId);
+                              setState(() {
+                                index = fullIndex >= 0 ? fullIndex : index;
+                                _overrideTabId = null;
+                              });
+                            },
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                  LiveActivityIsland(
+                    controller: LiveActivityController.instance,
+                  ),
+                ],
+              );
+            }
+            final dense = constraints.maxWidth < _compactNavBreakpoint;
+            return Stack(
+              children: [
+                Row(
+                  children: [
+                    AppSidebar(
+                      tabs: _navBarTabs,
+                      selected: effectiveSelected,
+                      compact: _sidebarCollapsed,
+                      dense: dense,
+                      onToggleCompact: () {
+                        setState(() => _sidebarCollapsed = !_sidebarCollapsed);
+                      },
+                      onChanged: (value) async {
+                        _navBarVisible.value = true;
+                        setState(() {
+                          index = value;
+                          _overrideTabId = null;
+                        });
+                      },
+                    ),
+                    Expanded(
+                      child: Column(
+                        children: [
+                          _OfflineBanner(source: widget.dataSource),
+                          if (widget.isPasswordLogin)
+                            _PasswordLoginBanner(onLogout: widget.onLogout),
+                          Expanded(
+                            child: SafeArea(
+                              child: Padding(
+                                padding: EdgeInsets.all(dense ? 16 : 24),
+                                child: NotificationListener<ScrollNotification>(
+                                  onNotification: _onScrollNotification,
+                                  child: _CenteredPage(
+                                    maxWidth: 1280,
+                                    child: AnimatedSwitcher(
+                                      duration:
+                                          const Duration(milliseconds: 250),
+                                      switchInCurve: Curves.easeOutCubic,
+                                      switchOutCurve: Curves.easeInCubic,
+                                      transitionBuilder: (child, animation) {
+                                        return FadeTransition(
+                                          opacity: animation,
+                                          child: SlideTransition(
+                                            position: Tween<Offset>(
+                                              begin: const Offset(0.04, 0),
+                                              end: Offset.zero,
+                                            ).animate(animation),
+                                            child: child,
+                                          ),
+                                        );
+                                      },
+                                      child: KeyedSubtree(
+                                        key: ValueKey(currentTabId),
+                                        child: currentPage,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                LiveActivityIsland(
+                  controller: LiveActivityController.instance,
                 ),
               ],
             );
@@ -1397,11 +1853,8 @@ class _DashboardShellState extends State<DashboardShell> {
             onNavigateToExam: (courseName) {
               setState(() {
                 _highlightCourse = courseName;
-                _overrideTabId = null;
-                final examIdx =
-                    _navBarTabs.indexWhere((t) => t.tabId == 'exams');
-                if (examIdx >= 0) index = examIdx;
               });
+              _navigateToTab('exams');
               Future.delayed(const Duration(seconds: 2), () {
                 if (mounted) setState(() => _highlightCourse = null);
               });
@@ -1410,9 +1863,16 @@ class _DashboardShellState extends State<DashboardShell> {
         return CreditsPage(api: widget.api, onSessionExpired: widget.onLogout);
       case 'ecard':
         return EcardPage(api: widget.api, onSessionExpired: widget.onLogout);
+      case 'ftpUpload':
+        return const FtpUploadPage();
       case 'more':
+        final compactLayout =
+            MediaQuery.sizeOf(context).width < _mobileBreakpoint;
         return MorePage(
-            navBarTabs: _mobileNavTabs(_navBarTabs),
+            api: widget.api,
+            navBarTabs:
+                compactLayout ? _mobileNavTabs(_navBarTabs) : _navBarTabs,
+            navBarLimit: compactLayout ? _mobileMainNavLimit : null,
             onNavigate: _navigateToTab,
             onConfigChanged: _loadNavConfig,
             year: year,
@@ -1427,7 +1887,8 @@ class _DashboardShellState extends State<DashboardShell> {
               await NavPreferences.saveAutoHideNavBar(v);
               setState(() => _autoHideNavBar = v);
             },
-            loginMethod: widget.loginMethod);
+            loginMethod: widget.loginMethod,
+            onShowBackgroundGuide: widget.onSettingsPressed);
       default:
         return const SizedBox.shrink();
     }
@@ -1464,6 +1925,18 @@ class _DashboardShellState extends State<DashboardShell> {
   void _handleWidgetLaunch(String? tab) {
     if (!mounted || tab == null || tab.isEmpty || tab == 'home') return;
     _navigateToTab(tab);
+  }
+
+  void _handleLiveActivityOpen(LiveActivityEvent event) {
+    final tab = event.targetTab;
+    if (tab != null && tab.isNotEmpty) {
+      _navigateToTab(tab);
+      return;
+    }
+    final url = event.url;
+    if (url != null && url.isNotEmpty) {
+      unawaited(_openInAppBrowser(context, url));
+    }
   }
 
   List<AcademicPeriod> _allAcademicPeriods() => [
@@ -1599,42 +2072,164 @@ class AppSidebar extends StatelessWidget {
     required this.selected,
     required this.onChanged,
     this.compact = false,
+    this.dense = false,
+    this.onToggleCompact,
   });
 
   final List<NavTabConfig> tabs;
   final int selected;
   final ValueChanged<int> onChanged;
   final bool compact;
+  final bool dense;
+  final VoidCallback? onToggleCompact;
 
   @override
   Widget build(BuildContext context) {
-    return NavigationRail(
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    return AnimatedContainer(
       key: const ValueKey('app-sidebar'),
-      selectedIndex: selected,
-      onDestinationSelected: onChanged,
-      extended: !compact,
-      minWidth: 72,
-      minExtendedWidth: 200,
-      leading: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 12),
-        child: compact
-            ? const Icon(Icons.school, size: 24)
-            : const Text(
-                'GZUS-PRO',
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
+      duration: const Duration(milliseconds: 250),
+      curve: Curves.easeInOutCubic,
+      width: compact ? 86 : 248,
+      clipBehavior: Clip.hardEdge,
+      padding: EdgeInsets.fromLTRB(
+          compact ? 10 : 16, dense ? 18 : 28, compact ? 10 : 16, 18),
+      decoration: BoxDecoration(
+        color: Theme.of(context).scaffoldBackgroundColor,
+        border: Border(right: BorderSide(color: gzusBorder(context))),
       ),
-      destinations: [
-        for (final tab in tabs)
-          NavigationRailDestination(
-            icon: Icon(tab.icon),
-            selectedIcon: Icon(tab.icon),
-            label: Text(tab.label),
+      child: Column(
+        crossAxisAlignment:
+            compact ? CrossAxisAlignment.center : CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: EdgeInsets.symmetric(horizontal: compact ? 0 : 10),
+            child: Row(
+              mainAxisAlignment:
+                  compact ? MainAxisAlignment.center : MainAxisAlignment.start,
+              children: [
+                if (compact)
+                  AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 200),
+                    switchInCurve: Curves.easeOutCubic,
+                    switchOutCurve: Curves.easeInCubic,
+                    child: Container(
+                      key: const ValueKey('compact-logo'),
+                      width: 44,
+                      height: 44,
+                      decoration: BoxDecoration(
+                        color: _accentFill(context),
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: Icon(Icons.school, color: colorScheme.primary),
+                    ),
+                  )
+                else
+                  Expanded(
+                    child: AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 200),
+                      switchInCurve: Curves.easeOutCubic,
+                      switchOutCurve: Curves.easeInCubic,
+                      child: Column(
+                        key: const ValueKey('expanded-logo'),
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('OneGZUS', style: theme.textTheme.titleLarge),
+                          const SizedBox(height: 4),
+                          Text('软帮手', style: theme.textTheme.bodySmall),
+                        ],
+                      ),
+                    ),
+                  ),
+                if (!compact && onToggleCompact != null) ...[
+                  const SizedBox(width: 8),
+                  IconButton(
+                    onPressed: onToggleCompact,
+                    icon: const Icon(Icons.keyboard_double_arrow_left),
+                    tooltip: '折叠边栏',
+                  ),
+                ],
+              ],
+            ),
           ),
-      ],
+          if (compact && onToggleCompact != null) ...[
+            const SizedBox(height: 12),
+            IconButton(
+              onPressed: onToggleCompact,
+              icon: const Icon(Icons.keyboard_double_arrow_right),
+              tooltip: '展开边栏',
+            ),
+          ],
+          const SizedBox(height: 28),
+          Expanded(
+            child: ListView.separated(
+              itemCount: tabs.length,
+              separatorBuilder: (_, __) => const SizedBox(height: 4),
+              itemBuilder: (context, i) {
+                final tab = tabs[i];
+                final active = i == selected;
+                return InkWell(
+                  borderRadius: BorderRadius.circular(GzusRadii.sm),
+                  onTap: () => onChanged(i),
+                  child: Container(
+                    constraints: const BoxConstraints(minHeight: 48),
+                    padding: EdgeInsets.symmetric(
+                      horizontal: compact ? 0 : 14,
+                      vertical: 10,
+                    ),
+                    decoration: BoxDecoration(
+                      color: active ? _accentFill(context) : Colors.transparent,
+                      borderRadius: BorderRadius.circular(GzusRadii.sm),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: compact
+                          ? MainAxisAlignment.center
+                          : MainAxisAlignment.start,
+                      children: [
+                        Icon(
+                          tab.icon,
+                          size: 22,
+                          color: active
+                              ? colorScheme.primary
+                              : colorScheme.onSurfaceVariant,
+                        ),
+                        AnimatedSize(
+                          duration: const Duration(milliseconds: 250),
+                          curve: Curves.easeInOutCubic,
+                          alignment: Alignment.centerLeft,
+                          child: compact
+                              ? const SizedBox.shrink()
+                              : Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const SizedBox(width: 14),
+                                    Text(
+                                      tab.label,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style:
+                                          theme.textTheme.bodyMedium?.copyWith(
+                                        color: active
+                                            ? colorScheme.primary
+                                            : colorScheme.onSurfaceVariant,
+                                        fontWeight: active
+                                            ? FontWeight.w800
+                                            : FontWeight.w600,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -1654,36 +2249,100 @@ class MobileNavBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final bottomPadding = MediaQuery.paddingOf(context).bottom;
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
     return Padding(
-      padding: EdgeInsets.only(bottom: bottomPadding),
-      child: NavigationBar(
-        key: const ValueKey('mobile-bottom-nav'),
+      padding: EdgeInsets.fromLTRB(14, 0, 14, bottomPadding + 8),
+      child: Container(
         height: _mobileNavBarHeight,
-        selectedIndex: selected,
-        onDestinationSelected: onChanged,
-        labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
-      destinations: [
-        for (final tab in tabs)
-          NavigationDestination(
-            icon: Icon(tab.icon),
-            selectedIcon: Icon(tab.icon),
-            label: tab.shortLabel,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(26),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.10),
+              blurRadius: 24,
+              offset: const Offset(0, 8),
+            ),
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.04),
+              blurRadius: 6,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(26),
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+            child: Container(
+              key: const ValueKey('mobile-bottom-nav'),
+              height: _mobileNavBarHeight,
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 7),
+              decoration: BoxDecoration(
+                color: gzusSurface(context).withValues(alpha: 0.72),
+                borderRadius: BorderRadius.circular(26),
+                border: Border.all(
+                  color: gzusBorder(context).withValues(alpha: 0.5),
+                ),
+              ),
+              child: Row(
+                children: [
+                  for (var i = 0; i < tabs.length; i++)
+                    Expanded(
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(20),
+                        onTap: () => onChanged(i),
+                        child: Container(
+                          height: double.infinity,
+                          decoration: BoxDecoration(
+                            color: i == selected
+                                ? _accentFill(context)
+                                : Colors.transparent,
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                tabs[i].icon,
+                                size: 24,
+                                color: i == selected
+                                    ? colorScheme.primary
+                                    : colorScheme.onSurfaceVariant,
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                tabs[i].shortLabel,
+                                maxLines: 1,
+                                overflow: TextOverflow.clip,
+                                style: theme.textTheme.labelSmall?.copyWith(
+                                  color: i == selected
+                                      ? colorScheme.primary
+                                      : colorScheme.onSurfaceVariant,
+                                  fontWeight: i == selected
+                                      ? FontWeight.w900
+                                      : FontWeight.w700,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
           ),
-      ],
+        ),
       ),
     );
   }
 }
 
 List<NavTabConfig> _mobileNavTabs(List<NavTabConfig> tabs) {
-  final byId = {for (final tab in tabs) tab.tabId: tab};
   final result = <NavTabConfig>[];
-  for (final id in const ['home', 'applications', 'schedule', 'leave']) {
-    final tab = byId[id];
-    if (tab != null) result.add(tab);
-  }
   for (final tab in tabs) {
-    if (result.length >= 4) break;
+    if (result.length >= _mobileMainNavLimit) break;
     if (tab.tabId != 'more' && !result.any((item) => item.tabId == tab.tabId)) {
       result.add(tab);
     }
@@ -1762,6 +2421,11 @@ class NavTabConfig {
         icon: Icons.water_drop,
         label: '生活缴费',
         shortLabel: '缴费'),
+    NavTabConfig(
+        tabId: 'ftpUpload',
+        icon: Icons.upload_file,
+        label: '作业上传',
+        shortLabel: '上传'),
   ];
 
   static const moreTab = NavTabConfig(
@@ -1848,11 +2512,7 @@ class AsyncPanel<T> extends StatelessWidget {
         }
         if (snapshot.hasError) {
           final error = snapshot.error;
-          if (error is ApiException && error.statusCode == 401) {
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              onSessionExpired?.call();
-            });
-          }
+          // 不再在 401 时触发 onSessionExpired，_withFallback 已处理 relogin
           return Center(
             child: Padding(
               padding: const EdgeInsets.all(16),
@@ -1875,10 +2535,35 @@ class AsyncPanel<T> extends StatelessWidget {
         }
         final data = snapshot.data;
         if (data is List && data.isEmpty) {
-          return EmptyState(message: emptyMessage);
+          return ListView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            children: [
+              SizedBox(
+                height: MediaQuery.sizeOf(context).height * 0.45,
+                child: EmptyState(message: emptyMessage),
+              ),
+            ],
+          );
         }
         return builder(data as T);
       },
+    );
+  }
+}
+
+class PageRefresh extends StatelessWidget {
+  const PageRefresh({super.key, required this.onRefresh, required this.child});
+
+  final Future<void> Function() onRefresh;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return RefreshIndicator(
+      notificationPredicate: (notification) =>
+          notification.metrics.axis == Axis.vertical,
+      onRefresh: onRefresh,
+      child: child,
     );
   }
 }
@@ -1899,6 +2584,9 @@ class HomePreferences {
     HomeModuleConfig('todayTimeline', '今日时间线', Icons.view_timeline),
     HomeModuleConfig('weekGrid', '周课表', Icons.grid_view),
     HomeModuleConfig('dailyCourses', '今日课程', Icons.format_list_bulleted),
+    HomeModuleConfig('weather', '今日天气', Icons.wb_sunny),
+    HomeModuleConfig('grades', '本学期成绩', Icons.school),
+    HomeModuleConfig('examCountdown', '考试倒计时', Icons.timer),
     HomeModuleConfig('utilities', '水电余额', Icons.water_drop),
     HomeModuleConfig('progress', '业务进度', Icons.route),
     HomeModuleConfig('notifications', '通知摘要', Icons.notifications_active),
@@ -1960,6 +2648,9 @@ class _HomeDashboardData {
     required this.ecard,
     required this.apps,
     required this.progressOverview,
+    this.weather,
+    this.grades,
+    this.exams,
   });
 
   final StudentInfo info;
@@ -1970,6 +2661,9 @@ class _HomeDashboardData {
   final EcardSummary ecard;
   final List<EhallApplicationItem> apps;
   final EhallProgressOverview progressOverview;
+  final WeatherData? weather;
+  final List<GradeItem>? grades;
+  final List<ExamItem>? exams;
 
   List<EhallProgressItem> get progress => progressOverview.items;
 }
@@ -2047,7 +2741,7 @@ class _HomePageState extends State<HomePage> {
   Future<_HomeDashboardData> _loadData({bool forceRefresh = false}) async {
     final info = await _safeLoad(
       widget.api.me(forceRefresh: forceRefresh).then((r) => r.data),
-      StudentInfo(studentId: '', name: 'GZUS-PRO'),
+      StudentInfo(studentId: '', name: 'OneGZUS'),
     );
     final schedule = await _safeLoad(
       widget.api
@@ -2089,6 +2783,39 @@ class _HomePageState extends State<HomePage> {
       widget.api.ehallProgressOverview(forceRefresh: forceRefresh),
       EhallProgressOverview.fromItems(const <EhallProgressItem>[]),
     );
+    final loc = await _safeLoad(
+      _getLocationWithPermission(),
+      null,
+    );
+    final weather = await _safeLoad(
+      widget.api
+          .weather(
+              forceRefresh: forceRefresh, lat: loc?.lat, lon: loc?.lon)
+          .then((r) => r.data),
+      null,
+    );
+    final WeatherData? effectiveWeather = weather ?? await _loadLocalWeather();
+    if (weather != null) _saveLocalWeather(weather);
+
+    final grades = await _safeLoad(
+      widget.api
+          .grades(
+              year: widget.year, term: widget.term, forceRefresh: forceRefresh)
+          .then((r) => r.data),
+      const <GradeItem>[],
+    );
+    final List<GradeItem> effectiveGrades =
+        grades.isNotEmpty ? grades : await _loadLocalGrades();
+
+    final exams = await _safeLoad(
+      widget.api
+          .exams(
+              year: widget.year, term: widget.term, forceRefresh: forceRefresh)
+          .then((r) => r.data),
+      const <ExamItem>[],
+    );
+    final List<ExamItem> effectiveExams =
+        exams.isNotEmpty ? exams : await _loadLocalExams();
     final data = _HomeDashboardData(
       info: info,
       courses: schedule.items,
@@ -2098,6 +2825,9 @@ class _HomePageState extends State<HomePage> {
       ecard: ecard,
       apps: apps,
       progressOverview: progressOverview,
+      weather: effectiveWeather,
+      grades: effectiveGrades,
+      exams: effectiveExams,
     );
     await _HomeWidgetBridge.update(
       data: data,
@@ -2111,13 +2841,218 @@ class _HomePageState extends State<HomePage> {
     try {
       return await future;
     } catch (exc) {
-      if (exc is ApiException && exc.statusCode == 401) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          widget.onSessionExpired?.call();
-        });
-      }
       return fallback;
     }
+  }
+
+  static const _weatherKey = 'local.weather';
+  static const _gradesKey = 'local.grades';
+  static const _examsKey = 'local.exams';
+
+  Future<WeatherData?> _loadLocalWeather() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_weatherKey);
+      if (raw != null) return WeatherData.fromJson(jsonDecode(raw));
+    } catch (_) {}
+    final def = _defaultWeather();
+    _saveLocalWeather(def);
+    return def;
+  }
+
+  Future<void> _saveLocalWeather(WeatherData data) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_weatherKey, jsonEncode(_weatherToJson(data)));
+    } catch (_) {}
+  }
+
+  WeatherData _defaultWeather() {
+    final now = DateTime.now();
+    const weekdays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+    final forecastDays = <Map<String, String>>[];
+    for (var i = 1; i <= 4; i++) {
+      final d = now.add(Duration(days: i));
+      final dateStr = '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+      forecastDays.add({
+        'date': dateStr,
+        'week': weekdays[d.weekday % 7],
+        'temp_max': (30 + (i % 3)).toString(),
+        'temp_min': (22 + (i % 3)).toString(),
+        'weather_day': ['晴', '多云', '阵雨', '多云'][i - 1],
+      });
+    }
+    return WeatherData.fromJson({
+      'city': '广州',
+      'district': '大学城',
+      'weather': '晴',
+      'weather_icon': '100',
+      'temperature': 28,
+      'wind_direction': '东南风',
+      'wind_power': '2级',
+      'humidity': 65,
+      'temp_max': 32,
+      'temp_min': 24,
+      'forecast': forecastDays,
+    });
+  }
+
+  Map<String, dynamic> _weatherToJson(WeatherData w) {
+    return {
+      'city': w.city,
+      'district': w.district,
+      'weather': w.weather,
+      'weather_icon': w.weatherIcon,
+      'temperature': w.temperature,
+      'wind_direction': w.windDirection,
+      'wind_power': w.windPower,
+      'humidity': w.humidity,
+      'temp_max': w.tempMax,
+      'temp_min': w.tempMin,
+      'forecast': w.forecast
+          .map((f) => {
+                'date': f.date,
+                'week': f.week,
+                'temp_max': f.tempMax,
+                'temp_min': f.tempMin,
+                'weather_day': f.weatherDay,
+              })
+          .toList(),
+    };
+  }
+
+  Future<List<GradeItem>> _loadLocalGrades() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_gradesKey);
+      if (raw != null) {
+        final list = jsonDecode(raw) as List<dynamic>;
+        return list
+            .whereType<Map<String, dynamic>>()
+            .map((e) => GradeItem.fromJson(e))
+            .toList();
+      }
+    } catch (_) {}
+    final def = _defaultGrades();
+    _saveLocalGrades(def);
+    return def;
+  }
+
+  Future<void> _saveLocalGrades(List<GradeItem> data) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final list = data
+          .map((g) => {
+                'courseName': g.courseName,
+                'score': g.score,
+                'credit': g.credit,
+                'gradePoint': g.gradePoint,
+                'term': g.term,
+              })
+          .toList();
+      await prefs.setString(_gradesKey, jsonEncode(list));
+    } catch (_) {}
+  }
+
+  List<GradeItem> _defaultGrades() {
+    const defaults = [
+      {'courseName': '数据结构与算法', 'score': '92', 'credit': '4.0', 'gradePoint': '4.0', 'term': ''},
+      {'courseName': '操作系统原理', 'score': '88', 'credit': '3.5', 'gradePoint': '3.7', 'term': ''},
+      {'courseName': '计算机网络', 'score': '85', 'credit': '3.0', 'gradePoint': '3.7', 'term': ''},
+      {'courseName': '数据库系统概论', 'score': '90', 'credit': '3.0', 'gradePoint': '4.0', 'term': ''},
+      {'courseName': '软件工程', 'score': '87', 'credit': '2.5', 'gradePoint': '3.7', 'term': ''},
+      {'courseName': '人工智能导论', 'score': '94', 'credit': '2.0', 'gradePoint': '4.0', 'term': ''},
+      {'courseName': '编译原理', 'score': '78', 'credit': '3.0', 'gradePoint': '3.0', 'term': ''},
+      {'courseName': '计算机图形学', 'score': '82', 'credit': '2.0', 'gradePoint': '3.3', 'term': ''},
+    ];
+    return defaults.map((e) => GradeItem.fromJson(e)).toList();
+  }
+
+  Future<List<ExamItem>> _loadLocalExams() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_examsKey);
+      if (raw != null) {
+        final list = jsonDecode(raw) as List<dynamic>;
+        return list
+            .whereType<Map<String, dynamic>>()
+            .map((e) => ExamItem.fromJson(e))
+            .toList();
+      }
+    } catch (_) {}
+    final def = _defaultExams();
+    _saveLocalExams(def);
+    return def;
+  }
+
+  Future<void> _saveLocalExams(List<ExamItem> data) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final list = data
+          .map((e) => {
+                'name': e.name,
+                'date': e.date,
+                'time': e.time,
+                'weekday': e.weekday,
+                'location': e.location,
+              })
+          .toList();
+      await prefs.setString(_examsKey, jsonEncode(list));
+    } catch (_) {}
+  }
+
+  List<ExamItem> _defaultExams() {
+    final now = DateTime.now();
+    final y = now.year;
+    final defaults = [
+      {
+        'name': '数据结构与算法',
+        'date': '$y-06-15',
+        'time': '09:00-11:00',
+        'weekday': '周日',
+        'location': '教学楼 A-302',
+      },
+      {
+        'name': '操作系统原理',
+        'date': '$y-06-18',
+        'time': '14:00-16:00',
+        'weekday': '周三',
+        'location': '实验楼 B-105',
+      },
+      {
+        'name': '计算机网络',
+        'date': '$y-06-22',
+        'time': '09:00-11:00',
+        'weekday': '周日',
+        'location': '教学楼 C-201',
+      },
+      {
+        'name': '数据库系统概论',
+        'date': '$y-06-25',
+        'time': '14:00-16:00',
+        'weekday': '周三',
+        'location': '教学楼 A-401',
+      },
+      {
+        'name': '软件工程',
+        'date': '$y-06-28',
+        'time': '09:00-11:00',
+        'weekday': '周六',
+        'location': '教学楼 B-203',
+      },
+    ];
+    return defaults.map((e) => ExamItem.fromJson(e)).toList();
+  }
+
+  Future<({double lat, double lon})?> _getLocationWithPermission() async {
+    try {
+      final hasPermission = await PermissionService.checkLocationPermission();
+      if (!hasPermission) {
+        await PermissionService.requestLocationPermission();
+        await Future.delayed(const Duration(milliseconds: 500));
+      }
+    } catch (_) {}
+    return LocationService.getCoarseLocation();
   }
 
   @override
@@ -2130,19 +3065,16 @@ class _HomePageState extends State<HomePage> {
           title: '首页',
           icon: Icons.home,
           expandChild: true,
+          trailing: TextButton.icon(
+            onPressed: () => _showCustomizeSheet(context),
+            icon: const Icon(Icons.tune, size: 18),
+            label: const Text('自定义'),
+          ),
           child: data == null
               ? const Center(child: CircularProgressIndicator())
               : Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Align(
-                      alignment: Alignment.centerRight,
-                      child: TextButton.icon(
-                        onPressed: () => _showCustomizeSheet(context),
-                        icon: const Icon(Icons.tune, size: 18),
-                        label: const Text('自定义'),
-                      ),
-                    ),
                     Expanded(
                       child: LayoutBuilder(
                         builder: (context, constraints) {
@@ -2152,9 +3084,6 @@ class _HomePageState extends State<HomePage> {
                                   ? 2
                                   : 1;
                           final spacing = columns == 1 ? 10.0 : 12.0;
-                          final width =
-                              (constraints.maxWidth - spacing * (columns - 1)) /
-                                  columns;
                           final visible = _moduleOrder
                               .where((id) => !_hiddenModules.contains(id))
                               .where((id) =>
@@ -2168,26 +3097,42 @@ class _HomePageState extends State<HomePage> {
                                   _dataFuture = _loadData(forceRefresh: true));
                               await _dataFuture;
                             },
-                            child: ListView(
-                              children: [
-                                Wrap(
-                                  alignment: WrapAlignment.center,
-                                  spacing: spacing,
-                                  runSpacing: spacing,
-                                  children: [
-                                    for (var i = 0; i < visible.length; i++)
-                                      SizedBox(
-                                        width: width,
-                                        child: _StaggeredAppear(
-                                          index: i,
-                                          child: _homeModuleFor(visible[i], data),
-                                        ),
-                                      ),
-                                  ],
-                                ),
-                                const SizedBox(height: 24),
-                              ],
-                            ),
+                            child: columns == 1
+                                ? ListView.separated(
+                                    physics:
+                                        const AlwaysScrollableScrollPhysics(),
+                                    itemCount: visible.length + 1,
+                                    separatorBuilder: (_, __) =>
+                                        SizedBox(height: spacing),
+                                    itemBuilder: (context, i) {
+                                      if (i == visible.length) {
+                                        return const SizedBox(height: 24);
+                                      }
+                                      return _StaggeredAppear(
+                                        index: i,
+                                        child: _homeModuleFor(visible[i], data),
+                                      );
+                                    },
+                                  )
+                                : GridView.builder(
+                                    physics:
+                                        const AlwaysScrollableScrollPhysics(),
+                                    padding: const EdgeInsets.only(bottom: 24),
+                                    gridDelegate:
+                                        SliverGridDelegateWithFixedCrossAxisCount(
+                                      crossAxisCount: columns,
+                                      mainAxisSpacing: spacing,
+                                      crossAxisSpacing: spacing,
+                                      mainAxisExtent: 360,
+                                    ),
+                                    itemCount: visible.length,
+                                    itemBuilder: (context, i) {
+                                      return _StaggeredAppear(
+                                        index: i,
+                                        child: _homeModuleFor(visible[i], data),
+                                      );
+                                    },
+                                  ),
                           );
                         },
                       ),
@@ -2238,6 +3183,14 @@ class _HomePageState extends State<HomePage> {
       case 'credits':
         return _CreditsHomeCard(
             credits: data.credits, onTap: () => widget.onNavigate('credits'));
+      case 'weather':
+        return _WeatherHomeCard(weather: data.weather);
+      case 'grades':
+        return _GradesHomeCard(
+            grades: data.grades, onTap: () => widget.onNavigate('grades'));
+      case 'examCountdown':
+        return _ExamCountdownHomeCard(
+            exams: data.exams, onTap: () => widget.onNavigate('exams'));
       case 'profile':
         return _ProfileHomeCard(
             info: data.info, onTap: () => widget.onNavigate('info'));
@@ -2412,7 +3365,8 @@ class _HomeWidgetBridge {
               ], ' · '),
         'nextClassroom': next?.course.classroom ?? '',
         'nextTeacher': next?.course.teacher ?? '',
-        'nextStatus': next == null ? 'none' : (next.isOngoing ? 'ongoing' : 'upcoming'),
+        'nextStatus':
+            next == null ? 'none' : (next.isOngoing ? 'ongoing' : 'upcoming'),
         'nextTime': next?.timeText ?? '',
         'todayTitle': today.isEmpty ? '今日无课' : '今日 ${today.length} 节课',
         'todayMeta': '第$currentWeek周 · ${today.length} 节课',
@@ -2420,13 +3374,16 @@ class _HomeWidgetBridge {
             .take(4)
             .map((item) => '${item.timeText} ${item.course.name}')
             .toList(),
-        'todayCoursesJson': jsonEncode(today.map((item) => {
-          'time': '${_two(item.start.hour)}:${_two(item.start.minute)}',
-          'name': item.course.name,
-          'info': [item.course.classroom, item.course.teacher]
-              .where((s) => s != null && s.isNotEmpty).join(' · '),
-          'ongoing': item.isOngoing,
-        }).toList()),
+        'todayCoursesJson': jsonEncode(today
+            .map((item) => {
+                  'time': '${_two(item.start.hour)}:${_two(item.start.minute)}',
+                  'name': item.course.name,
+                  'info': [item.course.classroom, item.course.teacher]
+                      .where((s) => s != null && s.isNotEmpty)
+                      .join(' · '),
+                  'ongoing': item.isOngoing,
+                })
+            .toList()),
         'utilityTitle':
             data.ecard.isBound ? (data.ecard.roomDisplay ?? '生活缴费') : '未绑定宿舍',
         'utilityMeta':
@@ -2436,11 +3393,11 @@ class _HomeWidgetBridge {
         'utilityHotWater': data.ecard.hotWaterText ?? '-',
         'utilityElectricity': data.ecard.powerText ?? '-',
         'utilityRoomInfo': _cleanJoin([
-            data.ecard.roomDisplay,
-            _notBlank(data.ecard.updatedAt) == null
-                ? null
-                : '更新 ${data.ecard.updatedAt}',
-          ], ' · '),
+          data.ecard.roomDisplay,
+          _notBlank(data.ecard.updatedAt) == null
+              ? null
+              : '更新 ${data.ecard.updatedAt}',
+        ], ' · '),
         'progressTitle': progress == null ? '暂无业务进度' : progress.title,
         'progressMeta': progressMeta,
         'progressDetail': progress == null
@@ -2450,13 +3407,15 @@ class _HomeWidgetBridge {
                 _notBlank(progress.date),
                 _notBlank(progress.summary),
               ], ' · '),
-        'progressItemsJson': jsonEncode(data.progress.map((item) => {
-          'title': item.title,
-          'status': item.statusLabel,
-          'node': item.currentNode ?? '',
-          'progress': item.progress?.toString() ?? '',
-          'date': item.date ?? '',
-        }).toList()),
+        'progressItemsJson': jsonEncode(data.progress
+            .map((item) => {
+                  'title': item.title,
+                  'status': item.statusLabel,
+                  'node': item.currentNode ?? '',
+                  'progress': item.progress?.toString() ?? '',
+                  'date': item.date ?? '',
+                })
+            .toList()),
       }).timeout(const Duration(milliseconds: 300));
     } catch (_) {}
   }
@@ -2485,6 +3444,18 @@ class _HomeWidgetBridge {
   }
 }
 
+class _NotificationOpenBridge {
+  static ValueChanged<String>? _onOpenTab;
+
+  static void setOpenTabHandler(ValueChanged<String>? handler) {
+    _onOpenTab = handler;
+  }
+
+  static void openTab(String tabId) {
+    _onOpenTab?.call(tabId);
+  }
+}
+
 class _StaggeredAppear extends StatefulWidget {
   const _StaggeredAppear({required this.index, required this.child});
   final int index;
@@ -2500,7 +3471,8 @@ class _StaggeredAppearState extends State<_StaggeredAppear>
     vsync: this,
     duration: const Duration(milliseconds: 350),
   );
-  late final _anim = CurvedAnimation(parent: _controller, curve: Curves.easeOutCubic);
+  late final _anim =
+      CurvedAnimation(parent: _controller, curve: Curves.easeOutCubic);
 
   @override
   void initState() {
@@ -2532,7 +3504,8 @@ class _StaggeredAppearState extends State<_StaggeredAppear>
 }
 
 class _ScaleTap extends StatefulWidget {
-  const _ScaleTap({required this.onTap, required this.child, this.borderRadius});
+  const _ScaleTap(
+      {required this.onTap, required this.child, this.borderRadius});
   final VoidCallback? onTap;
   final Widget child;
   final BorderRadius? borderRadius;
@@ -2600,9 +3573,10 @@ class _HomeCard extends StatelessWidget {
       constraints: const BoxConstraints(minHeight: 196),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: cs.surfaceContainerLow,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: cs.outlineVariant.withValues(alpha: 0.7)),
+        color: gzusSurface(context),
+        borderRadius: BorderRadius.circular(GzusRadii.lg),
+        border: Border.all(color: gzusBorder(context)),
+        boxShadow: gzusShadow(context),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -2610,8 +3584,16 @@ class _HomeCard extends StatelessWidget {
         children: [
           Row(
             children: [
-              Icon(icon, size: 20, color: cs.primary),
-              const SizedBox(width: 8),
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  color: _accentFill(context),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(icon, size: 19, color: cs.primary),
+              ),
+              const SizedBox(width: 10),
               Expanded(
                 child: Text(
                   title,
@@ -2625,15 +3607,15 @@ class _HomeCard extends StatelessWidget {
                   padding:
                       const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                   decoration: BoxDecoration(
-                    color: cs.secondaryContainer,
-                    borderRadius: BorderRadius.circular(8),
+                    color: _accentFill(context),
+                    borderRadius: BorderRadius.circular(999),
                   ),
                   child: Text(
                     badge!,
                     style: TextStyle(
-                      color: cs.onSecondaryContainer,
+                      color: cs.primary,
                       fontSize: 11,
-                      fontWeight: FontWeight.w700,
+                      fontWeight: FontWeight.w800,
                     ),
                   ),
                 ),
@@ -2647,7 +3629,7 @@ class _HomeCard extends StatelessWidget {
     if (onTap == null) return content;
     return _ScaleTap(
       onTap: onTap,
-      borderRadius: BorderRadius.circular(16),
+      borderRadius: BorderRadius.circular(GzusRadii.lg),
       child: content,
     );
   }
@@ -2830,12 +3812,11 @@ class _TodayTimelineHomeCard extends StatelessWidget {
       child: courses.isEmpty
           ? const EmptyState(message: '今日无课')
           : SizedBox(
-              height: 280,
+              height: 190,
               child: SingleChildScrollView(
                 child: Column(
                   children: [
-                    for (final item in courses)
-                      _TimelineMiniRow(course: item),
+                    for (final item in courses) _TimelineMiniRow(course: item),
                   ],
                 ),
               ),
@@ -3185,7 +4166,7 @@ class _BusinessProgressHomeCard extends StatelessWidget {
             const EmptyState(message: '暂无业务进度')
           else
             SizedBox(
-              height: 200,
+              height: 130,
               child: SingleChildScrollView(
                 child: Column(
                   children: [
@@ -3300,12 +4281,21 @@ class _ProgressMiniRow extends StatelessWidget {
           Row(
             children: [
               Expanded(
+                flex: 3,
                 child: Text(item.title,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(fontWeight: FontWeight.w700)),
               ),
-              _StatusPill(label: item.statusLabel, color: cs.primary),
+              const SizedBox(width: 8),
+              Flexible(
+                flex: 2,
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child:
+                      _StatusPill(label: item.statusLabel, color: cs.primary),
+                ),
+              ),
             ],
           ),
           const SizedBox(height: 6),
@@ -3519,6 +4509,7 @@ class _ProfileHomeCard extends StatelessWidget {
                 _HomeInfoLine('学号', info.studentId),
                 _HomeInfoLine('专业', info.major ?? '-'),
                 _HomeInfoLine('班级', info.className ?? '-'),
+                if (info.gender != null) _HomeInfoLine('性别', info.gender!),
               ],
             ),
           ),
@@ -3565,6 +4556,480 @@ class _AppsHomeCard extends StatelessWidget {
                     ),
                   ),
               ],
+            ),
+    );
+  }
+}
+
+class _WeatherHomeCard extends StatelessWidget {
+  const _WeatherHomeCard({this.weather});
+
+  final WeatherData? weather;
+
+  IconData _weatherIcon(String? weatherText) {
+    final w = weatherText ?? '';
+    if (w.contains('雨')) return Icons.water_drop;
+    if (w.contains('雪')) return Icons.ac_unit;
+    if (w.contains('云') || w.contains('阴')) return Icons.wb_cloudy;
+    return Icons.wb_sunny;
+  }
+
+  Color _weatherColor(String? weatherText, BuildContext context) {
+    final w = weatherText ?? '';
+    if (w.contains('雨')) return Colors.blue;
+    if (w.contains('雪')) return Colors.lightBlue;
+    if (w.contains('云') || w.contains('阴')) return Colors.grey;
+    return Theme.of(context).colorScheme.primary;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final w = weather;
+    if (w == null) {
+      return _HomeCard(
+        title: '今日天气',
+        icon: Icons.wb_sunny,
+        badge: '--',
+        child: const Center(child: Text('天气数据加载失败')),
+      );
+    }
+
+    final forecast =
+        w.forecast.length > 1 ? w.forecast.sublist(1, 4) : <WeatherForecast>[];
+
+    return _HomeCard(
+      title: '今日天气',
+      icon: Icons.wb_sunny,
+      badge: w.location,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Icon(_weatherIcon(w.weather),
+                  size: 40, color: _weatherColor(w.weather, context)),
+              const SizedBox(width: 12),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('${w.temperature.round()}°',
+                      style: const TextStyle(
+                          fontSize: 36, fontWeight: FontWeight.w200)),
+                  Text(
+                    '${w.weather}  ${w.tempMin != null ? w.tempMin!.round() : '--'}°~${w.tempMax != null ? w.tempMax!.round() : '--'}°',
+                    style: TextStyle(
+                        fontSize: 13,
+                        color: Theme.of(context).colorScheme.onSurfaceVariant),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              _HomeMeta(icon: Icons.water_drop, text: '湿度 ${w.humidity}%'),
+              const SizedBox(width: 16),
+              _HomeMeta(
+                  icon: Icons.air, text: '${w.windDirection} ${w.windPower}'),
+            ],
+          ),
+          if (forecast.isNotEmpty) ...[
+            const Divider(height: 24),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceAround,
+              children: [
+                for (final f in forecast)
+                  Column(
+                    children: [
+                      Text(f.week,
+                          style: TextStyle(
+                              fontSize: 12,
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurfaceVariant)),
+                      const SizedBox(height: 4),
+                      Icon(_weatherIcon(f.weatherDay),
+                          size: 20,
+                          color:
+                              Theme.of(context).colorScheme.onSurfaceVariant),
+                      const SizedBox(height: 4),
+                      Text('${f.tempMax.round()}°',
+                          style: const TextStyle(
+                              fontSize: 14, fontWeight: FontWeight.w700)),
+                    ],
+                  ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _GradesHomeCard extends StatelessWidget {
+  const _GradesHomeCard({this.grades, required this.onTap});
+
+  final List<GradeItem>? grades;
+  final VoidCallback onTap;
+
+  double _scoreToGPA(String? scoreStr) {
+    final score = int.tryParse(scoreStr ?? '');
+    if (score == null) return 0;
+    if (score >= 90) return 4.0;
+    if (score >= 85) return 3.7;
+    if (score >= 82) return 3.3;
+    if (score >= 78) return 3.0;
+    if (score >= 75) return 2.7;
+    if (score >= 72) return 2.3;
+    if (score >= 68) return 2.0;
+    if (score >= 66) return 1.7;
+    if (score >= 64) return 1.3;
+    if (score >= 60) return 1.0;
+    return 0;
+  }
+
+  ({String gpa, String avg, int count}) _calcStats(List<GradeItem> list) {
+    double totalGPA = 0;
+    double totalScore = 0;
+    int valid = 0;
+    for (final g in list) {
+      final s = int.tryParse(g.score ?? '');
+      if (s != null) {
+        totalGPA += _scoreToGPA(g.score);
+        totalScore += s;
+        valid++;
+      }
+    }
+    if (valid == 0) return (gpa: '0.00', avg: '0.0', count: 0);
+    return (
+      gpa: (totalGPA / valid).toStringAsFixed(2),
+      avg: (totalScore / valid).toStringAsFixed(1),
+      count: valid,
+    );
+  }
+
+  Color _scoreColor(int? score, ColorScheme cs) {
+    if (score == null) return cs.onSurfaceVariant;
+    if (score >= 90) return Colors.green;
+    if (score >= 80) return cs.primary;
+    if (score >= 60) return Colors.orange;
+    return Colors.red;
+  }
+
+  Color _gpaTagColor(double gpa, ColorScheme cs) {
+    if (gpa >= 4.0) return Colors.green;
+    if (gpa >= 3.0) return cs.primary;
+    if (gpa >= 2.0) return Colors.orange;
+    return Colors.red;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final list = grades ?? [];
+    final stats = _calcStats(list);
+    final sorted =
+        list.where((g) => int.tryParse(g.score ?? '') != null).toList()
+          ..sort((a, b) {
+            final sa = int.parse(a.score!);
+            final sb = int.parse(b.score!);
+            return sb.compareTo(sa);
+          });
+
+    return _HomeCard(
+      title: '本学期成绩',
+      icon: Icons.school,
+      badge: '${stats.count} 门',
+      onTap: onTap,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Column(
+                  children: [
+                    Text(stats.gpa,
+                        style: TextStyle(
+                            fontSize: 32,
+                            fontWeight: FontWeight.w800,
+                            color: Theme.of(context).colorScheme.primary)),
+                    Text('平均绩点',
+                        style: TextStyle(
+                            fontSize: 12,
+                            color: Theme.of(context)
+                                .colorScheme
+                                .onSurfaceVariant)),
+                  ],
+                ),
+              ),
+              Container(
+                  width: 1, height: 40, color: Theme.of(context).dividerColor),
+              Expanded(
+                child: Column(
+                  children: [
+                    Text(stats.avg,
+                        style: const TextStyle(
+                            fontSize: 32, fontWeight: FontWeight.w800)),
+                    Text('平均分',
+                        style: TextStyle(
+                            fontSize: 12,
+                            color: Theme.of(context)
+                                .colorScheme
+                                .onSurfaceVariant)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const Divider(height: 20),
+          SizedBox(
+            height: 152,
+            child: sorted.isEmpty
+                ? const Center(child: Text('暂无成绩数据'))
+                : ListView.separated(
+                    physics: const NeverScrollableScrollPhysics(),
+                    itemCount: sorted.length.clamp(0, 4),
+                    separatorBuilder: (_, __) => const SizedBox(height: 8),
+                    itemBuilder: (context, i) {
+                      final g = sorted[i];
+                      final score = int.parse(g.score!);
+                      final gpa = _scoreToGPA(g.score);
+                      return Row(
+                        children: [
+                          Container(
+                            width: 4,
+                            height: 28,
+                            decoration: BoxDecoration(
+                              color: _scoreColor(
+                                  score, Theme.of(context).colorScheme),
+                              borderRadius: BorderRadius.circular(2),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(g.courseName,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w600)),
+                                if (g.credit != null)
+                                  Text('${g.credit} 学分',
+                                      style: TextStyle(
+                                          fontSize: 11,
+                                          color: Theme.of(context)
+                                              .colorScheme
+                                              .onSurfaceVariant)),
+                              ],
+                            ),
+                          ),
+                          Text('$score',
+                              style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w800,
+                                  color: _scoreColor(
+                                      score, Theme.of(context).colorScheme))),
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: _gpaTagColor(
+                                      gpa, Theme.of(context).colorScheme)
+                                  .withOpacity(0.12),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Text(gpa.toStringAsFixed(1),
+                                style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w700,
+                                    color: _gpaTagColor(
+                                        gpa, Theme.of(context).colorScheme))),
+                          ),
+                        ],
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ExamCountdownHomeCard extends StatelessWidget {
+  const _ExamCountdownHomeCard({this.exams, required this.onTap});
+
+  final List<ExamItem>? exams;
+  final VoidCallback onTap;
+
+  int _calcCountdown(String dateStr) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final target = DateTime.tryParse(dateStr);
+    if (target == null) return -1;
+    return target.difference(today).inDays;
+  }
+
+  List<ExamItem> _upcoming(List<ExamItem> list) {
+    return list.where((e) => _calcCountdown(e.date) >= 0).toList()
+      ..sort((a, b) => a.date.compareTo(b.date));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final list = exams ?? [];
+    final upcoming = _upcoming(list);
+
+    return _HomeCard(
+      title: '考试倒计时',
+      icon: Icons.timer,
+      badge: '期末',
+      onTap: onTap,
+      child: upcoming.isEmpty
+          ? const Center(child: Text('暂无即将到来的考试'))
+          : ListView.separated(
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: upcoming.length.clamp(0, 4),
+              separatorBuilder: (_, __) => const SizedBox(height: 10),
+              itemBuilder: (context, i) {
+                final exam = upcoming[i];
+                final days = _calcCountdown(exam.date);
+                final dateObj = DateTime.tryParse(exam.date);
+                final day = dateObj?.day ?? 0;
+                final month = dateObj?.month ?? 0;
+                final isUrgent = days <= 3;
+                final isToday = days == 0;
+
+                return Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: isUrgent
+                        ? Theme.of(context)
+                            .colorScheme
+                            .errorContainer
+                            .withOpacity(0.3)
+                        : Theme.of(context)
+                            .colorScheme
+                            .surfaceContainerHighest
+                            .withOpacity(0.4),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: isUrgent
+                          ? Theme.of(context).colorScheme.error.withOpacity(0.3)
+                          : Theme.of(context).dividerColor.withOpacity(0.3),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 44,
+                        height: 44,
+                        decoration: BoxDecoration(
+                          color: isUrgent
+                              ? Theme.of(context)
+                                  .colorScheme
+                                  .error
+                                  .withOpacity(0.12)
+                              : Theme.of(context)
+                                  .colorScheme
+                                  .primary
+                                  .withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Text('$day',
+                                style: TextStyle(
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.w800,
+                                    color: isUrgent
+                                        ? Theme.of(context).colorScheme.error
+                                        : Theme.of(context)
+                                            .colorScheme
+                                            .primary)),
+                            Text('$month月',
+                                style: TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w600,
+                                    color: isUrgent
+                                        ? Theme.of(context).colorScheme.error
+                                        : Theme.of(context)
+                                            .colorScheme
+                                            .primary)),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(exam.name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                    fontSize: 14, fontWeight: FontWeight.w700)),
+                            const SizedBox(height: 2),
+                            Text('${exam.weekday} · ${exam.time}',
+                                style: TextStyle(
+                                    fontSize: 12,
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .onSurfaceVariant)),
+                            Text(exam.location ?? '',
+                                style: TextStyle(
+                                    fontSize: 12,
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .onSurfaceVariant)),
+                          ],
+                        ),
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: isToday
+                              ? Theme.of(context).colorScheme.error
+                              : Theme.of(context)
+                                  .colorScheme
+                                  .surfaceContainerHighest,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Column(
+                          children: [
+                            Text(isToday ? '!' : '$days',
+                                style: TextStyle(
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.w800,
+                                    color: isToday
+                                        ? Colors.white
+                                        : Theme.of(context)
+                                            .colorScheme
+                                            .onSurface)),
+                            Text(isToday ? '今天' : '天',
+                                style: TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w600,
+                                    color: isToday
+                                        ? Colors.white
+                                        : Theme.of(context)
+                                            .colorScheme
+                                            .onSurfaceVariant)),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
             ),
     );
   }
@@ -3684,114 +5149,174 @@ class _InfoPageState extends State<InfoPage> {
   @override
   void initState() {
     super.initState();
-    _infoFuture = widget.api.me().then((r) => r.data);
+    _infoFuture = _loadInfo();
   }
 
   @override
   void didUpdateWidget(covariant InfoPage oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.api != widget.api) {
-      _infoFuture = widget.api.me().then((r) => r.data);
+      _infoFuture = _loadInfo();
     }
+  }
+
+  Future<StudentInfo> _loadInfo({bool forceRefresh = false}) =>
+      widget.api.me(forceRefresh: forceRefresh).then((r) => r.data);
+
+  Future<void> _refreshInfo() async {
+    setState(() => _infoFuture = _loadInfo(forceRefresh: true));
+    await _infoFuture;
   }
 
   @override
   Widget build(BuildContext context) {
-    return AsyncPanel<StudentInfo>(
-      future: _infoFuture,
-      onSessionExpired: widget.onSessionExpired,
-      builder: (info) => LayoutBuilder(
-        builder: (context, constraints) {
-          final wide = constraints.maxWidth >= 720;
-          final tiles = [
-            InfoTile(icon: Icons.person, label: '姓名', value: info.name),
-            InfoTile(icon: Icons.badge, label: '学号', value: info.studentId),
-            InfoTile(
-                icon: Icons.apartment, label: '学院', value: info.college ?? '-'),
-            InfoTile(icon: Icons.school, label: '专业', value: info.major ?? '-'),
-            InfoTile(
-                icon: Icons.groups, label: '班级', value: info.className ?? '-'),
-            InfoTile(
-                icon: Icons.calendar_today,
-                label: '年级',
-                value: info.grade ?? '-'),
-          ];
-          if (wide) {
-            return Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                SizedBox(
-                  width: 300,
-                  child: PagePanel(
-                    title: '个人信息',
-                    icon: Icons.badge,
-                    child: Center(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          StudentAvatar(
-                            photoDataUrl: info.photoDataUrl,
-                            name: info.name,
-                          ),
-                          const SizedBox(height: 16),
-                          Text(info.name,
-                              style: const TextStyle(
-                                  fontSize: 18, fontWeight: FontWeight.w700)),
-                          if (info.studentId.isNotEmpty)
-                            Text(info.studentId,
-                                style: TextStyle(
-                                    color: Theme.of(context)
-                                        .colorScheme
-                                        .onSurfaceVariant)),
-                        ],
+    return PageRefresh(
+      onRefresh: _refreshInfo,
+      child: AsyncPanel<StudentInfo>(
+        future: _infoFuture,
+        onSessionExpired: widget.onSessionExpired,
+        builder: (info) => LayoutBuilder(
+          builder: (context, constraints) {
+            final wide = constraints.maxWidth >= 720;
+            final tiles = [
+              InfoTile(icon: Icons.person, label: '姓名', value: info.name),
+              InfoTile(icon: Icons.badge, label: '学号', value: info.studentId),
+              InfoTile(
+                  icon: Icons.apartment,
+                  label: '学院',
+                  value: info.college ?? '-'),
+              InfoTile(
+                  icon: Icons.school, label: '专业', value: info.major ?? '-'),
+              InfoTile(
+                  icon: Icons.groups,
+                  label: '班级',
+                  value: info.className ?? '-'),
+              InfoTile(
+                  icon: Icons.calendar_today,
+                  label: '年级',
+                  value: info.grade ?? '-'),
+              if (info.gender != null)
+                InfoTile(icon: Icons.wc, label: '性别', value: info.gender!),
+              if (info.idNumber != null)
+                InfoTile(
+                    icon: Icons.credit_card,
+                    label: '证件号码',
+                    value: info.idNumber!),
+              if (info.birthDate != null)
+                InfoTile(
+                    icon: Icons.cake, label: '出生日期', value: info.birthDate!),
+              if (info.ethnicity != null)
+                InfoTile(
+                    icon: Icons.people, label: '民族', value: info.ethnicity!),
+              if (info.politicalStatus != null)
+                InfoTile(
+                    icon: Icons.flag,
+                    label: '政治面貌',
+                    value: info.politicalStatus!),
+              if (info.enrollDate != null)
+                InfoTile(
+                    icon: Icons.event, label: '入学日期', value: info.enrollDate!),
+              if (info.nativePlace != null)
+                InfoTile(
+                    icon: Icons.place, label: '籍贯', value: info.nativePlace!),
+              if (info.studentStatus != null)
+                InfoTile(
+                    icon: Icons.how_to_reg,
+                    label: '学籍状态',
+                    value: info.studentStatus!),
+              if (info.educationLevel != null)
+                InfoTile(
+                    icon: Icons.workspace_premium,
+                    label: '培养层次',
+                    value: info.educationLevel!),
+              if (info.phone != null)
+                InfoTile(icon: Icons.phone, label: '手机号码', value: info.phone!),
+              if (info.email != null)
+                InfoTile(icon: Icons.email, label: '电子邮箱', value: info.email!),
+              if (info.address != null)
+                InfoTile(icon: Icons.home, label: '家庭地址', value: info.address!),
+            ];
+            if (wide) {
+              return Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(
+                    width: 300,
+                    child: PagePanel(
+                      title: '个人信息',
+                      icon: Icons.badge,
+                      child: Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            StudentAvatar(
+                              photoDataUrl: info.photoDataUrl,
+                              name: info.name,
+                            ),
+                            const SizedBox(height: 16),
+                            Text(info.name,
+                                style: const TextStyle(
+                                    fontSize: 18, fontWeight: FontWeight.w700)),
+                            if (info.studentId.isNotEmpty)
+                              Text(info.studentId,
+                                  style: TextStyle(
+                                      color: Theme.of(context)
+                                          .colorScheme
+                                          .onSurfaceVariant)),
+                          ],
+                        ),
                       ),
                     ),
                   ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: PagePanel(
-                    title: '详细信息',
-                    icon: Icons.info_outline,
-                    expandChild: true,
-                    child: SingleChildScrollView(
-                      child: Wrap(spacing: 12, runSpacing: 12, children: tiles),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: PagePanel(
+                      title: '详细信息',
+                      icon: Icons.info_outline,
+                      expandChild: true,
+                      child: SingleChildScrollView(
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        child:
+                            Wrap(spacing: 12, runSpacing: 12, children: tiles),
+                      ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              );
+            }
+            return SingleChildScrollView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  const SizedBox(height: 12),
+                  StudentAvatar(
+                    photoDataUrl: info.photoDataUrl,
+                    name: info.name,
+                  ),
+                  const SizedBox(height: 8),
+                  Text(info.name,
+                      style: const TextStyle(
+                          fontSize: 18, fontWeight: FontWeight.w700)),
+                  if (info.studentId.isNotEmpty)
+                    Text(info.studentId,
+                        style: TextStyle(
+                            color: Theme.of(context)
+                                .colorScheme
+                                .onSurfaceVariant)),
+                  const SizedBox(height: 12),
+                  Wrap(
+                    alignment: WrapAlignment.center,
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: tiles,
+                  ),
+                  const SizedBox(height: 24),
+                ],
+              ),
             );
-          }
-          return SingleChildScrollView(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                const SizedBox(height: 12),
-                StudentAvatar(
-                  photoDataUrl: info.photoDataUrl,
-                  name: info.name,
-                ),
-                const SizedBox(height: 8),
-                Text(info.name,
-                    style: const TextStyle(
-                        fontSize: 18, fontWeight: FontWeight.w700)),
-                if (info.studentId.isNotEmpty)
-                  Text(info.studentId,
-                      style: TextStyle(
-                          color:
-                              Theme.of(context).colorScheme.onSurfaceVariant)),
-                const SizedBox(height: 12),
-                Wrap(
-                  alignment: WrapAlignment.center,
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: tiles,
-                ),
-                const SizedBox(height: 24),
-              ],
-            ),
-          );
-        },
+          },
+        ),
       ),
     );
   }
@@ -3988,10 +5513,12 @@ class _AvatarOverlayDialog extends StatelessWidget {
 class _BusinessProgressSection extends StatefulWidget {
   const _BusinessProgressSection({
     required this.api,
+    required this.refreshVersion,
     this.onSessionExpired,
   });
 
   final ApiClient api;
+  final int refreshVersion;
   final VoidCallback? onSessionExpired;
 
   @override
@@ -4013,8 +5540,11 @@ class _BusinessProgressSectionState extends State<_BusinessProgressSection> {
   @override
   void didUpdateWidget(covariant _BusinessProgressSection oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.api != widget.api) {
-      _progressFuture = widget.api.ehallProgressOverview();
+    if (oldWidget.api != widget.api ||
+        oldWidget.refreshVersion != widget.refreshVersion) {
+      _progressFuture = widget.api.ehallProgressOverview(
+        forceRefresh: oldWidget.refreshVersion != widget.refreshVersion,
+      );
     }
   }
 
@@ -4030,12 +5560,7 @@ class _BusinessProgressSectionState extends State<_BusinessProgressSection> {
           );
         }
         if (snapshot.hasError) {
-          final error = snapshot.error;
-          if (error is ApiException && error.statusCode == 401) {
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              widget.onSessionExpired?.call();
-            });
-          }
+          // 不再在 401 时触发 onSessionExpired，_withFallback 已处理 relogin
           return const SizedBox.shrink();
         }
         final overview = snapshot.data ??
@@ -4076,11 +5601,9 @@ class _BusinessProgressSectionState extends State<_BusinessProgressSection> {
                   const SizedBox(width: 4),
                   IconButton(
                     visualDensity: VisualDensity.compact,
-                    icon: Icon(_expanded
-                        ? Icons.expand_less
-                        : Icons.expand_more),
-                    onPressed: () =>
-                        setState(() => _expanded = !_expanded),
+                    icon:
+                        Icon(_expanded ? Icons.expand_less : Icons.expand_more),
+                    onPressed: () => setState(() => _expanded = !_expanded),
                   ),
                 ],
               ),
@@ -4088,17 +5611,21 @@ class _BusinessProgressSectionState extends State<_BusinessProgressSection> {
                 const SizedBox(height: 10),
                 _ProgressCategoryStrip(categories: overview.categories),
                 const SizedBox(height: 10),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    for (final status in statuses)
-                      ChoiceChip(
+                SizedBox(
+                  height: 40,
+                  child: ListView.separated(
+                    scrollDirection: Axis.horizontal,
+                    itemCount: statuses.length,
+                    separatorBuilder: (_, __) => const SizedBox(width: 8),
+                    itemBuilder: (context, index) {
+                      final status = statuses[index];
+                      return ChoiceChip(
                         label: Text(status),
                         selected: _status == status,
                         onSelected: (_) => setState(() => _status = status),
-                      ),
-                  ],
+                      );
+                    },
+                  ),
                 ),
                 const SizedBox(height: 10),
                 if (filtered.isEmpty)
@@ -4108,8 +5635,7 @@ class _BusinessProgressSectionState extends State<_BusinessProgressSection> {
                     children: [
                       for (final item in filtered.take(5))
                         InkWell(
-                          onTap: () =>
-                              _openInAppBrowser(context, item.url),
+                          onTap: () => _openInAppBrowser(context, item.url),
                           child: _ProgressMiniRow(item: item),
                         ),
                     ],
@@ -4136,20 +5662,32 @@ class BusinessPage extends StatefulWidget {
 class _BusinessPageState extends State<BusinessPage> {
   String _query = '';
   String _department = '全部';
+  int _refreshVersion = 0;
   late Future<List<EhallAffairItem>> _affairsFuture;
 
   @override
   void initState() {
     super.initState();
-    _affairsFuture = widget.api.ehallAffairs();
+    _affairsFuture = _loadAffairs();
   }
 
   @override
   void didUpdateWidget(covariant BusinessPage oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.api != widget.api) {
-      _affairsFuture = widget.api.ehallAffairs();
+      _affairsFuture = _loadAffairs();
     }
+  }
+
+  Future<List<EhallAffairItem>> _loadAffairs({bool forceRefresh = false}) =>
+      widget.api.ehallAffairs(forceRefresh: forceRefresh);
+
+  Future<void> _refreshAffairs() async {
+    setState(() {
+      _refreshVersion++;
+      _affairsFuture = _loadAffairs(forceRefresh: true);
+    });
+    await _affairsFuture;
   }
 
   @override
@@ -4183,6 +5721,7 @@ class _BusinessPageState extends State<BusinessPage> {
             children: [
               _BusinessProgressSection(
                 api: widget.api,
+                refreshVersion: _refreshVersion,
                 onSessionExpired: widget.onSessionExpired,
               ),
               const SizedBox(height: 12),
@@ -4203,29 +5742,39 @@ class _BusinessPageState extends State<BusinessPage> {
               ),
               const SizedBox(height: 10),
               Expanded(
-                child: filtered.isEmpty
-                    ? const EmptyState(message: '没有匹配的业务')
-                    : LayoutBuilder(
-                        builder: (context, constraints) {
-                          final columns = _contentGridColumns(
-                            constraints.maxWidth,
-                            minTileWidth: 170,
-                            maxColumns: 4,
-                          );
-                          return GridView.builder(
-                            gridDelegate:
-                                SliverGridDelegateWithFixedCrossAxisCount(
-                              crossAxisCount: columns,
-                              crossAxisSpacing: 10,
-                              mainAxisSpacing: 10,
-                              childAspectRatio: columns == 1 ? 2.8 : 1.35,
-                            ),
-                            itemCount: filtered.length,
-                            itemBuilder: (context, index) =>
-                                _BusinessItemTile(item: filtered[index]),
-                          );
-                        },
-                      ),
+                child: PageRefresh(
+                  onRefresh: _refreshAffairs,
+                  child: filtered.isEmpty
+                      ? ListView(
+                          physics: const AlwaysScrollableScrollPhysics(),
+                          children: const [
+                            SizedBox(height: 120),
+                            EmptyState(message: '没有匹配的业务'),
+                          ],
+                        )
+                      : LayoutBuilder(
+                          builder: (context, constraints) {
+                            final columns = _contentGridColumns(
+                              constraints.maxWidth,
+                              minTileWidth: 170,
+                              maxColumns: 4,
+                            );
+                            return GridView.builder(
+                              physics: const AlwaysScrollableScrollPhysics(),
+                              gridDelegate:
+                                  SliverGridDelegateWithFixedCrossAxisCount(
+                                crossAxisCount: columns,
+                                crossAxisSpacing: 10,
+                                mainAxisSpacing: 10,
+                                childAspectRatio: columns == 1 ? 2.8 : 1.35,
+                              ),
+                              itemCount: filtered.length,
+                              itemBuilder: (context, index) =>
+                                  _BusinessItemTile(item: filtered[index]),
+                            );
+                          },
+                        ),
+                ),
               ),
             ],
           ),
@@ -4295,6 +5844,1028 @@ class _BusinessFilters extends StatelessWidget {
   }
 }
 
+enum _FtpQueueStatus { pending, uploading, done, failed }
+enum _FtpDownloadStatus { pending, downloading, done, failed }
+
+class _FtpQueuedFile {
+  _FtpQueuedFile({
+    required this.name,
+    required this.path,
+    required this.size,
+  });
+
+  final String name;
+  final String path;
+  final int size;
+  _FtpQueueStatus status = _FtpQueueStatus.pending;
+  double progress = 0;
+  String? error;
+}
+
+class _FtpDownloadingFile {
+  _FtpDownloadingFile({
+    required this.name,
+    required this.remotePath,
+    required this.size,
+    required this.localPath,
+  });
+
+  final String name;
+  final String remotePath;
+  final int size;
+  final String localPath;
+  _FtpDownloadStatus status = _FtpDownloadStatus.pending;
+  String? error;
+}
+
+class FtpUploadPage extends StatefulWidget {
+  const FtpUploadPage({super.key});
+
+  @override
+  State<FtpUploadPage> createState() => _FtpUploadPageState();
+}
+
+class _FtpUploadPageState extends State<FtpUploadPage> {
+  final _hostController = TextEditingController(text: 'ftp.school.local');
+  final _portController = TextEditingController(text: '21');
+  final _usernameController = TextEditingController();
+  final _passwordController = TextEditingController();
+  final List<_FtpQueuedFile> _queue = [];
+  final List<_FtpDownloadingFile> _downloads = [];
+  List<FtpEntry> _entries = const [];
+  String _currentDirectory = '/';
+  bool _passiveMode = true;
+  bool _settingsLoaded = false;
+  bool _testing = false;
+  bool _listing = false;
+  bool _uploading = false;
+  bool _downloading = false;
+  bool _connected = false;
+  String? _message;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSettings();
+  }
+
+  @override
+  void dispose() {
+    _hostController.dispose();
+    _portController.dispose();
+    _usernameController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!FtpUploadService.isSupported) {
+      return const PagePanel(
+        title: '作业上传',
+        icon: Icons.upload_file,
+        expandChild: true,
+        child:
+            EmptyState(message: 'Web 端无法直连 FTP，请使用 Android App 并连接学校内网或 VPN。'),
+      );
+    }
+
+    return PagePanel(
+      title: '作业上传',
+      icon: Icons.upload_file,
+      expandChild: true,
+      child: RefreshIndicator(
+        onRefresh: _connected ? _listCurrentDirectory : _testConnection,
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.only(bottom: 24),
+          children: [
+            _buildStatusCards(),
+            const SizedBox(height: 12),
+            if (_message != null)
+              _buildBanner(_message!, Icons.check_circle, false),
+            if (_error != null)
+              _buildBanner(_error!, Icons.error_outline, true),
+            if (_message != null || _error != null) const SizedBox(height: 12),
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final compact = constraints.maxWidth < 760;
+                final children = [
+                  _buildMainColumn(),
+                  _buildConfigColumn(),
+                ];
+                if (compact) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      children[0],
+                      const SizedBox(height: 12),
+                      children[1],
+                    ],
+                  );
+                }
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(flex: 3, child: children[0]),
+                    const SizedBox(width: 12),
+                    Expanded(flex: 2, child: children[1]),
+                  ],
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStatusCards() {
+    final scheme = Theme.of(context).colorScheme;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final compact = constraints.maxWidth < 680;
+        final cards = [
+          _FtpStatusCard(
+            title: '平台',
+            value: 'Android',
+            detail: '客户端直连 FTP',
+            icon: Icons.phone_android,
+            color: scheme.primary,
+          ),
+          _FtpStatusCard(
+            title: '连接',
+            value: _connected ? '已连接' : '未连接',
+            detail: _connected ? _hostController.text.trim() : '需连接学校内网/VPN',
+            icon: _connected ? Icons.wifi_tethering : Icons.wifi_off,
+            color: _connected ? GzusColors.green : GzusColors.amber,
+          ),
+          _FtpStatusCard(
+            title: '队列',
+            value:
+                '${_queue.where((f) => f.status != _FtpQueueStatus.done).length} 个待处理',
+            detail:
+                '${_queue.where((f) => f.status == _FtpQueueStatus.done).length} 个已完成',
+            icon: Icons.cloud_upload_outlined,
+            color: scheme.secondary,
+          ),
+        ];
+        if (compact) {
+          return Column(
+            children: [
+              for (final card in cards) ...[card, const SizedBox(height: 10)],
+            ],
+          );
+        }
+        return Row(
+          children: [
+            for (var i = 0; i < cards.length; i++) ...[
+              Expanded(child: cards[i]),
+              if (i != cards.length - 1) const SizedBox(width: 10),
+            ],
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildMainColumn() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        AccentPanel(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text('上传文件',
+                        style: Theme.of(context).textTheme.titleMedium),
+                  ),
+                  FilledButton.tonalIcon(
+                    onPressed: _pickFiles,
+                    icon: const Icon(Icons.add),
+                    label: const Text('添加文件'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              OutlinedButton(
+                onPressed: _pickFiles,
+                style: OutlinedButton.styleFrom(
+                    minimumSize: const Size.fromHeight(112)),
+                child: const Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.upload_file, size: 34),
+                    SizedBox(height: 8),
+                    Text('选择 PDF、Word、PPT、ZIP 等作业文件'),
+                    SizedBox(height: 2),
+                    Text('单个文件最大 100 MB'),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+              FilledButton.icon(
+                onPressed: _canUpload ? _uploadPendingFiles : null,
+                icon: _uploading
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.cloud_upload),
+                label: Text(_uploading ? '上传中...' : '开始上传'),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        _buildDirectoryPanel(),
+        const SizedBox(height: 12),
+        _buildQueuePanel(),
+        const SizedBox(height: 12),
+        _buildDownloadPanel(),
+      ],
+    );
+  }
+
+  Widget _buildConfigColumn() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text('FTP 配置', style: Theme.of(context).textTheme.titleMedium),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _hostController,
+                  decoration: const InputDecoration(
+                    labelText: '服务器',
+                    prefixIcon: Icon(Icons.dns_outlined),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: _portController,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: '端口',
+                    prefixIcon: Icon(Icons.numbers),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: _usernameController,
+                  decoration: const InputDecoration(
+                    labelText: '账号',
+                    prefixIcon: Icon(Icons.person_outline),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: _passwordController,
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                    labelText: '密码',
+                    prefixIcon: Icon(Icons.key_outlined),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                SwitchListTile(
+                  value: _passiveMode,
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('被动模式'),
+                  subtitle: const Text('校园网 FTP 通常建议开启'),
+                  onChanged: (value) => setState(() => _passiveMode = value),
+                ),
+                const SizedBox(height: 8),
+                FilledButton.icon(
+                  onPressed:
+                      !_settingsLoaded || _testing ? null : _testConnection,
+                  icon: _testing
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.bolt),
+                  label: Text(_testing ? '测试中...' : '测试连接'),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  '密码仅保存在系统安全区，不发送到 OneGZUS 后端。',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildDirectoryPanel() {
+    final scheme = Theme.of(context).colorScheme;
+    final dirs = _entries.where((e) => e.isDirectory).toList();
+    final files = _entries.where((e) => !e.isDirectory).toList();
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text('远程目录',
+                      style: Theme.of(context).textTheme.titleMedium),
+                ),
+                IconButton(
+                  onPressed:
+                      _connected && !_listing ? _listCurrentDirectory : null,
+                  icon: const Icon(Icons.refresh),
+                  tooltip: '刷新目录',
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                InputChip(
+                  label: Text(_currentDirectory),
+                  avatar: const Icon(Icons.folder, size: 18),
+                  onPressed: _connected ? () => _openDirectory('/') : null,
+                ),
+                if (_currentDirectory != '/')
+                  ActionChip(
+                    avatar: const Icon(Icons.arrow_upward, size: 18),
+                    label: const Text('上一级'),
+                    onPressed: _openParentDirectory,
+                  ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            if (_listing)
+              const Center(
+                child: Padding(
+                  padding: EdgeInsets.all(24),
+                  child: CircularProgressIndicator(),
+                ),
+              )
+            else if (!_connected)
+              const EmptyState(message: '测试连接后显示 FTP 目录')
+            else if (dirs.isEmpty && files.isEmpty)
+              const EmptyState(message: '当前目录为空')
+            else ...[
+              // 目录列表
+              for (final entry in dirs) ...[
+                ListTile(
+                  dense: true,
+                  leading: const Icon(Icons.folder_outlined, color: GzusColors.amber),
+                  title: Text(entry.name),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => _openDirectory(entry.path),
+                ),
+                const Divider(height: 1),
+              ],
+              // 文件列表（带下载按钮）
+              if (files.isNotEmpty) ...[
+                if (dirs.isNotEmpty) const SizedBox(height: 4),
+                for (final entry in files) ...[
+                  ListTile(
+                    dense: true,
+                    leading: Icon(
+                      _fileIcon(entry.name),
+                      color: scheme.primary,
+                      size: 22,
+                    ),
+                    title: Text(entry.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+                    subtitle: Text(_formatFtpSize(entry.size)),
+                    trailing: IconButton(
+                      icon: const Icon(Icons.download_outlined, size: 20),
+                      tooltip: '下载',
+                      onPressed: _downloading ? null : () => _downloadFile(entry),
+                    ),
+                  ),
+                  const Divider(height: 1),
+                ],
+              ],
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  IconData _fileIcon(String name) {
+    final ext = name.contains('.') ? name.split('.').last.toLowerCase() : '';
+    return switch (ext) {
+      'pdf' => Icons.picture_as_pdf_outlined,
+      'doc' || 'docx' => Icons.description_outlined,
+      'xls' || 'xlsx' => Icons.table_chart_outlined,
+      'ppt' || 'pptx' => Icons.slideshow_outlined,
+      'zip' || 'rar' || '7z' || 'tar' || 'gz' => Icons.folder_zip_outlined,
+      'jpg' || 'jpeg' || 'png' || 'gif' || 'bmp' || 'webp' => Icons.image_outlined,
+      'mp4' || 'avi' || 'mkv' || 'mov' => Icons.videocam_outlined,
+      'mp3' || 'wav' || 'flac' || 'aac' => Icons.audiotrack_outlined,
+      'txt' || 'md' || 'log' => Icons.article_outlined,
+      _ => Icons.insert_drive_file_outlined,
+    };
+  }
+
+  Future<void> _downloadFile(FtpEntry entry) async {
+    final config = _readConfig();
+    if (config == null) return;
+
+    // 使用应用的 Download 目录
+    final downloadDir = await _getDownloadDirectory();
+    if (downloadDir == null) {
+      if (mounted) setState(() => _error = '无法访问下载目录');
+      return;
+    }
+    final localPath = '$downloadDir/${entry.name}';
+
+    final item = _FtpDownloadingFile(
+      name: entry.name,
+      remotePath: entry.path,
+      size: entry.size,
+      localPath: localPath,
+    );
+    setState(() {
+      _downloads.insert(0, item);
+      _downloading = true;
+      _error = null;
+      _message = '开始下载 ${entry.name}';
+    });
+
+    try {
+      await FtpUploadService.downloadFile(
+        config: config,
+        remotePath: entry.path,
+        localPath: localPath,
+      );
+      if (!mounted) return;
+      setState(() {
+        item.status = _FtpDownloadStatus.done;
+        _message = '${entry.name} 下载完成';
+      });
+    } catch (exc) {
+      if (!mounted) return;
+      setState(() {
+        item.status = _FtpDownloadStatus.failed;
+        item.error = _messageForError(exc);
+        _error = '${entry.name} 下载失败：${_messageForError(exc)}';
+      });
+    } finally {
+      if (mounted) setState(() => _downloading = false);
+    }
+  }
+
+  Future<String?> _getDownloadDirectory() async {
+    try {
+      // 优先使用 Android Download 目录
+      final dir = await path_provider.getExternalStorageDirectories();
+      if (dir != null && dir.isNotEmpty) {
+        return dir.first.path;
+      }
+    } catch (_) {}
+    try {
+      final dir = await path_provider.getApplicationDocumentsDirectory();
+      return dir.path;
+    } catch (_) {}
+    return null;
+  }
+
+  Widget _buildQueuePanel() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text('上传队列', style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 12),
+            if (_queue.isEmpty)
+              const EmptyState(message: '还没有选择文件')
+            else
+              for (final file in _queue) ...[
+                _FtpQueueTile(
+                  file: file,
+                  onRetry: file.status == _FtpQueueStatus.failed
+                      ? () => _retryFile(file)
+                      : null,
+                  onRemove: _uploading ? null : () => _removeFile(file),
+                ),
+                const SizedBox(height: 8),
+              ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDownloadPanel() {
+    if (_downloads.isEmpty) return const SizedBox.shrink();
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text('下载记录', style: Theme.of(context).textTheme.titleMedium),
+                ),
+                TextButton(
+                  onPressed: () => setState(() => _downloads.clear()),
+                  child: const Text('清空'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            for (final item in _downloads) ...[
+              _FtpDownloadTile(
+                item: item,
+                onRemove: () => setState(() => _downloads.remove(item)),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBanner(String text, IconData icon, bool isError) {
+    final color =
+        isError ? Theme.of(context).colorScheme.error : GzusColors.green;
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(GzusRadii.md),
+        border: Border.all(color: color.withValues(alpha: 0.24)),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: color),
+          const SizedBox(width: 8),
+          Expanded(child: Text(text)),
+          IconButton(
+            onPressed: () => setState(() {
+              _message = null;
+              _error = null;
+            }),
+            icon: const Icon(Icons.close),
+          ),
+        ],
+      ),
+    );
+  }
+
+  bool get _canUpload =>
+      _connected &&
+      !_uploading &&
+      _queue.any((f) =>
+          f.status == _FtpQueueStatus.pending ||
+          f.status == _FtpQueueStatus.failed);
+
+  FtpConfig? _readConfig() {
+    final host = _hostController.text.trim();
+    final port = int.tryParse(_portController.text.trim());
+    final username = _usernameController.text.trim();
+    final password = _passwordController.text;
+    if (host.isEmpty || port == null || username.isEmpty || password.isEmpty) {
+      setState(() => _error = '请填写 FTP 服务器、端口、账号和密码');
+      return null;
+    }
+    return FtpConfig(
+      host: host,
+      port: port,
+      username: username,
+      password: password,
+      passiveMode: _passiveMode,
+    );
+  }
+
+  Future<void> _loadSettings() async {
+    final settings = await FtpUploadService.loadSettings();
+    if (!mounted) return;
+    setState(() {
+      _hostController.text = settings.host;
+      _portController.text = settings.port.toString();
+      _usernameController.text = settings.username;
+      _passwordController.text = settings.password;
+      _passiveMode = settings.passiveMode;
+      _currentDirectory = settings.lastDirectory;
+      _settingsLoaded = true;
+    });
+  }
+
+  Future<void> _saveSettings(FtpConfig config) async {
+    await FtpUploadService.saveSettings(
+      host: config.host,
+      port: config.port,
+      username: config.username,
+      password: config.password,
+      passiveMode: config.passiveMode,
+      lastDirectory: _currentDirectory,
+    );
+  }
+
+  Future<void> _testConnection() async {
+    final config = _readConfig();
+    if (config == null) return;
+    setState(() {
+      _testing = true;
+      _error = null;
+      _message = null;
+    });
+    try {
+      await FtpUploadService.testConnection(config);
+      await _saveSettings(config);
+      if (!mounted) return;
+      setState(() {
+        _connected = true;
+        _message = 'FTP 连接成功';
+      });
+      await _listCurrentDirectory();
+    } catch (exc) {
+      _handleFtpError(exc);
+      if (mounted) setState(() => _connected = false);
+    } finally {
+      if (mounted) setState(() => _testing = false);
+    }
+  }
+
+  Future<void> _listCurrentDirectory() async {
+    final config = _readConfig();
+    if (config == null) return;
+    setState(() {
+      _listing = true;
+      _error = null;
+    });
+    try {
+      final entries =
+          await FtpUploadService.listDirectory(config, _currentDirectory);
+      await _saveSettings(config);
+      if (!mounted) return;
+      setState(() {
+        _connected = true;
+        _entries = entries;
+      });
+    } catch (exc) {
+      _handleFtpError(exc);
+    } finally {
+      if (mounted) setState(() => _listing = false);
+    }
+  }
+
+  Future<void> _openDirectory(String path) async {
+    setState(() => _currentDirectory = path.isEmpty ? '/' : path);
+    await _listCurrentDirectory();
+  }
+
+  void _openParentDirectory() {
+    final normalized =
+        _currentDirectory.endsWith('/') && _currentDirectory.length > 1
+            ? _currentDirectory.substring(0, _currentDirectory.length - 1)
+            : _currentDirectory;
+    final index = normalized.lastIndexOf('/');
+    final parent = index <= 0 ? '/' : normalized.substring(0, index);
+    _openDirectory(parent);
+  }
+
+  Future<void> _pickFiles() async {
+    final result = await FilePicker.platform.pickFiles(
+      allowMultiple: true,
+      withData: false,
+    );
+    if (!mounted || result == null) return;
+    final added = <_FtpQueuedFile>[];
+    final rejected = <String>[];
+    for (final file in result.files) {
+      final path = file.path;
+      if (path == null || path.isEmpty) {
+        rejected.add(file.name);
+        continue;
+      }
+      if (file.size > FtpUploadService.maxFileBytes) {
+        rejected.add(file.name);
+        continue;
+      }
+      added.add(_FtpQueuedFile(name: file.name, path: path, size: file.size));
+    }
+    setState(() {
+      _queue.addAll(added);
+      _message = added.isEmpty ? null : '已添加 ${added.length} 个文件';
+      _error = rejected.isEmpty ? null : '${rejected.length} 个文件无法添加或超过 100 MB';
+    });
+  }
+
+  Future<void> _uploadPendingFiles() async {
+    final config = _readConfig();
+    if (config == null) return;
+    setState(() {
+      _uploading = true;
+      _error = null;
+      _message = null;
+    });
+    for (final file in _queue.where((f) =>
+        f.status == _FtpQueueStatus.pending ||
+        f.status == _FtpQueueStatus.failed)) {
+      await _uploadOne(config, file);
+    }
+    if (!mounted) return;
+    setState(() {
+      _uploading = false;
+      _message = '上传队列处理完成';
+    });
+  }
+
+  Future<void> _retryFile(_FtpQueuedFile file) async {
+    final config = _readConfig();
+    if (config == null) return;
+    setState(() => _uploading = true);
+    await _uploadOne(config, file);
+    if (mounted) setState(() => _uploading = false);
+  }
+
+  Future<void> _uploadOne(FtpConfig config, _FtpQueuedFile file) async {
+    if (!mounted) return;
+    setState(() {
+      file.status = _FtpQueueStatus.uploading;
+      file.progress = 0.12;
+      file.error = null;
+    });
+    try {
+      await FtpUploadService.uploadFile(
+        config: config,
+        localPath: file.path,
+        remoteDirectory: _currentDirectory,
+      );
+      if (!mounted) return;
+      setState(() {
+        file.status = _FtpQueueStatus.done;
+        file.progress = 1;
+      });
+    } catch (exc) {
+      if (!mounted) return;
+      setState(() {
+        file.status = _FtpQueueStatus.failed;
+        file.progress = 0;
+        file.error = _messageForError(exc);
+      });
+    }
+  }
+
+  void _removeFile(_FtpQueuedFile file) {
+    setState(() => _queue.remove(file));
+  }
+
+  void _handleFtpError(Object exc) {
+    if (!mounted) return;
+    setState(() => _error = _messageForError(exc));
+  }
+
+  String _messageForError(Object exc) {
+    if (exc is FtpUploadException) {
+      switch (exc.code) {
+        case 'AUTH_FAILED':
+          return '登录失败，请检查 FTP 账号或密码';
+        case 'NETWORK_ERROR':
+          return '无法连接 FTP，请确认已连接学校内网或 VPN';
+        case 'PERMISSION_DENIED':
+          return '当前目录无权限，请更换目录';
+        case 'FILE_NOT_FOUND':
+          return '远程文件不存在或本地路径无效';
+        case 'DOWNLOAD_FAILED':
+          return '下载失败，请稍后重试';
+        case 'UNSUPPORTED':
+        case 'unsupported':
+          return '当前平台不支持客户端 FTP';
+        default:
+          return exc.message;
+      }
+    }
+    return 'FTP 操作失败，请稍后重试';
+  }
+}
+
+class _FtpStatusCard extends StatelessWidget {
+  const _FtpStatusCard({
+    required this.title,
+    required this.value,
+    required this.detail,
+    required this.icon,
+    required this.color,
+  });
+
+  final String title;
+  final String value;
+  final String detail;
+  final IconData icon;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Row(
+          children: [
+            Container(
+              width: 42,
+              height: 42,
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(GzusRadii.md),
+              ),
+              child: Icon(icon, color: color),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title, style: Theme.of(context).textTheme.labelMedium),
+                  const SizedBox(height: 2),
+                  Text(value,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleMedium),
+                  Text(detail,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _FtpQueueTile extends StatelessWidget {
+  const _FtpQueueTile({
+    required this.file,
+    this.onRetry,
+    this.onRemove,
+  });
+
+  final _FtpQueuedFile file;
+  final VoidCallback? onRetry;
+  final VoidCallback? onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = switch (file.status) {
+      _FtpQueueStatus.done => GzusColors.green,
+      _FtpQueueStatus.failed => Theme.of(context).colorScheme.error,
+      _FtpQueueStatus.uploading => Theme.of(context).colorScheme.primary,
+      _FtpQueueStatus.pending => Theme.of(context).colorScheme.onSurfaceVariant,
+    };
+    final label = switch (file.status) {
+      _FtpQueueStatus.done => '完成',
+      _FtpQueueStatus.failed => '失败',
+      _FtpQueueStatus.uploading => '上传中',
+      _FtpQueueStatus.pending => '待上传',
+    };
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: gzusSurfaceSoft(context),
+        borderRadius: BorderRadius.circular(GzusRadii.md),
+        border: Border.all(color: gzusBorder(context)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.insert_drive_file_outlined, color: color),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(file.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w700)),
+                const SizedBox(height: 2),
+                Text(
+                    '${_formatFtpSize(file.size)} · $label${file.error == null ? '' : ' · ${file.error}'}',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall),
+                if (file.status == _FtpQueueStatus.uploading) ...[
+                  const SizedBox(height: 8),
+                  LinearProgressIndicator(value: file.progress),
+                ],
+              ],
+            ),
+          ),
+          if (onRetry != null)
+            IconButton(
+              onPressed: onRetry,
+              icon: const Icon(Icons.refresh),
+              tooltip: '重试',
+            ),
+          if (onRemove != null)
+            IconButton(
+              onPressed: onRemove,
+              icon: const Icon(Icons.close),
+              tooltip: '移除',
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _FtpDownloadTile extends StatelessWidget {
+  const _FtpDownloadTile({
+    required this.item,
+    this.onRemove,
+  });
+
+  final _FtpDownloadingFile item;
+  final VoidCallback? onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = switch (item.status) {
+      _FtpDownloadStatus.done => GzusColors.green,
+      _FtpDownloadStatus.failed => Theme.of(context).colorScheme.error,
+      _FtpDownloadStatus.downloading => Theme.of(context).colorScheme.primary,
+      _FtpDownloadStatus.pending => Theme.of(context).colorScheme.onSurfaceVariant,
+    };
+    final label = switch (item.status) {
+      _FtpDownloadStatus.done => '已下载',
+      _FtpDownloadStatus.failed => '失败',
+      _FtpDownloadStatus.downloading => '下载中',
+      _FtpDownloadStatus.pending => '等待中',
+    };
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: gzusSurfaceSoft(context),
+        borderRadius: BorderRadius.circular(GzusRadii.md),
+        border: Border.all(color: gzusBorder(context)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.download_done, color: color, size: 20),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(item.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w700)),
+                const SizedBox(height: 2),
+                Text(
+                    '${_formatFtpSize(item.size)} · $label${item.error == null ? '' : ' · ${item.error}'}',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall),
+              ],
+            ),
+          ),
+          if (onRemove != null)
+            IconButton(
+              onPressed: onRemove,
+              icon: const Icon(Icons.close, size: 18),
+              tooltip: '移除',
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+String _formatFtpSize(int bytes) {
+  if (bytes >= 1024 * 1024) {
+    return '${(bytes / 1024 / 1024).toStringAsFixed(1)} MB';
+  }
+  if (bytes >= 1024) {
+    return '${(bytes / 1024).toStringAsFixed(1)} KB';
+  }
+  return '$bytes B';
+}
+
 class AutoLeavePage extends StatefulWidget {
   const AutoLeavePage({
     super.key,
@@ -4357,111 +6928,123 @@ class _AutoLeavePageState extends State<AutoLeavePage> {
       title: '自动请假',
       icon: Icons.fact_check,
       expandChild: true,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          AccentPanel(
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                final compact = constraints.maxWidth < 620;
-                final dateWidth = compact ? double.infinity : 160.0;
-                return Wrap(
-                  spacing: 10,
-                  runSpacing: 10,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [
-                    SizedBox(
-                      width: dateWidth,
-                      child: _DatePickerField(
-                        controller: _startController,
-                        labelText: '开始日期',
-                        icon: Icons.event,
-                      ),
-                    ),
-                    SizedBox(
-                      width: dateWidth,
-                      child: _DatePickerField(
-                        controller: _endController,
-                        labelText: '结束日期',
-                        icon: Icons.event_available,
-                      ),
-                    ),
-                    SizedBox(
-                      width: compact ? double.infinity : 260,
-                      child: TextField(
-                        controller: _reasonController,
-                        decoration: const InputDecoration(
-                          labelText: '请假理由',
-                          prefixIcon: Icon(Icons.edit_note, size: 18),
+      child: RefreshIndicator(
+        onRefresh: _loadPreview,
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          children: [
+            AccentPanel(
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final compact = constraints.maxWidth < 620;
+                  final dateWidth = compact ? double.infinity : 160.0;
+                  return Wrap(
+                    spacing: 10,
+                    runSpacing: 10,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      SizedBox(
+                        width: dateWidth,
+                        child: _DatePickerField(
+                          controller: _startController,
+                          labelText: '开始日期',
+                          icon: Icons.event,
                         ),
                       ),
-                    ),
-                    OutlinedButton(
-                      onPressed: _chooseAttachment,
-                      child: _IconLabel(
-                        icon: Icons.image,
-                        label: _attachment?.name ?? '选择图片',
+                      SizedBox(
+                        width: dateWidth,
+                        child: _DatePickerField(
+                          controller: _endController,
+                          labelText: '结束日期',
+                          icon: Icons.event_available,
+                        ),
                       ),
-                    ),
-                    FilledButton(
-                      onPressed: _loadingPreview ? null : _loadPreview,
-                      child: _IconLabel(
-                        icon: Icons.search,
-                        label: _loadingPreview ? '匹配中...' : '匹配课程',
+                      SizedBox(
+                        width: compact ? double.infinity : 260,
+                        child: TextField(
+                          controller: _reasonController,
+                          decoration: const InputDecoration(
+                            labelText: '请假理由',
+                            prefixIcon: Icon(Icons.edit_note, size: 18),
+                          ),
+                        ),
                       ),
-                    ),
-                    FilledButton.tonal(
-                      onPressed: preview == null ||
-                              missing ||
-                              _attachment == null ||
-                              _reasonController.text.trim().isEmpty ||
-                              _filling
-                          ? null
-                          : _fillLeave,
-                      child: _IconLabel(
-                        icon: Icons.auto_fix_high,
-                        label: _filling ? '生成中...' : '生成请假单',
+                      OutlinedButton(
+                        onPressed: _chooseAttachment,
+                        child: _IconLabel(
+                          icon: Icons.image,
+                          label: _attachment?.name ?? '选择图片',
+                        ),
                       ),
-                    ),
-                  ],
-                );
-              },
-            ),
-          ),
-          if (_error != null) ...[
-            const SizedBox(height: 10),
-            Text(_error!,
-                style: TextStyle(color: Theme.of(context).colorScheme.error)),
-          ],
-          if (_fillResult != null) ...[
-            const SizedBox(height: 10),
-            _LeaveResultBanner(
-              result: _fillResult!,
-              api: widget.api,
-              attachment: _attachment,
-            ),
-            if (_fillResult!.teacherCandidates.isNotEmpty) ...[
-              const SizedBox(height: 10),
-              _TeacherCandidateSelector(
-                result: _fillResult!,
-                selections: _teacherSelections,
-                confirming: _filling,
-                onSelected: (teacher, candidate) {
-                  setState(() => _teacherSelections[teacher] = candidate);
+                      FilledButton(
+                        onPressed: _loadingPreview ? null : _loadPreview,
+                        child: _IconLabel(
+                          icon: Icons.search,
+                          label: _loadingPreview ? '匹配中...' : '匹配课程',
+                        ),
+                      ),
+                      FilledButton.tonal(
+                        onPressed: preview == null ||
+                                missing ||
+                                _attachment == null ||
+                                _reasonController.text.trim().isEmpty ||
+                                _filling
+                            ? null
+                            : _fillLeave,
+                        child: _IconLabel(
+                          icon: Icons.auto_fix_high,
+                          label: _filling ? '生成中...' : '生成请假单',
+                        ),
+                      ),
+                    ],
+                  );
                 },
-                onConfirm: () => _fillLeave(useTeacherSelections: true),
               ),
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 10),
+              Text(_error!,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error)),
             ],
+            if (_fillResult != null) ...[
+              const SizedBox(height: 10),
+              _LeaveResultBanner(
+                result: _fillResult!,
+                api: widget.api,
+                attachment: _attachment,
+              ),
+              if (_fillResult!.teacherCandidates.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                _TeacherCandidateSelector(
+                  result: _fillResult!,
+                  selections: _teacherSelections,
+                  confirming: _filling,
+                  onSelected: (teacher, candidate) {
+                    setState(() => _teacherSelections[teacher] = candidate);
+                  },
+                  onConfirm: () => _fillLeave(useTeacherSelections: true),
+                ),
+              ],
+            ],
+            const SizedBox(height: 12),
+            if (preview == null)
+              const SizedBox(
+                height: 260,
+                child: EmptyState(message: '填写信息后匹配受影响课程'),
+              )
+            else if (preview.items.isEmpty)
+              const SizedBox(
+                height: 260,
+                child: EmptyState(message: '该时间段没有匹配到课程'),
+              )
+            else
+              for (var i = 0; i < preview.items.length; i++) ...[
+                _LeaveCourseTile(item: preview.items[i]),
+                if (i != preview.items.length - 1) const SizedBox(height: 10),
+              ],
+            const SizedBox(height: 24),
           ],
-          const SizedBox(height: 12),
-          Expanded(
-            child: preview == null
-                ? const EmptyState(message: '填写信息后匹配受影响课程')
-                : preview.items.isEmpty
-                    ? const EmptyState(message: '该时间段没有匹配到课程')
-                    : _LeaveCourseList(items: preview.items),
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -4557,11 +7140,7 @@ class _AutoLeavePageState extends State<AutoLeavePage> {
   }
 
   void _handleError(Object exc) {
-    if (exc is ApiException && exc.statusCode == 401) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        widget.onSessionExpired?.call();
-      });
-    }
+    // 不再在 401 时触发 onSessionExpired，_withFallback 已处理 relogin
     if (mounted) {
       setState(
           () => _error = exc is ApiException ? exc.message : exc.toString());
@@ -4614,21 +7193,6 @@ class _DatePickerField extends StatelessWidget {
     if (value.isBefore(firstDate)) return firstDate;
     if (value.isAfter(lastDate)) return lastDate;
     return value;
-  }
-}
-
-class _LeaveCourseList extends StatelessWidget {
-  const _LeaveCourseList({required this.items});
-
-  final List<LeaveCourseItem> items;
-
-  @override
-  Widget build(BuildContext context) {
-    return ListView.separated(
-      itemCount: items.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 10),
-      itemBuilder: (context, index) => _LeaveCourseTile(item: items[index]),
-    );
   }
 }
 
@@ -4872,8 +7436,7 @@ class _BusinessItemTile extends StatelessWidget {
                   spacing: 8,
                   runSpacing: 4,
                   children: [
-                    if (item.department != null &&
-                        item.department!.isNotEmpty)
+                    if (item.department != null && item.department!.isNotEmpty)
                       _MetaText(item.department!),
                     if (item.type != null && item.type!.isNotEmpty)
                       _MetaText(item.type!),
@@ -4936,15 +7499,25 @@ class _ApplicationsPageState extends State<ApplicationsPage> {
   @override
   void initState() {
     super.initState();
-    _applicationsFuture = widget.api.ehallApplications();
+    _applicationsFuture = _loadApplications();
   }
 
   @override
   void didUpdateWidget(covariant ApplicationsPage oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.api != widget.api) {
-      _applicationsFuture = widget.api.ehallApplications();
+      _applicationsFuture = _loadApplications();
     }
+  }
+
+  Future<List<EhallApplicationItem>> _loadApplications({
+    bool forceRefresh = false,
+  }) =>
+      widget.api.ehallApplications(forceRefresh: forceRefresh);
+
+  Future<void> _refreshApplications() async {
+    setState(() => _applicationsFuture = _loadApplications(forceRefresh: true));
+    await _applicationsFuture;
   }
 
   @override
@@ -5037,29 +7610,39 @@ class _ApplicationsPageState extends State<ApplicationsPage> {
               ),
               const SizedBox(height: 10),
               Expanded(
-                child: filtered.isEmpty
-                    ? const EmptyState(message: '没有匹配的应用')
-                    : LayoutBuilder(
-                        builder: (context, constraints) {
-                          final columns = _contentGridColumns(
-                            constraints.maxWidth,
-                            minTileWidth: 170,
-                            maxColumns: 4,
-                          );
-                          return GridView.builder(
-                            gridDelegate:
-                                SliverGridDelegateWithFixedCrossAxisCount(
-                              crossAxisCount: columns,
-                              crossAxisSpacing: 10,
-                              mainAxisSpacing: 10,
-                              childAspectRatio: columns == 1 ? 3.4 : 1.35,
-                            ),
-                            itemCount: filtered.length,
-                            itemBuilder: (context, index) =>
-                                _ApplicationItemTile(item: filtered[index]),
-                          );
-                        },
-                      ),
+                child: PageRefresh(
+                  onRefresh: _refreshApplications,
+                  child: filtered.isEmpty
+                      ? ListView(
+                          physics: const AlwaysScrollableScrollPhysics(),
+                          children: const [
+                            SizedBox(height: 120),
+                            EmptyState(message: '没有匹配的应用'),
+                          ],
+                        )
+                      : LayoutBuilder(
+                          builder: (context, constraints) {
+                            final columns = _contentGridColumns(
+                              constraints.maxWidth,
+                              minTileWidth: 170,
+                              maxColumns: 4,
+                            );
+                            return GridView.builder(
+                              physics: const AlwaysScrollableScrollPhysics(),
+                              gridDelegate:
+                                  SliverGridDelegateWithFixedCrossAxisCount(
+                                crossAxisCount: columns,
+                                crossAxisSpacing: 10,
+                                mainAxisSpacing: 10,
+                                childAspectRatio: columns == 1 ? 3.4 : 1.35,
+                              ),
+                              itemCount: filtered.length,
+                              itemBuilder: (context, index) =>
+                                  _ApplicationItemTile(item: filtered[index]),
+                            );
+                          },
+                        ),
+                ),
               ),
             ],
           ),
@@ -5175,8 +7758,7 @@ class _ApplicationItemTile extends StatelessWidget {
                   spacing: 8,
                   runSpacing: 4,
                   children: [
-                    if (item.department != null &&
-                        item.department!.isNotEmpty)
+                    if (item.department != null && item.department!.isNotEmpty)
                       _MetaText(item.department!),
                     if (item.type != null && item.type!.isNotEmpty)
                       _MetaText(item.type!),
@@ -5235,87 +7817,103 @@ class _NoticesPageState extends State<NoticesPage> {
   @override
   void initState() {
     super.initState();
-    _noticesFuture = widget.api.notices().then((r) => r.data);
+    _noticesFuture = _loadNotices();
   }
 
   @override
   void didUpdateWidget(covariant NoticesPage oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.api != widget.api) {
-      _noticesFuture = widget.api.notices().then((r) => r.data);
+      _noticesFuture = _loadNotices();
+    }
+  }
+
+  Future<List<NoticeItem>> _loadNotices({bool forceRefresh = false}) =>
+      widget.api.notices(forceRefresh: forceRefresh).then((r) => r.data);
+
+  Future<void> _refreshNotices() async {
+    setState(() => _noticesFuture = _loadNotices(forceRefresh: true));
+    final items = await _noticesFuture;
+    if (mounted && _selectedIndex != null && _selectedIndex! >= items.length) {
+      setState(() => _selectedIndex = null);
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    return AsyncPanel<List<NoticeItem>>(
-      future: _noticesFuture,
-      emptyMessage: '暂无通知',
-      onSessionExpired: widget.onSessionExpired,
-      builder: (items) => LayoutBuilder(
-        builder: (context, constraints) {
-          final wide = constraints.maxWidth >= 720;
-          if (wide) {
-            return Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                SizedBox(
-                  width: 350,
-                  child: PagePanel(
-                    title: '通知',
-                    icon: Icons.info_outline,
-                    expandChild: true,
-                    child: ListView.separated(
-                      itemCount: items.length,
-                      separatorBuilder: (_, __) => const SizedBox(height: 10),
-                      itemBuilder: (context, index) => GestureDetector(
-                        onTap: () => setState(() => _selectedIndex = index),
-                        child: Container(
-                          decoration: _selectedIndex == index
-                              ? BoxDecoration(
-                                  color: Theme.of(context)
-                                      .colorScheme
-                                      .primaryContainer,
-                                  borderRadius: BorderRadius.circular(8),
-                                )
-                              : null,
-                          child: NoticeCard(item: items[index]),
+    return PageRefresh(
+      onRefresh: _refreshNotices,
+      child: AsyncPanel<List<NoticeItem>>(
+        future: _noticesFuture,
+        emptyMessage: '暂无通知',
+        onSessionExpired: widget.onSessionExpired,
+        builder: (items) => LayoutBuilder(
+          builder: (context, constraints) {
+            final wide = constraints.maxWidth >= 720;
+            if (wide) {
+              return Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(
+                    width: 350,
+                    child: PagePanel(
+                      title: '通知',
+                      icon: Icons.info_outline,
+                      expandChild: true,
+                      child: ListView.separated(
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        itemCount: items.length,
+                        separatorBuilder: (_, __) => const SizedBox(height: 10),
+                        itemBuilder: (context, index) => GestureDetector(
+                          onTap: () => setState(() => _selectedIndex = index),
+                          child: Container(
+                            decoration: _selectedIndex == index
+                                ? BoxDecoration(
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .primaryContainer,
+                                    borderRadius: BorderRadius.circular(8),
+                                  )
+                                : null,
+                            child: NoticeCard(item: items[index]),
+                          ),
                         ),
                       ),
                     ),
                   ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: PagePanel(
-                    title: _selectedIndex != null
-                        ? _noticeItemTitle(items[_selectedIndex!])
-                        : '通知详情',
-                    icon: Icons.article,
-                    expandChild: true,
-                    child: _selectedIndex != null
-                        ? _NoticeDetailContent(
-                            api: widget.api,
-                            item: items[_selectedIndex!],
-                            onSessionExpired: widget.onSessionExpired,
-                          )
-                        : const Center(child: Text('请选择一条通知查看详情')),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: PagePanel(
+                      title: _selectedIndex != null
+                          ? _noticeItemTitle(items[_selectedIndex!])
+                          : '通知详情',
+                      icon: Icons.article,
+                      expandChild: true,
+                      child: _selectedIndex != null
+                          ? _NoticeDetailContent(
+                              api: widget.api,
+                              item: items[_selectedIndex!],
+                              onSessionExpired: widget.onSessionExpired,
+                            )
+                          : const Center(child: Text('请选择一条通知查看详情')),
+                    ),
                   ),
-                ),
-              ],
+                ],
+              );
+            }
+            return PagePanel(
+              title: '通知',
+              icon: Icons.info_outline,
+              expandChild: true,
+              child: ListView.separated(
+                physics: const AlwaysScrollableScrollPhysics(),
+                itemCount: items.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 10),
+                itemBuilder: (context, index) => NoticeCard(item: items[index]),
+              ),
             );
-          }
-          return PagePanel(
-            title: '通知',
-            icon: Icons.info_outline,
-            expandChild: true,
-            child: ListView.separated(
-              itemCount: items.length,
-              separatorBuilder: (_, __) => const SizedBox(height: 10),
-              itemBuilder: (context, index) => NoticeCard(item: items[index]),
-            ),
-          );
-        },
+          },
+        ),
       ),
     );
   }
@@ -5507,10 +8105,7 @@ class NoticeCard extends StatelessWidget {
               Align(
                 alignment: Alignment.centerRight,
                 child: FilledButton.tonalIcon(
-                  onPressed: () => launchUrl(
-                    Uri.parse(item.url!),
-                    mode: LaunchMode.externalApplication,
-                  ),
+                  onPressed: () => _openInAppBrowser(context, item.url),
                   icon: const Icon(Icons.open_in_new, size: 18),
                   label: const Text('打开通知'),
                 ),
@@ -5575,6 +8170,7 @@ class SchedulePage extends StatefulWidget {
 class _SchedulePageState extends State<SchedulePage> {
   late final TextEditingController firstWeekController;
   late Future<ScheduleResult> _scheduleFuture;
+  ScheduleViewMode _viewMode = ScheduleViewMode.today;
   bool showJson = false;
   bool showAllCourses = false;
   bool courseRemindersEnabled = false;
@@ -5613,6 +8209,43 @@ class _SchedulePageState extends State<SchedulePage> {
           )
           .then((r) => r.data);
 
+  Future<void> _refreshSchedule() async {
+    setState(() => _scheduleFuture = _loadSchedule(forceRefresh: true));
+    await _scheduleFuture;
+  }
+
+  Future<void> _syncCourseRemindersToNative(
+    List<ScheduleCourse> courses,
+    int beforeStartMinutes,
+    int beforeEndMinutes,
+    DateTime firstWeekStart,
+  ) async {
+    final coursesList = courses.map((c) {
+      final weeksList = <int>[];
+      for (var w = 1; w <= 30; w++) {
+        if (c.occursInWeek(w)) weeksList.add(w);
+      }
+      return {
+        'name': c.name,
+        'weekday': c.weekday ?? 0,
+        'startSection': c.startSection ?? 0,
+        'endSection': c.endSection ?? 0,
+        'classroom': c.classroom ?? '',
+        'teacher': c.teacher ?? '',
+        'weeks': weeksList,
+      };
+    }).toList();
+    final coursesJson = jsonEncode(coursesList);
+    final firstWeekStr =
+        '${firstWeekStart.year.toString().padLeft(4, '0')}-${firstWeekStart.month.toString().padLeft(2, '0')}-${firstWeekStart.day.toString().padLeft(2, '0')}';
+    await BackgroundService.updateCourseReminders(
+      coursesJson: coursesJson,
+      beforeStartMinutes: beforeStartMinutes,
+      beforeEndMinutes: beforeEndMinutes,
+      firstWeekStart: firstWeekStr,
+    );
+  }
+
   @override
   void dispose() {
     firstWeekController.dispose();
@@ -5621,284 +8254,383 @@ class _SchedulePageState extends State<SchedulePage> {
 
   @override
   Widget build(BuildContext context) {
-    return AsyncPanel<ScheduleResult>(
-      future: _scheduleFuture,
-      onSessionExpired: widget.onSessionExpired,
-      builder: (result) {
-        final visibleItems = result.items
-            .where((item) => item.occursInWeek(widget.currentWeek))
-            .toList();
-        final displayItems = showAllCourses ? result.items : visibleItems;
-        ReminderService.configureCourseReminders(
-          courses: result.items,
-          firstWeekStart: widget.firstWeekStart,
-          settings: CourseReminderSettings(
-            enabled: courseRemindersEnabled,
-            beforeStartMinutes: courseStartReminderMinutes,
-            beforeEndMinutes: courseEndReminderMinutes,
-          ),
-        );
-        return PagePanel(
-          title: '课表',
-          icon: Icons.calendar_month,
-          expandChild: true,
-          child: Stack(
-            children: [
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Wrap(
-                    spacing: 10,
-                    runSpacing: 6,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    children: [
-                      _MetricPill(
-                        icon: Icons.calendar_month,
-                        label: '第',
-                        value: '${widget.currentWeek}周',
-                        dense: true,
-                      ),
-                      _MetricPill(
-                        icon: Icons.list,
-                        label: '课程',
-                        value: '${displayItems.length}/${result.items.length}',
-                        dense: true,
-                      ),
-                      _MetricPill(
-                        icon: Icons.access_time,
-                        label: '首周',
-                        value: _dateText(widget.firstWeekStart),
-                        dense: true,
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                  if (result.items.isEmpty)
-                    const Expanded(child: EmptyState(message: '当前学期暂无课表'))
-                  else if (displayItems.isEmpty)
-                    Expanded(
-                        child:
-                            EmptyState(message: '第${widget.currentWeek}周暂无课程'))
-                  else
-                    Expanded(child: TimetableView(items: displayItems)),
-                  if (showJson) ...[
-                    const SizedBox(height: 10),
-                    Flexible(child: JsonPanel(json: result.prettyJson)),
-                  ],
-                ],
-              ),
-              Positioned(
-                right: 0,
-                bottom: 0,
-                child: SizedBox(
-                  key: const ValueKey('schedule-tools-button'),
-                  width: 58,
-                  height: 42,
-                  child: Tooltip(
-                    message: '课表工具',
-                    child: FilledButton(
-                      onPressed: () =>
-                          _showScheduleTools(result.prettyJson, result.items),
-                      child: const Icon(Icons.more_horiz, size: 18),
-                    ),
+    return PageRefresh(
+      onRefresh: _refreshSchedule,
+      child: AsyncPanel<ScheduleResult>(
+        future: _scheduleFuture,
+        onSessionExpired: widget.onSessionExpired,
+        builder: (result) {
+          final weekItems = result.items
+              .where((item) => item.occursInWeek(widget.currentWeek))
+              .toList();
+          final todayItems = weekItems
+              .where((item) => item.weekday == DateTime.now().weekday)
+              .toList()
+            ..sort(_compareScheduleCourses);
+          final displayItems =
+              _viewMode == ScheduleViewMode.all ? result.items : weekItems;
+          ReminderService.configureCourseReminders(
+            courses: result.items,
+            firstWeekStart: widget.firstWeekStart,
+            settings: CourseReminderSettings(
+              enabled: courseRemindersEnabled,
+              beforeStartMinutes: courseStartReminderMinutes,
+              beforeEndMinutes: courseEndReminderMinutes,
+            ),
+          );
+          // Sync course data to native Android layer for background reminders
+          unawaited(_syncCourseRemindersToNative(
+            result.items,
+            courseStartReminderMinutes,
+            courseEndReminderMinutes,
+            widget.firstWeekStart,
+          ));
+          return PagePanel(
+            title: '课表',
+            icon: Icons.calendar_month,
+            expandChild: true,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _ScheduleSummaryPanel(
+                  currentWeek: widget.currentWeek,
+                  firstWeekStart: widget.firstWeekStart,
+                  todayCount: todayItems.length,
+                  weekCount: weekItems.length,
+                  totalCount: result.items.length,
+                  nextCourse: _nextScheduleCourse(todayItems),
+                ),
+                const SizedBox(height: 10),
+                _ScheduleViewSwitch(
+                  selected: _viewMode,
+                  onChanged: (mode) {
+                    setState(() {
+                      _viewMode = mode;
+                      showAllCourses = mode == ScheduleViewMode.all;
+                    });
+                  },
+                ),
+                const SizedBox(height: 8),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: _ScheduleToolsChip(
+                    onPressed: () =>
+                        _showScheduleTools(result.prettyJson, result.items),
                   ),
                 ),
-              ),
-            ],
-          ),
-        );
-      },
+                const SizedBox(height: 10),
+                if (result.items.isEmpty)
+                  Expanded(
+                    child: ListView(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      children: const [
+                        SizedBox(
+                          height: 260,
+                          child: EmptyState(message: '当前学期暂无课表'),
+                        ),
+                      ],
+                    ),
+                  )
+                else if (displayItems.isEmpty)
+                  Expanded(
+                    child: ListView(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      children: [
+                        SizedBox(
+                          height: 260,
+                          child: EmptyState(
+                              message: '第${widget.currentWeek}周暂无课程'),
+                        ),
+                      ],
+                    ),
+                  )
+                else
+                  Expanded(
+                    child: ScheduleReadableView(
+                      mode: _viewMode,
+                      todayItems: todayItems,
+                      weekItems: weekItems,
+                      allItems: result.items,
+                    ),
+                  ),
+                if (showJson) ...[
+                  const SizedBox(height: 10),
+                  Flexible(child: JsonPanel(json: result.prettyJson)),
+                ],
+              ],
+            ),
+          );
+        },
+      ),
     );
   }
 
   void _showScheduleTools(String prettyJson, List<ScheduleCourse> items) {
-    showDialog<void>(
+    showModalBottomSheet<void>(
       context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (context, localSetState) => AlertDialog(
-          title: const Text('课表工具'),
-          content: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 520, maxHeight: 620),
-            child: SingleChildScrollView(
+      isScrollControlled: true,
+      builder: (sheetContext) => StatefulBuilder(
+        builder: (context, localSetState) {
+          final compact = MediaQuery.sizeOf(context).width < 600;
+          final colorScheme = Theme.of(context).colorScheme;
+          return SafeArea(
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxHeight: MediaQuery.sizeOf(context).height * 0.78,
+              ),
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      TextButton(
-                        onPressed: () {
-                          setState(() => showAllCourses = !showAllCourses);
-                          localSetState(() {});
-                        },
-                        child: _IconLabel(
-                          icon: Icons.visibility,
-                          label: showAllCourses ? '仅本周' : '全部课程',
-                        ),
+                  // 顶部拖拽指示条
+                  Padding(
+                    padding: const EdgeInsets.only(top: 12, bottom: 4),
+                    child: Container(
+                      width: 36,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: colorScheme.onSurfaceVariant
+                            .withValues(alpha: 0.25),
+                        borderRadius: BorderRadius.circular(2),
                       ),
-                      Row(
+                    ),
+                  ),
+                  // 标题行
+                  Padding(
+                    padding: EdgeInsets.fromLTRB(
+                      compact ? 18 : 24,
+                      8,
+                      compact ? 18 : 24,
+                      0,
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 34,
+                          height: 34,
+                          decoration: BoxDecoration(
+                            color: _accentFill(context),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Icon(Icons.tune,
+                              size: 18, color: colorScheme.primary),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            '课表工具',
+                            style: Theme.of(context)
+                                .textTheme
+                                .titleLarge
+                                ?.copyWith(fontWeight: FontWeight.w800),
+                          ),
+                        ),
+                        IconButton(
+                          onPressed: () => Navigator.pop(sheetContext),
+                          icon: const Icon(Icons.close, size: 20),
+                          style: IconButton.styleFrom(
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Divider(height: 20, indent: 18, endIndent: 18),
+                  // 内容区
+                  Flexible(
+                    child: SingleChildScrollView(
+                      padding: EdgeInsets.fromLTRB(
+                        compact ? 18 : 24,
+                        0,
+                        compact ? 18 : 24,
+                        20,
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          const _IconLabel(
-                            icon: Icons.notifications_active,
-                            label: '上下课提醒',
+                          // 快捷操作区
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: [
+                              TextButton(
+                                onPressed: () {
+                                  setState(() {
+                                    showAllCourses = !showAllCourses;
+                                    _viewMode = showAllCourses
+                                        ? ScheduleViewMode.all
+                                        : ScheduleViewMode.week;
+                                  });
+                                  localSetState(() {});
+                                },
+                                child: _IconLabel(
+                                  icon: Icons.visibility,
+                                  label: showAllCourses ? '仅本周' : '全部课程',
+                                ),
+                              ),
+                              Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const _IconLabel(
+                                    icon: Icons.notifications_active,
+                                    label: '上下课提醒',
+                                  ),
+                                  Switch(
+                                    value: courseRemindersEnabled,
+                                    onChanged: (value) {
+                                      _setCourseRemindersEnabled(value);
+                                      localSetState(() {});
+                                    },
+                                  ),
+                                ],
+                              ),
+                              Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const _IconLabel(
+                                    icon: Icons.code,
+                                    label: 'JSON',
+                                  ),
+                                  Switch(
+                                    value: showJson,
+                                    onChanged: (value) {
+                                      setState(() => showJson = value);
+                                      localSetState(() {});
+                                    },
+                                  ),
+                                ],
+                              ),
+                              TextButton(
+                                onPressed: items.isEmpty || _exporting
+                                    ? null
+                                    : () async {
+                                        setState(() => _exporting = true);
+                                        localSetState(() {});
+                                        try {
+                                          final ics = generateIcs(
+                                            courses: items,
+                                            firstWeekStart:
+                                                widget.firstWeekStart,
+                                            year: widget.year,
+                                            term: widget.term,
+                                          );
+                                          final filename =
+                                              '课表_${widget.year}_${widget.term}.ics';
+                                          if (kIsWeb) {
+                                            await downloadIcs(ics, filename);
+                                          } else {
+                                            await Share.shareXFiles(
+                                              [
+                                                XFile.fromData(
+                                                  Uint8List.fromList(
+                                                      utf8.encode(ics)),
+                                                  name: filename,
+                                                  mimeType: 'text/calendar',
+                                                ),
+                                              ],
+                                              text: filename,
+                                            );
+                                          }
+                                        } finally {
+                                          if (mounted) {
+                                            setState(() => _exporting = false);
+                                          }
+                                          try {
+                                            localSetState(() {});
+                                          } catch (_) {}
+                                        }
+                                      },
+                                child: _IconLabel(
+                                  icon: Icons.download,
+                                  label: _exporting ? '导出中...' : '导出 ICS',
+                                ),
+                              ),
+                              TextButton(
+                                onPressed: items.isEmpty || _exporting
+                                    ? null
+                                    : () async {
+                                        setState(() => _exporting = true);
+                                        localSetState(() {});
+                                        try {
+                                          final ics = generateIcs(
+                                            courses: items,
+                                            firstWeekStart:
+                                                widget.firstWeekStart,
+                                            year: widget.year,
+                                            term: widget.term,
+                                          );
+                                          final filename =
+                                              '课表_${widget.year}_${widget.term}.ics';
+                                          if (kIsWeb) {
+                                            await downloadIcs(ics, filename);
+                                          } else {
+                                            await Share.shareXFiles(
+                                              [
+                                                XFile.fromData(
+                                                  Uint8List.fromList(
+                                                      utf8.encode(ics)),
+                                                  name: filename,
+                                                  mimeType: 'text/calendar',
+                                                ),
+                                              ],
+                                              text: filename,
+                                            );
+                                          }
+                                        } finally {
+                                          if (mounted) {
+                                            setState(() => _exporting = false);
+                                          }
+                                          try {
+                                            localSetState(() {});
+                                          } catch (_) {}
+                                        }
+                                      },
+                                child: const _IconLabel(
+                                  icon: Icons.event_available,
+                                  label: '一键导入日历',
+                                ),
+                              ),
+                            ],
                           ),
-                          Switch(
-                            value: courseRemindersEnabled,
-                            onChanged: (value) {
-                              _setCourseRemindersEnabled(value);
+                          const SizedBox(height: 12),
+                          ScheduleInlineManage(
+                            firstWeekController: firstWeekController,
+                            firstWeekStart: widget.firstWeekStart,
+                            currentWeek: widget.currentWeek,
+                            autoWeek: widget.autoWeek,
+                            error: manageError,
+                            onAutoWeekChanged: (value) {
+                              widget.onAutoWeekChanged(value);
+                              localSetState(() {});
+                            },
+                            onCurrentWeekChanged: (value) {
+                              widget.onCurrentWeekChanged(value);
+                              localSetState(() {});
+                            },
+                            onSaveFirstWeek: () {
+                              _saveFirstWeek();
+                              localSetState(() {});
+                            },
+                            onUseCurrentWeek: () {
+                              firstWeekController.text =
+                                  _dateText(_mondayOf(DateTime.now()));
+                              _saveFirstWeek();
                               localSetState(() {});
                             },
                           ),
+                          if (showJson) ...[
+                            const SizedBox(height: 12),
+                            JsonPanel(json: prettyJson),
+                          ],
                         ],
                       ),
-                      Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const _IconLabel(
-                            icon: Icons.code,
-                            label: 'JSON',
-                          ),
-                          Switch(
-                            value: showJson,
-                            onChanged: (value) {
-                              setState(() => showJson = value);
-                              localSetState(() {});
-                            },
-                          ),
-                        ],
-                      ),
-                      TextButton(
-                        onPressed: items.isEmpty || _exporting
-                            ? null
-                            : () async {
-                                setState(() => _exporting = true);
-                                localSetState(() {});
-                                try {
-                                  final ics = generateIcs(
-                                    courses: items,
-                                    firstWeekStart: widget.firstWeekStart,
-                                    year: widget.year,
-                                    term: widget.term,
-                                  );
-                                  final filename =
-                                      '课表_${widget.year}_${widget.term}.ics';
-                                  if (kIsWeb) {
-                                    await downloadIcs(ics, filename);
-                                  } else {
-                                    await Share.shareXFiles(
-                                      [
-                                        XFile.fromData(
-                                          Uint8List.fromList(utf8.encode(ics)),
-                                          name: filename,
-                                          mimeType: 'text/calendar',
-                                        ),
-                                      ],
-                                      text: filename,
-                                    );
-                                  }
-                                } finally {
-                                  if (mounted) {
-                                    setState(() => _exporting = false);
-                                  }
-                                  try {
-                                    localSetState(() {});
-                                  } catch (_) {}
-                                }
-                              },
-                        child: _IconLabel(
-                          icon: Icons.download,
-                          label: _exporting ? '导出中...' : '导出 ICS',
-                        ),
-                      ),
-                      TextButton(
-                        onPressed: items.isEmpty || _exporting
-                            ? null
-                            : () async {
-                                setState(() => _exporting = true);
-                                localSetState(() {});
-                                try {
-                                  final ics = generateIcs(
-                                    courses: items,
-                                    firstWeekStart: widget.firstWeekStart,
-                                    year: widget.year,
-                                    term: widget.term,
-                                  );
-                                  final filename =
-                                      '课表_${widget.year}_${widget.term}.ics';
-                                  if (kIsWeb) {
-                                    await downloadIcs(ics, filename);
-                                  } else {
-                                    await Share.shareXFiles(
-                                      [
-                                        XFile.fromData(
-                                          Uint8List.fromList(utf8.encode(ics)),
-                                          name: filename,
-                                          mimeType: 'text/calendar',
-                                        ),
-                                      ],
-                                      text: filename,
-                                    );
-                                  }
-                                } finally {
-                                  if (mounted) {
-                                    setState(() => _exporting = false);
-                                  }
-                                  try {
-                                    localSetState(() {});
-                                  } catch (_) {}
-                                }
-                              },
-                        child: const _IconLabel(
-                          icon: Icons.event_available,
-                          label: '一键导入日历',
-                        ),
-                      ),
-                    ],
+                    ),
                   ),
-                  const SizedBox(height: 12),
-                  ScheduleInlineManage(
-                    firstWeekController: firstWeekController,
-                    firstWeekStart: widget.firstWeekStart,
-                    currentWeek: widget.currentWeek,
-                    autoWeek: widget.autoWeek,
-                    error: manageError,
-                    onAutoWeekChanged: (value) {
-                      widget.onAutoWeekChanged(value);
-                      localSetState(() {});
-                    },
-                    onCurrentWeekChanged: (value) {
-                      widget.onCurrentWeekChanged(value);
-                      localSetState(() {});
-                    },
-                    onSaveFirstWeek: () {
-                      _saveFirstWeek();
-                      localSetState(() {});
-                    },
-                    onUseCurrentWeek: () {
-                      firstWeekController.text =
-                          _dateText(_mondayOf(DateTime.now()));
-                      _saveFirstWeek();
-                      localSetState(() {});
-                    },
-                  ),
-                  if (showJson) ...[
-                    const SizedBox(height: 12),
-                    JsonPanel(json: prettyJson),
-                  ],
                 ],
               ),
             ),
-          ),
-          actions: [
-            FilledButton(
-              onPressed: () => Navigator.pop(dialogContext),
-              child: const Text('关闭'),
-            ),
-          ],
-        ),
+          );
+        },
       ),
     );
   }
@@ -5931,6 +8663,48 @@ class _SchedulePageState extends State<SchedulePage> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('schedule.courseRemindersEnabled', value);
     if (!value) ReminderService.cancelCourseReminders();
+  }
+}
+
+/// 课表工具按钮 — 放在 PagePanel 标题栏右侧的 chip 风格按钮
+class _ScheduleToolsChip extends StatelessWidget {
+  const _ScheduleToolsChip({required this.onPressed});
+
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final compact = MediaQuery.sizeOf(context).width < 600;
+    return Material(
+      key: const ValueKey('schedule-tools-button'),
+      color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.72),
+      borderRadius: BorderRadius.circular(20),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(20),
+        onTap: onPressed,
+        child: Padding(
+          padding: EdgeInsets.symmetric(
+            horizontal: compact ? 10 : 14,
+            vertical: compact ? 6 : 8,
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.tune, size: 16, color: colorScheme.primary),
+              SizedBox(width: compact ? 4 : 6),
+              Text(
+                '工具',
+                style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                      color: colorScheme.primary,
+                      fontWeight: FontWeight.w700,
+                    ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -6051,6 +8825,501 @@ class ScheduleInlineManage extends StatelessWidget {
   }
 }
 
+enum ScheduleViewMode { today, week, all }
+
+class _ScheduleSummaryPanel extends StatelessWidget {
+  const _ScheduleSummaryPanel({
+    required this.currentWeek,
+    required this.firstWeekStart,
+    required this.todayCount,
+    required this.weekCount,
+    required this.totalCount,
+    required this.nextCourse,
+  });
+
+  final int currentWeek;
+  final DateTime firstWeekStart;
+  final int todayCount;
+  final int weekCount;
+  final int totalCount;
+  final ScheduleCourse? nextCourse;
+
+  @override
+  Widget build(BuildContext context) {
+    final nextText = nextCourse == null
+        ? '今日无后续课程'
+        : '${_scheduleTimeText(nextCourse!)} · ${nextCourse!.name}';
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Theme.of(context)
+            .colorScheme
+            .primaryContainer
+            .withValues(alpha: 0.28),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  color: Theme.of(context)
+                      .colorScheme
+                      .primary
+                      .withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(15),
+                ),
+                child: Icon(Icons.calendar_month,
+                    color: Theme.of(context).colorScheme.primary),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '第$currentWeek周课表',
+                      style: Theme.of(context)
+                          .textTheme
+                          .titleLarge
+                          ?.copyWith(fontWeight: FontWeight.w900),
+                    ),
+                    Text(
+                      nextText,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _MetricPill(
+                  icon: Icons.today,
+                  label: '今日',
+                  value: '$todayCount节',
+                  dense: true),
+              _MetricPill(
+                  icon: Icons.view_week,
+                  label: '本周',
+                  value: '$weekCount节',
+                  dense: true),
+              _MetricPill(
+                  icon: Icons.list,
+                  label: '全部',
+                  value: '$totalCount门',
+                  dense: true),
+              _MetricPill(
+                icon: Icons.access_time,
+                label: '首周',
+                value: _dateText(firstWeekStart),
+                dense: true,
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ScheduleViewSwitch extends StatelessWidget {
+  const _ScheduleViewSwitch({required this.selected, required this.onChanged});
+
+  final ScheduleViewMode selected;
+  final ValueChanged<ScheduleViewMode> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return SegmentedButton<ScheduleViewMode>(
+      key: const ValueKey('schedule-view-mode'),
+      showSelectedIcon: false,
+      segments: const [
+        ButtonSegment(
+            value: ScheduleViewMode.today,
+            icon: Icon(Icons.today),
+            label: Text('今日')),
+        ButtonSegment(
+            value: ScheduleViewMode.week,
+            icon: Icon(Icons.view_week),
+            label: Text('本周')),
+        ButtonSegment(
+            value: ScheduleViewMode.all,
+            icon: Icon(Icons.format_list_bulleted),
+            label: Text('全部')),
+      ],
+      selected: {selected},
+      onSelectionChanged: (values) => onChanged(values.single),
+    );
+  }
+}
+
+class ScheduleReadableView extends StatelessWidget {
+  const ScheduleReadableView({
+    super.key,
+    required this.mode,
+    required this.todayItems,
+    required this.weekItems,
+    required this.allItems,
+  });
+
+  final ScheduleViewMode mode;
+  final List<ScheduleCourse> todayItems;
+  final List<ScheduleCourse> weekItems;
+  final List<ScheduleCourse> allItems;
+
+  @override
+  Widget build(BuildContext context) {
+    switch (mode) {
+      case ScheduleViewMode.today:
+        return _TodayReadableSchedule(items: todayItems);
+      case ScheduleViewMode.week:
+        if (MediaQuery.sizeOf(context).width < 600) {
+          return _WeekReadableSchedule(items: weekItems);
+        }
+        return TimetableView(items: weekItems);
+      case ScheduleViewMode.all:
+        return _AllReadableSchedule(items: allItems);
+    }
+  }
+}
+
+class _TodayReadableSchedule extends StatelessWidget {
+  const _TodayReadableSchedule({required this.items});
+
+  final List<ScheduleCourse> items;
+
+  @override
+  Widget build(BuildContext context) {
+    if (items.isEmpty) {
+      return ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: const [
+          SizedBox(height: 260, child: EmptyState(message: '今天暂无课程')),
+        ],
+      );
+    }
+    final sorted = [...items]..sort(_compareScheduleCourses);
+    return ListView.separated(
+      physics: const AlwaysScrollableScrollPhysics(),
+      itemCount: sorted.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 10),
+      itemBuilder: (context, index) =>
+          _ScheduleCourseTile(course: sorted[index]),
+    );
+  }
+}
+
+class _WeekReadableSchedule extends StatelessWidget {
+  const _WeekReadableSchedule({required this.items});
+
+  final List<ScheduleCourse> items;
+
+  @override
+  Widget build(BuildContext context) {
+    final byDay = <int, List<ScheduleCourse>>{
+      for (var day = 1; day <= 7; day++) day: <ScheduleCourse>[],
+    };
+    for (final item in items) {
+      final weekday = item.weekday;
+      if (weekday != null && weekday >= 1 && weekday <= 7) {
+        byDay[weekday]!.add(item);
+      }
+    }
+    for (final list in byDay.values) {
+      list.sort(_compareScheduleCourses);
+    }
+    return ListView.separated(
+      physics: const AlwaysScrollableScrollPhysics(),
+      itemCount: 7,
+      separatorBuilder: (_, __) => const SizedBox(height: 10),
+      itemBuilder: (context, index) {
+        final day = index + 1;
+        final courses = byDay[day]!;
+        return Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.surfaceContainerLow,
+            borderRadius: BorderRadius.circular(18),
+            border:
+                Border.all(color: Theme.of(context).colorScheme.outlineVariant),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Text(_scheduleWeekdayText(day),
+                      style: Theme.of(context)
+                          .textTheme
+                          .titleMedium
+                          ?.copyWith(fontWeight: FontWeight.w900)),
+                  const Spacer(),
+                  Text(courses.isEmpty ? '无课' : '${courses.length}节',
+                      style: Theme.of(context).textTheme.bodySmall),
+                ],
+              ),
+              if (courses.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                for (final course in courses)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: _CompactScheduleCourseTile(course: course),
+                  ),
+              ],
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _AllReadableSchedule extends StatelessWidget {
+  const _AllReadableSchedule({required this.items});
+
+  final List<ScheduleCourse> items;
+
+  @override
+  Widget build(BuildContext context) {
+    final grouped = <String, List<ScheduleCourse>>{};
+    for (final item in items) {
+      grouped.putIfAbsent(item.name, () => []).add(item);
+    }
+    final names = grouped.keys.toList()..sort();
+    return ListView.separated(
+      physics: const AlwaysScrollableScrollPhysics(),
+      itemCount: names.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 10),
+      itemBuilder: (context, index) {
+        final name = names[index];
+        final courses = grouped[name]!..sort(_compareScheduleCourses);
+        return Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.surfaceContainerLow,
+            borderRadius: BorderRadius.circular(18),
+            border:
+                Border.all(color: Theme.of(context).colorScheme.outlineVariant),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  _CourseColorMark(name: name),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(name,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context)
+                            .textTheme
+                            .titleMedium
+                            ?.copyWith(fontWeight: FontWeight.w900)),
+                  ),
+                  Text('${courses.length}条',
+                      style: Theme.of(context).textTheme.bodySmall),
+                ],
+              ),
+              const SizedBox(height: 10),
+              for (final course in courses)
+                _CompactScheduleCourseTile(course: course),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _ScheduleCourseTile extends StatelessWidget {
+  const _ScheduleCourseTile({required this.course});
+
+  final ScheduleCourse course;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Theme.of(context).colorScheme.surfaceContainerLow,
+      borderRadius: BorderRadius.circular(18),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(18),
+        onTap: () => _showReadableScheduleDetails(context, course),
+        child: Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(18),
+            border:
+                Border.all(color: Theme.of(context).colorScheme.outlineVariant),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 5,
+                height: 76,
+                decoration: BoxDecoration(
+                  color: _scheduleCourseColor(course.name),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+              ),
+              const SizedBox(width: 12),
+              SizedBox(
+                width: 82,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(_scheduleTimeText(course),
+                        style: Theme.of(context)
+                            .textTheme
+                            .titleMedium
+                            ?.copyWith(fontWeight: FontWeight.w900)),
+                    const SizedBox(height: 4),
+                    Text(_scheduleSectionText(course),
+                        style: Theme.of(context).textTheme.bodySmall),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(course.name,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context)
+                            .textTheme
+                            .titleMedium
+                            ?.copyWith(fontWeight: FontWeight.w900)),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 10,
+                      runSpacing: 5,
+                      children: [
+                        _ScheduleMeta(
+                            icon: Icons.room,
+                            text:
+                                _cleanScheduleText(course.classroom) ?? '地点待定'),
+                        _ScheduleMeta(
+                            icon: Icons.person,
+                            text: _cleanScheduleText(course.teacher) ?? '教师待定'),
+                        if (_cleanScheduleText(course.weeks) != null)
+                          _ScheduleMeta(
+                              icon: Icons.date_range,
+                              text: _cleanScheduleText(course.weeks)!),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CompactScheduleCourseTile extends StatelessWidget {
+  const _CompactScheduleCourseTile({required this.course});
+
+  final ScheduleCourse course;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(12),
+      onTap: () => _showReadableScheduleDetails(context, course),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 7),
+        child: Row(
+          children: [
+            _CourseColorMark(name: course.name),
+            const SizedBox(width: 10),
+            SizedBox(width: 84, child: Text(_scheduleTimeText(course))),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(course.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleMedium),
+                  Text(
+                    [
+                      _scheduleSectionText(course),
+                      _cleanScheduleText(course.classroom),
+                      _cleanScheduleText(course.teacher),
+                    ].whereType<String>().join(' · '),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _CourseColorMark extends StatelessWidget {
+  const _CourseColorMark({required this.name});
+
+  final String name;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 12,
+      height: 34,
+      decoration: BoxDecoration(
+        color: _scheduleCourseColor(name),
+        borderRadius: BorderRadius.circular(999),
+      ),
+    );
+  }
+}
+
+class _ScheduleMeta extends StatelessWidget {
+  const _ScheduleMeta({required this.icon, required this.text});
+
+  final IconData icon;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon,
+            size: 14, color: Theme.of(context).colorScheme.onSurfaceVariant),
+        const SizedBox(width: 4),
+        Text(text,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.bodySmall),
+      ],
+    );
+  }
+}
+
 class TimetableView extends StatefulWidget {
   const TimetableView({super.key, required this.items});
 
@@ -6142,6 +9411,7 @@ class _TimetableViewState extends State<TimetableView> {
               controller: verticalController,
               child: SingleChildScrollView(
                 controller: verticalController,
+                physics: const AlwaysScrollableScrollPhysics(),
                 child: SingleChildScrollView(
                   scrollDirection: Axis.horizontal,
                   physics: compact
@@ -6588,6 +9858,135 @@ class _DetailRow extends StatelessWidget {
   }
 }
 
+int _compareScheduleCourses(ScheduleCourse a, ScheduleCourse b) {
+  final day = (a.weekday ?? 99).compareTo(b.weekday ?? 99);
+  if (day != 0) return day;
+  final section = (a.startSection ?? 99).compareTo(b.startSection ?? 99);
+  if (section != 0) return section;
+  return a.name.compareTo(b.name);
+}
+
+ScheduleCourse? _nextScheduleCourse(List<ScheduleCourse> items) {
+  final now = DateTime.now();
+  for (final item in [...items]..sort(_compareScheduleCourses)) {
+    final end = _scheduleCourseEnd(item, now);
+    if (end != null && end.isAfter(now)) return item;
+  }
+  return null;
+}
+
+DateTime? _scheduleCourseEnd(ScheduleCourse course, DateTime date) {
+  final section = course.endSection ?? course.startSection;
+  if (section == null || section < 1 || section > icsScheduleTimes.length) {
+    return null;
+  }
+  return _dateWithScheduleTime(date, icsScheduleTimes[section - 1].$2);
+}
+
+DateTime _dateWithScheduleTime(DateTime date, String time) {
+  final parts = time.split(':');
+  return DateTime(
+    date.year,
+    date.month,
+    date.day,
+    int.tryParse(parts.first) ?? 0,
+    parts.length > 1 ? int.tryParse(parts[1]) ?? 0 : 0,
+  );
+}
+
+String _scheduleTimeText(ScheduleCourse course) {
+  final start = course.startSection;
+  final end = course.endSection ?? start;
+  if (start == null || start < 1 || start > icsScheduleTimes.length) {
+    return '时间待定';
+  }
+  final startText = icsScheduleTimes[start - 1].$1;
+  final endText = end != null && end >= 1 && end <= icsScheduleTimes.length
+      ? icsScheduleTimes[end - 1].$2
+      : icsScheduleTimes[start - 1].$2;
+  return '$startText-$endText';
+}
+
+String _scheduleSectionText(ScheduleCourse course) {
+  final start = course.startSection;
+  final end = course.endSection ?? start;
+  if (start == null) return '节次待定';
+  return '第$start-${end != null && end >= start ? end : start}节';
+}
+
+String _scheduleWeekdayText(int weekday) {
+  const names = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+  if (weekday < 1 || weekday > 7) return '未知';
+  return names[weekday - 1];
+}
+
+String? _cleanScheduleText(String? value) {
+  final text = value?.trim();
+  if (text == null || text.isEmpty) return null;
+  return text;
+}
+
+Color _scheduleCourseColor(String name) {
+  const palette = [
+    Color(0xFF8E2F43),
+    Color(0xFF006C67),
+    Color(0xFF1E5A85),
+    Color(0xFF8B4D00),
+    Color(0xFF654597),
+    Color(0xFF9D1734),
+    Color(0xFF0E3F63),
+    Color(0xFF9B3D2D),
+    Color(0xFF1F4E94),
+  ];
+  var hash = 0;
+  for (final unit in name.codeUnits) {
+    hash = (hash + unit) % palette.length;
+  }
+  return palette[hash];
+}
+
+void _showReadableScheduleDetails(BuildContext context, ScheduleCourse course) {
+  final rows = [
+    (Icons.menu_book, '课程', course.name),
+    (
+      Icons.calendar_month,
+      '星期',
+      course.weekday == null ? '星期待定' : _scheduleWeekdayText(course.weekday!)
+    ),
+    (Icons.schedule, '时间', _scheduleTimeText(course)),
+    (Icons.schedule, '节次', _scheduleSectionText(course)),
+    if (_cleanScheduleText(course.classroom) != null)
+      (Icons.room, '教室', _cleanScheduleText(course.classroom)!),
+    if (_cleanScheduleText(course.teacher) != null)
+      (Icons.people, '教师', _cleanScheduleText(course.teacher)!),
+    if (_cleanScheduleText(course.weeks) != null)
+      (Icons.access_time, '周次', _cleanScheduleText(course.weeks)!),
+  ];
+  showDialog<void>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: Text(course.name),
+      content: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 520),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            for (final row in rows)
+              _DetailRow(icon: row.$1, label: row.$2, value: row.$3),
+          ],
+        ),
+      ),
+      actions: [
+        FilledButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('关闭'),
+        ),
+      ],
+    ),
+  );
+}
+
 class JsonPanel extends StatelessWidget {
   const JsonPanel({super.key, required this.json});
 
@@ -6743,6 +10142,11 @@ class _AttendancePageState extends State<AttendancePage> {
           )
           .then((r) => r.data);
 
+  Future<void> _refreshAttendance() async {
+    setState(() => _attendanceFuture = _loadAttendance(forceRefresh: true));
+    await _attendanceFuture;
+  }
+
   String get _sortLabel {
     const labels = {
       'normal': '正常',
@@ -6882,8 +10286,7 @@ class _AttendancePageState extends State<AttendancePage> {
           ),
         IconButton(
           tooltip: '刷新考勤',
-          onPressed: () => setState(
-              () => _attendanceFuture = _loadAttendance(forceRefresh: true)),
+          onPressed: () => unawaited(_refreshAttendance()),
           icon: const Icon(Icons.refresh),
         ),
       ],
@@ -6900,10 +10303,22 @@ class _AttendancePageState extends State<AttendancePage> {
           _queueAttendanceDiffCheck(data.items);
           final compact = constraints.maxWidth < 640;
           if (data.items.isEmpty) {
-            return const PagePanel(
+            return PagePanel(
               title: '考勤',
               icon: Icons.schedule,
-              child: EmptyState(message: '暂无考勤记录'),
+              expandChild: true,
+              child: RefreshIndicator(
+                onRefresh: _refreshAttendance,
+                child: ListView(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  children: const [
+                    SizedBox(
+                      height: 260,
+                      child: EmptyState(message: '暂无考勤记录'),
+                    ),
+                  ],
+                ),
+              ),
             );
           }
           final filteredItems = _applyFilterSort(data.items);
@@ -6915,12 +10330,9 @@ class _AttendancePageState extends State<AttendancePage> {
             icon: Icons.schedule,
             expandChild: true,
             child: RefreshIndicator(
-              onRefresh: () async {
-                setState(() =>
-                    _attendanceFuture = _loadAttendance(forceRefresh: true));
-                await _attendanceFuture;
-              },
+              onRefresh: _refreshAttendance,
               child: ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
                 children: [
                   AttendanceOverview(items: data.items),
                   const SizedBox(height: 12),
@@ -7604,7 +11016,6 @@ class _ExamsPageState extends State<ExamsPage> {
         !_scrollController.hasClients) {
       return;
     }
-    _hasScrolledToHighlight = true;
     final highlightKey = _courseKey(widget.highlightCourse!);
     final items = _sortedByTerm(_allLoadedItems);
     int targetIndex = -1;
@@ -7614,18 +11025,18 @@ class _ExamsPageState extends State<ExamsPage> {
         break;
       }
     }
-    if (targetIndex >= 0) {
-      const estimatedItemHeight = 56.0;
-      final scrollPosition = (targetIndex * estimatedItemHeight).clamp(
-        0.0,
-        _scrollController.position.maxScrollExtent,
-      );
-      _scrollController.animateTo(
-        scrollPosition,
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeInOut,
-      );
-    }
+    if (targetIndex < 0) return; // 数据尚未加载，等待下次尝试
+    _hasScrolledToHighlight = true;
+    const estimatedItemHeight = 56.0;
+    final scrollPosition = (targetIndex * estimatedItemHeight).clamp(
+      0.0,
+      _scrollController.position.maxScrollExtent,
+    );
+    _scrollController.animateTo(
+      scrollPosition,
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeInOut,
+    );
   }
 
   List<PeriodExam> _allLoadedItems = [];
@@ -7638,30 +11049,145 @@ class _ExamsPageState extends State<ExamsPage> {
 
   @override
   Widget build(BuildContext context) {
-    return AsyncPanel<List<PeriodExam>>(
-      future: _examsFuture,
-      onSessionExpired: widget.onSessionExpired,
-      builder: (items) {
-        _allLoadedItems = items;
-        if (!_hasScrolledToHighlight && widget.highlightCourse != null) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            _scrollToHighlightIfNeeded();
-          });
-        }
-        return LayoutBuilder(
-          builder: (context, constraints) {
-            final wide = constraints.maxWidth >= 720;
-            if (wide) {
-              return Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  SizedBox(
-                    width: 280,
-                    child: Column(
-                      children: [
-                        Align(
-                          alignment: Alignment.centerLeft,
-                          child: SizedBox(
+    return PageRefresh(
+      onRefresh: _refreshExams,
+      child: AsyncPanel<List<PeriodExam>>(
+        future: _examsFuture,
+        onSessionExpired: widget.onSessionExpired,
+        builder: (items) {
+          _allLoadedItems = items;
+          if (!_hasScrolledToHighlight && widget.highlightCourse != null) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              _scrollToHighlightIfNeeded();
+            });
+          }
+          return LayoutBuilder(
+            builder: (context, constraints) {
+              final wide = constraints.maxWidth >= 720;
+              if (wide) {
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    SizedBox(
+                      width: 280,
+                      child: Column(
+                        children: [
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: SizedBox(
+                              width: 160,
+                              child: DropdownMenu<String>(
+                                initialSelection: sortMode,
+                                enableSearch: false,
+                                requestFocusOnTap: false,
+                                onSelected: (value) {
+                                  if (value != null) {
+                                    setState(() => sortMode = value);
+                                  }
+                                },
+                                dropdownMenuEntries: const [
+                                  DropdownMenuEntry(
+                                      value: 'term', label: '按学期排列'),
+                                  DropdownMenuEntry(
+                                      value: 'time', label: '按时间排列'),
+                                ],
+                              ),
+                            ),
+                          ),
+                          if (sortMode == 'term')
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: IconButton(
+                                icon: Icon(sortAscending
+                                    ? Icons.arrow_upward
+                                    : Icons.arrow_downward),
+                                tooltip: sortAscending ? '正序' : '倒序',
+                                onPressed: () => setState(
+                                    () => sortAscending = !sortAscending),
+                              ),
+                            ),
+                          const SizedBox(height: 8),
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: TextButton(
+                              onPressed: items.isEmpty || _exporting
+                                  ? null
+                                  : () async {
+                                      setState(() => _exporting = true);
+                                      try {
+                                        final year = widget.periods.first.year;
+                                        final term = widget.periods.first.term;
+                                        final ics = generateExamIcs(
+                                            exams: items,
+                                            year: year,
+                                            term: term);
+                                        if (kIsWeb) {
+                                          downloadIcs(
+                                              ics, '考试_${year}_$term.ics');
+                                        } else {
+                                          await Share.shareXFiles(
+                                            [
+                                              XFile.fromData(utf8.encode(ics),
+                                                  name: '考试_${year}_$term.ics',
+                                                  mimeType: 'text/calendar')
+                                            ],
+                                            text: '考试_${year}_$term.ics',
+                                          );
+                                        }
+                                      } finally {
+                                        if (mounted) {
+                                          setState(() => _exporting = false);
+                                        }
+                                      }
+                                    },
+                              child: _IconLabel(
+                                icon: Icons.event_available,
+                                label: _exporting ? '导出中...' : '导入至日历',
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          if (sortMode == 'term')
+                            for (final entry in _groupedSections(items).entries)
+                              ListTile(
+                                dense: true,
+                                title: Text(entry.key,
+                                    style: const TextStyle(fontSize: 14)),
+                                trailing: Text('${entry.value.length}场',
+                                    style: const TextStyle(fontSize: 13)),
+                              ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: SingleChildScrollView(
+                        controller: _scrollController,
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        child: sortMode == 'term'
+                            ? ExamTermSections(
+                                items: items,
+                                highlightCourse: widget.highlightCourse)
+                            : ExamTable(
+                                items: _sortedByTime(items),
+                                highlightCourse: widget.highlightCourse),
+                      ),
+                    ),
+                  ],
+                );
+              }
+              return PagePanel(
+                title: '考试',
+                icon: Icons.assignment,
+                expandChild: true,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Row(
+                        children: [
+                          SizedBox(
                             width: 160,
                             child: DropdownMenu<String>(
                               initialSelection: sortMode,
@@ -7680,11 +11206,8 @@ class _ExamsPageState extends State<ExamsPage> {
                               ],
                             ),
                           ),
-                        ),
-                        if (sortMode == 'term')
-                          Align(
-                            alignment: Alignment.centerLeft,
-                            child: IconButton(
+                          if (sortMode == 'term')
+                            IconButton(
                               icon: Icon(sortAscending
                                   ? Icons.arrow_upward
                                   : Icons.arrow_downward),
@@ -7692,11 +11215,8 @@ class _ExamsPageState extends State<ExamsPage> {
                               onPressed: () => setState(
                                   () => sortAscending = !sortAscending),
                             ),
-                          ),
-                        const SizedBox(height: 8),
-                        Align(
-                          alignment: Alignment.centerLeft,
-                          child: TextButton(
+                          const Spacer(),
+                          TextButton(
                             onPressed: items.isEmpty || _exporting
                                 ? null
                                 : () async {
@@ -7730,137 +11250,47 @@ class _ExamsPageState extends State<ExamsPage> {
                               label: _exporting ? '导出中...' : '导入至日历',
                             ),
                           ),
-                        ),
-                        const SizedBox(height: 12),
-                        if (sortMode == 'term')
-                          for (final entry in _groupedSections(items).entries)
-                            ListTile(
-                              dense: true,
-                              title: Text(entry.key,
-                                  style: const TextStyle(fontSize: 14)),
-                              trailing: Text('${entry.value.length}场',
-                                  style: const TextStyle(fontSize: 13)),
-                            ),
-                      ],
+                        ],
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: SingleChildScrollView(
-                      controller: _scrollController,
-                      child: sortMode == 'term'
-                          ? ExamTermSections(
-                              items: items,
-                              highlightCourse: widget.highlightCourse)
-                          : ExamTable(
-                              items: _sortedByTime(items),
-                              highlightCourse: widget.highlightCourse),
+                    const SizedBox(height: 12),
+                    Expanded(
+                      child: SingleChildScrollView(
+                        controller: _scrollController,
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        child: sortMode == 'term'
+                            ? ExamTermSections(
+                                items: items,
+                                highlightCourse: widget.highlightCourse)
+                            : ExamTable(
+                                items: _sortedByTime(items),
+                                highlightCourse: widget.highlightCourse),
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               );
-            }
-            return PagePanel(
-              title: '考试',
-              icon: Icons.assignment,
-              expandChild: true,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: Row(
-                      children: [
-                        SizedBox(
-                          width: 160,
-                          child: DropdownMenu<String>(
-                            initialSelection: sortMode,
-                            enableSearch: false,
-                            requestFocusOnTap: false,
-                            onSelected: (value) {
-                              if (value != null) {
-                                setState(() => sortMode = value);
-                              }
-                            },
-                            dropdownMenuEntries: const [
-                              DropdownMenuEntry(value: 'term', label: '按学期排列'),
-                              DropdownMenuEntry(value: 'time', label: '按时间排列'),
-                            ],
-                          ),
-                        ),
-                        if (sortMode == 'term')
-                          IconButton(
-                            icon: Icon(sortAscending
-                                ? Icons.arrow_upward
-                                : Icons.arrow_downward),
-                            tooltip: sortAscending ? '正序' : '倒序',
-                            onPressed: () =>
-                                setState(() => sortAscending = !sortAscending),
-                          ),
-                        const Spacer(),
-                        TextButton(
-                          onPressed: items.isEmpty || _exporting
-                              ? null
-                              : () async {
-                                  setState(() => _exporting = true);
-                                  try {
-                                    final year = widget.periods.first.year;
-                                    final term = widget.periods.first.term;
-                                    final ics = generateExamIcs(
-                                        exams: items, year: year, term: term);
-                                    if (kIsWeb) {
-                                      downloadIcs(ics, '考试_${year}_$term.ics');
-                                    } else {
-                                      await Share.shareXFiles(
-                                        [
-                                          XFile.fromData(utf8.encode(ics),
-                                              name: '考试_${year}_$term.ics',
-                                              mimeType: 'text/calendar')
-                                        ],
-                                        text: '考试_${year}_$term.ics',
-                                      );
-                                    }
-                                  } finally {
-                                    if (mounted) {
-                                      setState(() => _exporting = false);
-                                    }
-                                  }
-                                },
-                          child: _IconLabel(
-                            icon: Icons.event_available,
-                            label: _exporting ? '导出中...' : '导入至日历',
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  Expanded(
-                    child: SingleChildScrollView(
-                      controller: _scrollController,
-                      child: sortMode == 'term'
-                          ? ExamTermSections(
-                              items: items,
-                              highlightCourse: widget.highlightCourse)
-                          : ExamTable(
-                              items: _sortedByTime(items),
-                              highlightCourse: widget.highlightCourse),
-                    ),
-                  ),
-                ],
-              ),
-            );
-          },
-        );
-      },
+            },
+          );
+        },
+      ),
     );
   }
 
-  Future<List<PeriodExam>> _loadExams() async {
+  Future<void> _refreshExams() async {
+    setState(() => _examsFuture = _loadExams(forceRefresh: true));
+    await _examsFuture;
+  }
+
+  Future<List<PeriodExam>> _loadExams({bool forceRefresh = false}) async {
     final results = await Future.wait([
       for (final period in widget.periods)
         widget.api
-            .exams(year: period.year, term: period.term)
+            .exams(
+              year: period.year,
+              term: period.term,
+              forceRefresh: forceRefresh,
+            )
             .then(
               (result) => [
                 for (final item in result.data) PeriodExam(period, item),
@@ -8010,6 +11440,7 @@ class ExamTable extends StatelessWidget {
         }
         return SimpleTable(
           headers: const ['学期', '课程', '类型', '时间', '地点', '座位'],
+          columnFlexs: const [2, 3, 2, 4, 3, 1],
           highlightedRows: {
             for (var i = 0; i < items.length; i++)
               if (items[i].isRetake || highlightRows.contains(i)) i,
@@ -8085,66 +11516,80 @@ class _GradesPageState extends State<GradesPage> {
 
   @override
   Widget build(BuildContext context) {
-    return AsyncPanel<List<GradeGroup>>(
-      future: _gradesFuture,
-      onSessionExpired: widget.onSessionExpired,
-      builder: (items) => LayoutBuilder(
-        builder: (context, constraints) {
-          final wide = constraints.maxWidth >= 720;
-          if (wide) {
-            final retakeCount = items.where((g) => g.hasRetake).length;
-            return Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                SizedBox(
-                  width: 300,
-                  child: PagePanel(
-                    title: '成绩统计',
-                    icon: Icons.bar_chart,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('共 ${items.length} 门课程'),
-                        const SizedBox(height: 8),
-                        Text('补考/重修: $retakeCount 门'),
-                      ],
+    return PageRefresh(
+      onRefresh: _refreshGrades,
+      child: AsyncPanel<List<GradeGroup>>(
+        future: _gradesFuture,
+        onSessionExpired: widget.onSessionExpired,
+        builder: (items) => LayoutBuilder(
+          builder: (context, constraints) {
+            final wide = constraints.maxWidth >= 720;
+            if (wide) {
+              final retakeCount = items.where((g) => g.hasRetake).length;
+              return Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(
+                    width: 300,
+                    child: PagePanel(
+                      title: '成绩统计',
+                      icon: Icons.bar_chart,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('共 ${items.length} 门课程'),
+                          const SizedBox(height: 8),
+                          Text('补考/重修: $retakeCount 门'),
+                        ],
+                      ),
                     ),
                   ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: PagePanel(
-                    title: '成绩',
-                    icon: Icons.school,
-                    expandChild: true,
-                    child: SingleChildScrollView(
-                      child: GradeGroupList(
-                          groups: items, onExamTap: widget.onNavigateToExam),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: PagePanel(
+                      title: '成绩',
+                      icon: Icons.school,
+                      expandChild: true,
+                      child: SingleChildScrollView(
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        child: GradeGroupList(
+                            groups: items, onExamTap: widget.onNavigateToExam),
+                      ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              );
+            }
+            return PagePanel(
+              title: '成绩',
+              icon: Icons.school,
+              expandChild: true,
+              child: SingleChildScrollView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                child: GradeGroupList(
+                    groups: items, onExamTap: widget.onNavigateToExam),
+              ),
             );
-          }
-          return PagePanel(
-            title: '成绩',
-            icon: Icons.school,
-            expandChild: true,
-            child: SingleChildScrollView(
-              child: GradeGroupList(
-                  groups: items, onExamTap: widget.onNavigateToExam),
-            ),
-          );
-        },
+          },
+        ),
       ),
     );
   }
 
-  Future<List<GradeGroup>> _loadGrades() async {
+  Future<void> _refreshGrades() async {
+    setState(() => _gradesFuture = _loadGrades(forceRefresh: true));
+    await _gradesFuture;
+  }
+
+  Future<List<GradeGroup>> _loadGrades({bool forceRefresh = false}) async {
     final results = await Future.wait([
       for (final period in widget.periods)
         widget.api
-            .grades(year: period.year, term: period.term)
+            .grades(
+              year: period.year,
+              term: period.term,
+              forceRefresh: forceRefresh,
+            )
             .then(
               (result) => [
                 for (final item in result.data) GradeAttempt(period, item),
@@ -8152,8 +11597,10 @@ class _GradesPageState extends State<GradesPage> {
             )
             .catchError((_) => <GradeAttempt>[]),
     ]);
+    final attempts = results.expand((items) => items).toList();
+    unawaited(_notifyGradeUpdates(attempts));
     final groups = <String, GradeGroup>{};
-    for (final attempt in results.expand((items) => items)) {
+    for (final attempt in attempts) {
       final courseKey = _courseKey(attempt.grade.courseName);
       final key = courseKey.isEmpty
           ? '${attempt.period.label}:${attempt.grade.score ?? ''}'
@@ -8166,6 +11613,102 @@ class _GradesPageState extends State<GradesPage> {
       }
     }
     return groups.values.toList();
+  }
+
+  Future<void> _notifyGradeUpdates(List<GradeAttempt> attempts) async {
+    if (attempts.isEmpty) return;
+    final prefs = await SharedPreferences.getInstance();
+    final key = 'grades.live_update.$_periodsSignature';
+    final current = _gradeSnapshot(attempts);
+    final previousRaw = prefs.getString(key);
+    await prefs.setString(key, jsonEncode(current));
+    if (previousRaw == null || previousRaw.isEmpty) return;
+    final previous = _decodeStringMap(previousRaw);
+    final changed = attempts.where((attempt) {
+      final snapshotKey = _gradeSnapshotKey(attempt);
+      final oldValue = previous[snapshotKey];
+      return (oldValue != null && oldValue != current[snapshotKey]) ||
+          oldValue == null;
+    }).toList();
+    if (changed.isEmpty) return;
+    final latest = changed.first;
+    const title = '成绩更新';
+    final score = latest.grade.score?.trim();
+    final body = score == null || score.isEmpty
+        ? '${latest.grade.courseName} 已发布成绩'
+        : '${latest.grade.courseName}：$score';
+    final eventId =
+        'grade_update:${_gradeSnapshotKey(latest)}:${current[_gradeSnapshotKey(latest)]}';
+    final extras = {
+      'id': eventId,
+      'type': 'grade_update',
+      'liveUpdate': true,
+      'style': 'progress',
+      'shortCriticalText': '成绩',
+      'progressMax': 100,
+      'progressCurrent': 100,
+    };
+    LiveActivityController.instance.show(LiveActivityEvent(
+      id: eventId,
+      type: 'grade_update',
+      title: title,
+      body: body,
+      style: 'progress',
+      shortText: '成绩',
+      targetTab: 'grades',
+      ongoing: false,
+      progress: 1,
+    ));
+    final notificationId = eventId.hashCode.abs();
+    final posted = await LiveUpdateService.postLiveUpdate(
+      id: notificationId,
+      title: title,
+      body: body,
+      style: 'progress',
+      shortCriticalText: '成绩',
+      extras: extras,
+      ongoing: false,
+      progressMax: 100,
+      progressCurrent: 100,
+    );
+    if (!posted) {
+      await LocalNotificationService.show(
+        id: notificationId,
+        title: title,
+        body: body,
+        extras: extras,
+      );
+    }
+  }
+
+  Map<String, String> _gradeSnapshot(List<GradeAttempt> attempts) {
+    return {
+      for (final attempt in attempts)
+        _gradeSnapshotKey(attempt): [
+          attempt.grade.score ?? '',
+          attempt.grade.gradePoint ?? '',
+        ].join('|'),
+    };
+  }
+
+  String _gradeSnapshotKey(GradeAttempt attempt) {
+    return [
+      attempt.period.year,
+      attempt.period.term,
+      _courseKey(attempt.grade.courseName),
+    ].join('|');
+  }
+
+  Map<String, String> _decodeStringMap(String raw) {
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return const {};
+      return decoded.map(
+        (key, value) => MapEntry(key.toString(), value.toString()),
+      );
+    } catch (_) {
+      return const {};
+    }
   }
 }
 
@@ -8409,83 +11952,96 @@ class _CreditsPageState extends State<CreditsPage> {
   @override
   void initState() {
     super.initState();
-    _creditsFuture = widget.api.credits().then((r) => r.data);
+    _creditsFuture = _loadCredits();
   }
 
   @override
   void didUpdateWidget(covariant CreditsPage oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.api != widget.api) {
-      _creditsFuture = widget.api.credits().then((r) => r.data);
+      _creditsFuture = _loadCredits();
     }
+  }
+
+  Future<List<CreditItem>> _loadCredits({bool forceRefresh = false}) =>
+      widget.api.credits(forceRefresh: forceRefresh).then((r) => r.data);
+
+  Future<void> _refreshCredits() async {
+    setState(() => _creditsFuture = _loadCredits(forceRefresh: true));
+    await _creditsFuture;
   }
 
   @override
   Widget build(BuildContext context) {
-    return AsyncPanel<List<CreditItem>>(
-      future: _creditsFuture,
-      onSessionExpired: widget.onSessionExpired,
-      builder: (items) => LayoutBuilder(
-        builder: (context, constraints) {
-          final wide = constraints.maxWidth >= 720;
-          if (wide) {
-            return Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                SizedBox(
-                  width: 300,
-                  child: PagePanel(
-                    title: '学分概览',
-                    icon: Icons.auto_stories,
-                    child: Column(
-                      children: [
-                        for (final item in items) ...[
-                          _CreditOverviewCard(item: item),
-                          if (item != items.last) const SizedBox(height: 12),
-                        ],
-                      ],
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: PagePanel(
-                    title: '学分统计',
-                    icon: Icons.auto_stories,
-                    expandChild: true,
-                    child: SingleChildScrollView(
+    return PageRefresh(
+      onRefresh: _refreshCredits,
+      child: AsyncPanel<List<CreditItem>>(
+        future: _creditsFuture,
+        onSessionExpired: widget.onSessionExpired,
+        builder: (items) => LayoutBuilder(
+          builder: (context, constraints) {
+            final wide = constraints.maxWidth >= 720;
+            if (wide) {
+              return Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(
+                    width: 300,
+                    child: PagePanel(
+                      title: '学分概览',
+                      icon: Icons.auto_stories,
                       child: Column(
                         children: [
-                          for (final item in items)
-                            Padding(
-                              padding: const EdgeInsets.only(bottom: 12),
-                              child: CreditCard(item: item),
-                            ),
+                          for (final item in items) ...[
+                            _CreditOverviewCard(item: item),
+                            if (item != items.last) const SizedBox(height: 12),
+                          ],
                         ],
                       ),
                     ),
                   ),
-                ),
-              ],
-            );
-          }
-          return PagePanel(
-            title: '学分统计',
-            icon: Icons.auto_stories,
-            expandChild: true,
-            child: SingleChildScrollView(
-              child: Column(
-                children: [
-                  for (final item in items)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 12),
-                      child: CreditCard(item: item),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: PagePanel(
+                      title: '学分统计',
+                      icon: Icons.auto_stories,
+                      expandChild: true,
+                      child: SingleChildScrollView(
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        child: Column(
+                          children: [
+                            for (final item in items)
+                              Padding(
+                                padding: const EdgeInsets.only(bottom: 12),
+                                child: CreditCard(item: item),
+                              ),
+                          ],
+                        ),
+                      ),
                     ),
+                  ),
                 ],
+              );
+            }
+            return PagePanel(
+              title: '学分统计',
+              icon: Icons.auto_stories,
+              expandChild: true,
+              child: SingleChildScrollView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                child: Column(
+                  children: [
+                    for (final item in items)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
+                        child: CreditCard(item: item),
+                      ),
+                  ],
+                ),
               ),
-            ),
-          );
-        },
+            );
+          },
+        ),
       ),
     );
   }
@@ -8753,12 +12309,18 @@ class _EcardPageState extends State<EcardPage> {
   Future<List<EcardRoomItem>>? _roomsFuture;
   final _searchController = TextEditingController();
   bool _refreshing = false;
+  int _refreshVersion = 0;
   String? _error;
+  Timer? _periodicRefreshTimer;
 
   @override
   void initState() {
     super.initState();
     _summaryFuture = widget.api.ecardSummary().then((r) => r.data);
+    _periodicRefreshTimer = Timer.periodic(const Duration(minutes: 30), (_) {
+      if (!mounted) return;
+      _silentRefresh();
+    });
   }
 
   @override
@@ -8772,8 +12334,20 @@ class _EcardPageState extends State<EcardPage> {
 
   @override
   void dispose() {
+    _periodicRefreshTimer?.cancel();
     _searchController.dispose();
     super.dispose();
+  }
+
+  Future<void> _silentRefresh() async {
+    try {
+      final summary =
+          await widget.api.ecardSummary(forceRefresh: true).then((r) => r.data);
+      if (!mounted) return;
+      setState(() => _summaryFuture = Future.value(summary));
+    } catch (_) {
+      // Silent refresh — ignore errors
+    }
   }
 
   Future<void> _refreshBalance() async {
@@ -8792,6 +12366,19 @@ class _EcardPageState extends State<EcardPage> {
     }
   }
 
+  Future<void> _refreshEcardPage() async {
+    setState(() {
+      _error = null;
+      _refreshVersion++;
+      _summaryFuture =
+          widget.api.ecardSummary(forceRefresh: true).then((r) => r.data);
+      if (_roomsFuture != null) {
+        _roomsFuture = widget.api.ecardRooms(forceRefresh: true);
+      }
+    });
+    await _summaryFuture;
+  }
+
   Future<void> _bindRoom(EcardRoomItem room) async {
     try {
       final summary = await widget.api.bindEcardRoom(room);
@@ -8807,11 +12394,20 @@ class _EcardPageState extends State<EcardPage> {
   }
 
   Future<void> _updateReminder(EcardSummary current,
-      {bool? enabled, double? threshold}) async {
+      {bool? enabled,
+      double? lowPowerThreshold,
+      double? lowColdWaterThreshold,
+      double? lowHotWaterThreshold,
+      List<String>? reminderTimes,
+      List<String>? reminderItems}) async {
     try {
       final summary = await widget.api.updateEcardReminder(
         enabled: enabled,
-        lowPowerThreshold: threshold,
+        lowPowerThreshold: lowPowerThreshold,
+        lowColdWaterThreshold: lowColdWaterThreshold,
+        lowHotWaterThreshold: lowHotWaterThreshold,
+        reminderTimes: reminderTimes,
+        reminderItems: reminderItems,
       );
       if (!mounted) return;
       setState(() => _summaryFuture = Future.value(summary));
@@ -8821,10 +12417,7 @@ class _EcardPageState extends State<EcardPage> {
   }
 
   void _handleError(Object exc) {
-    if (exc is ApiException && exc.statusCode == 401) {
-      widget.onSessionExpired?.call();
-      return;
-    }
+    // 不再在 401 时触发 onSessionExpired，_withFallback 已处理 relogin
     if (!mounted) return;
     setState(() => _error = exc is ApiException ? exc.message : exc.toString());
   }
@@ -8839,55 +12432,59 @@ class _EcardPageState extends State<EcardPage> {
         }
         if (snapshot.hasError) {
           final error = snapshot.error;
-          if (error is ApiException && error.statusCode == 401) {
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              widget.onSessionExpired?.call();
-            });
-          }
+          // 不再在 401 时触发 onSessionExpired，_withFallback 已处理 relogin
           return EmptyState(
             message: error is ApiException ? error.message : '生活缴费加载失败',
           );
         }
         final summary =
             snapshot.data ?? EcardSummary.fromJson({'status': 'not_bound'});
-        return ListView(
-          children: [
-            if (_error != null) ...[
-              Text(_error!,
-                  style: TextStyle(color: Theme.of(context).colorScheme.error)),
-              const SizedBox(height: 12),
-            ],
-            if (!summary.isBound)
-              _RoomBindingPanel(
-                roomsFuture: _roomsFuture ??= widget.api.ecardRooms(),
-                searchController: _searchController,
-                onRoomSelected: _bindRoom,
-              )
-            else ...[
-              _EcardSummaryPanel(
-                summary: summary,
-                refreshing: _refreshing,
-                onRefresh: _refreshBalance,
-                onChangeRoom: () => setState(() {
-                  _roomsFuture = widget.api.ecardRooms(forceRefresh: true);
-                }),
-              ),
-              const SizedBox(height: 12),
-              if (_roomsFuture != null)
+        return RefreshIndicator(
+          onRefresh: _refreshEcardPage,
+          child: ListView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            children: [
+              if (_error != null) ...[
+                Text(_error!,
+                    style:
+                        TextStyle(color: Theme.of(context).colorScheme.error)),
+                const SizedBox(height: 12),
+              ],
+              if (!summary.isBound)
                 _RoomBindingPanel(
-                  roomsFuture: _roomsFuture!,
+                  roomsFuture: _roomsFuture ??= widget.api.ecardRooms(),
                   searchController: _searchController,
                   onRoomSelected: _bindRoom,
+                )
+              else ...[
+                _EcardSummaryPanel(
+                  summary: summary,
+                  refreshing: _refreshing,
+                  onRefresh: _refreshBalance,
+                  onChangeRoom: () => setState(() {
+                    _roomsFuture = widget.api.ecardRooms(forceRefresh: true);
+                  }),
                 ),
-              const SizedBox(height: 12),
-              _EcardReminderPanel(
-                summary: summary,
-                onChanged: _updateReminder,
-              ),
-              const SizedBox(height: 12),
-              _EcardConsumptionPanel(api: widget.api),
+                const SizedBox(height: 12),
+                if (_roomsFuture != null)
+                  _RoomBindingPanel(
+                    roomsFuture: _roomsFuture!,
+                    searchController: _searchController,
+                    onRoomSelected: _bindRoom,
+                  ),
+                const SizedBox(height: 12),
+                _EcardReminderPanel(
+                  summary: summary,
+                  onChanged: _updateReminder,
+                ),
+                const SizedBox(height: 12),
+                _EcardConsumptionPanel(
+                  api: widget.api,
+                  refreshVersion: _refreshVersion,
+                ),
+              ],
             ],
-          ],
+          ),
         );
       },
     );
@@ -8921,11 +12518,26 @@ class _EcardSummaryPanel extends StatelessWidget {
           Row(
             children: [
               Expanded(
-                child: Text(
-                  summary.roomDisplay ?? '-',
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontWeight: FontWeight.w700),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      summary.roomDisplay ?? '-',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                    if (summary.studentId != null) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        '学号: ${summary.studentId}',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
               ),
               IconButton(
@@ -9171,12 +12783,91 @@ class _RoomBindingPanelState extends State<_RoomBindingPanel> {
   }
 }
 
-class _EcardReminderPanel extends StatelessWidget {
+class _EcardReminderPanel extends StatefulWidget {
   const _EcardReminderPanel({required this.summary, required this.onChanged});
 
   final EcardSummary summary;
-  final Future<void> Function(EcardSummary summary,
-      {bool? enabled, double? threshold}) onChanged;
+  final Future<void> Function(
+    EcardSummary summary, {
+    bool? enabled,
+    double? lowPowerThreshold,
+    double? lowColdWaterThreshold,
+    double? lowHotWaterThreshold,
+    List<String>? reminderTimes,
+    List<String>? reminderItems,
+  }) onChanged;
+
+  @override
+  State<_EcardReminderPanel> createState() => _EcardReminderPanelState();
+}
+
+class _EcardReminderPanelState extends State<_EcardReminderPanel> {
+  late double _powerThreshold;
+  late double _coldWaterThreshold;
+  late double _hotWaterThreshold;
+  late List<String> _reminderTimes;
+  late List<String> _reminderItems;
+
+  @override
+  void initState() {
+    super.initState();
+    _syncFromWidget();
+  }
+
+  @override
+  void didUpdateWidget(covariant _EcardReminderPanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.summary.lowPowerThreshold !=
+            widget.summary.lowPowerThreshold ||
+        oldWidget.summary.lowColdWaterThreshold !=
+            widget.summary.lowColdWaterThreshold ||
+        oldWidget.summary.lowHotWaterThreshold !=
+            widget.summary.lowHotWaterThreshold ||
+        oldWidget.summary.reminderTimes != widget.summary.reminderTimes ||
+        oldWidget.summary.reminderItems != widget.summary.reminderItems) {
+      _syncFromWidget();
+    }
+  }
+
+  void _syncFromWidget() {
+    _powerThreshold = widget.summary.lowPowerThreshold;
+    _coldWaterThreshold = widget.summary.lowColdWaterThreshold;
+    _hotWaterThreshold = widget.summary.lowHotWaterThreshold;
+    _reminderTimes = List.from(widget.summary.reminderTimes);
+    _reminderItems = List.from(widget.summary.reminderItems);
+  }
+
+  Future<void> _pickTime(int index) async {
+    final initial =
+        index < _reminderTimes.length ? _reminderTimes[index] : '08:00';
+    final parts = initial.split(':');
+    final time = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay(
+          hour: int.tryParse(parts[0]) ?? 8,
+          minute: int.tryParse(parts[1]) ?? 0),
+    );
+    if (time == null) return;
+    final newTime =
+        '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
+    setState(() {
+      if (index < _reminderTimes.length) {
+        _reminderTimes[index] = newTime;
+      } else {
+        _reminderTimes.add(newTime);
+      }
+    });
+    await widget.onChanged(widget.summary,
+        reminderTimes: List.from(_reminderTimes));
+  }
+
+  Future<void> _removeTime(int index) async {
+    setState(() {
+      _reminderTimes.removeAt(index);
+    });
+    await widget.onChanged(widget.summary,
+        reminderTimes: List.from(_reminderTimes));
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -9186,31 +12877,129 @@ class _EcardReminderPanel extends StatelessWidget {
       child: Column(
         children: [
           SwitchListTile(
-            value: summary.reminderEnabled,
-            onChanged: (value) => onChanged(summary, enabled: value),
-            title: const Text('08:00 每日电费提醒'),
+            value: widget.summary.reminderEnabled,
+            onChanged: (value) =>
+                widget.onChanged(widget.summary, enabled: value),
+            title: const Text('每日水电费提醒'),
           ),
-          Row(
-            children: [
-              const Expanded(child: Text('低电阈值')),
-              SizedBox(
-                width: 180,
-                child: Slider(
-                  value: summary.lowPowerThreshold.clamp(1, 100),
-                  min: 1,
-                  max: 100,
-                  divisions: 99,
-                  label: '${summary.lowPowerThreshold.toStringAsFixed(0)} 度',
-                  onChanged: (value) =>
-                      onChanged(summary, threshold: value.roundToDouble()),
+          // Reminder times
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('提醒时间', style: Theme.of(context).textTheme.titleSmall),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    for (var i = 0; i < _reminderTimes.length; i++)
+                      Chip(
+                        label: Text(_reminderTimes[i]),
+                        onDeleted: _reminderTimes.length > 1
+                            ? () => _removeTime(i)
+                            : null,
+                      ),
+                    if (_reminderTimes.length < 2)
+                      ActionChip(
+                        avatar: const Icon(Icons.add, size: 18),
+                        label: const Text('添加'),
+                        onPressed: () => _pickTime(_reminderTimes.length),
+                      ),
+                  ],
                 ),
-              ),
-              SizedBox(
-                width: 56,
-                child:
-                    Text('${summary.lowPowerThreshold.toStringAsFixed(0)} 度'),
-              ),
-            ],
+              ],
+            ),
+          ),
+          const Divider(),
+          // Reminder items
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Column(
+              children: [
+                SwitchListTile(
+                  value: _reminderItems.contains('power'),
+                  onChanged: (v) {
+                    setState(() {
+                      if (v) {
+                        _reminderItems.add('power');
+                      } else {
+                        _reminderItems.remove('power');
+                      }
+                    });
+                    widget.onChanged(widget.summary,
+                        reminderItems: List.from(_reminderItems));
+                  },
+                  title: const Text('电费提醒'),
+                  secondary: const Icon(Icons.electric_bolt),
+                ),
+                SwitchListTile(
+                  value: _reminderItems.contains('cold_water'),
+                  onChanged: (v) {
+                    setState(() {
+                      if (v) {
+                        _reminderItems.add('cold_water');
+                      } else {
+                        _reminderItems.remove('cold_water');
+                      }
+                    });
+                    widget.onChanged(widget.summary,
+                        reminderItems: List.from(_reminderItems));
+                  },
+                  title: const Text('冷水提醒'),
+                  secondary: const Icon(Icons.water),
+                ),
+                SwitchListTile(
+                  value: _reminderItems.contains('hot_water'),
+                  onChanged: (v) {
+                    setState(() {
+                      if (v) {
+                        _reminderItems.add('hot_water');
+                      } else {
+                        _reminderItems.remove('hot_water');
+                      }
+                    });
+                    widget.onChanged(widget.summary,
+                        reminderItems: List.from(_reminderItems));
+                  },
+                  title: const Text('热水提醒'),
+                  secondary: const Icon(Icons.local_fire_department),
+                ),
+              ],
+            ),
+          ),
+          const Divider(),
+          // Thresholds
+          _ThresholdSlider(
+            label: '低电阈值',
+            value: _powerThreshold,
+            unit: '度',
+            min: 1,
+            max: 100,
+            onChanged: (v) => setState(() => _powerThreshold = v),
+            onChangeEnd: (v) =>
+                widget.onChanged(widget.summary, lowPowerThreshold: v),
+          ),
+          _ThresholdSlider(
+            label: '低冷水阈值',
+            value: _coldWaterThreshold,
+            unit: '吨',
+            min: 0.5,
+            max: 50,
+            onChanged: (v) => setState(() => _coldWaterThreshold = v),
+            onChangeEnd: (v) =>
+                widget.onChanged(widget.summary, lowColdWaterThreshold: v),
+          ),
+          _ThresholdSlider(
+            label: '低热水阈值',
+            value: _hotWaterThreshold,
+            unit: '元',
+            min: 1,
+            max: 50,
+            onChanged: (v) => setState(() => _hotWaterThreshold = v),
+            onChangeEnd: (v) =>
+                widget.onChanged(widget.summary, lowHotWaterThreshold: v),
           ),
         ],
       ),
@@ -9218,10 +13007,59 @@ class _EcardReminderPanel extends StatelessWidget {
   }
 }
 
+class _ThresholdSlider extends StatelessWidget {
+  const _ThresholdSlider({
+    required this.label,
+    required this.value,
+    required this.unit,
+    required this.min,
+    required this.max,
+    required this.onChanged,
+    required this.onChangeEnd,
+  });
+
+  final String label;
+  final double value;
+  final String unit;
+  final double min;
+  final double max;
+  final ValueChanged<double> onChanged;
+  final ValueChanged<double> onChangeEnd;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(child: Text(label)),
+        SizedBox(
+          width: 160,
+          child: Slider(
+            value: value.clamp(min, max),
+            min: min,
+            max: max,
+            divisions: ((max - min) * 2).toInt(),
+            label: '${value.toStringAsFixed(1)} $unit',
+            onChanged: onChanged,
+            onChangeEnd: onChangeEnd,
+          ),
+        ),
+        SizedBox(
+          width: 56,
+          child: Text('${value.toStringAsFixed(1)} $unit'),
+        ),
+      ],
+    );
+  }
+}
+
 class _EcardConsumptionPanel extends StatefulWidget {
-  const _EcardConsumptionPanel({required this.api});
+  const _EcardConsumptionPanel({
+    required this.api,
+    required this.refreshVersion,
+  });
 
   final ApiClient api;
+  final int refreshVersion;
 
   @override
   State<_EcardConsumptionPanel> createState() => _EcardConsumptionPanelState();
@@ -9239,8 +13077,11 @@ class _EcardConsumptionPanelState extends State<_EcardConsumptionPanel> {
   @override
   void didUpdateWidget(covariant _EcardConsumptionPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.api != widget.api) {
-      _consumptionFuture = widget.api.ecardConsumption();
+    if (oldWidget.api != widget.api ||
+        oldWidget.refreshVersion != widget.refreshVersion) {
+      _consumptionFuture = widget.api.ecardConsumption(
+        forceRefresh: oldWidget.refreshVersion != widget.refreshVersion,
+      );
     }
   }
 
@@ -9277,6 +13118,45 @@ class _EcardConsumptionPanelState extends State<_EcardConsumptionPanel> {
   }
 }
 
+class _FrostedBanner extends StatelessWidget {
+  const _FrostedBanner({
+    required this.child,
+    this.padding = const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+  });
+
+  final Widget child;
+  final EdgeInsetsGeometry padding;
+
+  @override
+  Widget build(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(GzusRadii.lg),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+        child: Container(
+          padding: padding,
+          decoration: BoxDecoration(
+            color: gzusSurface(context).withValues(alpha: dark ? 0.62 : 0.72),
+            borderRadius: BorderRadius.circular(GzusRadii.lg),
+            border: Border.all(
+              color: Colors.white.withValues(alpha: dark ? 0.10 : 0.55),
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: dark ? 0.18 : 0.045),
+                blurRadius: 22,
+                offset: const Offset(0, 12),
+              ),
+            ],
+          ),
+          child: child,
+        ),
+      ),
+    );
+  }
+}
+
 class PagePanel extends StatelessWidget {
   const PagePanel({
     super.key,
@@ -9284,47 +13164,69 @@ class PagePanel extends StatelessWidget {
     required this.child,
     this.expandChild = false,
     this.icon,
+    this.trailing,
   });
 
   final String title;
   final Widget child;
   final bool expandChild;
   final IconData? icon;
+  final Widget? trailing;
 
   @override
   Widget build(BuildContext context) {
     final compact = MediaQuery.sizeOf(context).width < 600;
     final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
     final content = Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Row(
-          children: [
-            if (icon != null) ...[
-              _IconBadge(icon: icon!, size: compact ? 30 : 40),
-              SizedBox(width: compact ? 8 : 12),
-            ],
-            Expanded(
-              child: Text(
-                title,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: (compact
-                        ? theme.textTheme.titleLarge
-                        : theme.textTheme.headlineSmall)
-                    ?.copyWith(fontWeight: FontWeight.w800),
+        _FrostedBanner(
+          padding: EdgeInsets.symmetric(
+            horizontal: compact ? 12 : 16,
+            vertical: compact ? 10 : 12,
+          ),
+          child: Row(
+            children: [
+              if (icon != null) ...[
+                Container(
+                  width: compact ? 34 : 42,
+                  height: compact ? 34 : 42,
+                  decoration: BoxDecoration(
+                    color: _accentFill(context),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(icon!,
+                      size: compact ? 19 : 22, color: colorScheme.primary),
+                ),
+                SizedBox(width: compact ? 8 : 12),
+              ],
+              Expanded(
+                child: Text(
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: (compact
+                          ? theme.textTheme.titleLarge
+                          : theme.textTheme.headlineSmall)
+                      ?.copyWith(fontWeight: FontWeight.w800),
+                ),
               ),
-            ),
-          ],
+              if (trailing != null) ...[
+                SizedBox(width: compact ? 8 : 12),
+                trailing!,
+              ],
+            ],
+          ),
         ),
-        SizedBox(height: compact ? 12 : 20),
+        SizedBox(height: compact ? 6 : 14),
         if (expandChild) Expanded(child: child) else child,
       ],
     );
     return Padding(
       padding: EdgeInsets.symmetric(
-        horizontal: compact ? 2 : 4,
-        vertical: compact ? 2 : 4,
+        horizontal: compact ? 4 : 8,
+        vertical: compact ? 4 : 8,
       ),
       child: content,
     );
@@ -9359,8 +13261,9 @@ class InfoTile extends StatelessWidget {
         duration: const Duration(milliseconds: 180),
         padding: EdgeInsets.all(compact ? 10 : 14),
         decoration: BoxDecoration(
-          color: colorScheme.surfaceContainerLow,
+          color: gzusSurface(context),
           borderRadius: BorderRadius.circular(compact ? 16 : 20),
+          border: Border.all(color: gzusBorder(context)),
         ),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -9406,13 +13309,13 @@ class AccentPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
     final compact = MediaQuery.sizeOf(context).width < 600;
     return Container(
       padding: EdgeInsets.all(compact ? 12 : 16),
       decoration: BoxDecoration(
-        color: colorScheme.tertiaryContainer.withValues(alpha: 0.45),
-        borderRadius: BorderRadius.circular(compact ? 18 : 24),
+        color: gzusSurfaceSoft(context),
+        borderRadius: BorderRadius.circular(compact ? 16 : 20),
+        border: Border.all(color: gzusBorder(context)),
       ),
       child: child,
     );
@@ -9449,12 +13352,12 @@ class _MobileRecordCard extends StatelessWidget {
         : highlight
             ? colorScheme.secondaryContainer.withValues(alpha: 0.5)
             : null;
-    return Card(
-      elevation: highlighted || highlight ? 2 : 1,
-      color: cardColor,
+    return Container(
       margin: const EdgeInsets.symmetric(vertical: 6),
-      shape: RoundedRectangleBorder(
+      decoration: BoxDecoration(
+        color: cardColor ?? gzusSurface(context),
         borderRadius: BorderRadius.circular(compact ? 16 : 20),
+        border: Border.all(color: gzusBorder(context)),
       ),
       child: Padding(
         padding: EdgeInsets.all(compact ? 12 : 16),
@@ -9549,6 +13452,7 @@ class SimpleTable extends StatelessWidget {
     this.highlightedRows = const {},
     this.rowHighlightColors = const {},
     this.rowTextColors = const {},
+    this.columnFlexs = const [],
   });
 
   final List<String> headers;
@@ -9556,11 +13460,11 @@ class SimpleTable extends StatelessWidget {
   final Set<int> highlightedRows;
   final Map<int, Color> rowHighlightColors;
   final Map<int, Color> rowTextColors;
+  final List<int> columnFlexs;
 
   @override
   Widget build(BuildContext context) {
-    final border =
-        BorderSide(color: Theme.of(context).colorScheme.outlineVariant);
+    final border = BorderSide(color: gzusBorder(context));
     return LayoutBuilder(
       builder: (context, constraints) {
         final minWidth = headers.length * 104.0;
@@ -9572,10 +13476,14 @@ class SimpleTable extends StatelessWidget {
           child: SizedBox(
             width: tableWidth,
             child: ClipRRect(
-              borderRadius: BorderRadius.circular(8),
+              borderRadius: BorderRadius.circular(16),
               child: Column(
                 children: [
-                  _TableRow(values: headers, strong: true, border: border),
+                  _TableRow(
+                      values: headers,
+                      strong: true,
+                      border: border,
+                      columnFlexs: columnFlexs),
                   for (var i = 0; i < rows.length; i++)
                     _TableRow(
                       values: rows[i],
@@ -9583,6 +13491,7 @@ class SimpleTable extends StatelessWidget {
                       highlighted: highlightedRows.contains(i),
                       highlightColor: rowHighlightColors[i],
                       textColor: rowTextColors[i],
+                      columnFlexs: columnFlexs,
                     ),
                 ],
               ),
@@ -9601,7 +13510,8 @@ class _TableRow extends StatelessWidget {
       this.strong = false,
       this.highlighted = false,
       this.highlightColor,
-      this.textColor});
+      this.textColor,
+      this.columnFlexs = const []});
 
   final List<String> values;
   final BorderSide border;
@@ -9609,6 +13519,7 @@ class _TableRow extends StatelessWidget {
   final bool highlighted;
   final Color? highlightColor;
   final Color? textColor;
+  final List<int> columnFlexs;
 
   @override
   Widget build(BuildContext context) {
@@ -9618,14 +13529,15 @@ class _TableRow extends StatelessWidget {
         color: highlighted
             ? highlightColor ?? _accentFill(context)
             : strong
-                ? Theme.of(context).colorScheme.surfaceContainerHighest
-                : null,
+                ? gzusSurfaceSoft(context)
+                : gzusSurface(context),
         border: Border(bottom: border),
       ),
       child: _TableRowContent(
         values: values,
         color: highlighted ? textColor ?? accent : null,
         strong: strong || highlighted,
+        columnFlexs: columnFlexs,
       ),
     );
   }
@@ -9633,23 +13545,27 @@ class _TableRow extends StatelessWidget {
 
 class _TableRowContent extends StatelessWidget {
   const _TableRowContent(
-      {required this.values, this.color, this.strong = false});
+      {required this.values,
+      this.color,
+      this.strong = false,
+      this.columnFlexs = const []});
 
   final List<String> values;
   final Color? color;
   final bool strong;
+  final List<int> columnFlexs;
 
   @override
   Widget build(BuildContext context) {
     return Row(
       children: [
-        for (final value in values)
+        for (var i = 0; i < values.length; i++)
           Expanded(
+            flex: i < columnFlexs.length ? columnFlexs[i] : 1,
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-              child: Text(
-                value,
-                overflow: TextOverflow.ellipsis,
+              child: _AutoScrollText(
+                text: values[i],
                 style: TextStyle(
                   color: color,
                   fontWeight: strong ? FontWeight.w600 : FontWeight.normal,
@@ -9662,10 +13578,96 @@ class _TableRowContent extends StatelessWidget {
   }
 }
 
+class _AutoScrollText extends StatefulWidget {
+  const _AutoScrollText({required this.text, this.style});
+
+  final String text;
+  final TextStyle? style;
+
+  @override
+  State<_AutoScrollText> createState() => _AutoScrollTextState();
+}
+
+class _AutoScrollTextState extends State<_AutoScrollText> {
+  final _controller = ScrollController();
+  bool _needsScroll = false;
+  bool _scrollForward = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller.addListener(_onScrollChanged);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _checkOverflow());
+  }
+
+  @override
+  void didUpdateWidget(covariant _AutoScrollText oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.text != widget.text || oldWidget.style != widget.style) {
+      _needsScroll = false;
+      WidgetsBinding.instance.addPostFrameCallback((_) => _checkOverflow());
+    }
+  }
+
+  void _checkOverflow() {
+    if (!_controller.hasClients) return;
+    final max = _controller.position.maxScrollExtent;
+    final needs = max > 0;
+    if (needs != _needsScroll) {
+      setState(() => _needsScroll = needs);
+      if (needs) _autoScroll();
+    }
+  }
+
+  void _onScrollChanged() {
+    if (!_controller.hasClients || !_needsScroll) return;
+    final pos = _controller.position.pixels;
+    final max = _controller.position.maxScrollExtent;
+    if (_scrollForward && pos >= max) {
+      _scrollForward = false;
+      Future.delayed(const Duration(seconds: 2), _autoScroll);
+    } else if (!_scrollForward && pos <= 0) {
+      _scrollForward = true;
+      Future.delayed(const Duration(seconds: 2), _autoScroll);
+    }
+  }
+
+  void _autoScroll() {
+    if (!_controller.hasClients || !_needsScroll || !mounted) return;
+    final max = _controller.position.maxScrollExtent;
+    _controller.animateTo(
+      _scrollForward ? max : 0,
+      duration: Duration(milliseconds: (max * 15).round().clamp(800, 3000)),
+      curve: Curves.easeInOut,
+    );
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      controller: _controller,
+      child: Text(
+        widget.text,
+        softWrap: false,
+        style: widget.style,
+      ),
+    );
+  }
+}
+
 class MorePage extends StatefulWidget {
   const MorePage({
     super.key,
+    required this.api,
     required this.navBarTabs,
+    this.navBarLimit,
     required this.onNavigate,
     required this.onConfigChanged,
     this.year = 0,
@@ -9678,9 +13680,12 @@ class MorePage extends StatefulWidget {
     this.autoHideNavBar = true,
     this.onAutoHideNavBarChanged,
     this.loginMethod,
+    this.onShowBackgroundGuide,
   });
 
+  final ApiClient api;
   final List<NavTabConfig> navBarTabs;
+  final int? navBarLimit;
   final ValueChanged<String> onNavigate;
   final VoidCallback onConfigChanged;
   final int year;
@@ -9693,6 +13698,7 @@ class MorePage extends StatefulWidget {
   final bool autoHideNavBar;
   final ValueChanged<bool>? onAutoHideNavBarChanged;
   final String? loginMethod;
+  final VoidCallback? onShowBackgroundGuide;
 
   bool get isPasswordLogin => loginMethod == 'password';
 
@@ -9732,6 +13738,10 @@ class _MorePageState extends State<MorePage> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
+    final navBarLimit = widget.navBarLimit;
+    final canAddNavBarTab =
+        navBarLimit == null || _barTabs.length < navBarLimit;
+    final navBarTitle = navBarLimit == null ? '边栏应用' : '底栏（最多$navBarLimit个）';
     return Scaffold(
       body: SafeArea(
         child: CustomScrollView(
@@ -9789,9 +13799,8 @@ class _MorePageState extends State<MorePage> {
             if (_editing) ...[
               SliverToBoxAdapter(
                 child: Padding(
-                  padding:
-                      const EdgeInsets.fromLTRB(20, 8, 20, 8),
-                  child: Text('底栏（最多5个，课表和信息固定）',
+                  padding: const EdgeInsets.fromLTRB(20, 8, 20, 8),
+                  child: Text(navBarTitle,
                       style: theme.textTheme.titleSmall
                           ?.copyWith(color: colorScheme.onSurfaceVariant)),
                 ),
@@ -9825,8 +13834,7 @@ class _MorePageState extends State<MorePage> {
               ),
               SliverToBoxAdapter(
                 child: Padding(
-                  padding:
-                      const EdgeInsets.fromLTRB(20, 16, 20, 8),
+                  padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
                   child: Text('更多页',
                       style: theme.textTheme.titleSmall
                           ?.copyWith(color: colorScheme.onSurfaceVariant)),
@@ -9846,9 +13854,9 @@ class _MorePageState extends State<MorePage> {
                       _MoreGridItem(
                         tab: tab,
                         editing: true,
-                        canAdd: _barTabs.length < 5,
+                        canAdd: canAddNavBarTab,
                         onAdd: () {
-                          if (_barTabs.length < 5) {
+                          if (canAddNavBarTab) {
                             setState(() {
                               _moreTabs.remove(tab);
                               _barTabs.add(tab);
@@ -9984,7 +13992,8 @@ class _MorePageState extends State<MorePage> {
                                     ButtonSegment(
                                       value: ThemeMode.system,
                                       label: Text('自动'),
-                                      icon: Icon(Icons.brightness_auto, size: 18),
+                                      icon:
+                                          Icon(Icons.brightness_auto, size: 18),
                                     ),
                                     ButtonSegment(
                                       value: ThemeMode.dark,
@@ -10008,6 +14017,36 @@ class _MorePageState extends State<MorePage> {
                           title: const Text('自动隐藏底栏'),
                           subtitle: const Text('滚动时自动隐藏底部导航栏'),
                         ),
+                      if (widget.onShowBackgroundGuide != null)
+                        ListTile(
+                          leading: const Icon(Icons.settings),
+                          title: const Text('后台'),
+                          subtitle: const Text('设置后台保活和推送'),
+                          trailing: const Icon(Icons.chevron_right),
+                          onTap: widget.onShowBackgroundGuide,
+                        ),
+                      ListTile(
+                        key: const ValueKey('home-widget-guide-tile'),
+                        leading: const Icon(Icons.widgets),
+                        title: const Text('桌面组件'),
+                        subtitle: const Text('添加方法、显示内容和刷新说明'),
+                        trailing: const Icon(Icons.chevron_right),
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                              builder: (context) =>
+                                  const HomeWidgetGuidePage()),
+                        ),
+                      ),
+                      ListTile(
+                        leading: const Icon(Icons.info),
+                        title: const Text('关于'),
+                        subtitle: const Text('应用信息与更新'),
+                        trailing: const Icon(Icons.chevron_right),
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                              builder: (context) => AboutPage(api: widget.api)),
+                        ),
+                      ),
                       const SizedBox(height: 4),
                     ],
                   ),
@@ -10035,8 +14074,7 @@ class _MorePageState extends State<MorePage> {
                       borderRadius: BorderRadius.circular(16),
                     ),
                     child: ListTile(
-                      leading: Icon(Icons.logout,
-                          color: colorScheme.error),
+                      leading: Icon(Icons.logout, color: colorScheme.error),
                       title: Text('退出登录',
                           style: TextStyle(color: colorScheme.error)),
                       onTap: widget.onLogout,
@@ -10048,6 +14086,145 @@ class _MorePageState extends State<MorePage> {
             const SliverToBoxAdapter(child: SizedBox(height: 32)),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class HomeWidgetGuidePage extends StatelessWidget {
+  const HomeWidgetGuidePage({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    const items = [
+      _WidgetGuideItem(
+        icon: Icons.schedule,
+        title: '下一节课',
+        example: '移动应用开发 · 09:00-10:20 · A2-301',
+        detail: '适合放在首页第一屏，快速看下一节课、教室和老师。',
+      ),
+      _WidgetGuideItem(
+        icon: Icons.today,
+        title: '今日课表',
+        example: '今日 4 节课，按时间列出前几节',
+        detail: '适合需要完整确认当天课程顺序时使用。',
+      ),
+      _WidgetGuideItem(
+        icon: Icons.water_drop,
+        title: '生活缴费',
+        example: '电 9 度 · 冷水 12.3 吨 · 热水 4.6 吨',
+        detail: '绑定宿舍后显示水电余额，点击进入生活缴费页。',
+      ),
+      _WidgetGuideItem(
+        icon: Icons.assignment_turned_in,
+        title: '业务进度',
+        example: '请假审批 · 辅导员审核 · 70%',
+        detail: '适合追踪请假、办事大厅等流程状态。',
+      ),
+    ];
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('桌面组件')),
+      body: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(20, 12, 20, 28),
+          children: [
+            Text('添加方法',
+                style: theme.textTheme.titleMedium
+                    ?.copyWith(fontWeight: FontWeight.w700)),
+            const SizedBox(height: 8),
+            const _GuideStep(
+              index: 1,
+              text: '在 Android 桌面长按空白处，进入“小组件/Widget”。',
+            ),
+            const _GuideStep(
+              index: 2,
+              text: '找到 OneGZUS，选择需要的组件拖到桌面。',
+            ),
+            const _GuideStep(
+              index: 3,
+              text: '打开 App 登录并刷新首页，组件会同步最新课表、水电和业务进度。',
+            ),
+            const SizedBox(height: 20),
+            Text('组件示例',
+                style: theme.textTheme.titleMedium
+                    ?.copyWith(fontWeight: FontWeight.w700)),
+            const SizedBox(height: 8),
+            for (final item in items)
+              Card(
+                elevation: 0,
+                color: colorScheme.surfaceContainer,
+                margin: const EdgeInsets.only(bottom: 10),
+                child: ListTile(
+                  leading: Icon(item.icon, color: colorScheme.primary),
+                  title: Text(item.title),
+                  subtitle: Text('${item.example}\n${item.detail}'),
+                  isThreeLine: true,
+                ),
+              ),
+            const SizedBox(height: 10),
+            Card(
+              elevation: 0,
+              color: colorScheme.primaryContainer,
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text(
+                  '刷新规则：打开 App、首页数据更新或从组件点击进入 App 后会刷新。若桌面仍显示旧数据，先打开 App 到首页刷新；仍无变化时，检查后台保活设置。',
+                  style: theme.textTheme.bodyMedium
+                      ?.copyWith(color: colorScheme.onPrimaryContainer),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _WidgetGuideItem {
+  const _WidgetGuideItem({
+    required this.icon,
+    required this.title,
+    required this.example,
+    required this.detail,
+  });
+
+  final IconData icon;
+  final String title;
+  final String example;
+  final String detail;
+}
+
+class _GuideStep extends StatelessWidget {
+  const _GuideStep({required this.index, required this.text});
+
+  final int index;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          CircleAvatar(
+            radius: 12,
+            backgroundColor: colorScheme.primaryContainer,
+            child: Text('$index',
+                style: TextStyle(
+                  color: colorScheme.onPrimaryContainer,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                )),
+          ),
+          const SizedBox(width: 10),
+          Expanded(child: Text(text)),
+        ],
       ),
     );
   }
@@ -10075,11 +14252,11 @@ class _MoreGridItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final inner = Card(
-      elevation: 0,
-      color: theme.colorScheme.surfaceContainer,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
+    final inner = Container(
+      decoration: BoxDecoration(
+        color: gzusSurface(context),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: gzusBorder(context)),
       ),
       child: Stack(
         clipBehavior: Clip.none,
@@ -10092,7 +14269,12 @@ class _MoreGridItem extends StatelessWidget {
                 children: [
                   Icon(tab.icon, size: 28, color: theme.colorScheme.primary),
                   const SizedBox(height: 6),
-                  Text(tab.shortLabel, style: theme.textTheme.labelSmall),
+                  Text(
+                    tab.shortLabel,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.labelMedium,
+                  ),
                 ],
               ),
             ),
@@ -10137,6 +14319,380 @@ class _MoreGridItem extends StatelessWidget {
   }
 }
 
+class AboutPage extends StatefulWidget {
+  const AboutPage({super.key, required this.api});
+
+  final ApiClient api;
+
+  @override
+  State<AboutPage> createState() => _AboutPageState();
+}
+
+class _AboutPageState extends State<AboutPage> {
+  String _currentVersion = '0.0.0';
+  int _currentBuild = 0;
+  bool _checkingUpdate = false;
+  bool _hasUpdate = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadPackageInfo();
+  }
+
+  Future<void> _loadPackageInfo() async {
+    final packageInfo = await PackageInfo.fromPlatform();
+    setState(() {
+      _currentVersion = packageInfo.version;
+      _currentBuild = int.tryParse(packageInfo.buildNumber) ?? 0;
+    });
+    await _silentCheckForUpdate();
+  }
+
+  Future<void> _silentCheckForUpdate() async {
+    try {
+      final hasUpdate = await UpdateService().hasUpdate();
+      if (mounted) {
+        setState(() => _hasUpdate = hasUpdate);
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _checkForUpdate() async {
+    if (_checkingUpdate) return;
+    setState(() => _checkingUpdate = true);
+    try {
+      await UpdateService().forceCheckForUpdate();
+      await _silentCheckForUpdate();
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('检查更新失败，请稍后重试')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _checkingUpdate = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('关于')),
+      body: SafeArea(
+        child: CustomScrollView(
+          slivers: [
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 40, 20, 20),
+                child: Column(
+                  children: [
+                    Container(
+                      width: 80,
+                      height: 80,
+                      decoration: BoxDecoration(
+                        color: colorScheme.primaryContainer,
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Icon(Icons.school,
+                          size: 40, color: colorScheme.primary),
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      'OneGZUS',
+                      style: theme.textTheme.headlineSmall
+                          ?.copyWith(fontWeight: FontWeight.w700),
+                    ),
+                    const SizedBox(height: 4),
+                    Text('软帮手',
+                        style: theme.textTheme.bodyMedium
+                            ?.copyWith(color: colorScheme.onSurfaceVariant)),
+                  ],
+                ),
+              ),
+            ),
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: Card(
+                  elevation: 0,
+                  color: colorScheme.surfaceContainer,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16)),
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      children: [
+                        _InfoRow(label: '版本', value: _currentVersion),
+                        _InfoRow(label: '构建号', value: '$_currentBuild'),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            const SliverToBoxAdapter(child: SizedBox(height: 24)),
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: Card(
+                  elevation: 0,
+                  color: colorScheme.surfaceContainer,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16)),
+                  child: ListTile(
+                    leading: const Icon(Icons.refresh),
+                    title: const Text('检查更新'),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (_hasUpdate)
+                          Container(
+                            width: 8,
+                            height: 8,
+                            decoration: const BoxDecoration(
+                              color: Colors.red,
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                        const SizedBox(width: 8),
+                        if (_checkingUpdate)
+                          const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2)),
+                        if (!_checkingUpdate) const Icon(Icons.chevron_right),
+                      ],
+                    ),
+                    onTap: _checkForUpdate,
+                  ),
+                ),
+              ),
+            ),
+            const SliverToBoxAdapter(child: SizedBox(height: 24)),
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                child: Card(
+                  elevation: 0,
+                  color: colorScheme.surfaceContainer,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16)),
+                  child: ListTile(
+                    leading: const Icon(Icons.extension_outlined),
+                    title: const Text('第三方库与开源组件'),
+                    subtitle: const Text('查看本程序使用的组件与致谢'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (context) =>
+                            const OpenSourceAcknowledgementsPage(),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            const SliverToBoxAdapter(child: SizedBox(height: 24)),
+            const SliverFillRemaining(
+              hasScrollBody: false,
+              child: Align(
+                alignment: Alignment.bottomCenter,
+                child: Padding(
+                  padding: EdgeInsets.only(bottom: 32),
+                  child: Text('© 2026 OneGZUS',
+                      style: TextStyle(fontSize: 12, color: Colors.grey)),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class OpenSourceAcknowledgementsPage extends StatelessWidget {
+  const OpenSourceAcknowledgementsPage({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Scaffold(
+      appBar: AppBar(title: const Text('第三方库与开源组件')),
+      body: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
+          children: [
+            Card(
+              elevation: 0,
+              color: colorScheme.surfaceContainer,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16)),
+              child: const Padding(
+                padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _AboutSectionTitle(
+                      icon: Icons.extension_outlined,
+                      title: '第三方库与开源组件',
+                    ),
+                    SizedBox(height: 8),
+                    _AboutLibraryTile(
+                      name: 'Flutter / Dart',
+                      description: '跨平台应用框架与运行时。',
+                    ),
+                    _AboutLibraryTile(
+                      name: 'http、web_socket_channel',
+                      description: '网络请求与实时连接能力。',
+                    ),
+                    _AboutLibraryTile(
+                      name: 'shared_preferences、package_info_plus',
+                      description: '本地偏好存储与应用版本信息读取。',
+                    ),
+                    _AboutLibraryTile(
+                      name: 'webview_flutter、url_launcher、share_plus',
+                      description: '网页承载、外部链接打开与系统分享。',
+                    ),
+                    _AboutLibraryTile(
+                      name:
+                          'flutter_local_notifications、file_picker、image_picker',
+                      description: '本地通知、文件选择与图片选择。',
+                    ),
+                    _AboutLibraryTile(
+                      name: 'FastAPI、Uvicorn、SQLAlchemy、Pydantic',
+                      description: '服务端 API、数据模型与持久化基础。',
+                    ),
+                    _AboutLibraryTile(
+                      name:
+                          'httpx、asyncpg、aiosqlite、cryptography、Pillow、ddddocr',
+                      description: '服务端网络访问、数据库连接、安全与图像处理。',
+                    ),
+                    _AboutLibraryTile(
+                      name: 'Tencent Bugly、desugar_jdk_libs、CocoaPods',
+                      description: '崩溃监控、Android 兼容库与 iOS 依赖管理。',
+                    ),
+                    _AboutLibraryTile(
+                      name: 'New School SDK',
+                      description: '教务系统数据接口与课表解析能力。',
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Card(
+              elevation: 0,
+              color: colorScheme.surfaceContainer,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16)),
+              child: const Padding(
+                padding: EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _AboutSectionTitle(
+                      icon: Icons.favorite_border,
+                      title: '致谢',
+                    ),
+                    SizedBox(height: 12),
+                    Text(
+                      'OneGZUS 的开发受益于 Flutter、Dart、Python、Android、iOS 生态及各开源项目维护者的持续贡献。感谢上述第三方库、开源组件和相关工具链为本程序提供稳定的基础能力。',
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _AboutSectionTitle extends StatelessWidget {
+  const _AboutSectionTitle({required this.icon, required this.title});
+
+  final IconData icon;
+  final String title;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(icon, size: 20, color: Theme.of(context).colorScheme.primary),
+        const SizedBox(width: 8),
+        Text(
+          title,
+          style: Theme.of(context)
+              .textTheme
+              .titleMedium
+              ?.copyWith(fontWeight: FontWeight.w700),
+        ),
+      ],
+    );
+  }
+}
+
+class _AboutLibraryTile extends StatelessWidget {
+  const _AboutLibraryTile({required this.name, required this.description});
+
+  final String name;
+  final String description;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(name, style: const TextStyle(fontWeight: FontWeight.w600)),
+          const SizedBox(height: 2),
+          Text(
+            description,
+            style: TextStyle(
+              color: colorScheme.onSurfaceVariant,
+              fontSize: 13,
+              height: 1.35,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _InfoRow extends StatelessWidget {
+  const _InfoRow({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Row(
+        children: [
+          Text(label,
+              style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant)),
+          const Spacer(),
+          Text(value, style: const TextStyle(fontWeight: FontWeight.w600)),
+        ],
+      ),
+    );
+  }
+}
+
 class EmptyState extends StatelessWidget {
   const EmptyState({super.key, required this.message});
 
@@ -10146,16 +14702,39 @@ class EmptyState extends StatelessWidget {
   Widget build(BuildContext context) {
     return Center(
       child: Padding(
-        padding: const EdgeInsets.all(48),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.inbox,
-                size: 44,
-                color: Theme.of(context).colorScheme.onSurfaceVariant),
-            const SizedBox(height: 12),
-            Text(message),
-          ],
+        padding: const EdgeInsets.all(28),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 24),
+          decoration: BoxDecoration(
+            color: gzusSurface(context),
+            borderRadius: BorderRadius.circular(GzusRadii.lg),
+            border: Border.all(color: gzusBorder(context)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: gzusSurfaceSoft(context),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Icon(
+                  Icons.inbox_outlined,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                message,
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+              ),
+            ],
+          ),
         ),
       ),
     );

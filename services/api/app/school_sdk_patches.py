@@ -23,6 +23,7 @@ DEFAULT_SCHEDULE_TIME = {
 }
 
 _PATCH_MARKER = "_gzus_pro_schedule_patch_applied"
+_INFO_PATCH_MARKER = "_gzus_pro_info_patch_applied"
 
 
 def apply_school_sdk_import_patches() -> None:
@@ -71,4 +72,53 @@ def apply_school_sdk_patches() -> bool:
     ScheduleParse.get_class_time = patched_get_class_time
     ScheduleParse.SCHEDULE_TIME = schedule_time_copy()
     setattr(ScheduleParse, _PATCH_MARKER, True)
+    return True
+
+
+def apply_school_sdk_info_patch() -> bool:
+    """Patch school-sdk Info._parse to use updated CSS selectors for GZUS JWXT V9.
+
+    The JWXT V9 system uses different element IDs for some fields:
+    - Major: #col_zyh_id instead of #col_zyfx_id
+    - Department: #col_jg_id instead of #col_jg_id (same, but ensure fallback)
+    """
+    apply_school_sdk_import_patches()
+    try:
+        from school_sdk.client.api.user_info import Info
+    except ModuleNotFoundError:
+        return False
+
+    if getattr(Info, _INFO_PATCH_MARKER, False):
+        return True
+
+    original_parse = getattr(Info, "_parse", None)
+
+    def patched_parse(self: Any, html: str) -> dict:
+        from pyquery import PyQuery as pq
+
+        doc = pq(html)
+        info = {
+            "student_number": doc("#col_xh > p").text() or doc("#ajaxForm > div > div.panel-heading > div > div:nth-child(1) > div > div > p").text(),
+            "name": doc("#col_xm > p").text() or doc("#ajaxForm > div > div.panel-heading > div > div:nth-child(2) > div > div > p").text(),
+            "department_name": doc("#col_jg_id > p").text() or doc("#col_jg > p").text(),
+            "class_name": doc("#col_bh_id > p").text() or doc("#col_bh > p").text(),
+            "grade": doc("#col_njdm_id > p").text() or doc("#col_nj > p").text(),
+            "major": doc("#col_zyh_id > p").text() or doc("#col_zyfx_id > p").text() or doc("#col_zy > p").text(),
+            "gender": doc("#col_xbm > p").text(),
+            "zjhm": doc("#col_zjhm > p").text(),
+            "csrq": doc("#col_csrq > p").text(),
+            "mzm": doc("#col_mzm > p").text(),
+            "zzmmm": doc("#col_zzmmm > p").text(),
+            "rxrq": doc("#col_rxrq > p").text(),
+            "jg": doc("#col_jg > p").text(),
+            "xjztdm": doc("#col_xjztdm > p").text(),
+            "pyccdm": doc("#col_pyccdm > p").text(),
+            "sjhm": doc("#col_sjhm > p").text(),
+            "dzyx": doc("#col_dzyx > p").text(),
+            "jtdz": doc("#col_jtdz > p").text(),
+        }
+        return info
+
+    Info._parse = patched_parse  # type: ignore[attr-defined]
+    setattr(Info, _INFO_PATCH_MARKER, True)
     return True

@@ -1,1 +1,1 @@
-"""GZUS-PRO API package."""
+"""OneGZUS API package."""

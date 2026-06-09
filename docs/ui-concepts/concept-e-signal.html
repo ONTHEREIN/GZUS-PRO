@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OneGZUS Concept E - Signal Terminal</title>
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+  <style>
+    :root {
+      --bg: #e5e2d8;
+      --ink: #10110f;
+      --panel: #f4f1e8;
+      --line: #161713;
+      --muted: #5b5d53;
+      --yellow: #f0c93d;
+      --green: #2fbf91;
+      --red: #e05744;
+      --blue: #3077b8;
+      font-family: "IBM Plex Mono", "Cascadia Mono", "Microsoft YaHei", monospace;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--ink);
+      background:
+        linear-gradient(135deg, rgba(16,17,15,.06) 25%, transparent 25%) 0 0 / 18px 18px,
+        var(--bg);
+    }
+    button { font: inherit; color: inherit; }
+    .frame {
+      display: grid;
+      grid-template-rows: auto 1fr;
+      min-height: 100vh;
+      padding: 14px;
+      gap: 12px;
+    }
+    .top {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      align-items: center;
+      gap: 12px;
+      border: 3px solid var(--line);
+      background: var(--panel);
+      box-shadow: 6px 6px 0 var(--line);
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 14px;
+      border-right: 3px solid var(--line);
+      font-weight: 900;
+    }
+    .brand img {
+      width: 38px;
+      height: 38px;
+      border: 2px solid var(--line);
+      background: white;
+    }
+    .ticker {
+      overflow: hidden;
+      white-space: nowrap;
+      color: var(--muted);
+    }
+    .ticker span {
+      display: inline-block;
+      animation: ticker 18s linear infinite;
+    }
+    .sync {
+      align-self: stretch;
+      padding: 0 16px;
+      border: 0;
+      border-left: 3px solid var(--line);
+      background: var(--yellow);
+      cursor: pointer;
+      font-weight: 900;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: 220px 1fr 330px;
+      gap: 12px;
+      min-height: 0;
+    }
+    .box {
+      border: 3px solid var(--line);
+      background: var(--panel);
+      box-shadow: 6px 6px 0 var(--line);
+      animation: snap .4s ease both;
+    }
+    .nav {
+      display: grid;
+      align-content: start;
+    }
+    .nav button {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-height: 56px;
+      padding: 0 14px;
+      border: 0;
+      border-bottom: 3px solid var(--line);
+      background: transparent;
+      cursor: pointer;
+    }
+    .nav button.active, .nav button:hover { background: var(--yellow); }
+    .main {
+      display: grid;
+      grid-template-rows: auto 1fr;
+      gap: 12px;
+    }
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 240px;
+      gap: 12px;
+    }
+    .mission {
+      padding: 22px;
+      background: var(--yellow);
+      border: 3px solid var(--line);
+    }
+    h1 {
+      margin: 0;
+      font-size: clamp(38px, 7vw, 86px);
+      line-height: .92;
+      letter-spacing: 0;
+      text-transform: uppercase;
+    }
+    .mission p { max-width: 620px; line-height: 1.75; }
+    .countdown {
+      display: grid;
+      place-items: center;
+      padding: 16px;
+      text-align: center;
+      background: var(--ink);
+      color: var(--yellow);
+      border: 3px solid var(--line);
+    }
+    .countdown b { font-size: 62px; line-height: 1; }
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+    }
+    .metric {
+      padding: 16px;
+      border: 3px solid var(--line);
+      background: var(--panel);
+      transition: transform .18s ease, background .18s ease;
+    }
+    .metric:hover { transform: translate(-3px, -3px); background: white; }
+    .metric span { color: var(--muted); }
+    .metric strong { display: block; margin-top: 8px; font-size: 28px; }
+    .schedule {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 10px;
+      padding: 12px;
+    }
+    .day {
+      min-height: 270px;
+      border: 3px solid var(--line);
+      background: #fffdf6;
+    }
+    .day b {
+      display: block;
+      padding: 9px;
+      border-bottom: 3px solid var(--line);
+      background: #dcd8ca;
+    }
+    .chip {
+      margin: 10px;
+      padding: 10px;
+      background: var(--green);
+      border: 2px solid var(--line);
+      font-size: 13px;
+      font-weight: 800;
+    }
+    .chip.red { background: var(--red); }
+    .chip.blue { background: var(--blue); color: white; }
+    .side {
+      display: grid;
+      grid-template-rows: auto auto 1fr;
+      gap: 12px;
+    }
+    .panel-title {
+      display: flex;
+      justify-content: space-between;
+      padding: 12px;
+      border-bottom: 3px solid var(--line);
+      font-weight: 900;
+      background: #dcd8ca;
+    }
+    .list { padding: 12px; display: grid; gap: 10px; }
+    .row {
+      display: grid;
+      grid-template-columns: 56px 1fr;
+      gap: 10px;
+      padding-bottom: 10px;
+      border-bottom: 2px dashed #9b998d;
+    }
+    .row:last-child { border-bottom: 0; }
+    .row time { color: var(--red); font-weight: 900; }
+    .status {
+      display: grid;
+      gap: 10px;
+      padding: 12px;
+    }
+    .status-item {
+      display: flex;
+      justify-content: space-between;
+      padding: 12px;
+      border: 2px solid var(--line);
+      background: #fffdf6;
+    }
+    .mobile-bar { display: none; }
+    @keyframes ticker {
+      from { transform: translateX(0); }
+      to { transform: translateX(-50%); }
+    }
+    @keyframes snap {
+      from { opacity: 0; transform: translate(8px, 8px); box-shadow: 0 0 0 var(--line); }
+      to { opacity: 1; transform: translate(0, 0); box-shadow: 6px 6px 0 var(--line); }
+    }
+    @media (max-width: 1120px) {
+      .grid { grid-template-columns: 82px 1fr; }
+      .nav button span { display: none; }
+      .side { grid-column: 2; grid-template-columns: 1fr 1fr; }
+      .side .box:last-child { grid-column: 1 / -1; }
+    }
+    @media (max-width: 760px) {
+      .frame { padding: 10px 10px 82px; }
+      .top { grid-template-columns: 1fr auto; }
+      .ticker { display: none; }
+      .brand { border-right: 0; }
+      .grid { display: block; }
+      .nav { display: none; }
+      .main, .hero, .metrics, .side { grid-template-columns: 1fr; }
+      .schedule { grid-template-columns: 1fr; }
+      .day { min-height: auto; }
+      .box, .hero > * { margin-bottom: 12px; }
+      .mobile-bar {
+        position: fixed;
+        left: 10px;
+        right: 10px;
+        bottom: 10px;
+        display: grid;
+        grid-template-columns: repeat(5, 1fr);
+        border: 3px solid var(--line);
+        background: var(--panel);
+        box-shadow: 5px 5px 0 var(--line);
+      }
+      .mobile-bar button {
+        min-height: 52px;
+        border: 0;
+        border-right: 3px solid var(--line);
+        background: transparent;
+      }
+      .mobile-bar button:last-child { border-right: 0; }
+      .mobile-bar button.active { background: var(--yellow); }
+    }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <header class="top">
+      <div class="brand"><img src="../../apps/mobile_web/assets/icon.png" alt="OneGZUS"><span>OneGZUS</span></div>
+      <div class="ticker"><span>第 14 周 // 课程 17/21 // 请假审批 1 // 考试安排 2 // 电费 155.28 度 // 第 14 周 // 课程 17/21 // 请假审批 1 // 考试安排 2 //</span></div>
+      <button class="sync">SYNC</button>
+    </header>
+    <section class="grid">
+      <nav class="nav box">
+        <button class="active"><i data-lucide="home"></i><span>首页</span></button>
+        <button><i data-lucide="calendar-days"></i><span>课表</span></button>
+        <button><i data-lucide="clipboard-check"></i><span>请假</span></button>
+        <button><i data-lucide="graduation-cap"></i><span>学分</span></button>
+        <button><i data-lucide="more-horizontal"></i><span>更多</span></button>
+      </nav>
+      <main class="main">
+        <section class="hero">
+          <div class="mission">
+            <h1>Next<br>Class<br>09:00</h1>
+            <p>大学体育 II · TY101（江） · 赵国宾。建议 08:45 出发。</p>
+          </div>
+          <div class="countdown"><span>COUNTDOWN</span><b>32</b><span>MIN</span></div>
+        </section>
+        <section class="metrics">
+          <div class="metric"><span>WATER / COLD</span><strong>17.99 吨</strong></div>
+          <div class="metric"><span>WATER / HOT</span><strong>18.488 元</strong></div>
+          <div class="metric"><span>POWER</span><strong>155.28 度</strong></div>
+        </section>
+        <section class="schedule box">
+          <div class="day"><b>MON</b><div class="chip blue">形势与政策 II</div><div class="chip">计算机网络</div></div>
+          <div class="day"><b>TUE</b><div class="chip red">管理信息系统导论</div></div>
+          <div class="day"><b>WED</b><div class="chip blue">大学体育 II</div><div class="chip">工程应用数学</div></div>
+          <div class="day"><b>THU</b><div class="chip">Python 编程技术</div></div>
+          <div class="day"><b>FRI</b><div class="chip red">心理健康教育</div></div>
+        </section>
+      </main>
+      <aside class="side">
+        <section class="box">
+          <div class="panel-title"><span>TIMELINE</span><i data-lucide="list-checks"></i></div>
+          <div class="list">
+            <div class="row"><time>09:00</time><strong>大学体育 II</strong></div>
+            <div class="row"><time>10:40</time><strong>工程应用数学</strong></div>
+            <div class="row"><time>15:30</time><strong>Python 编程技术</strong></div>
+          </div>
+        </section>
+        <section class="box">
+          <div class="panel-title"><span>MODULES</span><i data-lucide="grid-3x3"></i></div>
+          <div class="status">
+            <div class="status-item"><span>请假审批</span><b>1</b></div>
+            <div class="status-item"><span>考试安排</span><b>2</b></div>
+            <div class="status-item"><span>通知公告</span><b>5</b></div>
+          </div>
+        </section>
+      </aside>
+    </section>
+  </div>
+  <nav class="mobile-bar">
+    <button class="active"><i data-lucide="home"></i></button><button><i data-lucide="calendar-days"></i></button><button><i data-lucide="clipboard-check"></i></button><button><i data-lucide="graduation-cap"></i></button><button><i data-lucide="more-horizontal"></i></button>
+  </nav>
+  <script>
+    lucide.createIcons({ strokeWidth: 2.2 });
+    document.querySelectorAll(".nav button, .mobile-bar button").forEach((button) => {
+      button.addEventListener("click", () => {
+        const group = button.closest(".nav, .mobile-bar");
+        group.querySelectorAll("button").forEach((item) => item.classList.remove("active"));
+        button.classList.add("active");
+      });
+    });
+  </script>
+</body>
+</html>

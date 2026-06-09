@@ -1,60 +1,148 @@
-# GZUS-PRO
+# OneGZUS
 
-Flutter Web-first + FastAPI 教务助手。
+<p align="center">
+  <img src="website/assets/widget_final_today_schedule.png" alt="OneGZUS" width="260">
+</p>
+
+<p align="center">
+  <b>软帮手</b>
+</p>
+
+<p align="center">
+  课表、成绩、考勤、水电费、请假、考试提醒 — 一个 App 搞定全部教务事务。
+</p>
+
+<p align="center">
+  <a href="#features"><img src="https://img.shields.io/badge/功能介绍-2563EB?style=flat-square" alt="功能介绍"></a>
+  <a href="./deploy-free.md"><img src="https://img.shields.io/badge/零成本部署-059669?style=flat-square&logo=vercel&logoColor=white" alt="零成本部署"></a>
+  <img src="https://img.shields.io/badge/License-MIT-yellow?style=flat-square" alt="License">
+</p>
+
+---
+
+## 这个 App 能帮你做什么？
+
+每天打开四五个系统查信息，真的累了。OneGZUS 把你在学校需要的教务功能全部放在一起：
+
+- **早上醒来** — 看一眼今日课表，知道今天在哪上课
+- **考完试** — 成绩推送直接通知你，不用每隔一小时刷新教务系统
+- **月底查账** — 水电费余额实时显示，不怕突然停水停电
+- **考前一周** — 考试安排自动提醒，不怕记错时间
+- **需要请假** — 手机填写申请，查看审批进度，不用打印纸质单子
+
+## 功能特性
+
+| 功能 | 描述 | 使用场景 |
+|------|------|----------|
+| **智能课表** | 今日课程时间线、周视图课表、ICS 日历导出 | 每天查看上课地点 |
+| **成绩查询** | 实时成绩推送、绩点计算、学分统计 | 期末查成绩 |
+| **考勤管理** | 出勤记录查询、缺勤提醒、考勤统计 | 学期中自查考勤 |
+| **考试提醒** | 考试安排同步、考前推送、倒计时 | 考前确认时间地点 |
+| **水电费查询** | 实时余额、用量统计、缴费提醒 | 月底查水电费 |
+| **校园通知** | 教务通知推送、已读标记、历史归档 | 关注选课/学籍通知 |
+| **请假系统** | 在线申请、进度追踪、附件上传 | 事假/病假/公假 |
+| **一卡通** | 余额查询、消费记录、充值提醒 | 查消费明细 |
+| **Android 桌面组件** | 下一节课、今日课表、生活缴费、业务进度 | 不打开 App 也能看关键信息 |
+| **深色模式** | 自动跟随系统主题 | 夜间使用 |
+
+## 界面预览
+
+<p align="center">
+  <img src="website/assets/widget_final_today_schedule.png" width="200" alt="首页">
+  <img src="website/assets/widget_final_schedule_warm_fixed.png" width="200" alt="课表">
+  <img src="website/assets/widget_final_utilities.png" width="200" alt="工具">
+  <img src="website/assets/widget_final_business_progress.png" width="200" alt="请假">
+</p>
+
+## 快速开始
+
+### Web 版（推荐）
+
+无需下载，浏览器打开即用：
+
+```
+https://your-github-pages-url.github.io
+```
+
+支持手机浏览器，可添加到主屏幕获得类似原生 App 的体验。
+
+### Android 版
+
+下载 APK 安装包安装即可：
+
+1. 下载最新版本 APK
+2. 允许安装未知来源应用
+3. 使用学校统一身份认证登录
+
+> 首次登录后，App 会自动记住会话，之后无需重复登录。
+
+#### 桌面组件示例
+
+Android 版支持 4 类桌面组件：
+
+- **下一节课**：显示课程名、时间、教室、老师
+- **今日课表**：显示当天课程列表
+- **生活缴费**：显示电费、冷水、热水余额
+- **业务进度**：显示请假/办事大厅审批状态
+
+添加方法：在 Android 桌面长按空白处，进入“小组件/Widget”，找到 OneGZUS 后拖到桌面。打开 App 并刷新首页后，组件会同步最新数据。
+
+### iOS
+
+由于 Apple 开发者账号费用较高，暂未上架 App Store。iOS 用户建议使用 Web 版，可添加到主屏幕作为快捷方式使用。
+
+## 常见问题
+
+**Q: 使用这个 App 安全吗？**
+
+A: 完全安全。App 使用学校官方统一身份认证登录，不会存储你的教务密码。所有数据均从学校官方系统实时获取。
+
+**Q: 数据是实时的吗？**
+
+A: 是的。课表、成绩、考勤等数据均实时从学校教务系统获取。网络不佳时会自动展示缓存数据，恢复后自动刷新。
+
+**Q: 这个 App 收费吗？**
+
+A: 完全免费。这是学生自发开发的开源项目，没有任何广告或内购。
+
+**Q: 发现 Bug 怎么办？**
+
+A: 欢迎通过 GitHub Issues 提交反馈，或直接联系开发者。
+
+## 开发相关
+
+如果你对这个项目的技术实现感兴趣，或者想参与开发：
+
+- **前端**: Flutter 3.x，一套代码构建 Web + Android + iOS
+- **后端**: FastAPI + Python，高性能异步 API 服务
+- **部署**: 支持 Vercel + GitHub Pages 零成本部署
+
+详细开发文档和部署指南请参考 [**deploy-free.md**](./deploy-free.md)。
 
 ## 项目结构
 
-- `apps/mobile_web`：Flutter 前端，Fluent 2 风格，Web 优先。
-- `services/api`：FastAPI 后端，封装教务系统登录和数据读取。
-- `docs`：接口、隐私和抓取边界说明。
-
-## 后端启动
-
-```powershell
-cd services/api
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -e ".[dev]"
-uvicorn app.main:app --reload
+```
+OneGZUS/
+├── apps/mobile_web/      # Flutter 前端
+├── services/api/         # FastAPI 后端
+├── docs/                 # 文档与隐私政策
+└── website/              # 项目展示网站
 ```
 
-真实连接教务系统时安装 SDK：
+## 免责声明
 
-```powershell
-pip install -e ".[school]"
-```
+本项目为广州软件学院学生自发开发的开源工具，仅供学习交流使用。
 
-`school-sdk` 当前声明支持 Python 3.8-3.13；如需真实登录，请使用 Python 3.11-3.13。
+- 使用本工具产生的所有数据归学校教务系统所有
+- 请遵守学校相关规定，合理使用教务系统接口
+- 开发者不对因使用本工具产生的任何问题负责
 
-后端只直接依赖 `FarmerChillax/new-school-sdk`。考试、考勤等 SDK 未覆盖能力已保留 `proxy_request` 扩展空位，等拿到学校接口文件后补 endpoint 和解析器。
+## 许可证
 
-## 前端启动
+[MIT License](./LICENSE)
 
-```powershell
-cd apps/mobile_web
-flutter pub get
-flutter run -d chrome --dart-define=API_BASE_URL=http://127.0.0.1:8000
-```
+---
 
-如果 Flutter 未加入当前进程 `PATH`，可直接使用：
-
-```powershell
-D:\REINs\Documents\flutter\bin\flutter.bat run -d chrome --dart-define=API_BASE_URL=http://127.0.0.1:8000
-```
-
-## 移动端启动
-
-移动端复用同一个 Flutter 工程，已生成 `android/` 和 `ios/` 平台目录。联奕单点登录在移动端走 App 内 WebView，登录完成后读取 WebView 中 `jwxt.seig.edu.cn` 的 cookie，再交给后端验证。
-
-Android 模拟器访问本机后端时使用：
-
-```powershell
-cd apps/mobile_web
-D:\REINs\Documents\flutter\bin\flutter.bat run -d android --dart-define=API_BASE_URL=http://10.0.2.2:8000
-```
-
-真机或生产环境请使用可被手机访问的 HTTPS 后端地址：
-
-```powershell
-D:\REINs\Documents\flutter\bin\flutter.bat run -d android --dart-define=API_BASE_URL=https://your-api.example.com
-```
+<p align="center">
+  Made with &#10084; by GZUS students
+</p>

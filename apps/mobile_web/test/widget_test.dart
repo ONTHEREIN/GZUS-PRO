@@ -5,7 +5,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gzus_pro_mobile_web/main.dart';
 import 'package:gzus_pro_mobile_web/api_client.dart';
+import 'package:gzus_pro_mobile_web/live_activity_service.dart';
 import 'package:gzus_pro_mobile_web/reminder_service.dart';
+import 'package:gzus_pro_mobile_web/ws_service.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -35,6 +37,140 @@ void main() {
     expect(slots[0].when, DateTime(2026, 6, 1, 8, 50));
     expect(slots[1].title, '即将下课');
     expect(slots[1].when, DateTime(2026, 6, 1, 10, 15));
+  });
+
+  test('live push message id is stable from server id', () {
+    final first = WsService.notificationIdForMessage({
+      'id': 'exam_reminder:sid1:math',
+      'type': 'exam_reminder',
+      'title': '考试提醒',
+      'body': '高等数学',
+    });
+    final second = WsService.notificationIdForMessage({
+      'id': 'exam_reminder:sid1:math',
+      'type': 'exam_reminder',
+      'title': '考试提醒',
+      'body': '高等数学 updated',
+    });
+
+    expect(first, second);
+  });
+
+  test('live activity maps notification messages to targets', () {
+    final exam = LiveActivityEvent.fromMessage({
+      'id': 'exam-1',
+      'type': 'exam_reminder',
+      'title': '考试提醒',
+      'body': '高数 23:00',
+      'style': 'timer',
+      'endTime': 1780930800000,
+      'shortCriticalText': '考试',
+    });
+    final ecard = LiveActivityEvent.fromMessage({
+      'id': 'ecard-1',
+      'type': 'ecard_reminder',
+      'title': '电量偏低',
+      'body': '9 度',
+      'style': 'metric',
+      'ongoing': false,
+    });
+    final course = LiveActivityEvent.courseReminder(
+      id: 42,
+      title: '即将上课',
+      body: '1 分钟后：高等数学',
+      courseName: '高等数学',
+      countdownTarget: DateTime(2026, 6, 8, 9),
+      shortText: '1min',
+    );
+
+    expect(exam.targetTab, 'exams');
+    expect(exam.isTimer, isTrue);
+    expect(ecard.targetTab, 'ecard');
+    expect(ecard.isMetric, isTrue);
+    expect(course.targetTab, 'schedule');
+    expect(course.isTimer, isTrue);
+  });
+
+  test('live activity parses grade update and progress fields', () {
+    final grade = LiveActivityEvent.fromMessage({
+      'id': 'grade-1',
+      'type': 'grade_update',
+      'title': '成绩更新',
+      'body': '移动应用开发：92',
+      'style': 'progress',
+      'shortCriticalText': '成绩',
+      'progressMax': 100,
+      'progressCurrent': 75,
+    });
+
+    expect(grade.targetTab, 'grades');
+    expect(grade.progress, 0.75);
+    expect(grade.isMetric, isFalse);
+  });
+
+  testWidgets('live activity updates same id and collapses', (tester) async {
+    final controller = LiveActivityController.instance;
+    controller.resetForTest();
+    addTearDown(controller.resetForTest);
+
+    controller.show(LiveActivityEvent(
+      id: 'same',
+      type: 'ecard_reminder',
+      title: '电量偏低',
+      body: '20 度',
+      targetTab: 'ecard',
+    ));
+    controller.show(LiveActivityEvent(
+      id: 'same',
+      type: 'ecard_reminder',
+      title: '电量极低',
+      body: '9 度',
+      targetTab: 'ecard',
+    ));
+
+    expect(controller.state.value.event?.title, '电量极低');
+    expect(controller.state.value.expanded, isTrue);
+
+    await tester.pump(LiveActivityController.initialExpandedDuration +
+        const Duration(milliseconds: 300));
+
+    expect(controller.state.value.event?.id, 'same');
+    expect(controller.state.value.expanded, isFalse);
+  });
+
+  testWidgets('live activity timer dismisses at end time', (tester) async {
+    final controller = LiveActivityController.instance;
+    controller.resetForTest();
+    addTearDown(controller.resetForTest);
+
+    controller.show(LiveActivityEvent(
+      id: 'timer',
+      type: 'exam_reminder',
+      title: '考试提醒',
+      body: '高数',
+      style: 'timer',
+      endTime: DateTime.now().add(const Duration(milliseconds: 600)),
+      targetTab: 'exams',
+      ongoing: true,
+    ));
+
+    expect(controller.state.value.visible, isTrue);
+
+    await tester.pump(const Duration(milliseconds: 800));
+
+    expect(controller.state.value.visible, isFalse);
+  });
+
+  test('login result preserves ehall webview auth state', () {
+    final result = LoginResult.fromJson({
+      'status': 'ok',
+      'sessionId': 'session-1',
+      'ehallCookies': 'sid=abc',
+      'ehallAuthToken': 'token-1',
+    });
+
+    expect(result.ehallCookies, 'sid=abc');
+    expect(result.ehallAuthToken, 'token-1');
   });
 
   test('attendance records parse day details', () {
@@ -164,16 +300,76 @@ void main() {
     expect(result.data.name, '本地学生');
     expect(result.source.isOffline, isTrue);
     expect(result.source.needsRelogin, isTrue);
-    expect(result.source.displayText, '需重新登录才能更新');
+    expect(result.source.displayText, '教务系统会话已失效，请重新登录');
+  });
+
+  test('api refreshes expired credential token with saved password', () async {
+    SharedPreferences.setMockInitialValues({
+      'auth.credentialToken': 'expired-token',
+      'auth.rememberPassword': true,
+      'auth.account': '2540232101',
+      'auth.password': 'secret',
+    });
+    var meCalls = 0;
+    var autoLoginCalled = false;
+    final api = ApiClient(
+      httpClient: MockClient((request) async {
+        if (request.url.path.endsWith('/me')) {
+          meCalls++;
+          if (meCalls == 1) {
+            return http.Response(jsonEncode({'detail': 'expired'}), 401);
+          }
+          return http.Response.bytes(
+            utf8.encode(jsonEncode({
+              'studentId': '2540232101',
+              'name': '服务器学生',
+            })),
+            200,
+          );
+        }
+        if (request.url.path.endsWith('/auth/relogin')) {
+          return http.Response.bytes(
+            utf8.encode(jsonEncode({'detail': '凭据已失效，请重新登录'})),
+            401,
+          );
+        }
+        if (request.url.path.endsWith('/auth/auto-login')) {
+          autoLoginCalled = true;
+          final body = jsonDecode(request.body) as Map<String, dynamic>;
+          expect(body['account'], '2540232101');
+          expect(body['password'], 'secret');
+          return http.Response.bytes(
+            utf8.encode(jsonEncode({
+              'status': 'ok',
+              'sessionId': 'session-2',
+              'studentName': '服务器学生',
+              'studentId': '2540232101',
+              'credentialToken': 'fresh-token',
+            })),
+            200,
+          );
+        }
+        return http.Response('not found', 404);
+      }),
+    );
+
+    final result = await api.me(forceRefresh: true);
+    final prefs = await SharedPreferences.getInstance();
+
+    expect(result.data.name, '服务器学生');
+    expect(autoLoginCalled, isTrue);
+    expect(api.sessionId, 'session-2');
+    expect(prefs.getString('auth.credentialToken'), 'fresh-token');
+    expect(prefs.getString('auth.sessionId'), 'session-2');
   });
 
   testWidgets('renders login page', (tester) async {
     SharedPreferences.setMockInitialValues({});
 
-    await tester.pumpWidget(const GzusProApp());
+    await tester.pumpWidget(const OneGzusApp());
     await tester.pumpAndSettle();
 
-    expect(find.text('GZUS-PRO'), findsOneWidget);
+    expect(find.text('OneGZUS'), findsOneWidget);
     expect(find.text('推荐使用办事大厅统一登录'), findsOneWidget);
     expect(find.text('办事大厅统一登录'), findsOneWidget);
     expect(find.text('教务系统登录'), findsWidgets);
@@ -182,7 +378,7 @@ void main() {
   testWidgets('mobile sso is enabled without account', (tester) async {
     SharedPreferences.setMockInitialValues({});
 
-    await tester.pumpWidget(const GzusProApp());
+    await tester.pumpWidget(const OneGzusApp());
     await tester.pumpAndSettle();
 
     final ssoButton = tester.widget<FilledButton>(
@@ -198,10 +394,10 @@ void main() {
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
 
-    await tester.pumpWidget(const GzusProApp());
+    await tester.pumpWidget(const OneGzusApp());
     await tester.pumpAndSettle();
 
-    expect(find.text('GZUS-PRO'), findsOneWidget);
+    expect(find.text('OneGZUS'), findsOneWidget);
     expect(find.text('办事大厅统一登录'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
@@ -212,15 +408,9 @@ void main() {
     expect(find.byKey(const ValueKey('mobile-bottom-nav')), findsOneWidget);
     expect(find.byKey(const ValueKey('app-sidebar')), findsNothing);
     expect(find.byKey(const ValueKey('dashboard-header-tools')), findsNothing);
-    expect(find.byKey(const ValueKey('mobile-header-toggle')), findsOneWidget);
-
-    await tester.tap(find.byKey(const ValueKey('mobile-header-toggle')));
-    await tester.pumpAndSettle();
-    expect(
-        find.byKey(const ValueKey('dashboard-header-tools')), findsOneWidget);
-
-    await tester.tap(find.byKey(const ValueKey('mobile-header-toggle')));
-    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('mobile-header-toggle')), findsNothing);
+    expect(find.text('首页'), findsWidgets);
+    expect(find.text('下一节课'), findsOneWidget);
     expect(find.byKey(const ValueKey('dashboard-header-tools')), findsNothing);
 
     await tester.tap(find.text('课表').last);
@@ -235,7 +425,43 @@ void main() {
 
     expect(find.text('首页'), findsWidgets);
     expect(find.text('下一节课'), findsOneWidget);
-    expect(find.text('业务进度'), findsWidgets);
+    expect(find.textContaining('移动应用开发'), findsWidgets);
+  });
+
+  testWidgets('live activity island expands, collapses, and opens target tab',
+      (tester) async {
+    final controller = LiveActivityController.instance;
+    await _pumpDashboard(tester, const Size(390, 844));
+
+    controller.show(LiveActivityEvent(
+      id: 'exam-island',
+      type: 'exam_reminder',
+      title: '考试提醒',
+      body: '高等数学 23:00',
+      style: 'timer',
+      endTime: DateTime.now().add(const Duration(minutes: 30)),
+      shortText: '考试',
+      targetTab: 'exams',
+      ongoing: true,
+    ));
+    await tester.pump();
+
+    expect(find.byKey(const ValueKey('live-activity-island')), findsOneWidget);
+    expect(find.text('考试提醒'), findsOneWidget);
+    expect(find.text('高等数学 23:00'), findsOneWidget);
+
+    await tester.pump(LiveActivityController.initialExpandedDuration +
+        const Duration(milliseconds: 400));
+
+    expect(find.text('高等数学 23:00'), findsNothing);
+
+    await tester.tap(find.byKey(const ValueKey('live-activity-island')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('live-activity-action')));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(ExamsPage), findsOneWidget);
+    controller.resetForTest();
   });
 
   testWidgets('dashboard uses sidebar on desktop', (tester) async {
@@ -248,17 +474,36 @@ void main() {
   testWidgets('mobile dashboard tabs fit every page', (tester) async {
     await _pumpDashboard(tester, const Size(390, 844));
 
-    for (final label in ['首页', '应用', '课表', '请假', '更多']) {
+    for (final label in ['首页', '信息', '应用', '课表', '更多']) {
       await tester.tap(find.text(label).last);
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull, reason: '$label should fit');
     }
   });
 
+  testWidgets('home widget guide explains setup and examples', (tester) async {
+    await _pumpDashboard(tester, const Size(1180, 820));
+
+    await tester.tap(find.text('更多').last);
+    await tester.pumpAndSettle();
+    final guideTile = find.byKey(const ValueKey('home-widget-guide-tile'));
+    await tester.ensureVisible(guideTile);
+    await tester.pumpAndSettle();
+    await tester.tap(guideTile);
+    await tester.pumpAndSettle();
+
+    expect(find.text('添加方法'), findsOneWidget);
+    expect(find.text('组件示例'), findsOneWidget);
+    expect(find.text('下一节课'), findsWidgets);
+    expect(find.text('生活缴费'), findsWidgets);
+    expect(find.textContaining('Android 桌面长按空白处'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('home customization hides a module', (tester) async {
     await _pumpDashboard(tester, const Size(390, 844));
 
-    await tester.tap(find.text('自定义'));
+    await tester.tap(find.widgetWithText(TextButton, '自定义'));
     await tester.pumpAndSettle();
     expect(find.text('自定义首页'), findsOneWidget);
 
@@ -286,7 +531,7 @@ void main() {
         home: DashboardShell(
           api: _mockApi(),
           studentName: '测试学生',
-          darkMode: false,
+          themeMode: ThemeMode.light,
           onThemeChanged: (_) {},
           onLogout: () {},
         ),
@@ -305,6 +550,53 @@ void main() {
 
     expect(find.text('课表工具'), findsWidgets);
     expect(find.text('2026-02-16'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('schedule switches between today week and all views',
+      (tester) async {
+    SharedPreferences.setMockInitialValues({
+      'schedule.2025.2.firstWeekStart': '2026-02-16',
+      'schedule.autoWeek': true,
+    });
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: DashboardShell(
+          api: _mockApi(),
+          studentName: '测试学生',
+          themeMode: ThemeMode.light,
+          onThemeChanged: (_) {},
+          onLogout: () {},
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('课表').last);
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('schedule-view-mode')), findsOneWidget);
+
+    await tester.tap(find.descendant(
+      of: find.byKey(const ValueKey('schedule-view-mode')),
+      matching: find.text('本周'),
+    ));
+    await tester.pumpAndSettle();
+    expect(find.text('09:00-10:20'), findsOneWidget);
+    expect(find.text('周一'), findsWidgets);
+    expect(find.text('1节'), findsWidgets);
+
+    await tester.tap(find.descendant(
+      of: find.byKey(const ValueKey('schedule-view-mode')),
+      matching: find.text('全部'),
+    ));
+    await tester.pumpAndSettle();
+    expect(find.text('移动应用开发'), findsWidgets);
+    expect(find.text('1条'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -373,6 +665,8 @@ void main() {
 }
 
 Future<void> _pumpDashboard(WidgetTester tester, Size size) async {
+  LiveActivityController.instance.resetForTest();
+  addTearDown(LiveActivityController.instance.resetForTest);
   SharedPreferences.setMockInitialValues({});
   tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1;
@@ -383,7 +677,7 @@ Future<void> _pumpDashboard(WidgetTester tester, Size size) async {
       home: DashboardShell(
         api: _mockApi(),
         studentName: '测试学生',
-        darkMode: false,
+        themeMode: ThemeMode.light,
         onThemeChanged: (_) {},
         onLogout: () {},
       ),
@@ -417,7 +711,7 @@ ApiClient _mockApi() {
               'weekday': 1,
               'startSection': 1,
               'endSection': 2,
-              'weeks': '1-16',
+              'weeks': '1-30',
             }
           ];
           break;

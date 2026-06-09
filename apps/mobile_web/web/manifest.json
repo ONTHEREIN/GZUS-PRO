@@ -1,0 +1,30 @@
+{
+  "name": "OneGZUS",
+  "short_name": "OneGZUS",
+  "description": "软帮手",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#3593FC",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "icons/icon-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icons/icon-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "scope": ".",
+  "serviceworker": {
+    "src": "gzus_pwa_sw.js",
+    "scope": ".",
+    "type": "module"
+  }
+}

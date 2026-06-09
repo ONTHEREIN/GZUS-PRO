@@ -27,19 +27,31 @@ router = APIRouter(prefix="/ecard", tags=["ecard"])
 
 
 def _student_info(session: AppSession) -> tuple[str, str]:
+    student_id = ""
+    name = session.student_name or ""
+    
     try:
         info = session.client.get_info()
+        if isinstance(info, dict):
+            student_id = str(info.get("studentId") or info.get("student_id") or info.get("sno") or "")
+            name = str(info.get("name") or info.get("xm") or name)
     except AuthenticationError as exc:
         logger.warning("ecard: get_info auth failed for session: %s", exc)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
     except Exception as exc:
         logger.error("ecard: get_info failed: %s", exc, exc_info=True)
-        raise HTTPException(status_code=502, detail="获取当前用户学号失败") from exc
-    student_id = str(info.get("studentId") or info.get("student_id") or info.get("sno") or "")
+    
     if not student_id:
-        logger.error("ecard: no student_id in get_info response: %s", info)
+        student_id = getattr(session.client, "_account", None)
+        if student_id:
+            student_id = str(student_id)
+            logger.info("ecard: fallback to client._account for student_id")
+    
+    if not student_id:
+        logger.error("ecard: no student_id available")
         raise HTTPException(status_code=502, detail="当前用户缺少学号")
-    return student_id, str(info.get("name") or session.student_name or "")
+    
+    return student_id, name
 
 
 def _client() -> EcardClient:
@@ -56,7 +68,7 @@ def _binding_for(student_id: str) -> EcardBinding | None:
         return db.query(EcardBinding).filter(EcardBinding.student_id == student_id).first()
 
 
-def _summary_from_binding(binding: EcardBinding) -> dict[str, Any]:
+def _summary_from_binding(binding: EcardBinding, student_id: str | None = None) -> dict[str, Any]:
     data: dict[str, Any] = {}
     if binding.last_summary_json:
         try:
@@ -65,10 +77,15 @@ def _summary_from_binding(binding: EcardBinding) -> dict[str, Any]:
             data = {}
     return {
         "status": "ok",
+        "studentId": student_id,
         "roomId": binding.room_id,
         "roomDisplay": binding.room_display,
         "reminderEnabled": binding.reminder_enabled,
         "lowPowerThreshold": binding.low_power_threshold,
+        "lowColdWaterThreshold": binding.low_cold_water_threshold,
+        "lowHotWaterThreshold": binding.low_hot_water_threshold,
+        "reminderTimes": json.loads(binding.reminder_times) if binding.reminder_times else ["08:00"],
+        "reminderItems": json.loads(binding.reminder_items) if binding.reminder_items else ["power", "cold_water", "hot_water"],
         "updatedAt": binding.last_checked_at.isoformat() if binding.last_checked_at else None,
         **data,
     }
@@ -130,7 +147,7 @@ def bind_room(
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         db.commit()
         db.refresh(binding)
-        return _summary_from_binding(binding)
+        return _summary_from_binding(binding, student_id)
 
 
 @router.get("/summary", response_model=EcardSummary)
@@ -139,7 +156,7 @@ def summary(session: AppSession = Depends(require_session)) -> dict[str, Any]:
     binding = _binding_for(student_id)
     if binding is None:
         return {"status": "not_bound"}
-    return _summary_from_binding(binding)
+    return _summary_from_binding(binding, student_id)
 
 
 @router.post("/refresh", response_model=EcardSummary)
@@ -160,7 +177,7 @@ def refresh(session: AppSession = Depends(require_session)) -> dict[str, Any]:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         db.commit()
         db.refresh(binding)
-        return _summary_from_binding(binding)
+        return _summary_from_binding(binding, student_id)
 
 
 @router.patch("/reminder", response_model=EcardSummary)
@@ -178,10 +195,18 @@ def update_reminder(
             binding.reminder_enabled = payload.enabled
         if payload.low_power_threshold is not None:
             binding.low_power_threshold = payload.low_power_threshold
+        if payload.low_cold_water_threshold is not None:
+            binding.low_cold_water_threshold = payload.low_cold_water_threshold
+        if payload.low_hot_water_threshold is not None:
+            binding.low_hot_water_threshold = payload.low_hot_water_threshold
+        if payload.reminder_times is not None:
+            binding.reminder_times = json.dumps(payload.reminder_times[:2])
+        if payload.reminder_items is not None:
+            binding.reminder_items = json.dumps(payload.reminder_items)
         binding.updated_at = datetime.now(timezone.utc)
         db.commit()
         db.refresh(binding)
-        return _summary_from_binding(binding)
+        return _summary_from_binding(binding, student_id)
 
 
 @router.get("/consumption", response_model=EcardConsumptionResponse)

@@ -12,10 +12,13 @@
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>
+    <uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS"/>
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
 
     <application
         android:name=".GzusApplication"
-        android:label="GZUS-PRO"
+        android:label="OneGZUS"
         android:usesCleartextTraffic="true"
         android:icon="@mipmap/ic_launcher">
         <activity
@@ -57,6 +60,12 @@
         <meta-data
             android:name="BUGLY_CHANNEL"
             android:value="gzus_pro"/>
+        <meta-data
+            android:name="SHIPLY_APP_ID"
+            android:value="6fe87f3a4f"/>
+        <meta-data
+            android:name="SHIPLY_APP_KEY"
+            android:value="1428fb40-2640-4c74-a9b4-ea235190b290"/>
         <service
             android:name=".BackgroundService"
             android:exported="false"
@@ -70,6 +79,9 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
         </provider>
+        <receiver
+            android:name=".CourseReminderReceiver"
+            android:exported="false"/>
         <receiver
             android:name=".BootReceiver"
             android:exported="false">

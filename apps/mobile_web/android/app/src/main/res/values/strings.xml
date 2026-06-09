@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="widget_desc_next_class">查看下一节课的信息</string>
+    <string name="widget_desc_today_schedule">查看今日课程安排</string>
+    <string name="widget_desc_utilities">查看水电费余额</string>
+    <string name="widget_desc_business_progress">查看办事进度</string>
+</resources>

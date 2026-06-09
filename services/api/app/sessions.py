@@ -46,6 +46,7 @@ class AppSession:
     student_name: str | None = None
     ehall_client: Any | None = None
     created_at: datetime = field(default_factory=datetime.now)
+    last_active_at: datetime = field(default_factory=datetime.now)
     push_registration_id: str | None = None
     push_platform: str = "android"
     encrypted_credentials: str | None = None
@@ -102,6 +103,8 @@ class SessionStore:
         if datetime.now() - session.created_at > self._ttl:
             self._remove(session.id)
             return None
+        # Refresh last active timestamp so we can detect stale sessions
+        session.last_active_at = datetime.now()
         return session
 
     def remove(self, session_id: str) -> None:
@@ -109,11 +112,19 @@ class SessionStore:
 
     def _remove(self, session_id: str) -> None:
         session = self._sessions.pop(session_id, None)
-        if session is not None and session.client is not None:
-            try:
-                session.client.logout()
-            except Exception:
-                pass
+        if session is not None:
+            if session.ehall_client is not None:
+                try:
+                    close = getattr(session.ehall_client, "close", None)
+                    if close:
+                        close()
+                except Exception:
+                    pass
+            if session.client is not None:
+                try:
+                    session.client.logout()
+                except Exception:
+                    pass
 
     async def start_cleanup_task(self) -> None:
         async def cleanup():

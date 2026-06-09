@@ -1,6 +1,8 @@
 import 'dart:async';
 
 import 'api_client.dart';
+import 'live_activity_service.dart';
+import 'live_update_service.dart';
 import 'local_notification_service.dart';
 
 class CourseReminderSettings {
@@ -22,6 +24,8 @@ class CourseReminderSlot {
     required this.title,
     required this.body,
     required this.courseName,
+    required this.countdownTarget,
+    required this.shortCriticalText,
   });
 
   final int id;
@@ -29,10 +33,13 @@ class CourseReminderSlot {
   final String title;
   final String body;
   final String courseName;
+  final DateTime countdownTarget;
+  final String shortCriticalText;
 }
 
 class ReminderService {
   static final List<Timer> _courseTimers = [];
+  static final List<Timer> _cancelTimers = [];
   static String? _courseSignature;
 
   static int get pendingCourseReminderCount => _courseTimers.length;
@@ -57,16 +64,50 @@ class ReminderService {
     );
     for (final slot in slots) {
       final delay = slot.when.difference(now);
-      _courseTimers.add(Timer(delay, () {
-        LocalNotificationService.show(
+      _courseTimers.add(Timer(delay, () async {
+        final extras = {
+          'type': 'course_reminder',
+          'courseName': slot.courseName,
+        };
+        LiveActivityController.instance.show(
+          LiveActivityEvent(
+            id: slot.id.toString(),
+            type: 'course_reminder',
+            title: slot.title,
+            body: slot.body,
+            style: 'progress',
+            endTime: slot.countdownTarget,
+            shortText: '上课',
+            targetTab: 'schedule',
+            ongoing: true,
+            progress: _slotProgress(slot),
+          ),
+        );
+        final posted = await LiveUpdateService.postTimedProgressLiveUpdate(
           id: slot.id,
           title: slot.title,
           body: slot.body,
-          extras: {
-            'type': 'course_reminder',
-            'courseName': slot.courseName,
-          },
+          startTimeMillis: slot.when.millisecondsSinceEpoch,
+          endTimeMillis: slot.countdownTarget.millisecondsSinceEpoch,
+          shortCriticalText: '上课',
+          extras: extras,
         );
+        if (!posted) {
+          await LocalNotificationService.show(
+            id: slot.id,
+            title: slot.title,
+            body: slot.body,
+            extras: extras,
+          );
+        }
+        final cancelDelay = slot.countdownTarget.difference(DateTime.now());
+        if (cancelDelay.isNegative) {
+          LiveUpdateService.cancelLiveUpdate(id: slot.id);
+        } else {
+          _cancelTimers.add(Timer(cancelDelay, () {
+            LiveUpdateService.cancelLiveUpdate(id: slot.id);
+          }));
+        }
       }));
     }
   }
@@ -76,6 +117,10 @@ class ReminderService {
       timer.cancel();
     }
     _courseTimers.clear();
+    for (final timer in _cancelTimers) {
+      timer.cancel();
+    }
+    _cancelTimers.clear();
     _courseSignature = null;
   }
 
@@ -130,6 +175,8 @@ class ReminderService {
             body: _courseBody(course, classStart,
                 prefix: '${settings.beforeStartMinutes} 分钟后'),
             courseName: course.name,
+            countdownTarget: classStart,
+            shortCriticalText: '${settings.beforeStartMinutes}min',
           ));
         }
         if (endReminder.isAfter(now) && !endReminder.isAfter(endAt)) {
@@ -140,6 +187,8 @@ class ReminderService {
             body: _courseBody(course, classEnd,
                 prefix: '${settings.beforeEndMinutes} 分钟后下课'),
             courseName: course.name,
+            countdownTarget: classEnd,
+            shortCriticalText: '${settings.beforeEndMinutes}min',
           ));
         }
       }
@@ -208,6 +257,13 @@ class ReminderService {
     final hour = value.hour.toString().padLeft(2, '0');
     final minute = value.minute.toString().padLeft(2, '0');
     return '$hour:$minute';
+  }
+
+  static double _slotProgress(CourseReminderSlot slot) {
+    final total = slot.countdownTarget.difference(slot.when).inMilliseconds;
+    if (total <= 0) return 1;
+    final elapsed = DateTime.now().difference(slot.when).inMilliseconds;
+    return (elapsed / total).clamp(0.0, 1.0);
   }
 }
 

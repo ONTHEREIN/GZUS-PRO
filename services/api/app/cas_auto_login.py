@@ -6,6 +6,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass
+from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 import httpx
@@ -66,6 +67,7 @@ class CasLoginResult:
     ehall_cookies: str | None = None
     ehall_auth_token: str | None = None
     error: str | None = None
+    httpx_client: Any | None = None
 
 
 def _rsa_encrypt(plaintext: str) -> str:
@@ -186,45 +188,63 @@ class CasAutoLogin:
     # ------------------------------------------------------------------
 
     def auto_login(self, account: str, password: str) -> CasLoginResult:
-        """Orchestrate the full CAS login flow with CAPTCHA retry."""
+        """Orchestrate the full CAS login flow with CAPTCHA retry.
+
+        On success, returns a CasLoginResult with the httpx_client that
+        holds the authenticated JWXT session cookies.  Callers should pass
+        this client to SchoolSdkClient(..., httpx_client=result.httpx_client)
+        so that proxy_request uses the already-authenticated session directly.
+        """
         try:
-            with httpx.Client(follow_redirects=False, timeout=self.timeout) as client:
-                # Step 1: GET CAS login page to establish session
-                # Retry on transient DNS/connection errors
-                self._fetch_cas_page_with_retry(client)
+            client = httpx.Client(follow_redirects=False, timeout=self.timeout)
+            # Step 1: GET CAS login page to establish session
+            # Retry on transient DNS/connection errors
+            self._fetch_cas_page_with_retry(client)
 
-                for attempt in range(1, MAX_CAPTCHA_RETRIES + 1):
-                    # Step 2: GET kaptcha (returns uid + image)
-                    kaptcha_uid, captcha_bytes = self._download_kaptcha(client)
-                    if not captcha_bytes:
-                        return CasLoginResult(
-                            account=account, cookies="", error="无法获取验证码图片"
-                        )
+            for attempt in range(1, MAX_CAPTCHA_RETRIES + 1):
+                # Step 2: GET kaptcha (returns uid + image)
+                kaptcha_uid, captcha_bytes = self._download_kaptcha(client)
+                if not captcha_bytes:
+                    return CasLoginResult(
+                        account=account, cookies="", error="无法获取验证码图片"
+                    )
 
-                    # Step 3: OCR the captcha and solve arithmetic
+                # Step 3: OCR the captcha and solve arithmetic
+                try:
                     ocr_text = captcha_ocr.recognize(captcha_bytes)
-                    captcha_code = _solve_arithmetic_captcha(ocr_text)
-                    logger.info(
-                        "CAPTCHA attempt %d/%d: OCR=%r, solved=%s",
-                        attempt, MAX_CAPTCHA_RETRIES, ocr_text, captcha_code,
+                except RuntimeError as exc:
+                    logger.error("CAPTCHA OCR unavailable: %s", exc)
+                    return CasLoginResult(
+                        account=account, cookies="", error=str(exc)
                     )
-                    if not captcha_code:
-                        logger.warning("Failed to solve captcha, getting new one")
-                        continue
-
-                    # Step 4: POST /v1/tickets with RSA-encrypted password
-                    result = self._submit_login(
-                        client, account, password, kaptcha_uid, captcha_code
-                    )
-                    if result is not None:
-                        return result
-
-                    # Login returned CODEFALSE – captcha was wrong, retry
-                    logger.info("Captcha was wrong on attempt %d, retrying", attempt)
-
-                return CasLoginResult(
-                    account=account, cookies="", error="验证码识别失败，请重试"
+                captcha_code = _solve_arithmetic_captcha(ocr_text)
+                logger.info(
+                    "CAPTCHA attempt %d/%d: OCR=%r, solved=%s",
+                    attempt, MAX_CAPTCHA_RETRIES, ocr_text, captcha_code,
                 )
+                if not captcha_code:
+                    logger.warning("Failed to solve captcha, getting new one")
+                    continue
+
+                # Step 4: POST /v1/tickets with RSA-encrypted password
+                result = self._submit_login(
+                    client, account, password, kaptcha_uid, captcha_code
+                )
+                if result is not None:
+                    if result.error:
+                        result.httpx_client = None
+                    else:
+                        # Switch to follow_redirects for authenticated requests
+                        self._enable_follow_redirects(client)
+                        result.httpx_client = client
+                    return result
+
+                # Login returned CODEFALSE – captcha was wrong, retry
+                logger.info("Captcha was wrong on attempt %d, retrying", attempt)
+
+            return CasLoginResult(
+                account=account, cookies="", error="验证码识别失败，请重试"
+            )
         except Exception as exc:
             logger.exception("CAS auto-login error")
             return CasLoginResult(account=account, cookies="", error=str(exc))
@@ -235,6 +255,16 @@ class CasAutoLogin:
 
     _CONNECT_RETRIES = 3
     _CONNECT_RETRY_DELAY = 2  # seconds
+
+    @staticmethod
+    def _enable_follow_redirects(client: httpx.Client) -> None:
+        """Switch the httpx client to follow_redirects=True after CAS login.
+
+        The CAS flow uses follow_redirects=False because we need to
+        explicitly handle ticket/TGT redirects.  Once logged in, we need
+        follow_redirects=True for normal JWXT API proxy requests.
+        """
+        client.follow_redirects = True
 
     def _fetch_cas_page_with_retry(self, client: httpx.Client) -> None:
         """GET the CAS login page with retry on transient DNS/connection errors."""
@@ -416,14 +446,16 @@ class CasAutoLogin:
         else:
             redirect_url = f"{service_url}?ticket={ticket}"
 
-        logger.debug("Following service URL with ticket: %s", redirect_url)
-        try:
-            response = client.get(redirect_url, follow_redirects=True)
-            response.raise_for_status()
-        except Exception as exc:
-            logger.warning("Failed to follow service URL: %s", exc)
+        jwxt_host = urlparse(self._service_url).hostname or "jwxt.seig.edu.cn"
+        self._follow_service_ticket(client, redirect_url)
+        jwxt_cookies = self._extract_cookies_for_hosts(client, [jwxt_host])
+        if not jwxt_cookies and tgt:
+            fallback_ticket = self._request_service_ticket(client, tgt, self._service_url)
+            if fallback_ticket:
+                fallback_url = self._service_ticket_url(self._service_url, fallback_ticket)
+                self._follow_service_ticket(client, fallback_url)
+                jwxt_cookies = self._extract_cookies_for_hosts(client, [jwxt_host])
 
-        jwxt_cookies = self._extract_domain_cookies(client, "jwxt")
         ehall_cookies, ehall_token = self._get_ehall_session(client, tgt)
 
         if not jwxt_cookies and not ehall_cookies:
@@ -436,6 +468,39 @@ class CasAutoLogin:
             ehall_auth_token=ehall_token,
         )
 
+    def _follow_service_ticket(self, client: httpx.Client, url: str) -> None:
+        logger.debug("Following service URL with ticket: %s", url)
+        try:
+            response = client.get(url, follow_redirects=True)
+            response.raise_for_status()
+        except Exception as exc:
+            logger.warning("Failed to follow service URL: %s", exc)
+
+    def _request_service_ticket(
+        self,
+        client: httpx.Client,
+        tgt: str,
+        service_url: str,
+    ) -> str:
+        try:
+            tgt_url = f"{self._cas_base}/lyuapServer/v1/tickets/{tgt}"
+            response = client.post(
+                tgt_url,
+                data={"service": service_url},
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+            if response.status_code == 200:
+                return response.text.strip()
+        except Exception as exc:
+            logger.warning("Failed to request service ticket: %s", exc)
+        return ""
+
+    @staticmethod
+    def _service_ticket_url(service_url: str, ticket: str) -> str:
+        if "?" in service_url:
+            return f"{service_url}&ticket={ticket}"
+        return f"{service_url}?ticket={ticket}"
+
     # ------------------------------------------------------------------
     # Cookie extraction helpers
     # ------------------------------------------------------------------
@@ -447,6 +512,25 @@ class CasAutoLogin:
         for cookie in client.cookies.jar:
             if domain_keyword in (cookie.domain or ""):
                 cookie_parts.append(f"{cookie.name}={cookie.value}")
+        return "; ".join(cookie_parts) if cookie_parts else ""
+
+    @staticmethod
+    def _extract_cookies_for_hosts(client: httpx.Client, hosts: list[str]) -> str:
+        """Extract cookies that would be sent to any target host."""
+        target_hosts = [host.lower().lstrip(".") for host in hosts if host]
+        cookie_parts: list[str] = []
+        seen: set[str] = set()
+        for cookie in client.cookies.jar:
+            domain = (cookie.domain or "").lower().lstrip(".")
+            if not domain:
+                continue
+            if not any(host == domain or host.endswith(f".{domain}") for host in target_hosts):
+                continue
+            key = cookie.name
+            if key in seen:
+                continue
+            seen.add(key)
+            cookie_parts.append(f"{cookie.name}={cookie.value}")
         return "; ".join(cookie_parts) if cookie_parts else ""
 
     # ------------------------------------------------------------------

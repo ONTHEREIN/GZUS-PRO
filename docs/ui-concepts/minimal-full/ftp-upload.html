@@ -1,0 +1,579 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>作业上传 - OneGZUS</title>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700;900&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+    <style>
+        .ftp-layout {
+            display: grid;
+            grid-template-columns: minmax(0, 1.35fr) minmax(320px, 0.65fr);
+            gap: 20px;
+            align-items: start;
+        }
+        .ftp-stack {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        .status-strip {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 12px;
+        }
+        .status-tile {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            padding: 18px;
+            animation: cardEnter 0.6s var(--transition) both;
+        }
+        .status-top {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 10px;
+        }
+        .status-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--secondary);
+        }
+        .status-value {
+            font-size: 20px;
+            font-weight: 800;
+            color: var(--primary);
+            line-height: 1.2;
+        }
+        .status-meta {
+            font-size: 12px;
+            color: var(--secondary);
+            margin-top: 4px;
+        }
+        .state-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: var(--success);
+            box-shadow: 0 0 0 4px var(--success-light);
+            flex-shrink: 0;
+        }
+        .state-dot.warning {
+            background: var(--warning);
+            box-shadow: 0 0 0 4px var(--warning-light);
+        }
+        .form-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 14px;
+        }
+        .field {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .field.full {
+            grid-column: 1 / -1;
+        }
+        .field label {
+            font-size: 13px;
+            font-weight: 700;
+            color: var(--primary);
+        }
+        .field input,
+        .field select {
+            width: 100%;
+            min-height: 44px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            background: var(--bg);
+            color: var(--primary);
+            padding: 0 14px;
+            font: inherit;
+            outline: none;
+        }
+        .field input:focus,
+        .field select:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 4px var(--accent-light);
+        }
+        .field-note {
+            font-size: 12px;
+            color: var(--secondary);
+        }
+        .action-row {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-top: 18px;
+        }
+        .primary-btn,
+        .secondary-btn {
+            min-height: 44px;
+            border-radius: var(--radius-sm);
+            padding: 0 16px;
+            border: 1px solid transparent;
+            font: inherit;
+            font-weight: 700;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            cursor: pointer;
+            transition: all 0.3s var(--transition);
+        }
+        .primary-btn {
+            background: var(--accent);
+            color: white;
+        }
+        .primary-btn:hover {
+            background: var(--accent-hover);
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-md);
+        }
+        .secondary-btn {
+            background: var(--surface);
+            border-color: var(--border);
+            color: var(--primary);
+        }
+        .secondary-btn:hover {
+            background: var(--surface-hover);
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+        .drop-zone {
+            border: 1.5px dashed var(--border);
+            border-radius: var(--radius-lg);
+            background: var(--bg);
+            padding: 28px;
+            min-height: 190px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            gap: 12px;
+        }
+        .drop-icon {
+            width: 56px;
+            height: 56px;
+            border-radius: var(--radius-md);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--accent-light);
+            color: var(--accent);
+        }
+        .drop-title {
+            font-size: 18px;
+            font-weight: 800;
+        }
+        .drop-meta {
+            font-size: 13px;
+            color: var(--secondary);
+        }
+        .path-bar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+            padding: 12px 14px;
+            border-radius: var(--radius-md);
+            background: var(--bg);
+            color: var(--secondary);
+            font-size: 13px;
+            margin-bottom: 16px;
+        }
+        .path-current {
+            color: var(--primary);
+            font-weight: 700;
+        }
+        .folder-list,
+        .upload-list {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .folder-row,
+        .upload-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px;
+            border-radius: var(--radius-md);
+            border: 1px solid var(--border-light);
+            background: var(--surface);
+        }
+        .folder-row:hover,
+        .upload-row:hover {
+            background: var(--bg);
+            border-color: var(--border);
+        }
+        .row-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: var(--radius-sm);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--accent-light);
+            color: var(--accent);
+            flex-shrink: 0;
+        }
+        .row-main {
+            flex: 1;
+            min-width: 0;
+        }
+        .row-title {
+            font-size: 14px;
+            font-weight: 700;
+            color: var(--primary);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .row-meta {
+            font-size: 12px;
+            color: var(--secondary);
+            margin-top: 2px;
+        }
+        .progress-mini {
+            width: 120px;
+            height: 6px;
+            border-radius: 3px;
+            overflow: hidden;
+            background: var(--border-light);
+            flex-shrink: 0;
+        }
+        .progress-mini span {
+            display: block;
+            height: 100%;
+            border-radius: 3px;
+            background: var(--accent);
+        }
+        .security-note {
+            display: flex;
+            gap: 12px;
+            padding: 16px;
+            border-radius: var(--radius-lg);
+            background: var(--success-light);
+            color: var(--success);
+            font-size: 13px;
+            font-weight: 600;
+        }
+        .unavailable {
+            border-color: var(--warning);
+            background: var(--warning-light);
+        }
+        @media (max-width: 1100px) {
+            .ftp-layout {
+                grid-template-columns: 1fr;
+            }
+        }
+        @media (max-width: 768px) {
+            .status-strip,
+            .form-grid {
+                grid-template-columns: 1fr;
+            }
+            .progress-mini {
+                width: 72px;
+            }
+            .drop-zone {
+                padding: 22px 16px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="app">
+        <aside class="sidebar">
+            <div class="logo">OneGZUS</div>
+            <nav class="nav-main">
+                <a href="index.html" class="nav-item">
+                    <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
+                    <span class="nav-label">首页</span>
+                </a>
+                <a href="schedule.html" class="nav-item">
+                    <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                    <span class="nav-label">课表</span>
+                </a>
+                <a href="attendance.html" class="nav-item">
+                    <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
+                    <span class="nav-label">考勤</span>
+                </a>
+                <a href="grades.html" class="nav-item">
+                    <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/></svg>
+                    <span class="nav-label">成绩</span>
+                </a>
+                <a href="notifications.html" class="nav-item">
+                    <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg>
+                    <span class="nav-label">通知</span>
+                    <span class="nav-badge">3</span>
+                </a>
+            </nav>
+            <nav class="nav-secondary">
+                <a href="utilities.html" class="nav-item">
+                    <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                    <span class="nav-label">水电</span>
+                </a>
+                <a href="ftp-upload.html" class="nav-item active">
+                    <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1M12 4v12m0-12l-4 4m4-4l4 4"/></svg>
+                    <span class="nav-label">作业上传</span>
+                </a>
+                <a href="leave.html" class="nav-item">
+                    <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/></svg>
+                    <span class="nav-label">请假</span>
+                </a>
+                <a href="settings.html" class="nav-item">
+                    <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                    <span class="nav-label">设置</span>
+                </a>
+            </nav>
+        </aside>
+
+        <main class="main">
+            <header class="header">
+                <div class="greeting">
+                    <h1>作业上传</h1>
+                    <p>仅在客户端连接学校内网 FTP</p>
+                </div>
+                <div class="header-actions">
+                    <button class="icon-btn" id="theme-toggle" title="切换主题" onclick="toggleTheme()">
+                        <svg id="theme-icon" width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/></svg>
+                    </button>
+                    <button class="icon-btn" title="刷新目录">
+                        <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582M20 20v-5h-.581M5.635 9A7.003 7.003 0 0117.657 6.343M18.365 15A7.003 7.003 0 016.343 17.657"/></svg>
+                    </button>
+                </div>
+            </header>
+
+            <div class="status-strip">
+                <div class="status-tile">
+                    <div class="status-top">
+                        <span class="status-title">网络</span>
+                        <span class="state-dot"></span>
+                    </div>
+                    <div class="status-value">校园网</div>
+                    <div class="status-meta">192.168.12.37 · 可访问 FTP</div>
+                </div>
+                <div class="status-tile">
+                    <div class="status-top">
+                        <span class="status-title">连接</span>
+                        <span class="state-dot"></span>
+                    </div>
+                    <div class="status-value">已连接</div>
+                    <div class="status-meta">ftp.school.local:21</div>
+                </div>
+                <div class="status-tile">
+                    <div class="status-top">
+                        <span class="status-title">平台</span>
+                        <span class="state-dot warning"></span>
+                    </div>
+                    <div class="status-value">移动端</div>
+                    <div class="status-meta">Web 版显示不可用提示</div>
+                </div>
+            </div>
+
+            <div class="ftp-layout" style="margin-top: 20px;">
+                <div class="ftp-stack">
+                    <section class="card">
+                        <div class="card-header">
+                            <span class="card-label">上传文件</span>
+                            <span class="badge">2 个待处理</span>
+                        </div>
+                        <div class="drop-zone">
+                            <div class="drop-icon">
+                                <svg width="28" height="28" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M12 12v9m0-9l-3 3m3-3l3 3"/></svg>
+                            </div>
+                            <div>
+                                <div class="drop-title">选择作业文件</div>
+                                <div class="drop-meta">支持 PDF、Word、PPT、ZIP；单个文件建议小于 100 MB</div>
+                            </div>
+                            <button class="primary-btn">
+                                <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                                添加文件
+                            </button>
+                        </div>
+                    </section>
+
+                    <section class="card">
+                        <div class="card-header">
+                            <span class="card-label">目标目录</span>
+                            <span class="badge badge-outline">课程作业</span>
+                        </div>
+                        <div class="path-bar">
+                            <span>/</span>
+                            <span>作业提交</span>
+                            <span>/</span>
+                            <span>2025-2026-2</span>
+                            <span>/</span>
+                            <span class="path-current">移动应用开发</span>
+                        </div>
+                        <div class="folder-list">
+                            <div class="folder-row">
+                                <div class="row-icon" style="background: var(--warning-light); color: var(--warning);">
+                                    <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"/></svg>
+                                </div>
+                                <div class="row-main">
+                                    <div class="row-title">第 12 周实验报告</div>
+                                    <div class="row-meta">截止 6月12日 23:59 · 可上传</div>
+                                </div>
+                                <span class="badge">当前</span>
+                            </div>
+                            <div class="folder-row unavailable">
+                                <div class="row-icon" style="background: var(--warning-light); color: var(--warning);">
+                                    <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M5.07 19h13.86a2 2 0 001.74-2.99L13.74 4a2 2 0 00-3.48 0L3.33 16.01A2 2 0 005.07 19z"/></svg>
+                                </div>
+                                <div class="row-main">
+                                    <div class="row-title">期末大作业归档</div>
+                                    <div class="row-meta">暂未开放 · 仅显示目录</div>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+                </div>
+
+                <aside class="ftp-stack">
+                    <section class="card">
+                        <div class="card-header">
+                            <span class="card-label">FTP 配置</span>
+                            <span class="badge" style="background: var(--success-light); color: var(--success);">本机保存</span>
+                        </div>
+                        <div class="form-grid">
+                            <div class="field full">
+                                <label>服务器</label>
+                                <input value="ftp.school.local" readonly>
+                            </div>
+                            <div class="field">
+                                <label>端口</label>
+                                <input value="21" readonly>
+                            </div>
+                            <div class="field">
+                                <label>协议</label>
+                                <select>
+                                    <option>FTP</option>
+                                    <option>FTPS</option>
+                                    <option>SFTP</option>
+                                </select>
+                            </div>
+                            <div class="field full">
+                                <label>账号</label>
+                                <input value="2025******" readonly>
+                                <div class="field-note">密码进入系统安全区，不发送到 OneGZUS 后端。</div>
+                            </div>
+                        </div>
+                        <div class="action-row">
+                            <button class="primary-btn">
+                                <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                                测试连接
+                            </button>
+                            <button class="secondary-btn">
+                                <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>
+                                更换账号
+                            </button>
+                        </div>
+                    </section>
+
+                    <section class="security-note">
+                        <svg width="22" height="22" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="flex-shrink: 0;"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 11c0 1.657-1.343 3-3 3S6 12.657 6 11s1.343-3 3-3 3 1.343 3 3z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 12.414M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                        <span>FTP 连接、目录读取、文件上传全部发生在客户端；后端不接触文件和凭据。</span>
+                    </section>
+
+                    <section class="card">
+                        <div class="card-header">
+                            <span class="card-label">上传队列</span>
+                            <span class="badge badge-outline">1/2</span>
+                        </div>
+                        <div class="upload-list">
+                            <div class="upload-row">
+                                <div class="row-icon" style="background: var(--accent-light); color: var(--accent);">
+                                    <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>
+                                </div>
+                                <div class="row-main">
+                                    <div class="row-title">实验12-20251234.pdf</div>
+                                    <div class="row-meta">2.8 MB · 上传中</div>
+                                </div>
+                                <div class="progress-mini"><span style="width: 72%;"></span></div>
+                            </div>
+                            <div class="upload-row">
+                                <div class="row-icon" style="background: var(--success-light); color: var(--success);">
+                                    <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                                </div>
+                                <div class="row-main">
+                                    <div class="row-title">源代码.zip</div>
+                                    <div class="row-meta">18.4 MB · 已完成</div>
+                                </div>
+                                <span class="badge" style="background: var(--success-light); color: var(--success);">完成</span>
+                            </div>
+                            <div class="upload-row">
+                                <div class="row-icon" style="background: var(--danger-light); color: var(--danger);">
+                                    <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                                </div>
+                                <div class="row-main">
+                                    <div class="row-title">演示录屏.mp4</div>
+                                    <div class="row-meta">126 MB · 超过课程限制</div>
+                                </div>
+                                <span class="badge" style="background: var(--danger-light); color: var(--danger);">失败</span>
+                            </div>
+                        </div>
+                    </section>
+                </aside>
+            </div>
+        </main>
+    </div>
+
+    <nav class="mobile-nav">
+        <a href="index.html" class="mobile-nav-item">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
+            <span>首页</span>
+        </a>
+        <a href="schedule.html" class="mobile-nav-item">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+            <span>课表</span>
+        </a>
+        <a href="attendance.html" class="mobile-nav-item">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
+            <span>考勤</span>
+        </a>
+        <a href="grades.html" class="mobile-nav-item">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/></svg>
+            <span>成绩</span>
+        </a>
+        <a href="more.html" class="mobile-nav-item active">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1M12 4v12m0-12l-4 4m4-4l4 4"/></svg>
+            <span>上传</span>
+        </a>
+    </nav>
+
+    <script>
+        (function() {
+            const saved = localStorage.getItem('theme');
+            if (saved === 'dark') {
+                document.documentElement.setAttribute('data-theme', 'dark');
+            } else if (saved === 'light') {
+                document.documentElement.setAttribute('data-theme', 'light');
+            }
+            function updateThemeUI() {
+                const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+                const icon = document.getElementById('theme-icon');
+                if (icon) {
+                    icon.innerHTML = isDark
+                        ? '<circle cx="12" cy="12" r="5"/><path d="M12 1v2m0 18v2M4.22 4.22l1.42 1.42m12.72 12.72l1.42 1.42M1 12h2m18 0h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>'
+                        : '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/>';
+                }
+            }
+            window.toggleTheme = function() {
+                const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+                const next = isDark ? 'light' : 'dark';
+                document.documentElement.setAttribute('data-theme', next);
+                localStorage.setItem('theme', next);
+                updateThemeUI();
+            };
+            updateThemeUI();
+        })();
+    </script>
+</body>
+</html>

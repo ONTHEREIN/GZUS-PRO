@@ -144,6 +144,7 @@ class BackgroundService : Service() {
                 startPolling()
                 scheduleKeepAlive(this)
                 checkAppProcessAlive()
+                CourseReminderScheduler(this).scheduleAll()
             }
         }
         return START_STICKY
@@ -289,7 +290,9 @@ class BackgroundService : Service() {
             val appForeground = prefs.getBoolean(KEY_APP_FOREGROUND, false)
             for (index in 0 until messages.length()) {
                 val message = messages.optJSONObject(index) ?: continue
-                if (!appForeground) {
+                val isLiveUpdate = message.optBoolean("liveUpdate", false) ||
+                    (message.optJSONObject("extras")?.optBoolean("liveUpdate", false) ?: false)
+                if (isLiveUpdate || !appForeground) {
                     showPushNotification(message)
                 }
             }
@@ -321,12 +324,65 @@ class BackgroundService : Service() {
     }
 
     private fun showPushNotification(message: JSONObject) {
-        val title = message.optString("title", "GZUS-PRO 通知")
+        val title = message.optString("title", "OneGZUS 通知")
         val body = message.optString("body", "")
         val extras = message.optJSONObject("extras") ?: JSONObject().apply {
             put("type", message.optString("type", ""))
             put("url", message.optString("url", ""))
         }
+        val liveUpdate = message.optBoolean("liveUpdate", false)
+        val style = message.optString("style", "metric")
+        val endTime = message.optLong("endTime", 0L)
+        val progressStartTime = message.optLong("progressStartTime", System.currentTimeMillis())
+        val progressMax = message.optInt("progressMax", 0)
+        val progressCurrent = message.optInt("progressCurrent", 0)
+        val ongoing = message.optBoolean("ongoing", style != "metric")
+        val shortCriticalText = message.optString("shortCriticalText", "").ifBlank { null }
+
+        // Try live update notification first
+        if (liveUpdate) {
+            try {
+                val helper = LiveUpdateNotificationHelper(this)
+                val notificationKey = message.optString("id").ifBlank { "${System.currentTimeMillis()}" }
+                val posted = helper.postLiveUpdate(
+                    id = notificationKey.hashCode(),
+                    title = title,
+                    body = body,
+                    style = style,
+                    endTimeMillis = endTime,
+                    shortCriticalText = shortCriticalText,
+                    extrasJson = extras.toString(),
+                    ongoing = ongoing,
+                    progressMax = if (style == "progress" && endTime > 0L) 100 else progressMax,
+                    progressCurrent = if (style == "progress" && endTime > 0L) {
+                        timeProgress(progressStartTime, endTime)
+                    } else {
+                        progressCurrent
+                    },
+                )
+                if (posted) {
+                    val cancelTime = if (style == "metric") System.currentTimeMillis() + 30 * 60 * 1000L else endTime
+                    if (ongoing && style == "progress" && endTime > System.currentTimeMillis()) {
+                        scheduleProgressUpdates(
+                            helper = helper,
+                            notificationId = notificationKey.hashCode(),
+                            title = title,
+                            body = body,
+                            endTimeMillis = endTime,
+                            startTimeMillis = progressStartTime,
+                            shortCriticalText = shortCriticalText,
+                            extrasJson = extras.toString(),
+                        )
+                    }
+                    scheduleLiveUpdateCancel(notificationKey.hashCode(), cancelTime)
+                    return
+                }
+            } catch (_: Exception) {
+                // Fall through to regular notification
+            }
+        }
+
+        // Existing regular notification code
         val intent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
             putExtra(EXTRA_PUSH_EXTRAS, extras.toString())
@@ -354,6 +410,50 @@ class BackgroundService : Service() {
         }
     }
 
+    private fun scheduleLiveUpdateCancel(notificationId: Int, endTimeMillis: Long) {
+        if (endTimeMillis <= System.currentTimeMillis()) return
+        Handler(Looper.getMainLooper()).postDelayed({
+            LiveUpdateNotificationHelper(this).cancelLiveUpdate(notificationId)
+        }, endTimeMillis - System.currentTimeMillis())
+    }
+
+    private fun scheduleProgressUpdates(
+        helper: LiveUpdateNotificationHelper,
+        notificationId: Int,
+        title: String,
+        body: String,
+        startTimeMillis: Long,
+        endTimeMillis: Long,
+        shortCriticalText: String?,
+        extrasJson: String,
+    ) {
+        val handler = Handler(Looper.getMainLooper())
+        fun postNext() {
+            if (endTimeMillis <= System.currentTimeMillis()) return
+            helper.postLiveUpdate(
+                id = notificationId,
+                title = title,
+                body = body,
+                style = "progress",
+                endTimeMillis = endTimeMillis,
+                shortCriticalText = shortCriticalText,
+                extrasJson = extrasJson,
+                ongoing = true,
+                progressMax = 100,
+                progressCurrent = timeProgress(startTimeMillis, endTimeMillis),
+            )
+            handler.postDelayed({ postNext() }, 60_000L)
+        }
+        handler.postDelayed({ postNext() }, 60_000L)
+    }
+
+    private fun timeProgress(startTimeMillis: Long, endTimeMillis: Long): Int {
+        val total = endTimeMillis - startTimeMillis
+        if (total <= 0L) return 100
+        val elapsed = System.currentTimeMillis() - startTimeMillis
+        return ((elapsed.toDouble() / total.toDouble()) * 100.0).toInt().coerceIn(0, 100)
+    }
+
     private fun createNotificationChannels() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val foreground = NotificationChannel(
@@ -361,12 +461,12 @@ class BackgroundService : Service() {
                 "后台服务",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "GZUS-PRO 后台收消息服务"
+                description = "OneGZUS 后台收消息服务"
                 setShowBadge(false)
             }
             val push = NotificationChannel(
                 NOTIFICATION_CHANNEL_ID,
-                "GZUS-PRO 通知",
+                "OneGZUS 通知",
                 NotificationManager.IMPORTANCE_HIGH
             ).apply {
                 description = "教务系统通知推送"
@@ -388,14 +488,20 @@ class BackgroundService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("GZUS-PRO 正在后台收消息")
+            .setContentTitle("OneGZUS 正在后台收消息")
             .setContentText("用于接收教务通知和生活缴费提醒")
             .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
+            .setAutoCancel(false)
+            .setOnlyAlertOnce(true)
+            .setShowWhen(false)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .build()
+            .also {
+                it.flags = it.flags or Notification.FLAG_ONGOING_EVENT or Notification.FLAG_NO_CLEAR
+            }
     }
 
 }

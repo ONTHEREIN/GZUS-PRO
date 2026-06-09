@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OneGZUS Concept D - Editorial Brief</title>
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+  <style>
+    :root {
+      --paper: #f8f3e8;
+      --ink: #151515;
+      --muted: #6e665b;
+      --line: #d7cab7;
+      --red: #c9452f;
+      --green: #0b6b5a;
+      --blue: #275f8f;
+      --panel: #fffaf0;
+      font-family: "Source Han Serif SC", "Noto Serif SC", "SimSun", serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--ink);
+      background:
+        linear-gradient(90deg, rgba(21,21,21,.035) 1px, transparent 1px),
+        linear-gradient(rgba(21,21,21,.028) 1px, transparent 1px),
+        var(--paper);
+      background-size: 56px 56px;
+    }
+    body:after {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      opacity: .18;
+      background-image: radial-gradient(rgba(21,21,21,.18) .55px, transparent .55px);
+      background-size: 5px 5px;
+      mix-blend-mode: multiply;
+    }
+    button { font: inherit; color: inherit; }
+    .page {
+      width: min(1360px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 22px 0 36px;
+    }
+    header {
+      display: grid;
+      grid-template-columns: 72px 1fr auto;
+      align-items: center;
+      gap: 18px;
+      padding-bottom: 18px;
+      border-bottom: 3px double var(--ink);
+    }
+    .logo {
+      width: 58px;
+      height: 58px;
+      border-radius: 50%;
+      object-fit: cover;
+      border: 2px solid var(--ink);
+      padding: 4px;
+      background: var(--panel);
+    }
+    .masthead {
+      display: grid;
+      gap: 4px;
+    }
+    .masthead strong {
+      font-size: clamp(30px, 7vw, 86px);
+      line-height: .9;
+      letter-spacing: 0;
+      text-transform: uppercase;
+    }
+    .masthead span, .meta, .muted { color: var(--muted); }
+    .date {
+      min-width: 178px;
+      padding: 12px;
+      border: 1px solid var(--ink);
+      text-align: center;
+      background: rgba(255,250,240,.72);
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: 1.25fr .75fr;
+      gap: 22px;
+      margin-top: 22px;
+    }
+    .lead {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 280px;
+      gap: 20px;
+      min-height: 430px;
+      padding: 22px;
+      border: 1px solid var(--ink);
+      background: var(--panel);
+      animation: pressIn .55s ease both;
+    }
+    h1 {
+      margin: 0;
+      font-size: clamp(44px, 8vw, 104px);
+      line-height: .93;
+      letter-spacing: 0;
+    }
+    .lead p {
+      max-width: 620px;
+      color: var(--muted);
+      font-size: 18px;
+      line-height: 1.8;
+    }
+    .stamp {
+      align-self: end;
+      display: grid;
+      gap: 12px;
+      padding: 16px;
+      border: 2px solid var(--red);
+      color: var(--red);
+      transform: rotate(-2deg);
+    }
+    .stamp b { font-size: 42px; line-height: 1; }
+    .nav {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      margin-top: 16px;
+      border: 1px solid var(--ink);
+      background: var(--panel);
+    }
+    .nav button {
+      min-height: 56px;
+      border: 0;
+      border-right: 1px solid var(--ink);
+      background: transparent;
+      cursor: pointer;
+      transition: background .2s ease, color .2s ease;
+    }
+    .nav button:last-child { border-right: 0; }
+    .nav button.active, .nav button:hover { background: var(--ink); color: var(--paper); }
+    .section {
+      border: 1px solid var(--line);
+      background: rgba(255,250,240,.72);
+      animation: pressIn .55s ease both;
+    }
+    .section h2 {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin: 0;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line);
+      font-size: 24px;
+    }
+    .brief-list { padding: 0 16px 16px; }
+    .brief {
+      display: grid;
+      grid-template-columns: 88px 1fr;
+      gap: 14px;
+      padding: 14px 0;
+      border-bottom: 1px solid var(--line);
+    }
+    .brief:last-child { border-bottom: 0; }
+    .brief time { color: var(--red); font-weight: 800; }
+    .brief strong { display: block; margin-bottom: 4px; font-size: 20px; }
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin-top: 22px;
+    }
+    .card {
+      padding: 18px;
+      border: 1px solid var(--ink);
+      background: var(--panel);
+      transition: transform .24s ease, box-shadow .24s ease;
+    }
+    .card:hover {
+      transform: translateY(-5px) rotate(-.4deg);
+      box-shadow: 8px 8px 0 var(--ink);
+    }
+    .card i { color: var(--green); }
+    .card b {
+      display: block;
+      margin: 12px 0 8px;
+      font-size: 28px;
+    }
+    .week {
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      gap: 0;
+      border: 1px solid var(--ink);
+      margin-top: 22px;
+      background: var(--panel);
+    }
+    .day {
+      min-height: 174px;
+      padding: 12px;
+      border-right: 1px solid var(--line);
+    }
+    .day:last-child { border-right: 0; }
+    .day b { display: block; margin-bottom: 12px; font-size: 22px; }
+    .chip {
+      display: block;
+      padding: 8px;
+      border-left: 5px solid var(--blue);
+      background: rgba(39,95,143,.1);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    .chip + .chip { margin-top: 8px; border-left-color: var(--red); background: rgba(201,69,47,.1); }
+    @keyframes pressIn {
+      from { opacity: 0; transform: translateY(16px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @media (max-width: 980px) {
+      header, .layout, .lead { grid-template-columns: 1fr; }
+      .date { text-align: left; }
+      .cards { grid-template-columns: 1fr; }
+      .week { grid-template-columns: repeat(3, 1fr); }
+      .day { border-bottom: 1px solid var(--line); }
+    }
+    @media (max-width: 560px) {
+      .page { width: min(100% - 20px, 1360px); }
+      .nav { grid-template-columns: repeat(2, 1fr); }
+      .nav button { border-bottom: 1px solid var(--ink); }
+      .week { grid-template-columns: 1fr; }
+      .lead { padding: 16px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header>
+      <img class="logo" src="../../apps/mobile_web/assets/icon.png" alt="OneGZUS">
+      <div class="masthead">
+        <strong>Campus Brief</strong>
+        <span>OneGZUS 教务日报 · 江门校区 · 第 14 周</span>
+      </div>
+      <div class="date">2026 / 06 / 07<br><span class="muted">实时同步</span></div>
+    </header>
+    <nav class="nav">
+      <button class="active">首页</button><button>课表</button><button>请假</button><button>学分</button><button>更多</button>
+    </nav>
+    <section class="layout">
+      <article>
+        <div class="lead">
+          <div>
+            <h1>今天第一件事：09:00 体育课。</h1>
+            <p>TY101（江），赵国宾。其后是工程应用数学、Python 编程技术。请假审批有一条新进度，宿舍水电余额无需处理。</p>
+          </div>
+          <aside class="stamp">
+            <span>下一节</span>
+            <b>32 分钟</b>
+            <span>建议 08:45 出发</span>
+          </aside>
+        </div>
+        <div class="cards">
+          <div class="card"><i data-lucide="droplets"></i><b>17.99 吨</b><span class="muted">冷水余额</span></div>
+          <div class="card"><i data-lucide="flame"></i><b>18.488 元</b><span class="muted">热水余额</span></div>
+          <div class="card"><i data-lucide="zap"></i><b>155.28 度</b><span class="muted">电费余额</span></div>
+        </div>
+        <section class="week">
+          <div class="day"><b>一</b><span class="chip">形势与政策 II</span><span class="chip">计算机网络</span></div>
+          <div class="day"><b>二</b><span class="chip">管理信息系统导论</span></div>
+          <div class="day"><b>三</b><span class="chip">大学体育 II</span><span class="chip">工程应用数学</span></div>
+          <div class="day"><b>四</b><span class="chip">Python 编程技术</span></div>
+          <div class="day"><b>五</b><span class="chip">心理健康教育</span></div>
+          <div class="day"><b>六</b></div>
+          <div class="day"><b>日</b></div>
+        </section>
+      </article>
+      <aside class="section">
+        <h2>今日简报 <i data-lucide="newspaper"></i></h2>
+        <div class="brief-list">
+          <div class="brief"><time>09:00</time><div><strong>大学体育 II</strong><span class="muted">TY101（江） · 赵国宾</span></div></div>
+          <div class="brief"><time>10:40</time><div><strong>工程应用数学</strong><span class="muted">H3-205（江） · 关文超</span></div></div>
+          <div class="brief"><time>14:00</time><div><strong>办事大厅</strong><span class="muted">请假审批 · 辅导员审核中</span></div></div>
+          <div class="brief"><time>15:30</time><div><strong>Python 编程技术</strong><span class="muted">S-201（江） · 胡军成</span></div></div>
+        </div>
+      </aside>
+    </section>
+  </main>
+  <script>
+    lucide.createIcons({ strokeWidth: 1.9 });
+    document.querySelectorAll(".nav button").forEach((button) => {
+      button.addEventListener("click", () => {
+        document.querySelectorAll(".nav button").forEach((item) => item.classList.remove("active"));
+        button.classList.add("active");
+      });
+    });
+  </script>
+</body>
+</html>

@@ -4,6 +4,7 @@ import hashlib
 import mimetypes
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 from html import unescape
 from urllib.parse import quote
@@ -46,6 +47,24 @@ class EhallClient:
         self.timeout_seconds = timeout_seconds
         self._cookies = _cookie_dict(cookies)
         self._auth_token = auth_token
+        self._http_client: httpx.Client | None = None
+
+    def _get_http_client(self) -> httpx.Client:
+        if self._http_client is None or getattr(self._http_client, "is_closed", True):
+            self._http_client = httpx.Client(
+                base_url=self.base_url,
+                cookies=self._cookies,
+                timeout=self.timeout_seconds,
+                follow_redirects=True,
+                headers=self._auth_headers(),
+                limits=httpx.Limits(max_connections=6, max_keepalive_connections=3),
+            )
+        return self._http_client
+
+    def close(self) -> None:
+        if self._http_client is not None and not self._http_client.is_closed:
+            self._http_client.close()
+            self._http_client = None
 
     @property
     def cookie_header(self) -> str:
@@ -59,19 +78,16 @@ class EhallClient:
     def get_notice_items(self, page_size: int = 20) -> list[dict]:
         items: list[dict] = []
         seen: set[tuple[str, str, str]] = set()
-        for category, endpoint in TASK_ENDPOINTS.items():
+
+        def fetch_category(args: tuple[str, str]) -> list[dict]:
+            category, endpoint = args
             try:
-                payload = self._get_json(
-                    endpoint,
-                    {
-                        "pageNum": 1,
-                        "pageSize": page_size,
-                    },
-                )
+                payload = self._get_json(endpoint, {"pageNum": 1, "pageSize": page_size})
             except EhallAuthenticationError:
                 raise
             except Exception:
-                continue
+                return []
+            result = []
             for record in extract_records(payload):
                 item = normalize_task_record(record, category, self.base_url)
                 if item is None:
@@ -80,7 +96,22 @@ class EhallClient:
                 if key in seen:
                     continue
                 seen.add(key)
-                items.append(item)
+                result.append(item)
+            return result
+
+        with ThreadPoolExecutor(max_workers=min(len(TASK_ENDPOINTS), 4)) as executor:
+            futures = {
+                executor.submit(fetch_category, (cat, ep)): cat
+                for cat, ep in TASK_ENDPOINTS.items()
+            }
+            for future in as_completed(futures, timeout=self.timeout_seconds * 2):
+                try:
+                    result = future.result(timeout=self.timeout_seconds)
+                    items.extend(result)
+                except EhallAuthenticationError:
+                    raise
+                except Exception:
+                    continue
         return items
 
     def get_progress_items(self, page_size: int = 30) -> list[dict]:
@@ -90,21 +121,19 @@ class EhallClient:
         items: list[dict] = []
         counts: dict[str, int] = {category: 0 for category in TASK_CATEGORIES}
         seen: set[tuple[str, str, str]] = set()
-        for category, endpoint in TASK_ENDPOINTS.items():
+        counts_lock = None  # Only needed for thread safety
+
+        def fetch_category(args: tuple[str, str]) -> tuple[str, list[dict], int]:
+            category, endpoint = args
             try:
-                payload = self._get_json(
-                    endpoint,
-                    {
-                        "pageNum": 1,
-                        "pageSize": page_size,
-                    },
-                )
+                payload = self._get_json(endpoint, {"pageNum": 1, "pageSize": page_size})
             except EhallAuthenticationError:
                 raise
             except Exception:
-                continue
+                return category, [], 0
             records = extract_records(payload)
-            counts[category] = extract_total(payload) or len(records)
+            count = extract_total(payload) or len(records)
+            result = []
             for record in records:
                 item = normalize_progress_record(record, category, self.base_url)
                 if item is None:
@@ -113,7 +142,23 @@ class EhallClient:
                 if key in seen:
                     continue
                 seen.add(key)
-                items.append(item)
+                result.append(item)
+            return category, result, count
+
+        with ThreadPoolExecutor(max_workers=min(len(TASK_ENDPOINTS), 4)) as executor:
+            futures = {
+                executor.submit(fetch_category, (cat, ep)): cat
+                for cat, ep in TASK_ENDPOINTS.items()
+            }
+            for future in as_completed(futures, timeout=self.timeout_seconds * 2):
+                try:
+                    category, result, count = future.result(timeout=self.timeout_seconds)
+                    counts[category] = count
+                    items.extend(result)
+                except EhallAuthenticationError:
+                    raise
+                except Exception:
+                    continue
         items.sort(key=lambda item: item.get("date") or "", reverse=True)
         return {
             "categories": [
@@ -332,17 +377,8 @@ class EhallClient:
                 f"timestamp={timestamp},key={csrf_key}".encode("utf-8")
             ).hexdigest(),
         }
-        headers: dict[str, str] = {}
-        if self._auth_token:
-            headers["Authorization"] = self._auth_token
-        with httpx.Client(
-            base_url=self.base_url,
-            cookies=self._cookies,
-            timeout=self.timeout_seconds,
-            follow_redirects=True,
-            headers=headers,
-        ) as client:
-            response = client.get(endpoint, params=query)
+        client = self._get_http_client()
+        response = client.get(endpoint, params=query)
         if _looks_like_login(response):
             raise EhallAuthenticationError("办事大厅会话已失效，请重新登录")
         response.raise_for_status()

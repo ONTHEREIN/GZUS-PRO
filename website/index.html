@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OneGZUS | 选择设计版本</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #faf9f5;
+      --ink: #141413;
+      --muted: #8a8986;
+      --subtle: #e8e6dc;
+      --accent: #1e3a5f;
+      --radius: 20px;
+      --spring: cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Space Grotesk', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+      min-height: 100dvh;
+      display: flex;
+      flex-direction: column;
+    }
+    .header {
+      text-align: center;
+      padding: 80px 24px 40px;
+    }
+    .header h1 {
+      font-size: 2rem;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      margin-bottom: 8px;
+    }
+    .header p {
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+    .versions {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 40px 24px 80px;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 24px;
+      flex: 1;
+    }
+    .version-card {
+      background: white;
+      border: 1px solid var(--subtle);
+      border-radius: var(--radius);
+      overflow: hidden;
+      transition: all 0.4s var(--spring);
+      text-decoration: none;
+      color: inherit;
+      display: flex;
+      flex-direction: column;
+    }
+    .version-card:hover {
+      transform: translateY(-8px);
+      box-shadow: 0 20px 60px rgba(0,0,0,0.08);
+      border-color: transparent;
+    }
+    .version-preview {
+      height: 200px;
+      position: relative;
+      overflow: hidden;
+      border-bottom: 1px solid var(--subtle);
+    }
+    .version-preview iframe {
+      width: 400px;
+      height: 800px;
+      border: none;
+      transform: scale(0.5);
+      transform-origin: top left;
+      pointer-events: none;
+      position: absolute;
+      top: 0; left: 0;
+    }
+    .version-preview .fallback {
+      width: 100%;
+      height: 100%;
+      display: grid;
+      place-items: center;
+      font-size: 3rem;
+      font-weight: 700;
+      color: var(--subtle);
+      letter-spacing: -0.05em;
+    }
+    .version-info {
+      padding: 24px;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+    }
+    .version-tag {
+      display: inline-block;
+      font-size: 0.65rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--accent);
+      background: #e8eef5;
+      padding: 3px 10px;
+      border-radius: 100px;
+      width: fit-content;
+      margin-bottom: 12px;
+    }
+    .version-info h2 {
+      font-size: 1.2rem;
+      font-weight: 700;
+      margin-bottom: 8px;
+      letter-spacing: -0.02em;
+    }
+    .version-info p {
+      font-size: 0.85rem;
+      color: var(--muted);
+      line-height: 1.5;
+      flex: 1;
+    }
+    .version-meta {
+      display: flex;
+      gap: 12px;
+      margin-top: 16px;
+      padding-top: 16px;
+      border-top: 1px solid var(--subtle);
+    }
+    .version-meta span {
+      font-size: 0.7rem;
+      color: var(--muted);
+      font-weight: 500;
+    }
+    .version-cta {
+      display: block;
+      margin-top: 20px;
+      padding: 10px 0;
+      text-align: center;
+      background: var(--ink);
+      color: white;
+      font-size: 0.8rem;
+      font-weight: 600;
+      border-radius: 10px;
+      transition: all 0.3s;
+    }
+    .version-card:hover .version-cta {
+      background: var(--accent);
+    }
+    .footer {
+      text-align: center;
+      padding: 24px;
+      font-size: 0.75rem;
+      color: var(--muted);
+      border-top: 1px solid var(--subtle);
+    }
+    @media (max-width: 900px) {
+      .versions { grid-template-columns: 1fr; max-width: 480px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>OneGZUS 网站设计</h1>
+    <p>三个风格版本，选择最适合的一个</p>
+  </div>
+  <div class="versions">
+    <a href="v1-bento.html" class="version-card">
+      <div class="version-preview">
+        <div class="fallback" style="background:#faf9f5;">Bento</div>
+      </div>
+      <div class="version-info">
+        <span class="version-tag">版本一</span>
+        <h2>Bento Grid</h2>
+        <p>现代信息密度型设计。Bento 网格布局展示功能模块，Liquid Glass 导航，Spring 物理动画。适合功能丰富、信息层级清晰的产品展示。</p>
+        <div class="version-meta">
+          <span>高信息密度</span>
+          <span>玻璃态导航</span>
+          <span>暖灰配色</span>
+        </div>
+        <span class="version-cta">预览此版本</span>
+      </div>
+    </a>
+    <a href="v2-editorial.html" class="version-card">
+      <div class="version-preview">
+        <div class="fallback" style="background:#0f0f0e;color:#c4785a;">Editorial</div>
+      </div>
+      <div class="version-info">
+        <span class="version-tag">版本二</span>
+        <h2>Editorial Narrative</h2>
+        <p>编辑叙事型设计。深色 Hero + 大字体排版，不对称分屏布局，讲述产品解决的痛点。适合情感化表达和品牌故事叙述。</p>
+        <div class="version-meta">
+          <span>深色冲击</span>
+          <span>衬线点缀</span>
+          <span>叙事节奏</span>
+        </div>
+        <span class="version-cta">预览此版本</span>
+      </div>
+    </a>
+    <a href="v3-minimal.html" class="version-card">
+      <div class="version-preview">
+        <div class="fallback" style="background:#fefefe;color:#6b7c5e;">Zen</div>
+      </div>
+      <div class="version-info">
+        <span class="version-tag">版本三</span>
+        <h2>Minimal Zen</h2>
+        <p>极简禅意型设计。大量留白，单色调 + 低饱和强调色，极细边框，微妙过渡。适合追求优雅、克制、高级感的品牌调性。</p>
+        <div class="version-meta">
+          <span>大量留白</span>
+          <span>单色调</span>
+          <span>极细边框</span>
+        </div>
+        <span class="version-cta">预览此版本</span>
+      </div>
+    </a>
+  </div>
+  <div class="footer">
+    OneGZUS | 软帮手
+  </div>
+</body>
+</html>

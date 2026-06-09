@@ -41,9 +41,16 @@ android {
             )
         }
     }
+
+    buildFeatures {
+        buildConfig = true
+    }
 }
 
 dependencies {
+    implementation("commons-net:commons-net:3.11.1")
+    implementation("com.tencent.shiply:upgrade:2.2.2")
+    implementation("com.tencent.shiply:upgrade-ui:2.2.2")
     implementation("com.tencent.bugly:crashreport:latest.release")
     implementation("com.tencent.bugly:nativecrashreport:latest.release")
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")

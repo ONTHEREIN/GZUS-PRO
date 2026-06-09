@@ -19,7 +19,13 @@ open class HomeWidgetProvider : AppWidgetProvider() {
         appWidgetManager: AppWidgetManager,
         appWidgetIds: IntArray
     ) {
-        appWidgetIds.forEach { updateWidget(context, appWidgetManager, it, kind) }
+        appWidgetIds.forEach {
+            try {
+                updateWidget(context, appWidgetManager, it, kind)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
     }
 
     companion object {
@@ -47,20 +53,24 @@ open class HomeWidgetProvider : AppWidgetProvider() {
             widgetId: Int,
             kind: String
         ) {
-            val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            try {
+                val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
-            when (kind) {
-                "utilities" -> updateUtilitiesWidget(context, manager, widgetId, prefs)
-                "next" -> {
-                    val data = widgetData(prefs, kind)
-                    updateNextClassWidget(context, manager, widgetId, prefs, data)
+                when (kind) {
+                    "utilities" -> updateUtilitiesWidget(context, manager, widgetId, prefs)
+                    "next" -> {
+                        val data = widgetData(prefs, kind)
+                        updateNextClassWidget(context, manager, widgetId, prefs, data)
+                    }
+                    "today" -> updateTodayWidget(context, manager, widgetId, prefs)
+                    "progress" -> updateProgressWidget(context, manager, widgetId, prefs)
+                    else -> {
+                        val data = widgetData(prefs, kind)
+                        updateGenericWidget(context, manager, widgetId, data, kind)
+                    }
                 }
-                "today" -> updateTodayWidget(context, manager, widgetId, prefs)
-                "progress" -> updateProgressWidget(context, manager, widgetId, prefs)
-                else -> {
-                    val data = widgetData(prefs, kind)
-                    updateGenericWidget(context, manager, widgetId, data, kind)
-                }
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
         }
 

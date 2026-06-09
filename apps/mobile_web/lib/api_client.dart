@@ -1,7 +1,8 @@
 import 'dart:convert';
 import 'dart:async';
-import 'dart:typed_data';
+import 'dart:io' show SocketException;
 
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -9,8 +10,36 @@ import 'persistent_cache.dart';
 
 const apiBaseUrl = String.fromEnvironment(
   'API_BASE_URL',
-  defaultValue: 'http://127.0.0.1:8000',
+  defaultValue: '',
 );
+
+List<String> _parseApiBaseUrlCandidates(String value) {
+  final trimmed = value.trim();
+  if (trimmed.isEmpty) return [];
+  return trimmed
+      .split(',')
+      .map((e) => e.trim())
+      .where((e) => e.isNotEmpty)
+      .toList();
+}
+
+String _normalizeSingle(String url) {
+  final normalized = url.endsWith('/') ? url.substring(0, url.length - 1) : url;
+  if (defaultTargetPlatform == TargetPlatform.android) {
+    final uri = Uri.tryParse(normalized);
+    if (uri != null && (uri.host == '127.0.0.1' || uri.host == 'localhost')) {
+      return uri.replace(host: '10.0.2.2').toString();
+    }
+  }
+  return normalized;
+}
+
+String _defaultApiBaseUrl() {
+  if (defaultTargetPlatform == TargetPlatform.android) {
+    return 'http://10.0.2.2:8000,http://127.0.0.1:8000';
+  }
+  return 'http://127.0.0.1:8000,http://10.0.2.2:8000';
+}
 
 class DataSourceInfo {
   const DataSourceInfo({
@@ -28,7 +57,7 @@ class DataSourceInfo {
   final bool needsRelogin;
 
   String get displayText {
-    if (needsRelogin) return '需重新登录才能更新';
+    if (needsRelogin) return '教务系统会话已失效，请重新登录';
     if (fromLocalCache) return isOffline ? '离线缓存' : '本地缓存';
     if (fromCache) return '更新失败，显示上次数据';
     return '';
@@ -101,6 +130,8 @@ class LoginResult {
     this.captchaImage,
     this.loginMethod,
     this.credentialToken,
+    this.ehallCookies,
+    this.ehallAuthToken,
   });
 
   factory LoginResult.fromJson(Map<String, dynamic> json) => LoginResult(
@@ -112,6 +143,8 @@ class LoginResult {
         captchaImage: json['captchaImage'] as String?,
         loginMethod: json['loginMethod'] as String?,
         credentialToken: json['credentialToken'] as String?,
+        ehallCookies: json['ehallCookies'] as String?,
+        ehallAuthToken: json['ehallAuthToken'] as String?,
       );
 
   final String status;
@@ -126,6 +159,10 @@ class LoginResult {
 
   /// 用于自动重新登录的凭证令牌
   final String? credentialToken;
+
+  /// 办事大厅 WebView 登录态。
+  final String? ehallCookies;
+  final String? ehallAuthToken;
 }
 
 class StudentInfo {
@@ -136,6 +173,18 @@ class StudentInfo {
     this.major,
     this.className,
     this.grade,
+    this.gender,
+    this.idNumber,
+    this.birthDate,
+    this.ethnicity,
+    this.politicalStatus,
+    this.enrollDate,
+    this.nativePlace,
+    this.studentStatus,
+    this.educationLevel,
+    this.phone,
+    this.email,
+    this.address,
     this.photoDataUrl,
   });
 
@@ -146,6 +195,18 @@ class StudentInfo {
         major: json['major'] as String?,
         className: json['className'] as String?,
         grade: json['grade'] as String?,
+        gender: json['gender'] as String?,
+        idNumber: json['idNumber'] as String?,
+        birthDate: json['birthDate'] as String?,
+        ethnicity: json['ethnicity'] as String?,
+        politicalStatus: json['politicalStatus'] as String?,
+        enrollDate: json['enrollDate'] as String?,
+        nativePlace: json['nativePlace'] as String?,
+        studentStatus: json['studentStatus'] as String?,
+        educationLevel: json['educationLevel'] as String?,
+        phone: json['phone'] as String?,
+        email: json['email'] as String?,
+        address: json['address'] as String?,
         photoDataUrl: json['photoDataUrl'] as String?,
       );
 
@@ -155,6 +216,18 @@ class StudentInfo {
   final String? major;
   final String? className;
   final String? grade;
+  final String? gender;
+  final String? idNumber;
+  final String? birthDate;
+  final String? ethnicity;
+  final String? politicalStatus;
+  final String? enrollDate;
+  final String? nativePlace;
+  final String? studentStatus;
+  final String? educationLevel;
+  final String? phone;
+  final String? email;
+  final String? address;
   final String? photoDataUrl;
 }
 
@@ -167,6 +240,7 @@ class ScheduleCourse {
         startSection = _intValue(json['startSection']),
         endSection = _intValue(json['endSection']),
         weeks = json['weeks'] as String?,
+        kcbmc = json['kcbmc'] as String?,
         raw = json['raw'] is Map<String, dynamic>
             ? json['raw'] as Map<String, dynamic>
             : json;
@@ -178,6 +252,7 @@ class ScheduleCourse {
   final int? startSection;
   final int? endSection;
   final String? weeks;
+  final String? kcbmc;
   final Map<String, dynamic> raw;
 
   bool occursInWeek(int week) {
@@ -242,14 +317,20 @@ class ScheduleResult {
 
 class ExamItem {
   ExamItem.fromJson(Map<String, dynamic> json)
-      : courseName = json['courseName'] as String? ?? '',
-        time = json['time'] as String?,
+      : courseName = json['courseName'] as String? ?? json['name'] as String? ?? '',
+        name = json['name'] as String? ?? json['courseName'] as String? ?? '',
+        date = json['date'] as String? ?? '',
+        time = json['time'] as String? ?? '',
+        weekday = json['weekday'] as String? ?? '',
         location = json['location'] as String?,
         seat = json['seat'] as String?,
         type = json['type'] as String?;
 
   final String courseName;
+  final String name;
+  final String date;
   final String? time;
+  final String? weekday;
   final String? location;
   final String? seat;
   final String? type;
@@ -299,11 +380,60 @@ class GradeItem {
   final String? term;
 }
 
+class WeatherData {
+  WeatherData.fromJson(Map<String, dynamic> json)
+      : province = json['province'] as String? ?? '',
+        city = json['city'] as String? ?? '',
+        district = json['district'] as String? ?? '',
+        weather = json['weather'] as String? ?? '--',
+        weatherIcon = json['weather_icon'] as String? ?? '100',
+        temperature = (json['temperature'] as num?)?.toDouble() ?? 0,
+        windDirection = json['wind_direction'] as String? ?? '',
+        windPower = json['wind_power'] as String? ?? '',
+        humidity = (json['humidity'] as num?)?.toInt() ?? 0,
+        tempMax = (json['temp_max'] as num?)?.toDouble(),
+        tempMin = (json['temp_min'] as num?)?.toDouble(),
+        forecast = (json['forecast'] as List<dynamic>? ?? const [])
+            .whereType<Map<String, dynamic>>()
+            .map((e) => WeatherForecast.fromJson(e))
+            .toList();
+
+  final String province;
+  final String city;
+  final String district;
+  final String weather;
+  final String weatherIcon;
+  final double temperature;
+  final String windDirection;
+  final String windPower;
+  final int humidity;
+  final double? tempMax;
+  final double? tempMin;
+  final List<WeatherForecast> forecast;
+
+  String get location => district.isNotEmpty ? district : (city.isNotEmpty ? city : province);
+}
+
+class WeatherForecast {
+  WeatherForecast.fromJson(Map<String, dynamic> json)
+      : date = json['date'] as String? ?? '',
+        week = json['week'] as String? ?? '',
+        tempMax = (json['temp_max'] as num?)?.toDouble() ?? 0,
+        tempMin = (json['temp_min'] as num?)?.toDouble() ?? 0,
+        weatherDay = json['weather_day'] as String? ?? '';
+
+  final String date;
+  final String week;
+  final double tempMax;
+  final double tempMin;
+  final String weatherDay;
+}
+
 class AttendanceResponse {
   AttendanceResponse.fromJson(Map<String, dynamic> json)
       : status = json['status'] as String? ?? 'not_implemented',
         items = (json['items'] as List<dynamic>? ?? const [])
-            .cast<Map<String, dynamic>>()
+            .whereType<Map<String, dynamic>>()
             .map((item) => AttendanceItem.fromJson(item))
             .toList();
 
@@ -476,10 +606,44 @@ String? _firstText(Map<String, dynamic> json, List<String> keys) {
   for (final key in keys) {
     final value = json[key];
     if (value == null) continue;
-    final text = value.toString().trim();
-    if (text.isNotEmpty) return text;
+    final text = _cleanNoticeText(value);
+    if (text.isNotEmpty && !_looksGarbledNoticeText(text)) return text;
   }
   return null;
+}
+
+String _cleanNoticeText(Object? value) {
+  if (value == null) return '';
+  return value
+      .toString()
+      .replaceAll(RegExp('[\\u0000-\\u001F\\u007F-\\u009F\\uFFFD]'), '')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+}
+
+bool _looksGarbledNoticeText(String text) {
+  if (RegExp('[\\u0080-\\u009F\\uFFFD]').hasMatch(text)) return true;
+  if (RegExp(r'[\u4E00-\u9FFF]').hasMatch(text)) return false;
+  final hasMojibakeLetter = RegExp(
+    r'[ÃÂÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõöøùúûüýþÿ]',
+  ).hasMatch(text);
+  final hasMojibakeMark =
+      RegExp(r'[€œžŸ¢£¥§¨©ª«¬®¯°±²³´µ¶·¸¹º»¼½¾¿–—]').hasMatch(text);
+  return hasMojibakeLetter && hasMojibakeMark;
+}
+
+bool _isReadableNoticeItem(NoticeItem item) {
+  final title = _cleanNoticeText(item.title);
+  final summary = _cleanNoticeText(item.summary);
+  final category = _cleanNoticeText(item.category);
+  final candidate = title.isNotEmpty ? title : summary;
+  if (candidate.isEmpty) return false;
+  if (_looksGarbledNoticeText(title) ||
+      _looksGarbledNoticeText(summary) ||
+      _looksGarbledNoticeText(category)) {
+    return false;
+  }
+  return RegExp(r'[A-Za-z0-9\u4E00-\u9FFF]').hasMatch(candidate);
 }
 
 class NoticeDetail {
@@ -500,7 +664,7 @@ class LeavePreviewResponse {
       : status = json['status'] as String? ?? 'ok',
         hasMissingFields = json['hasMissingFields'] as bool? ?? false,
         items = (json['items'] as List<dynamic>? ?? const [])
-            .cast<Map<String, dynamic>>()
+            .whereType<Map<String, dynamic>>()
             .map((item) => LeaveCourseItem.fromJson(item))
             .toList();
 
@@ -551,17 +715,17 @@ class LeaveFillResponse {
                 .toList(),
         matchedTeachers =
             (json['matchedTeachers'] as List<dynamic>? ?? const [])
-                .cast<Map<String, dynamic>>()
+                .whereType<Map<String, dynamic>>()
                 .map((item) => MatchedTeacherItem.fromJson(item))
                 .toList(),
         teacherCandidates =
             (json['teacherCandidates'] as List<dynamic>? ?? const [])
-                .cast<Map<String, dynamic>>()
+                .whereType<Map<String, dynamic>>()
                 .map((item) => TeacherCandidateGroup.fromJson(item))
                 .toList(),
         attachmentUploaded = json['attachmentUploaded'] as bool? ?? false,
         items = (json['items'] as List<dynamic>? ?? const [])
-            .cast<Map<String, dynamic>>()
+            .whereType<Map<String, dynamic>>()
             .map((item) => LeaveCourseItem.fromJson(item))
             .toList();
 
@@ -741,7 +905,7 @@ class TeacherCandidateGroup {
   TeacherCandidateGroup.fromJson(Map<String, dynamic> json)
       : teacher = json['teacher'] as String? ?? '',
         candidates = (json['candidates'] as List<dynamic>? ?? const [])
-            .cast<Map<String, dynamic>>()
+            .whereType<Map<String, dynamic>>()
             .map((item) => StaffCandidateItem.fromJson(item))
             .toList();
 
@@ -889,6 +1053,7 @@ class EcardRoomItem {
 class EcardSummary {
   EcardSummary.fromJson(Map<String, dynamic> json)
       : status = json['status'] as String? ?? 'not_bound',
+        studentId = json['studentId'] as String?,
         roomId = json['roomId'] as String?,
         roomDisplay = json['roomDisplay'] as String?,
         powerBalance = _doubleFromJson(json['powerBalance']),
@@ -902,9 +1067,20 @@ class EcardSummary {
         hotWaterText = json['hotWaterText'] as String?,
         reminderEnabled = json['reminderEnabled'] as bool? ?? true,
         lowPowerThreshold = _doubleFromJson(json['lowPowerThreshold']) ?? 30.0,
+        lowColdWaterThreshold = _doubleFromJson(json['lowColdWaterThreshold']) ?? 5.0,
+        lowHotWaterThreshold = _doubleFromJson(json['lowHotWaterThreshold']) ?? 10.0,
+        reminderTimes = (json['reminderTimes'] as List<dynamic>?)
+                ?.map((e) => e.toString())
+                .toList() ??
+            ['08:00'],
+        reminderItems = (json['reminderItems'] as List<dynamic>?)
+                ?.map((e) => e.toString())
+                .toList() ??
+            ['power', 'cold_water', 'hot_water'],
         updatedAt = json['updatedAt'] as String?;
 
   final String status;
+  final String? studentId;
   final String? roomId;
   final String? roomDisplay;
   final double? powerBalance;
@@ -918,11 +1094,19 @@ class EcardSummary {
   final String? hotWaterText;
   final bool reminderEnabled;
   final double lowPowerThreshold;
+  final double lowColdWaterThreshold;
+  final double lowHotWaterThreshold;
+  final List<String> reminderTimes;
+  final List<String> reminderItems;
   final String? updatedAt;
 
   bool get isBound => status == 'ok';
   bool get isLowPower =>
       powerBalance != null && powerBalance! < lowPowerThreshold;
+  bool get isLowColdWater =>
+      coldWaterBalance != null && coldWaterBalance! < lowColdWaterThreshold;
+  bool get isLowHotWater =>
+      hotWaterBalance != null && hotWaterBalance! < lowHotWaterThreshold;
   bool get isCriticalPower => powerBalance != null && powerBalance! < 10;
 }
 
@@ -931,7 +1115,7 @@ class EcardConsumptionResponse {
       : status = json['status'] as String? ?? 'limited',
         message = json['message'] as String?,
         items = (json['items'] as List<dynamic>? ?? const [])
-            .cast<Map<String, dynamic>>()
+            .whereType<Map<String, dynamic>>()
             .map((item) => EcardConsumptionItem.fromJson(item))
             .toList();
 
@@ -959,43 +1143,59 @@ double? _doubleFromJson(dynamic value) {
   return null;
 }
 
-class AppVersionInfo {
-  AppVersionInfo.fromJson(Map<String, dynamic> json)
-      : latestVersion = json['latest_version'] as String? ?? '',
-        latestBuild = json['latest_build'] as int? ?? 0,
-        downloadUrl = json['download_url'] as String? ?? '',
-        releaseNotes = json['release_notes'] as String? ?? '',
-        updateAvailable = json['update_available'] as bool? ?? false,
-        forceUpdate = json['force_update'] as bool? ?? false,
-        minSupportedVersion = json['min_supported_version'] as String? ?? '';
-
-  final String latestVersion;
-  final int latestBuild;
-  final String downloadUrl;
-  final String releaseNotes;
-  final bool updateAvailable;
-  final bool forceUpdate;
-  final String minSupportedVersion;
-}
-
 class ApiClient {
-  ApiClient(
-      {http.Client? httpClient, this.baseUrl = apiBaseUrl, RequestCache? cache})
+  ApiClient({http.Client? httpClient, String? baseUrl, RequestCache? cache})
       : _http = httpClient ?? http.Client(),
-        _cache = cache ?? RequestCache();
+        _cache = cache ?? RequestCache() {
+    final raw = baseUrl ?? apiBaseUrl;
+    _candidates = _buildCandidates(raw);
+    this.baseUrl = _candidates.first;
+    _currentBaseUrl = this.baseUrl;
+  }
+
+  static List<String> _buildCandidates(String raw) {
+    final list = _parseApiBaseUrlCandidates(raw);
+    final defaults = _parseApiBaseUrlCandidates(_defaultApiBaseUrl());
+    if (list.isEmpty) return defaults;
+    final merged = list.map(_normalizeSingle).toList();
+    for (final defaultUrl in defaults) {
+      if (!merged.contains(defaultUrl)) {
+        merged.add(defaultUrl);
+      }
+    }
+    return merged;
+  }
 
   final http.Client _http;
-  final String baseUrl;
+  late final String baseUrl;
+  late final List<String> _candidates;
   final RequestCache _cache;
   final Map<String, Future<void>> _backgroundRefreshes = {};
   final Map<String, DateTime> _backgroundRefreshAt = {};
   String? sessionId;
   String? _studentId;
   PersistentCache? _persistentCache;
+  Future<PersistentCache>? _persistentCacheFuture;
   String? _credentialToken;
+  String? _savedAccount;
+  String? _savedPassword;
+
+  /// 当前使用的 baseUrl（可能因连接失败自动切换）
+  String _currentBaseUrl = '';
 
   /// 当自动重新登录失败时调用的回调，UI 层可用来导航到登录页
   void Function()? onReloginFailed;
+
+  /// --- Relogin backoff state ---
+  /// Tracks the last time a relogin attempt was made and how many
+  /// consecutive failures occurred.  Prevents hammering the CAS server
+  /// when relogin keeps failing.
+  DateTime? _lastReloginAttempt;
+  int _consecutiveReloginFailures = 0;
+
+  /// Minimum interval between relogin attempts (increases with failures).
+  static const Duration _reloginMinInterval = Duration(seconds: 5);
+  static const int _reloginMaxBackoffSeconds = 120;
 
   static const Duration _backgroundRefreshCooldown = Duration(minutes: 5);
 
@@ -1011,15 +1211,34 @@ class ApiClient {
     if (_studentId != value) {
       _studentId = value;
       _persistentCache = null;
+      _persistentCacheFuture = null;
     }
   }
 
   Future<PersistentCache> _getPersistentCache() async {
-    if (_persistentCache == null) {
-      _persistentCache = PersistentCache(namespace: namespace);
-      await _persistentCache!.init();
+    final cache = _persistentCache;
+    if (cache != null) return cache;
+
+    final initializing = _persistentCacheFuture;
+    if (initializing != null) return initializing;
+
+    final cacheNamespace = namespace;
+    final future = () async {
+      final cache = PersistentCache(namespace: cacheNamespace);
+      await cache.init();
+      if (cacheNamespace == namespace) {
+        _persistentCache = cache;
+      }
+      return cache;
+    }();
+    _persistentCacheFuture = future;
+    try {
+      return await future;
+    } finally {
+      if (_persistentCacheFuture == future) {
+        _persistentCacheFuture = null;
+      }
     }
-    return _persistentCache!;
   }
 
   DataSourceInfo _localSource(DateTime? cachedAt) => DataSourceInfo(
@@ -1129,6 +1348,22 @@ class ApiClient {
         );
       }
       rethrow;
+    } catch (e) {
+      final cached = _cachedObject(pcache, cacheKey);
+      if (cached != null) {
+        return DataResult<T>(
+          data: fromJson(cached),
+          source: _localSource(pcache.getCachedAt(cacheKey)),
+        );
+      }
+      final memCached = _cache.get<Map<String, dynamic>>(cacheKey);
+      if (memCached != null) {
+        return DataResult<T>(
+          data: fromJson(memCached),
+          source: const DataSourceInfo(fromCache: true),
+        );
+      }
+      rethrow;
     }
   }
 
@@ -1187,7 +1422,8 @@ class ApiClient {
       if (memCached != null) {
         return DataResult<List<T>>(
           data: memCached
-              .map((item) => fromJson(item as Map<String, dynamic>))
+              .whereType<Map<String, dynamic>>()
+              .map((item) => fromJson(item))
               .toList(),
           source: DataSourceInfo(
             fromCache: true,
@@ -1196,11 +1432,31 @@ class ApiClient {
         );
       }
       rethrow;
+    } catch (e) {
+      final cached = _cachedList(pcache, cacheKey);
+      if (cached != null) {
+        return DataResult<List<T>>(
+          data: cached.map((item) => fromJson(item)).toList(),
+          source: _localSource(pcache.getCachedAt(cacheKey)),
+        );
+      }
+      final memCached = _cache.get<List<dynamic>>(cacheKey);
+      if (memCached != null) {
+        return DataResult<List<T>>(
+          data: memCached
+              .whereType<Map<String, dynamic>>()
+              .map((item) => fromJson(item))
+              .toList(),
+          source: const DataSourceInfo(fromCache: true),
+        );
+      }
+      rethrow;
     }
   }
 
   String lySsoStartUrl({required String returnUrl}) {
-    final uri = Uri.parse('$baseUrl/auth/ly/start');
+    final url = _resolveBaseUrl();
+    final uri = Uri.parse('$url/auth/ly/start');
     return uri.replace(queryParameters: {'return_url': returnUrl}).toString();
   }
 
@@ -1248,29 +1504,137 @@ class ApiClient {
     return result;
   }
 
+  Future<bool> checkHealth() async {
+    for (final candidate in _candidates) {
+      try {
+        final response = await _http
+            .get(Uri.parse('$candidate/health'))
+            .timeout(const Duration(seconds: 5));
+        if (response.statusCode == 200) {
+          _currentBaseUrl = candidate;
+          return true;
+        }
+      } catch (_) {
+        continue;
+      }
+    }
+    return false;
+  }
+
   Future<void> logout() async {
-    await _post('/auth/logout', {});
+    try {
+      final url = _resolveBaseUrl();
+      await _http
+          .post(Uri.parse('$url/auth/logout'),
+              headers: _headers(), body: jsonEncode({}))
+          .timeout(const Duration(seconds: 10));
+    } catch (_) {
+      // Logout should proceed even if the server request fails.
+    }
     sessionId = null;
     _credentialToken = null;
     _cache.clear();
   }
 
+  /// 立即清除凭证，防止后续请求触发 relogin 重试
+  void clearCredentials() {
+    _credentialToken = null;
+    _savedAccount = null;
+    _savedPassword = null;
+    _cache.clear();
+  }
+
   Future<LoginResult> relogin() async {
-    if (_credentialToken == null) {
-      throw ApiException('No saved credentials for relogin', statusCode: 401);
+    await loadSavedCredentials();
+    if (_credentialToken != null) {
+      try {
+        return await _reloginWithCredentialToken(_credentialToken!);
+      } on ApiException catch (exc) {
+        if (exc.statusCode != 401 || !_hasSavedPasswordCredentials) rethrow;
+      }
     }
-    final response = await _post('/auth/relogin', {
-      'credentialToken': _credentialToken,
-    });
-    final result = LoginResult.fromJson(response);
+    if (_hasSavedPasswordCredentials) {
+      final result = await autoLogin(_savedAccount!, _savedPassword!);
+      await saveCredentialToken(result.credentialToken);
+      await _saveEhallAuth(result);
+      return result;
+    }
+    throw ApiException('教务系统会话已失效，请重新登录', statusCode: 401);
+  }
+
+  bool get _hasSavedPasswordCredentials =>
+      (_savedAccount?.isNotEmpty ?? false) &&
+      (_savedPassword?.isNotEmpty ?? false);
+
+  Future<LoginResult> _reloginWithCredentialToken(
+      String credentialToken) async {
+    // 直接发HTTP请求，不走 _withReloginRetry，避免 relogin 自身 401 时无限递归
+    final url = _resolveBaseUrl();
+    final response = await _http
+        .post(Uri.parse('$url/auth/relogin'),
+            headers: _headers(),
+            body: jsonEncode({'credentialToken': credentialToken}))
+        .timeout(_requestTimeout);
+    final decoded = _decode(response);
+    final result = LoginResult.fromJson(decoded as Map<String, dynamic>);
     sessionId = result.sessionId;
     _cache.clear();
+
+    await saveCredentialToken(result.credentialToken ?? credentialToken);
+    await _saveEhallAuth(result);
     return result;
+  }
+
+  Future<void> saveCredentialToken(String? credentialToken) async {
+    if (credentialToken == null || credentialToken.isEmpty) return;
+    _credentialToken = credentialToken;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('auth.credentialToken', credentialToken);
+  }
+
+  Future<void> savePasswordCredentials(
+    String account,
+    String password, {
+    required bool remember,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('auth.rememberPassword', remember);
+    if (!remember) {
+      _savedAccount = null;
+      _savedPassword = null;
+      await prefs.remove('auth.account');
+      await prefs.remove('auth.password');
+      return;
+    }
+    _savedAccount = account;
+    _savedPassword = password;
+    await prefs.setString('auth.account', account);
+    await prefs.setString('auth.password', password);
+  }
+
+  Future<void> _saveEhallAuth(LoginResult result) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (result.sessionId != null && result.sessionId!.isNotEmpty) {
+      await prefs.setString('auth.sessionId', result.sessionId!);
+    }
+    if (result.ehallCookies != null) {
+      await prefs.setString('auth.ehallCookies', result.ehallCookies!);
+    }
+    if (result.ehallAuthToken != null) {
+      await prefs.setString('auth.ehallAuthToken', result.ehallAuthToken!);
+    }
   }
 
   Future<void> loadSavedCredentials() async {
     final prefs = await SharedPreferences.getInstance();
     _credentialToken = prefs.getString('auth.credentialToken');
+    if (prefs.getBool('auth.rememberPassword') ?? false) {
+      _savedAccount = prefs.getString('auth.account');
+      _savedPassword = prefs.getString('auth.password');
+    } else {
+      _savedAccount = null;
+      _savedPassword = null;
+    }
   }
 
   Future<DataResult<StudentInfo>> me({bool forceRefresh = false}) =>
@@ -1335,14 +1699,59 @@ class ApiClient {
         forceRefresh: forceRefresh,
       );
 
-  Future<DataResult<List<NoticeItem>>> notices({bool forceRefresh = false}) =>
-      _cacheFirstList<NoticeItem>(
-        cacheKey: 'notices',
-        fetch: () => _getList('/notices'),
-        fromJson: (json) => NoticeItem.fromJson(json),
+  Future<DataResult<WeatherData>> weather({
+    bool forceRefresh = false,
+    double? lat,
+    double? lon,
+  }) =>
+      _cacheFirstObject<WeatherData>(
+        cacheKey: _weatherCacheKey(lat, lon),
+        fetch: () async {
+          final uri = _weatherUri(lat, lon);
+          final response = await _http
+              .get(uri)
+              .timeout(const Duration(seconds: 10));
+          final body = utf8.decode(response.bodyBytes);
+          final decoded = jsonDecode(body);
+          if (decoded is! Map<String, dynamic>) {
+            throw ApiException('天气 API 返回了意外的数据格式');
+          }
+          return decoded;
+        },
+        fromJson: (json) => WeatherData.fromJson(json),
         forceRefresh: forceRefresh,
-        memoryTtl: const Duration(minutes: 2),
+        memoryTtl: const Duration(minutes: 30),
       );
+
+  Uri _weatherUri(double? lat, double? lon) {
+    final query = StringBuffer('forecast=true');
+    if (lat != null && lon != null) {
+      query.write('&lat=${lat.toStringAsFixed(4)}&lon=${lon.toStringAsFixed(4)}');
+    }
+    return Uri.parse('https://api.uapis.cn/api/weather?$query');
+  }
+
+  String _weatherCacheKey(double? lat, double? lon) {
+    if (lat != null && lon != null) {
+      return 'weather_${lat.toStringAsFixed(2)}_${lon.toStringAsFixed(2)}';
+    }
+    return 'weather';
+  }
+
+  Future<DataResult<List<NoticeItem>>> notices(
+      {bool forceRefresh = false}) async {
+    final result = await _cacheFirstList<NoticeItem>(
+      cacheKey: 'notices',
+      fetch: () => _getList('/notices'),
+      fromJson: (json) => NoticeItem.fromJson(json),
+      forceRefresh: forceRefresh,
+      memoryTtl: const Duration(minutes: 2),
+    );
+    return DataResult<List<NoticeItem>>(
+      data: result.data.where(_isReadableNoticeItem).toList(),
+      source: result.source,
+    );
+  }
 
   Future<DataResult<NoticeDetail>> fetchNoticeDetail(
     String url, {
@@ -1496,10 +1905,18 @@ class ApiClient {
   Future<EcardSummary> updateEcardReminder({
     bool? enabled,
     double? lowPowerThreshold,
+    double? lowColdWaterThreshold,
+    double? lowHotWaterThreshold,
+    List<String>? reminderTimes,
+    List<String>? reminderItems,
   }) async {
     final data = await _patch('/ecard/reminder', {
       if (enabled != null) 'enabled': enabled,
       if (lowPowerThreshold != null) 'lowPowerThreshold': lowPowerThreshold,
+      if (lowColdWaterThreshold != null) 'lowColdWaterThreshold': lowColdWaterThreshold,
+      if (lowHotWaterThreshold != null) 'lowHotWaterThreshold': lowHotWaterThreshold,
+      if (reminderTimes != null) 'reminderTimes': reminderTimes,
+      if (reminderItems != null) 'reminderItems': reminderItems,
     });
     _cache.set('ecard_summary', data);
     final pcache = await _getPersistentCache();
@@ -1529,24 +1946,41 @@ class ApiClient {
   }
 
   Future<void> unregisterPush() async {
-    await _post('/push/unregister', {});
+    try {
+      final url = _resolveBaseUrl();
+      await _http
+          .post(Uri.parse('$url/push/unregister'),
+              headers: _headers(), body: jsonEncode({}))
+          .timeout(const Duration(seconds: 10));
+    } catch (_) {
+      // Unregister should not block logout even if it fails.
+    }
   }
 
-  Future<AppVersionInfo> checkUpdate({
-    String platform = 'android',
-    String currentVersion = '',
-    int currentBuild = 0,
-  }) async {
-    final data = await _get(
-        '/app/version?platform=$platform&current_version=${Uri.encodeComponent(currentVersion)}&current_build=$currentBuild');
-    return AppVersionInfo.fromJson(data);
+  Future<List<Map<String, dynamic>>> pollPushMessages() async {
+    final data = await _get('/push/poll');
+    final messages = data['messages'];
+    if (messages is! List<dynamic>) return const [];
+    return [
+      for (final item in messages)
+        if (item is Map<String, dynamic>) item,
+    ];
   }
+
+  Future<Map<String, dynamic>> getWebPushConfig() async {
+    final data = await _get('/push/web/config');
+    return data;
+  }
+
+  static const Duration _requestTimeout = Duration(seconds: 15);
 
   Future<Map<String, dynamic>> _get(String path) async {
     return _withReloginRetry(
       () async {
-        final response =
-            await _http.get(Uri.parse('$baseUrl$path'), headers: _headers());
+        final url = _resolveBaseUrl();
+        final response = await _http
+            .get(Uri.parse('$url$path'), headers: _headers())
+            .timeout(_requestTimeout);
         return _decodeObject(response);
       },
     );
@@ -1555,10 +1989,15 @@ class ApiClient {
   Future<List<Map<String, dynamic>>> _getList(String path) async {
     return _withReloginRetry(
       () async {
-        final response =
-            await _http.get(Uri.parse('$baseUrl$path'), headers: _headers());
+        final url = _resolveBaseUrl();
+        final response = await _http
+            .get(Uri.parse('$url$path'), headers: _headers())
+            .timeout(_requestTimeout);
         final decoded = _decode(response);
-        return (decoded as List<dynamic>).cast<Map<String, dynamic>>();
+        if (decoded is! List<dynamic>) {
+          throw ApiException('服务器返回了意外的数据格式');
+        }
+        return decoded.whereType<Map<String, dynamic>>().toList();
       },
     );
   }
@@ -1567,11 +2006,14 @@ class ApiClient {
       String path, Map<String, dynamic> body) async {
     return _withReloginRetry(
       () async {
-        final response = await _http.post(
-          Uri.parse('$baseUrl$path'),
-          headers: _headers(),
-          body: jsonEncode(body),
-        );
+        final url = _resolveBaseUrl();
+        final response = await _http
+            .post(
+              Uri.parse('$url$path'),
+              headers: _headers(),
+              body: jsonEncode(body),
+            )
+            .timeout(_requestTimeout);
         return _decodeObject(response);
       },
     );
@@ -1581,33 +2023,109 @@ class ApiClient {
       String path, Map<String, dynamic> body) async {
     return _withReloginRetry(
       () async {
-        final response = await _http.patch(
-          Uri.parse('$baseUrl$path'),
-          headers: _headers(),
-          body: jsonEncode(body),
-        );
+        final url = _resolveBaseUrl();
+        final response = await _http
+            .patch(
+              Uri.parse('$url$path'),
+              headers: _headers(),
+              body: jsonEncode(body),
+            )
+            .timeout(_requestTimeout);
         return _decodeObject(response);
       },
     );
   }
 
+  String _resolveBaseUrl() {
+    if (_currentBaseUrl.isEmpty) _currentBaseUrl = baseUrl;
+    return _currentBaseUrl;
+  }
+
   /// 在收到 401 时自动尝试 relogin 并重试原始请求
   Future<T> _withReloginRetry<T>(Future<T> Function() request) async {
+    return _withFallback(request, tried: {});
+  }
+
+  /// 带候选地址切换的请求重试，每个候选地址只尝试一次
+  Future<T> _withFallback<T>(
+    Future<T> Function() request, {
+    required Set<String> tried,
+  }) async {
     try {
       return await request();
     } on ApiException catch (e) {
-      if (e.statusCode == 401 && _credentialToken != null) {
+      if (e.statusCode == 401) {
+        await loadSavedCredentials();
+        if (_credentialToken == null && !_hasSavedPasswordCredentials) {
+          rethrow;
+        }
+        // --- Relogin with backoff ---
+        // Avoid hammering CAS if relogin keeps failing.
+        final now = DateTime.now();
+        final backoffSeconds = (_reloginMinInterval.inSeconds *
+                (1 << _consecutiveReloginFailures.clamp(0, 4)))
+            .clamp(_reloginMinInterval.inSeconds, _reloginMaxBackoffSeconds);
+        if (_lastReloginAttempt != null &&
+            now.difference(_lastReloginAttempt!) <
+                Duration(seconds: backoffSeconds)) {
+          // Too soon to retry — rethrow so the caller sees the 401
+          throw ApiException('教务系统会话已失效，请重新登录', statusCode: 401);
+        }
+        _lastReloginAttempt = now;
+        bool reloginSucceeded = false;
         try {
           await relogin();
-          return await request();
-        } catch (_) {
+          reloginSucceeded = true;
+          _consecutiveReloginFailures = 0; // reset on success
+        } catch (e) {
+          _consecutiveReloginFailures++;
+          // relogin 本身失败，清除凭证和触发 onReloginFailed
           _credentialToken = null;
           onReloginFailed?.call();
           rethrow;
         }
+        // relogin 成功，重试原始请求
+        if (reloginSucceeded) {
+          // 重试请求，如果仍然 401 说明该 API 需要特殊权限（如 ehall），
+          // 不是 session 过期问题，直接抛出异常
+          return await request();
+        }
       }
       rethrow;
+    } on TimeoutException {
+      final next = _nextUntriedCandidate(tried);
+      if (next != null) {
+        _currentBaseUrl = next;
+        return _withFallback(request, tried: {...tried, next});
+      }
+      final target = _resolveBaseUrl();
+      throw ApiException('请求超时 ($target)，请检查网络连接');
+    } on http.ClientException {
+      final next = _nextUntriedCandidate(tried);
+      if (next != null) {
+        _currentBaseUrl = next;
+        return _withFallback(request, tried: {...tried, next});
+      }
+      final target = _resolveBaseUrl();
+      throw ApiException('无法连接服务器 ($target)，请确认服务已启动且设备在同一网络');
+    } on SocketException {
+      final next = _nextUntriedCandidate(tried);
+      if (next != null) {
+        _currentBaseUrl = next;
+        return _withFallback(request, tried: {...tried, next});
+      }
+      final target = _resolveBaseUrl();
+      throw ApiException('无法连接服务器 ($target)，请确认服务已启动且设备在同一网络');
     }
+  }
+
+  /// 返回下一个未尝试过的候选地址
+  String? _nextUntriedCandidate(Set<String> tried) {
+    final current = _resolveBaseUrl();
+    final untried =
+        _candidates.where((c) => !tried.contains(c) && c != current).toList();
+    if (untried.isNotEmpty) return untried.first;
+    return null;
   }
 
   Map<String, String> _headers() => {
@@ -1617,7 +2135,10 @@ class ApiClient {
 
   Map<String, dynamic> _decodeObject(http.Response response) {
     final decoded = _decode(response);
-    return decoded as Map<String, dynamic>;
+    if (decoded is! Map<String, dynamic>) {
+      throw ApiException('服务器返回了意外的数据格式');
+    }
+    return decoded;
   }
 
   dynamic _decode(http.Response response) {
@@ -1714,7 +2235,7 @@ String generateIcs({
 }) {
   final lines = <String>[];
   lines.add('BEGIN:VCALENDAR');
-  lines.add('PRODID:-//GZUS-PRO//Schedule//CN');
+  lines.add('PRODID:-//OneGZUS//Schedule//CN');
   lines.add('VERSION:2.0');
   for (final course in courses) {
     if (course.weekday == null ||
@@ -1732,7 +2253,7 @@ String generateIcs({
           '${date.year}${date.month.toString().padLeft(2, '0')}${date.day.toString().padLeft(2, '0')}';
       lines.add('BEGIN:VEVENT');
       lines.add(
-          'UID:gzus-${course.name.hashCode.abs()}-$week-${course.weekday}@gzus-pro');
+          'UID:gzus-${course.name.hashCode.abs()}-$week-${course.weekday}@onegzus');
       lines.add('DTSTART:${dateStr}T${startTime.replaceAll(':', '')}00');
       lines.add('DTEND:${dateStr}T${endTime.replaceAll(':', '')}00');
       lines.add('SUMMARY:${course.name}');
@@ -1756,13 +2277,13 @@ String generateExamIcs({
 }) {
   final lines = <String>[];
   lines.add('BEGIN:VCALENDAR');
-  lines.add('PRODID:-//GZUS-PRO//Exams//CN');
+  lines.add('PRODID:-//OneGZUS//Exams//CN');
   lines.add('VERSION:2.0');
   for (final pe in exams) {
     final exam = pe.exam;
     lines.add('BEGIN:VEVENT');
     lines.add(
-        'UID:gzus-exam-${exam.courseName.hashCode.abs()}-${pe.period.year}-${pe.period.term}@gzus-pro');
+        'UID:gzus-exam-${exam.courseName.hashCode.abs()}-${pe.period.year}-${pe.period.term}@onegzus');
     lines.add('SUMMARY:${exam.courseName} 考试');
     final parsed = _parseExamDateTime(exam.time);
     if (parsed != null) {

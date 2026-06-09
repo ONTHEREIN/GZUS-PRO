@@ -1,0 +1,872 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OneGZUS | 软帮手</title>
+  <meta name="description" content="OneGZUS - 软帮手。课表、成绩、考勤、水电费、请假、考试提醒，一个 App 搞定全部教务事务。">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Crimson+Pro:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css">
+  <style>
+    :root {
+      --bg: #f5f3ef;
+      --surface: #ffffff;
+      --ink: #0f0f0e;
+      --muted: #7a7874;
+      --subtle: #ddd9d2;
+      --accent: #2c1810;
+      --accent-warm: #c4785a;
+      --accent-soft: #f0e6e0;
+      --dark: #0f0f0e;
+      --radius-sm: 4px;
+      --radius-md: 8px;
+      --radius-lg: 16px;
+      --spring: cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: 'Space Grotesk', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
+
+    /* Editorial Typography */
+    .display-xl {
+      font-size: clamp(3rem, 8vw, 7rem);
+      font-weight: 700;
+      line-height: 0.95;
+      letter-spacing: -0.04em;
+    }
+
+    .display-lg {
+      font-size: clamp(2rem, 5vw, 4rem);
+      font-weight: 700;
+      line-height: 1;
+      letter-spacing: -0.03em;
+    }
+
+    .serif {
+      font-family: 'Crimson Pro', Georgia, serif;
+      font-style: italic;
+      font-weight: 400;
+    }
+
+    /* Scroll Reveal */
+    .reveal {
+      opacity: 0;
+      transform: translateY(60px);
+      transition: opacity 1s var(--spring), transform 1s var(--spring);
+    }
+    .reveal.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    /* Navigation */
+    .nav {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      z-index: 1000;
+      padding: 24px 40px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      transition: all 0.4s var(--spring);
+    }
+
+    .nav.scrolled {
+      background: rgba(245,243,239,0.9);
+      backdrop-filter: blur(16px);
+      padding: 16px 40px;
+    }
+
+    .nav-dark { color: white; }
+    .nav-dark.scrolled { background: rgba(15,15,14,0.85); color: white; }
+
+    .nav-logo {
+      font-weight: 700;
+      font-size: 1rem;
+      letter-spacing: -0.02em;
+      text-decoration: none;
+      color: inherit;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .nav-logo-icon {
+      width: 28px; height: 28px;
+      background: currentColor;
+      color: var(--bg);
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      font-size: 10px;
+      font-weight: 800;
+    }
+
+    .nav-links {
+      display: flex;
+      gap: 32px;
+      align-items: center;
+    }
+
+    .nav-links a {
+      color: inherit;
+      opacity: 0.6;
+      text-decoration: none;
+      font-size: 0.85rem;
+      font-weight: 500;
+      transition: opacity 0.2s;
+    }
+
+    .nav-links a:hover { opacity: 1; }
+
+    .nav-cta {
+      border: 1px solid currentColor;
+      padding: 8px 20px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      text-decoration: none;
+      color: inherit;
+      transition: all 0.3s;
+    }
+
+    .nav-cta:hover {
+      background: currentColor;
+      color: var(--dark);
+    }
+
+    /* Hero - Dark Editorial */
+    .hero-dark {
+      background: var(--dark);
+      color: white;
+      min-height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      padding: 120px 40px 80px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .hero-dark-grid {
+      position: absolute;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px);
+      background-size: 80px 80px;
+      mask-image: radial-gradient(ellipse at center, black 0%, transparent 70%);
+      -webkit-mask-image: radial-gradient(ellipse at center, black 0%, transparent 70%);
+    }
+
+    .hero-dark-inner {
+      max-width: 1200px;
+      margin: 0 auto;
+      width: 100%;
+      position: relative;
+      z-index: 1;
+    }
+
+    .hero-dark .eyebrow {
+      font-size: 0.8rem;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.15em;
+      opacity: 0.5;
+      margin-bottom: 32px;
+    }
+
+    .hero-dark h1 {
+      max-width: 900px;
+      margin-bottom: 40px;
+    }
+
+    .hero-dark h1 .accent {
+      color: var(--accent-warm);
+    }
+
+    .hero-dark p {
+      font-size: 1.15rem;
+      opacity: 0.6;
+      max-width: 480px;
+      line-height: 1.7;
+      margin-bottom: 48px;
+    }
+
+    .hero-dark-actions {
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+
+    .btn-outline {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 14px 28px;
+      border: 1px solid rgba(255,255,255,0.3);
+      color: white;
+      text-decoration: none;
+      font-size: 0.9rem;
+      font-weight: 600;
+      transition: all 0.3s;
+      font-family: inherit;
+    }
+
+    .btn-outline:hover {
+      background: white;
+      color: var(--dark);
+      border-color: white;
+    }
+
+    .btn-solid {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 14px 28px;
+      background: var(--accent-warm);
+      color: white;
+      text-decoration: none;
+      font-size: 0.9rem;
+      font-weight: 600;
+      transition: all 0.3s;
+      border: none;
+      font-family: inherit;
+      cursor: pointer;
+    }
+
+    .btn-solid:hover {
+      transform: translateY(-2px);
+      filter: brightness(1.1);
+    }
+
+    .hero-phone {
+      position: absolute;
+      right: 5%;
+      bottom: -5%;
+      width: 300px;
+      transform: rotate(5deg);
+      opacity: 0.9;
+      transition: transform 0.6s var(--spring);
+    }
+
+    .hero-phone:hover { transform: rotate(2deg) scale(1.02); }
+
+    .hero-phone img {
+      width: 100%;
+      border-radius: 32px;
+      box-shadow: 0 40px 80px rgba(0,0,0,0.4);
+    }
+
+    /* Editorial Sections */
+    .editorial-section {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 160px 40px;
+    }
+
+    .editorial-section.full-bleed {
+      max-width: none;
+      padding: 160px 0;
+    }
+
+    .section-label {
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.15em;
+      color: var(--accent-warm);
+      margin-bottom: 24px;
+    }
+
+    /* Asymmetric Grid */
+    .asymmetric {
+      display: grid;
+      grid-template-columns: 1fr 1.2fr;
+      gap: 80px;
+      align-items: center;
+    }
+
+    .asymmetric.reverse {
+      grid-template-columns: 1.2fr 1fr;
+    }
+
+    .asymmetric-text h2 {
+      margin-bottom: 24px;
+    }
+
+    .asymmetric-text p {
+      font-size: 1.05rem;
+      color: var(--muted);
+      line-height: 1.7;
+      max-width: 440px;
+    }
+
+    .asymmetric-img {
+      position: relative;
+    }
+
+    .asymmetric-img img {
+      width: 100%;
+      border-radius: var(--radius-lg);
+      transition: transform 0.5s var(--spring);
+    }
+
+    .asymmetric-img:hover img {
+      transform: scale(1.02);
+    }
+
+    .asymmetric-img::before {
+      content: '';
+      position: absolute;
+      inset: -20px;
+      border: 1px solid var(--subtle);
+      border-radius: var(--radius-lg);
+      z-index: -1;
+      transition: all 0.4s;
+    }
+
+    .asymmetric-img:hover::before {
+      inset: -12px;
+      border-color: var(--accent-warm);
+    }
+
+    /* Feature List Editorial */
+    .feature-list {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+      border-top: 1px solid var(--subtle);
+    }
+
+    .feature-row {
+      display: grid;
+      grid-template-columns: 60px 1fr 2fr auto;
+      gap: 40px;
+      align-items: center;
+      padding: 32px 0;
+      border-bottom: 1px solid var(--subtle);
+      transition: all 0.3s;
+      cursor: default;
+    }
+
+    .feature-row:hover {
+      padding-left: 16px;
+    }
+
+    .feature-row .num {
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .feature-row h3 {
+      font-size: 1.3rem;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+    }
+
+    .feature-row p {
+      font-size: 0.9rem;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+
+    .feature-row .arrow {
+      opacity: 0;
+      transform: translateX(-10px);
+      transition: all 0.3s;
+      color: var(--accent-warm);
+    }
+
+    .feature-row:hover .arrow {
+      opacity: 1;
+      transform: translateX(0);
+    }
+
+    /* Screenshots Editorial */
+    .screenshots-editorial {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+    }
+
+    .screenshot-ed {
+      position: relative;
+      overflow: hidden;
+      transition: all 0.5s var(--spring);
+    }
+
+    .screenshot-ed img {
+      width: 100%;
+      height: auto;
+      display: block;
+      transition: transform 0.5s var(--spring);
+    }
+
+    .screenshot-ed:hover {
+      z-index: 2;
+    }
+
+    .screenshot-ed:hover img {
+      transform: scale(1.05);
+    }
+
+    .screenshot-ed .caption {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      padding: 20px;
+      background: linear-gradient(transparent, rgba(15,15,14,0.9));
+      color: white;
+      font-size: 0.8rem;
+      font-weight: 500;
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+
+    .screenshot-ed:hover .caption { opacity: 1; }
+
+    /* CTA Section */
+    .cta-dark {
+      background: var(--dark);
+      color: white;
+      padding: 140px 40px;
+      text-align: center;
+    }
+
+    .cta-dark h2 {
+      max-width: 700px;
+      margin: 0 auto 24px;
+    }
+
+    .cta-dark p {
+      opacity: 0.5;
+      max-width: 480px;
+      margin: 0 auto 48px;
+      font-size: 1.1rem;
+    }
+
+    /* FAQ Editorial */
+    .faq-editorial {
+      max-width: 800px;
+    }
+
+    .faq-ed-item {
+      border-bottom: 1px solid var(--subtle);
+      padding: 28px 0;
+    }
+
+    .faq-ed-question {
+      width: 100%;
+      background: none;
+      border: none;
+      text-align: left;
+      font-family: inherit;
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: var(--ink);
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0;
+    }
+
+    .faq-ed-question:hover { color: var(--accent-warm); }
+
+    .faq-ed-question .toggle {
+      font-size: 1.5rem;
+      font-weight: 300;
+      transition: transform 0.3s;
+      color: var(--muted);
+    }
+
+    .faq-ed-item.active .toggle {
+      transform: rotate(45deg);
+      color: var(--accent-warm);
+    }
+
+    .faq-ed-answer {
+      max-height: 0;
+      overflow: hidden;
+      transition: max-height 0.5s var(--spring);
+    }
+
+    .faq-ed-item.active .faq-ed-answer {
+      max-height: 300px;
+    }
+
+    .faq-ed-answer-inner {
+      padding-top: 16px;
+      font-size: 0.95rem;
+      color: var(--muted);
+      line-height: 1.7;
+      max-width: 600px;
+    }
+
+    /* Footer Minimal */
+    .footer-ed {
+      border-top: 1px solid var(--subtle);
+      padding: 48px 40px;
+      max-width: 1200px;
+      margin: 0 auto;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .footer-ed-left {
+      font-size: 0.85rem;
+      color: var(--muted);
+    }
+
+    .footer-ed-right {
+      display: flex;
+      gap: 24px;
+    }
+
+    .footer-ed-right a {
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 0.85rem;
+      transition: color 0.2s;
+    }
+
+    .footer-ed-right a:hover { color: var(--ink); }
+
+    /* Responsive */
+    @media (max-width: 1024px) {
+      .hero-phone { display: none; }
+      .asymmetric, .asymmetric.reverse {
+        grid-template-columns: 1fr;
+        gap: 48px;
+      }
+      .asymmetric-img { order: -1; }
+      .feature-row {
+        grid-template-columns: 40px 1fr;
+        gap: 16px;
+      }
+      .feature-row p { grid-column: 2; }
+      .feature-row .arrow { display: none; }
+      .screenshots-editorial { grid-template-columns: repeat(2, 1fr); }
+    }
+
+    @media (max-width: 768px) {
+      .nav { padding: 16px 20px; }
+      .nav-links { display: none; }
+      .hero-dark { padding: 100px 20px 60px; }
+      .editorial-section { padding: 80px 20px; }
+      .cta-dark { padding: 80px 20px; }
+      .footer-ed { flex-direction: column; gap: 20px; text-align: center; }
+      .screenshots-editorial { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Navigation -->
+  <nav class="nav nav-dark" id="nav">
+    <a href="#" class="nav-logo">
+      <div class="nav-logo-icon">GZ</div>
+      OneGZUS
+    </a>
+    <div class="nav-links">
+      <a href="#features">功能</a>
+      <a href="#screenshots">预览</a>
+      <a href="#faq">FAQ</a>
+      <a href="https://github.com" class="nav-cta" target="_blank">GitHub</a>
+    </div>
+  </nav>
+
+  <!-- Hero -->
+  <section class="hero-dark">
+    <div class="hero-dark-grid"></div>
+    <div class="hero-dark-inner">
+      <div class="eyebrow reveal">广州软件学院 / 软帮手</div>
+      <h1 class="display-xl reveal">
+        一个 App<br>
+        <span class="serif accent">搞定全部教务</span>
+      </h1>
+      <p class="reveal">课表、成绩、考勤、水电费、请假、考试提醒... 告别在多个系统之间反复切换的日子。</p>
+      <div class="hero-dark-actions reveal">
+        <a href="#download" class="btn-solid">
+          <i class="ph ph-download-simple"></i>
+          立即下载
+        </a>
+        <a href="#features" class="btn-outline">
+          探索功能
+        </a>
+      </div>
+    </div>
+    <div class="hero-phone">
+      <img src="assets/widget_final_today_schedule.png" alt="OneGZUS" loading="eager">
+    </div>
+  </section>
+
+  <!-- Story 1 -->
+  <section class="editorial-section">
+    <div class="asymmetric reveal">
+      <div class="asymmetric-text">
+        <div class="section-label">Problem 01</div>
+        <h2 class="display-lg">早上醒来，<br><span class="serif">忘记今天在哪上课</span></h2>
+        <p>课表截图翻聊天记录、教务系统登录又卡又慢、教室位置记混了... 这些每天都在发生。OneGZUS 把今日课表放在首页最显眼的位置，打开 App 第一眼就看到时间、地点、教室。</p>
+      </div>
+      <div class="asymmetric-img">
+        <img src="assets/widget_final_today_schedule.png" alt="今日课表" loading="lazy">
+      </div>
+    </div>
+  </section>
+
+  <!-- Story 2 -->
+  <section class="editorial-section" style="background: var(--surface);">
+    <div class="asymmetric reverse reveal">
+      <div class="asymmetric-img">
+        <img src="assets/widget_final_business_progress.png" alt="请假系统" loading="lazy">
+      </div>
+      <div class="asymmetric-text">
+        <div class="section-label">Problem 02</div>
+        <h2 class="display-lg">请个假，<br><span class="serif">要跑三个办公室</span></h2>
+        <p>打印纸质单子、找辅导员签字、找院领导审批、交回教务处... 一个请假流程折腾半天。现在，手机填写申请、上传附件、查看审批进度，全程在 App 里完成。</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Story 3 -->
+  <section class="editorial-section">
+    <div class="asymmetric reveal">
+      <div class="asymmetric-text">
+        <div class="section-label">Problem 03</div>
+        <h2 class="display-lg">考完试，<br><span class="serif">每隔一小时刷系统</span></h2>
+        <p>成绩公布那几天，教务系统被刷到崩溃。OneGZUS 自动监控成绩更新，新成绩一出立即推送通知，绩点实时计算，再也不用守着电脑刷新。</p>
+      </div>
+      <div class="asymmetric-img">
+        <img src="assets/widget_final_utilities.png" alt="成绩与工具" loading="lazy">
+      </div>
+    </div>
+  </section>
+
+  <!-- Features List -->
+  <section class="editorial-section" id="features" style="background: var(--surface);">
+    <div class="section-label reveal">All Features</div>
+    <h2 class="display-lg reveal" style="margin-bottom: 60px;">
+      覆盖教务<br><span class="serif">全场景</span>
+    </h2>
+    <div class="feature-list reveal">
+      <div class="feature-row">
+        <span class="num">01</span>
+        <h3>智能课表</h3>
+        <p>今日时间线、周视图、ICS 导出，教务系统自动同步</p>
+        <i class="ph ph-arrow-right arrow"></i>
+      </div>
+      <div class="feature-row">
+        <span class="num">02</span>
+        <h3>成绩查询</h3>
+        <p>实时推送、绩点计算、学分统计、学期筛选</p>
+        <i class="ph ph-arrow-right arrow"></i>
+      </div>
+      <div class="feature-row">
+        <span class="num">03</span>
+        <h3>考勤管理</h3>
+        <p>出勤记录、缺勤提醒、考勤统计报表</p>
+        <i class="ph ph-arrow-right arrow"></i>
+      </div>
+      <div class="feature-row">
+        <span class="num">04</span>
+        <h3>考试提醒</h3>
+        <p>安排同步、考前推送、倒计时、座位号查看</p>
+        <i class="ph ph-arrow-right arrow"></i>
+      </div>
+      <div class="feature-row">
+        <span class="num">05</span>
+        <h3>水电费查询</h3>
+        <p>实时余额、用量统计、缴费提醒、历史账单</p>
+        <i class="ph ph-arrow-right arrow"></i>
+      </div>
+      <div class="feature-row">
+        <span class="num">06</span>
+        <h3>校园通知</h3>
+        <p>教务通知推送、已读标记、历史归档</p>
+        <i class="ph ph-arrow-right arrow"></i>
+      </div>
+      <div class="feature-row">
+        <span class="num">07</span>
+        <h3>请假系统</h3>
+        <p>在线申请、进度追踪、附件上传、分类申请</p>
+        <i class="ph ph-arrow-right arrow"></i>
+      </div>
+      <div class="feature-row">
+        <span class="num">08</span>
+        <h3>一卡通</h3>
+        <p>余额查询、消费记录、充值提醒</p>
+        <i class="ph ph-arrow-right arrow"></i>
+      </div>
+      <div class="feature-row">
+        <span class="num">09</span>
+        <h3>深色模式</h3>
+        <p>自动跟随系统主题，精心调校的深色配色</p>
+        <i class="ph ph-arrow-right arrow"></i>
+      </div>
+    </div>
+  </section>
+
+  <!-- Screenshots -->
+  <section class="editorial-section full-bleed" id="screenshots">
+    <div style="padding: 0 40px;">
+      <div class="section-label reveal">Interface</div>
+      <h2 class="display-lg reveal" style="margin-bottom: 60px;">
+        界面<span class="serif">预览</span>
+      </h2>
+    </div>
+    <div class="screenshots-editorial reveal">
+      <div class="screenshot-ed">
+        <img src="assets/widget_final_today_schedule.png" alt="首页" loading="lazy">
+        <div class="caption">首页 - 今日课表</div>
+      </div>
+      <div class="screenshot-ed">
+        <img src="assets/widget_final_schedule_warm_fixed.png" alt="课表" loading="lazy">
+        <div class="caption">周课表视图</div>
+      </div>
+      <div class="screenshot-ed">
+        <img src="assets/widget_final_utilities.png" alt="工具" loading="lazy">
+        <div class="caption">实用工具</div>
+      </div>
+      <div class="screenshot-ed">
+        <img src="assets/widget_final_business_progress.png" alt="请假" loading="lazy">
+        <div class="caption">请假进度</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Download CTA -->
+  <section class="cta-dark" id="download">
+    <h2 class="display-lg reveal">
+      准备好告别<br><span class="serif">反复切换的日子了吗？</span>
+    </h2>
+    <p class="reveal">Web 版无需下载，打开即用。Android 版下载 APK 安装。</p>
+    <div class="hero-dark-actions reveal" style="justify-content:center;">
+      <a href="#" class="btn-solid">
+        <i class="ph ph-globe"></i>
+        Web 版直接访问
+      </a>
+      <a href="#" class="btn-outline">
+        <i class="ph ph-download-simple"></i>
+        下载 Android 版
+      </a>
+    </div>
+  </section>
+
+  <!-- FAQ -->
+  <section class="editorial-section" id="faq">
+    <div class="section-label reveal">FAQ</div>
+    <h2 class="display-lg reveal" style="margin-bottom: 60px;">
+      常见<span class="serif">问题</span>
+    </h2>
+    <div class="faq-editorial reveal">
+      <div class="faq-ed-item">
+        <button class="faq-ed-question">
+          使用这个 App 安全吗？我的教务账号会不会泄露？
+          <span class="toggle">+</span>
+        </button>
+        <div class="faq-ed-answer">
+          <div class="faq-ed-answer-inner">完全安全。App 使用学校官方统一身份认证登录，不会存储你的教务密码。所有会话数据均加密存储，且仅用于向教务系统获取你的课表、成绩等数据。</div>
+        </div>
+      </div>
+      <div class="faq-ed-item">
+        <button class="faq-ed-question">
+          数据是实时同步的吗？
+          <span class="toggle">+</span>
+        </button>
+        <div class="faq-ed-answer">
+          <div class="faq-ed-answer-inner">是的。课表、成绩、考勤等数据均实时从学校教务系统获取。当教务系统维护或网络不佳时，App 会自动展示最近一次成功获取的数据，并在恢复后自动刷新。</div>
+        </div>
+      </div>
+      <div class="faq-ed-item">
+        <button class="faq-ed-question">
+          iOS 可以用吗？
+          <span class="toggle">+</span>
+        </button>
+        <div class="faq-ed-answer">
+          <div class="faq-ed-answer-inner">Web 版可以在任何设备的浏览器中使用，包括 iPhone 和 iPad。由于 Apple 开发者账号费用较高，目前暂未上架 App Store，iOS 用户建议收藏 Web 版到主屏幕。</div>
+        </div>
+      </div>
+      <div class="faq-ed-item">
+        <button class="faq-ed-question">
+          这个 App 收费吗？
+          <span class="toggle">+</span>
+        </button>
+        <div class="faq-ed-answer">
+          <div class="faq-ed-answer-inner">完全免费。OneGZUS 是学生自发开发的开源项目，所有功能均免费使用，没有任何广告或内购。</div>
+        </div>
+      </div>
+      <div class="faq-ed-item">
+        <button class="faq-ed-question">
+          发现 Bug 或有新功能建议怎么办？
+          <span class="toggle">+</span>
+        </button>
+        <div class="faq-ed-answer">
+          <div class="faq-ed-answer-inner">欢迎通过 GitHub Issues 提交反馈，或直接联系开发者。我们非常欢迎用户的建议和反馈。</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="footer-ed">
+    <div class="footer-ed-left">
+      &copy; 2026 OneGZUS. 开源项目，仅供学习交流使用。
+    </div>
+    <div class="footer-ed-right">
+      <a href="https://github.com" target="_blank">GitHub</a>
+      <a href="#">问题反馈</a>
+      <a href="./docs/privacy.html">隐私政策</a>
+    </div>
+  </footer>
+
+  <script>
+    // Scroll reveal
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) entry.target.classList.add('visible');
+      });
+    }, { threshold: 0.1 });
+    document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
+
+    // Nav scroll
+    const nav = document.getElementById('nav');
+    window.addEventListener('scroll', () => {
+      if (window.scrollY > 50) nav.classList.add('scrolled');
+      else nav.classList.remove('scrolled');
+    });
+
+    // FAQ
+    document.querySelectorAll('.faq-ed-question').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const item = btn.closest('.faq-ed-item');
+        const wasActive = item.classList.contains('active');
+        document.querySelectorAll('.faq-ed-item').forEach(i => i.classList.remove('active'));
+        if (!wasActive) item.classList.add('active');
+      });
+    });
+  </script>
+</body>
+</html>

@@ -128,6 +128,6 @@ def test_missing_ecard_openid_returns_503(monkeypatch):
 
 
 def test_ecard_reminder_message_levels():
-    assert ecard_reminder_message({"powerBalance": 9, "powerText": "9 度"}, 30)[0] == "电量极低"
-    assert ecard_reminder_message({"powerBalance": 20, "powerText": "20 度"}, 30)[0] == "电量偏低"
-    assert ecard_reminder_message({"powerBalance": 50, "powerText": "50 度"}, 30)[0] == "今日水电费"
+    assert ecard_reminder_message({"powerBalance": 9, "powerText": "9 度"}, 30, 5, 10, ["power"])[0][1] == "电量极低"
+    assert ecard_reminder_message({"powerBalance": 20, "powerText": "20 度"}, 30, 5, 10, ["power"])[0][1] == "电量偏低"
+    assert ecard_reminder_message({"powerBalance": 50, "powerText": "50 度"}, 30, 5, 10, ["power"])[0][1] == "今日水电费"

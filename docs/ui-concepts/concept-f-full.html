@@ -1,0 +1,967 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OneGZUS Concept F Full Prototype</title>
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+  <style>
+    :root {
+      --ink: #16202d;
+      --muted: #68778c;
+      --soft: #f5f9ff;
+      --glass: rgba(255,255,255,.66);
+      --glass-strong: rgba(255,255,255,.82);
+      --line: rgba(255,255,255,.82);
+      --blue: #52a7ff;
+      --green: #44c6a1;
+      --pink: #f08ca3;
+      --gold: #d4a94e;
+      --danger: #e45f77;
+      --shadow: 0 16px 44px rgba(56,89,128,.12), inset 0 1px 0 rgba(255,255,255,.72);
+      font-family: "Avenir Next", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 12% 10%, rgba(82,167,255,.42), transparent 29rem),
+        radial-gradient(circle at 82% 8%, rgba(240,140,163,.34), transparent 25rem),
+        radial-gradient(circle at 50% 92%, rgba(68,198,161,.35), transparent 28rem),
+        linear-gradient(135deg, #eef7ff, #fff6f8 48%, #effaf6);
+      overflow-x: hidden;
+    }
+    body:before,
+    body:after {
+      content: "";
+      position: fixed;
+      width: 38vw;
+      height: 38vw;
+      min-width: 260px;
+      min-height: 260px;
+      border-radius: 38% 62% 55% 45%;
+      pointer-events: none;
+      opacity: .32;
+      filter: blur(1px);
+      animation: morph 10s ease-in-out infinite;
+    }
+    body:before { left: -10vw; top: 18vh; background: rgba(82,167,255,.35); }
+    body:after { right: -12vw; bottom: 8vh; background: rgba(68,198,161,.34); animation-delay: -4.8s; }
+    button, input, select, textarea { font: inherit; color: inherit; }
+    button { cursor: pointer; }
+    .app {
+      position: relative;
+      z-index: 1;
+      width: min(1320px, calc(100% - 28px));
+      margin: 0 auto;
+      padding: 18px 0 36px;
+    }
+    .top {
+      position: sticky;
+      top: 14px;
+      z-index: 20;
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      align-items: center;
+      gap: 14px;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 30px;
+      background: var(--glass);
+      backdrop-filter: blur(24px) saturate(145%);
+      box-shadow: var(--shadow);
+    }
+    .brand, .profile {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+      font-weight: 800;
+    }
+    .brand img {
+      width: 42px;
+      height: 42px;
+      border-radius: 15px;
+      background: white;
+      box-shadow: inset 0 0 0 1px rgba(22,32,45,.08);
+    }
+    .nav {
+      display: flex;
+      gap: 6px;
+      justify-content: center;
+      padding: 6px;
+      border-radius: 22px;
+      background: rgba(255,255,255,.34);
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+    .nav::-webkit-scrollbar { display: none; }
+    .nav button,
+    .icon-btn,
+    .seg button,
+    .mini-action {
+      border: 1px solid transparent;
+      background: transparent;
+      transition: transform .24s ease, background .24s ease, border-color .24s ease, color .24s ease;
+    }
+    .nav button {
+      flex: 0 0 auto;
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      min-height: 38px;
+      padding: 0 12px;
+      border-radius: 17px;
+      color: var(--muted);
+    }
+    .nav button.active,
+    .nav button:hover,
+    .seg button.active,
+    .seg button:hover {
+      color: var(--ink);
+      background: rgba(255,255,255,.72);
+      border-color: rgba(255,255,255,.9);
+      transform: translateY(-1px);
+    }
+    .profile {
+      justify-content: flex-end;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .avatar {
+      display: grid;
+      place-items: center;
+      width: 38px;
+      height: 38px;
+      border-radius: 14px;
+      color: white;
+      background: linear-gradient(135deg, var(--blue), var(--green));
+      font-weight: 900;
+    }
+    .glass {
+      border: 1px solid var(--line);
+      border-radius: 32px;
+      background: var(--glass);
+      backdrop-filter: blur(24px) saturate(150%);
+      box-shadow: var(--shadow);
+    }
+    .screen {
+      display: none;
+      margin-top: 18px;
+      animation: floatIn .42s ease both;
+    }
+    .screen.active { display: block; }
+    .screen-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 16px;
+      padding: 22px;
+    }
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: rgba(255,255,255,.48);
+      color: var(--muted);
+      font-size: 13px;
+    }
+    h1, h2, h3, p { margin: 0; }
+    h1 {
+      margin-top: 12px;
+      font-size: clamp(36px, 7vw, 78px);
+      line-height: .96;
+      letter-spacing: 0;
+    }
+    h2 { font-size: 22px; }
+    h3 { font-size: 17px; }
+    .muted { color: var(--muted); }
+    .page-copy {
+      max-width: 660px;
+      margin-top: 12px;
+      color: var(--muted);
+      line-height: 1.8;
+    }
+    .grid { display: grid; gap: 16px; }
+    .cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .cols-main { grid-template-columns: minmax(0, 1.18fr) minmax(320px, .82fr); }
+    .panel {
+      padding: 18px;
+      border-radius: 28px;
+    }
+    .panel-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+    .panel-title > span,
+    .metric span,
+    .row span,
+    .small { color: var(--muted); font-size: 13px; }
+    .hero-card {
+      position: relative;
+      min-height: 360px;
+      padding: clamp(24px, 5vw, 46px);
+      overflow: hidden;
+    }
+    .hero-card:after {
+      content: "";
+      position: absolute;
+      right: 34px;
+      bottom: 30px;
+      width: 170px;
+      height: 170px;
+      border-radius: 50%;
+      background: conic-gradient(from 140deg, var(--blue), var(--green), var(--pink), var(--blue));
+      opacity: .18;
+      animation: spin 9s linear infinite;
+    }
+    .hero-card p {
+      position: relative;
+      z-index: 1;
+      max-width: 580px;
+      margin-top: 14px;
+      color: var(--muted);
+      line-height: 1.85;
+      font-size: 17px;
+    }
+    .chips {
+      position: relative;
+      z-index: 1;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 26px;
+    }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 9px 11px;
+      border-radius: 15px;
+      background: rgba(255,255,255,.44);
+      color: var(--ink);
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .dense-board {
+      position: relative;
+      z-index: 1;
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 22px;
+    }
+    .dense-item {
+      padding: 12px;
+      border-radius: 18px;
+      background: rgba(255,255,255,.5);
+      border: 1px solid rgba(255,255,255,.68);
+    }
+    .dense-item b {
+      display: block;
+      margin-top: 5px;
+      font-size: 18px;
+    }
+    .chip.blue { background: rgba(82,167,255,.18); color: #1768b5; }
+    .chip.green { background: rgba(68,198,161,.18); color: #147d66; }
+    .chip.pink { background: rgba(240,140,163,.2); color: #b84461; }
+    .metric {
+      display: grid;
+      gap: 8px;
+      padding: 18px;
+      min-height: 122px;
+      border-radius: 24px;
+      background: rgba(255,255,255,.38);
+      transition: transform .25s ease, background .25s ease;
+    }
+    .metric:hover { transform: translateY(-4px); background: rgba(255,255,255,.6); }
+    .metric i { color: var(--blue); }
+    .metric strong { font-size: 27px; }
+    .timeline, .list { display: grid; gap: 10px; }
+    .lesson, .row, .app-card, .notice-card, .setting-row {
+      border-radius: 22px;
+      background: rgba(255,255,255,.38);
+      transition: transform .24s ease, background .24s ease, box-shadow .24s ease;
+    }
+    .lesson:hover, .row:hover, .app-card:hover, .notice-card:hover, .setting-row:hover {
+      transform: translateY(-3px);
+      background: rgba(255,255,255,.62);
+    }
+    .lesson {
+      display: grid;
+      grid-template-columns: 58px 1fr auto;
+      gap: 12px;
+      align-items: center;
+      padding: 12px;
+    }
+    .time {
+      display: grid;
+      place-items: center;
+      width: 58px;
+      height: 58px;
+      border-radius: 20px;
+      background: rgba(82,167,255,.18);
+      color: #1b69b5;
+      font-weight: 800;
+    }
+    .lesson:nth-child(2n) .time { background: rgba(68,198,161,.18); color: #147d66; }
+    .lesson:nth-child(3n) .time { background: rgba(240,140,163,.18); color: #b84461; }
+    .row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px;
+    }
+    .row-main {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+    }
+    .icon-bubble {
+      display: grid;
+      place-items: center;
+      flex: 0 0 auto;
+      width: 42px;
+      height: 42px;
+      border-radius: 16px;
+      background: rgba(82,167,255,.16);
+      color: #1768b5;
+    }
+    .icon-bubble.green { background: rgba(68,198,161,.16); color: #147d66; }
+    .icon-bubble.pink { background: rgba(240,140,163,.18); color: #b84461; }
+    .icon-bubble.gold { background: rgba(212,169,78,.2); color: #9d6d12; }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 32px;
+      padding: 0 10px;
+      border-radius: 999px;
+      background: rgba(255,255,255,.48);
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .pill.good { color: #147d66; background: rgba(68,198,161,.18); }
+    .pill.warn { color: #9d6d12; background: rgba(212,169,78,.2); }
+    .pill.hot { color: #b84461; background: rgba(240,140,163,.2); }
+    .seg {
+      display: inline-flex;
+      gap: 6px;
+      padding: 5px;
+      border-radius: 18px;
+      background: rgba(255,255,255,.4);
+    }
+    .seg button {
+      min-height: 34px;
+      padding: 0 12px;
+      border-radius: 14px;
+      color: var(--muted);
+    }
+    .schedule-week {
+      display: grid;
+      grid-template-columns: repeat(7, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .schedule-day {
+      min-height: 230px;
+      padding: 12px;
+      border-radius: 24px;
+      background: rgba(255,255,255,.34);
+    }
+    .schedule-day b { display: block; margin-bottom: 10px; }
+    .class-block {
+      display: block;
+      padding: 10px;
+      border-radius: 17px;
+      color: white;
+      background: linear-gradient(135deg, var(--blue), #6ebaff);
+      font-size: 13px;
+      line-height: 1.45;
+      box-shadow: 0 12px 26px rgba(82,167,255,.2);
+    }
+    .class-block + .class-block { margin-top: 8px; background: linear-gradient(135deg, var(--green), #7adfbd); }
+    .class-block.pink { background: linear-gradient(135deg, var(--pink), #ffb0c0); }
+    .class-block.gold { background: linear-gradient(135deg, var(--gold), #f2ca6d); }
+    .today-view { display: none; }
+    .schedule-panel.today-mode .schedule-week { display: none; }
+    .schedule-panel.today-mode .today-view { display: grid; }
+    .table {
+      width: 100%;
+      border-collapse: collapse;
+      overflow: hidden;
+      border-radius: 22px;
+      background: rgba(255,255,255,.32);
+    }
+    th, td {
+      padding: 13px 12px;
+      border-bottom: 1px solid rgba(255,255,255,.54);
+      text-align: left;
+      vertical-align: top;
+    }
+    th { color: var(--muted); font-size: 13px; font-weight: 800; }
+    tr:last-child td { border-bottom: 0; }
+    .form-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+    label {
+      display: grid;
+      gap: 7px;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+    }
+    input, select, textarea {
+      width: 100%;
+      min-height: 46px;
+      padding: 10px 12px;
+      border: 1px solid rgba(255,255,255,.86);
+      border-radius: 16px;
+      outline: 0;
+      background: rgba(255,255,255,.52);
+    }
+    textarea { min-height: 104px; resize: vertical; }
+    .primary, .secondary, .mini-action {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      min-height: 42px;
+      padding: 0 14px;
+      border-radius: 16px;
+      border: 1px solid rgba(255,255,255,.86);
+    }
+    .primary {
+      color: white;
+      background: linear-gradient(135deg, var(--blue), var(--green));
+      box-shadow: 0 12px 28px rgba(82,167,255,.22);
+    }
+    .secondary, .mini-action { background: rgba(255,255,255,.5); color: var(--ink); }
+    .leave-state { display: none; }
+    .leave-state.active { display: grid; }
+    details {
+      border-radius: 22px;
+      background: rgba(255,255,255,.38);
+      overflow: hidden;
+    }
+    summary {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px;
+      cursor: pointer;
+      font-weight: 800;
+      list-style: none;
+    }
+    summary::-webkit-details-marker { display: none; }
+    details p { padding: 0 14px 14px; color: var(--muted); line-height: 1.7; }
+    .app-card, .notice-card, .setting-row { padding: 16px; }
+    .app-card {
+      display: grid;
+      min-height: 146px;
+      align-content: space-between;
+    }
+    .notice-card { display: grid; gap: 9px; }
+    .login-wrap {
+      min-height: calc(100vh - 120px);
+      display: grid;
+      grid-template-columns: 1.1fr .9fr;
+      gap: 18px;
+      align-items: center;
+    }
+    .login-card { padding: clamp(24px, 5vw, 44px); }
+    .widget-phone {
+      position: relative;
+      max-width: 390px;
+      margin: 0 auto;
+      padding: 18px;
+      border-radius: 42px;
+      background:
+        radial-gradient(circle at 20% 10%, rgba(82,167,255,.34), transparent 14rem),
+        radial-gradient(circle at 80% 90%, rgba(240,140,163,.26), transparent 13rem),
+        rgba(18, 28, 42, .84);
+      box-shadow: 0 34px 90px rgba(22,32,45,.22);
+      color: white;
+    }
+    .phone-top {
+      display: flex;
+      justify-content: space-between;
+      padding: 4px 8px 14px;
+      color: rgba(255,255,255,.72);
+      font-size: 12px;
+    }
+    .widget-grid {
+      display: grid;
+      gap: 12px;
+    }
+    .widget {
+      padding: 14px;
+      border-radius: 24px;
+      background: rgba(255,255,255,.86);
+      color: var(--ink);
+      box-shadow: 0 18px 44px rgba(0,0,0,.14);
+    }
+    .widget.compact {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      background: transparent;
+      box-shadow: none;
+      padding: 0;
+    }
+    .widget.compact > div {
+      padding: 14px;
+      border-radius: 22px;
+      background: rgba(255,255,255,.86);
+    }
+    .widget h3 {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 10px;
+      font-size: 15px;
+    }
+    .widget-line {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 7px 0;
+      border-bottom: 1px solid rgba(22,32,45,.08);
+      font-size: 13px;
+    }
+    .widget-line:last-child { border-bottom: 0; }
+    .dock {
+      display: none;
+      position: fixed;
+      left: 12px;
+      right: 12px;
+      bottom: 12px;
+      z-index: 30;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 8px;
+      padding: 8px;
+      border: 1px solid var(--line);
+      border-radius: 26px;
+      background: rgba(255,255,255,.68);
+      backdrop-filter: blur(20px);
+      box-shadow: 0 18px 50px rgba(56,89,128,.18);
+    }
+    .dock button {
+      display: grid;
+      place-items: center;
+      min-height: 48px;
+      border: 0;
+      border-radius: 18px;
+      background: transparent;
+      color: var(--muted);
+    }
+    .dock button.active { background: rgba(255,255,255,.78); color: var(--ink); }
+    @keyframes morph {
+      0%,100% { transform: scale(1) rotate(0deg); border-radius: 38% 62% 55% 45%; }
+      50% { transform: scale(1.08) rotate(10deg); border-radius: 58% 42% 36% 64%; }
+    }
+    @keyframes floatIn {
+      from { opacity: 0; transform: translateY(18px) scale(.985); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @media (max-width: 1080px) {
+      .top { grid-template-columns: auto 1fr; }
+      .profile { display: none; }
+      .cols-main, .login-wrap { grid-template-columns: 1fr; }
+      .cols-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .schedule-week { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    }
+    @media (max-width: 760px) {
+      body {
+        background:
+          linear-gradient(180deg, rgba(238,247,255,.92), rgba(248,251,252,.96) 42%, rgba(239,250,246,.9));
+      }
+      body:before,
+      body:after { display: none; }
+      .app { width: min(100% - 16px, 1320px); padding: 8px 0 88px; }
+      .top { display: none; }
+      .brand span, .nav { display: none; }
+      .dock { display: grid; }
+      .screen { margin-top: 0; animation-duration: .22s; }
+      .glass {
+        border-color: rgba(214,226,238,.86);
+        border-radius: 22px;
+        background: rgba(255,255,255,.86);
+        backdrop-filter: blur(10px) saturate(118%);
+        box-shadow: 0 8px 22px rgba(56,89,128,.08);
+      }
+      .screen-head { display: block; padding: 14px; margin-bottom: 10px; }
+      .eyebrow { display: none; }
+      h1 { margin-top: 0; font-size: clamp(26px, 8vw, 36px); line-height: 1.08; }
+      h2 { font-size: 18px; }
+      h3 { font-size: 15px; }
+      .page-copy { margin-top: 6px; line-height: 1.5; font-size: 13px; }
+      .cols-2, .cols-3, .cols-4, .form-grid { grid-template-columns: 1fr; }
+      .cols-main { grid-template-columns: 1fr; gap: 8px; }
+      .grid { gap: 10px; }
+      .panel { padding: 12px; border-radius: 20px; }
+      .hero-card {
+        min-height: auto;
+        padding: 16px;
+        border-radius: 22px;
+      }
+      .hero-card:after { display: none; }
+      .hero-card p { margin-top: 8px; font-size: 13px; line-height: 1.55; }
+      .chips { gap: 7px; margin-top: 12px; }
+      .chip { min-height: 28px; padding: 6px 8px; border-radius: 10px; font-size: 12px; }
+      .dense-board {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+        margin-top: 12px;
+      }
+      .dense-item {
+        padding: 10px;
+        border-radius: 14px;
+        background: rgba(244,248,252,.92);
+        border-color: rgba(214,226,238,.86);
+      }
+      .dense-item b { font-size: 15px; }
+      .utility-strip {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 8px;
+      }
+      .metric {
+        min-height: 82px;
+        padding: 10px;
+        border-radius: 16px;
+        background: rgba(244,248,252,.92);
+      }
+      .metric i { display: none; }
+      .metric strong { font-size: 17px; }
+      .metric span { font-size: 11px; }
+      .panel-title { margin-bottom: 10px; }
+      .lesson { grid-template-columns: 48px 1fr; }
+      .lesson, .row, .app-card, .notice-card, .setting-row {
+        border-radius: 16px;
+        background: rgba(244,248,252,.92);
+      }
+      .lesson:hover, .row:hover, .app-card:hover, .notice-card:hover, .setting-row:hover {
+        transform: none;
+      }
+      .lesson .pill { grid-column: 2; width: fit-content; }
+      .time { width: 48px; height: 48px; border-radius: 16px; }
+      .schedule-week { display: none; }
+      .schedule-panel .today-view { display: grid; }
+      .schedule-panel:not(.today-mode) .today-view { display: grid; }
+      .schedule-actions { display: none; }
+      .table-wrap { overflow-x: auto; }
+      .widget-phone { max-width: 100%; border-radius: 24px; }
+      .dock {
+        left: 8px;
+        right: 8px;
+        bottom: 8px;
+        border-color: rgba(214,226,238,.9);
+        border-radius: 22px;
+        background: rgba(255,255,255,.92);
+        backdrop-filter: blur(14px);
+        box-shadow: 0 10px 28px rgba(56,89,128,.14);
+      }
+      .dock button {
+        min-height: 46px;
+        border-radius: 15px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <header class="top">
+      <div class="brand">
+        <img src="../../apps/mobile_web/assets/icon.png" alt="OneGZUS">
+        <span>OneGZUS</span>
+      </div>
+      <nav class="nav" aria-label="主导航">
+        <button data-target="login"><i data-lucide="log-in"></i>登录</button>
+        <button class="active" data-target="home"><i data-lucide="home"></i>首页</button>
+        <button data-target="info"><i data-lucide="id-card"></i>信息</button>
+        <button data-target="notices"><i data-lucide="bell"></i>通知</button>
+        <button data-target="business"><i data-lucide="briefcase-business"></i>办事</button>
+        <button data-target="apps"><i data-lucide="grid-3x3"></i>应用</button>
+        <button data-target="schedule"><i data-lucide="calendar-days"></i>课表</button>
+        <button data-target="attendance"><i data-lucide="radar"></i>考勤</button>
+        <button data-target="leave"><i data-lucide="clipboard-check"></i>请假</button>
+        <button data-target="exams"><i data-lucide="file-clock"></i>考试</button>
+        <button data-target="grades"><i data-lucide="chart-no-axes-column"></i>成绩</button>
+        <button data-target="credits"><i data-lucide="graduation-cap"></i>学分</button>
+        <button data-target="ecard"><i data-lucide="wallet-cards"></i>一卡通</button>
+        <button data-target="widgets"><i data-lucide="layout-template"></i>Widget</button>
+        <button data-target="more"><i data-lucide="settings"></i>更多</button>
+      </nav>
+      <div class="profile"><span>叶远志 · 第 14 周</span><div class="avatar">叶</div></div>
+    </header>
+
+    <section class="screen active" data-screen="home">
+      <div class="grid cols-main">
+        <article class="glass hero-card">
+          <span class="eyebrow"><i data-lucide="sparkles"></i>今日校园卡</span>
+          <h1>09:00 大学体育 II</h1>
+          <p>TY101（江） · 赵国宾。今天 6 节课，上午 2 节，下午 4 节。</p>
+          <div class="chips"><span class="chip blue">32 分钟后</span><span class="chip green">17 / 21 课程</span><span class="chip pink">请假审批 1</span></div>
+          <div class="dense-board" aria-label="今日关键状态">
+            <div class="dense-item"><span class="small">下一地点</span><b>TY101（江）</b></div>
+            <div class="dense-item"><span class="small">今日课程</span><b>6 节</b></div>
+            <div class="dense-item"><span class="small">未读通知</span><b>5 条</b></div>
+            <div class="dense-item"><span class="small">考勤状态</span><b>正常</b></div>
+          </div>
+        </article>
+        <aside class="grid utility-strip">
+          <div class="glass metric"><i data-lucide="droplets"></i><span>冷水余额</span><strong>17.99 吨</strong></div>
+          <div class="glass metric"><i data-lucide="flame"></i><span>热水余额</span><strong>18.488 元</strong></div>
+          <div class="glass metric"><i data-lucide="zap"></i><span>电费余额</span><strong>155.28 度</strong></div>
+        </aside>
+      </div>
+      <div class="grid cols-2" style="margin-top:16px">
+        <article class="glass panel">
+          <div class="panel-title"><h2><i data-lucide="list-checks"></i> 今日时间线</h2><span>6 节</span></div>
+          <div class="timeline">
+            <div class="lesson"><div class="time">09</div><div><h3>大学体育 II</h3><span class="muted">TY101（江） · 赵国宾</span></div><span class="pill good">下一节</span></div>
+            <div class="lesson"><div class="time">10</div><div><h3>工程应用数学</h3><span class="muted">H3-205（江） · 关文超</span></div><span class="pill">2 节</span></div>
+            <div class="lesson"><div class="time">15</div><div><h3>Python 编程技术</h3><span class="muted">S-201（江） · 胡军成</span></div><span class="pill">下午</span></div>
+          </div>
+        </article>
+        <article class="glass panel">
+          <div class="panel-title"><h2><i data-lucide="route"></i> 业务状态</h2><span>实时</span></div>
+          <div class="list">
+            <div class="row"><div class="row-main"><div class="icon-bubble green"><i data-lucide="clipboard-check"></i></div><div><h3>请假审批</h3><span>辅导员审核中</span></div></div><span class="pill warn">进行中</span></div>
+            <div class="row"><div class="row-main"><div class="icon-bubble pink"><i data-lucide="file-clock"></i></div><div><h3>考试安排</h3><span>本周 2 场</span></div></div><span class="pill">查看</span></div>
+            <div class="row"><div class="row-main"><div class="icon-bubble"><i data-lucide="bell"></i></div><div><h3>通知公告</h3><span>5 条未读</span></div></div><span class="pill hot">新</span></div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section class="screen" data-screen="login">
+      <div class="login-wrap">
+        <article class="glass hero-card">
+          <span class="eyebrow"><i data-lucide="shield-check"></i>安全登录</span>
+          <h1>进入你的校园空间。</h1>
+          <p>统一登录、账号密码、移动端 WebView 都收敛为同一张清晰入口卡。</p>
+          <div class="chips"><span class="chip blue">办事大厅统一登录</span><span class="chip green">记住会话</span><span class="chip pink">自动刷新</span></div>
+        </article>
+        <form class="glass login-card">
+          <div class="grid">
+            <label>学号<input value="2026042042"></label>
+            <label>密码<input type="password" value="password"></label>
+            <button class="primary" type="button"><i data-lucide="log-in"></i>办事大厅统一登录</button>
+            <button class="secondary" type="button">使用账号密码登录</button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <section class="screen" data-screen="info">
+      <div class="glass screen-head"><div><span class="eyebrow"><i data-lucide="id-card"></i>个人信息</span><h1>身份与学籍一屏读完。</h1><p class="page-copy">重要身份、院系、班级、宿舍与登录状态合并展示，减少跳转。</p></div></div>
+      <div class="grid cols-4">
+        <div class="glass metric"><span>姓名</span><strong>叶远志</strong><span>计算机科学与技术</span></div>
+        <div class="glass metric"><span>学号</span><strong>2026042042</strong><span>本科 · 2024 级</span></div>
+        <div class="glass metric"><span>班级</span><strong>24 计科 3 班</strong><span>江门校区</span></div>
+        <div class="glass metric"><span>宿舍</span><strong>西苑 A2-932</strong><span>已绑定一卡通</span></div>
+      </div>
+    </section>
+
+    <section class="screen" data-screen="notices">
+      <div class="glass screen-head"><div><span class="eyebrow"><i data-lucide="bell"></i>通知公告</span><h1>只保留需要行动的信息。</h1><p class="page-copy">公告按考试、课程、事务分类，详情可展开。</p></div><span class="pill hot">5 未读</span></div>
+      <div class="grid cols-2">
+        <details class="notice-card glass" open><summary>考试周安排更新 <span class="pill hot">重要</span></summary><p>第 17 周开始集中考试，请在考试页查看具体教室和时间。</p></details>
+        <details class="notice-card glass"><summary>课程地点提醒 <span class="pill">课程</span></summary><p>形势与政策 II 本周地点保持 H1-101。</p></details>
+        <details class="notice-card glass"><summary>办事大厅维护 <span class="pill warn">维护</span></summary><p>周日 22:00-23:00 部分服务可能短暂不可用。</p></details>
+        <details class="notice-card glass"><summary>校园卡充值渠道调整 <span class="pill">生活</span></summary><p>水电费查询不受影响，充值入口迁移至一卡通服务页。</p></details>
+      </div>
+    </section>
+
+    <section class="screen" data-screen="business">
+      <div class="glass screen-head"><div><span class="eyebrow"><i data-lucide="briefcase-business"></i>办事大厅</span><h1>流程进度更直观。</h1><p class="page-copy">把状态、当前节点、日期和处理建议放进同一行。</p></div></div>
+      <div class="grid cols-3">
+        <div class="glass panel"><div class="panel-title"><h2>请假审批</h2><span class="pill warn">70%</span></div><p class="muted">辅导员审核中 · 提交于 06-06</p></div>
+        <div class="glass panel"><div class="panel-title"><h2>成绩复核</h2><span class="pill">待反馈</span></div><p class="muted">教务处处理中 · 材料已上传</p></div>
+        <div class="glass panel"><div class="panel-title"><h2>证明申请</h2><span class="pill good">已完成</span></div><p class="muted">电子文件可下载</p></div>
+      </div>
+    </section>
+
+    <section class="screen" data-screen="apps">
+      <div class="glass screen-head"><div><span class="eyebrow"><i data-lucide="grid-3x3"></i>应用中心</span><h1>常用入口前置。</h1><p class="page-copy">保持卡片轻量，每个入口只保留动作名称、用途和状态。</p></div></div>
+      <div class="grid cols-4">
+        <div class="glass app-card"><div class="icon-bubble"><i data-lucide="file-pen-line"></i></div><h3>学籍证明</h3><span class="muted">线上申请</span></div>
+        <div class="glass app-card"><div class="icon-bubble green"><i data-lucide="calendar-plus"></i></div><h3>场地预约</h3><span class="muted">体育馆 / 教室</span></div>
+        <div class="glass app-card"><div class="icon-bubble pink"><i data-lucide="package-check"></i></div><h3>业务进度</h3><span class="muted">3 条记录</span></div>
+        <div class="glass app-card"><div class="icon-bubble gold"><i data-lucide="message-square-text"></i></div><h3>意见反馈</h3><span class="muted">服务工单</span></div>
+      </div>
+    </section>
+
+    <section class="screen" data-screen="schedule">
+      <div class="glass screen-head"><div><span class="eyebrow"><i data-lucide="calendar-days"></i>课表</span><h1>桌面看周，移动看今天。</h1><p class="page-copy">周网格保留完整视野，今日列表用于小屏快速扫描。</p></div><div class="seg schedule-actions"><button class="active" data-schedule="week">周视图</button><button data-schedule="today">今日</button></div></div>
+      <article class="glass panel schedule-panel">
+        <div class="schedule-week">
+          <div class="schedule-day"><b>一</b><span class="class-block">形势与政策 II<br>09:00</span><span class="class-block">计算机网络<br>14:00</span></div>
+          <div class="schedule-day"><b>二</b><span class="class-block pink">管理信息系统导论<br>09:00</span></div>
+          <div class="schedule-day"><b>三</b><span class="class-block">大学体育 II<br>09:00</span><span class="class-block green">工程应用数学<br>10:40</span></div>
+          <div class="schedule-day"><b>四</b><span class="class-block gold">Python 编程技术<br>10:40</span></div>
+          <div class="schedule-day"><b>五</b><span class="class-block pink">心理健康教育<br>10:40</span></div>
+          <div class="schedule-day"><b>六</b></div>
+          <div class="schedule-day"><b>日</b></div>
+        </div>
+        <div class="today-view timeline">
+          <div class="lesson"><div class="time">09</div><div><h3>大学体育 II</h3><span class="muted">TY101（江） · 赵国宾</span></div><span class="pill good">下一节</span></div>
+          <div class="lesson"><div class="time">10</div><div><h3>工程应用数学</h3><span class="muted">H3-205（江） · 关文超</span></div><span class="pill">2 节连排</span></div>
+          <div class="lesson"><div class="time">15</div><div><h3>Python 编程技术</h3><span class="muted">S-201（江） · 胡军成</span></div><span class="pill">实验课</span></div>
+        </div>
+      </article>
+    </section>
+
+    <section class="screen" data-screen="attendance">
+      <div class="glass screen-head"><div><span class="eyebrow"><i data-lucide="radar"></i>考勤</span><h1>异常优先显示。</h1><p class="page-copy">正常记录折叠，迟到、缺勤、待确认进入顶部状态。</p></div></div>
+      <div class="grid cols-3">
+        <div class="glass metric"><span>本学期出勤</span><strong>98.4%</strong><span>126 / 128</span></div>
+        <div class="glass metric"><span>异常</span><strong>2</strong><span>1 次待确认</span></div>
+        <div class="glass metric"><span>最近同步</span><strong>刚刚</strong><span>缓存可用</span></div>
+      </div>
+    </section>
+
+    <section class="screen" data-screen="leave">
+      <div class="glass screen-head"><div><span class="eyebrow"><i data-lucide="clipboard-check"></i>自动请假</span><h1>先预览，再提交。</h1><p class="page-copy">表单、冲突课程、提交状态分区展示，降低误操作。</p></div></div>
+      <div class="grid cols-main">
+        <form class="glass panel">
+          <div class="form-grid">
+            <label>开始时间<input value="2026-06-09 08:00"></label>
+            <label>结束时间<input value="2026-06-09 12:00"></label>
+            <label>请假类型<select><option>事假</option><option>病假</option></select></label>
+            <label>联系电话<input value="138****2042"></label>
+            <label style="grid-column:1/-1">请假理由<textarea>校外办理个人事务，已确认不会影响下午课程。</textarea></label>
+          </div>
+          <div class="chips"><button class="secondary" type="button" data-leave="preview">预览冲突</button><button class="primary" type="button" data-leave="done">模拟提交</button></div>
+        </form>
+        <aside class="grid">
+          <div class="glass panel leave-state active" data-leave-state="idle"><h2>等待预览</h2><p class="page-copy">点击预览后显示冲突课程和提交摘要。</p></div>
+          <div class="glass panel leave-state" data-leave-state="preview"><h2>冲突课程</h2><div class="list"><div class="row"><span>09:00 大学体育 II</span><span class="pill warn">需请假</span></div><div class="row"><span>10:40 工程应用数学</span><span class="pill warn">需请假</span></div></div></div>
+          <div class="glass panel leave-state" data-leave-state="done"><h2>提交成功</h2><p class="page-copy">申请已进入辅导员审核，业务大厅会同步显示进度。</p></div>
+        </aside>
+      </div>
+    </section>
+
+    <section class="screen" data-screen="exams">
+      <div class="glass screen-head"><div><span class="eyebrow"><i data-lucide="file-clock"></i>考试</span><h1>考试时间和地点放大。</h1><p class="page-copy">优先展示最近考试，关联成绩页可直接跳转。</p></div></div>
+      <div class="grid cols-2">
+        <div class="glass panel"><div class="panel-title"><h2>工程应用数学</h2><span class="pill hot">06-18</span></div><p class="muted">09:00-11:00 · H3-205（江）</p></div>
+        <div class="glass panel"><div class="panel-title"><h2>Python 编程技术</h2><span class="pill warn">06-21</span></div><p class="muted">14:30-16:30 · S-201（江）</p></div>
+      </div>
+    </section>
+
+    <section class="screen" data-screen="grades">
+      <div class="glass screen-head"><div><span class="eyebrow"><i data-lucide="chart-no-axes-column"></i>成绩</span><h1>先看趋势，再看明细。</h1><p class="page-copy">绩点、均分、课程成绩与复核入口统一展示。</p></div></div>
+      <div class="grid cols-3">
+        <div class="glass metric"><span>平均分</span><strong>86.7</strong><span>较上学期 +2.1</span></div>
+        <div class="glass metric"><span>绩点</span><strong>3.62</strong><span>稳定</span></div>
+        <div class="glass metric"><span>待复核</span><strong>1</strong><span>工程应用数学</span></div>
+      </div>
+      <div class="glass panel table-wrap" style="margin-top:16px">
+        <table class="table"><thead><tr><th>课程</th><th>成绩</th><th>绩点</th><th>状态</th></tr></thead><tbody><tr><td>大学体育 II</td><td>92</td><td>4.0</td><td><span class="pill good">已发布</span></td></tr><tr><td>工程应用数学</td><td>84</td><td>3.3</td><td><span class="pill warn">可复核</span></td></tr><tr><td>Python 编程技术</td><td>89</td><td>3.7</td><td><span class="pill good">已发布</span></td></tr></tbody></table>
+      </div>
+    </section>
+
+    <section class="screen" data-screen="credits">
+      <div class="glass screen-head"><div><span class="eyebrow"><i data-lucide="graduation-cap"></i>学分</span><h1>毕业进度一眼判断。</h1><p class="page-copy">总学分、分类学分、缺口和建议动作组合展示。</p></div></div>
+      <div class="grid cols-3">
+        <div class="glass metric"><span>已修</span><strong>96.5</strong><span>目标 150</span></div>
+        <div class="glass metric"><span>本学期</span><strong>18</strong><span>已选课程</span></div>
+        <div class="glass metric"><span>缺口</span><strong>35.5</strong><span>建议补选通识</span></div>
+      </div>
+    </section>
+
+    <section class="screen" data-screen="ecard">
+      <div class="glass screen-head"><div><span class="eyebrow"><i data-lucide="wallet-cards"></i>一卡通</span><h1>生活缴费更明确。</h1><p class="page-copy">宿舍绑定、更新时间、冷水热水电费拆开显示。</p></div></div>
+      <div class="grid cols-3">
+        <div class="glass metric"><i data-lucide="droplets"></i><span>冷水</span><strong>17.99 吨</strong><span>西苑 A2-932</span></div>
+        <div class="glass metric"><i data-lucide="flame"></i><span>热水</span><strong>18.488 元</strong><span>实时</span></div>
+        <div class="glass metric"><i data-lucide="zap"></i><span>电费</span><strong>155.28 度</strong><span>余额充足</span></div>
+      </div>
+    </section>
+
+    <section class="screen" data-screen="widgets">
+      <div class="glass screen-head"><div><span class="eyebrow"><i data-lucide="layout-template"></i>Android Widget</span><h1>桌面组件也用同一套语言。</h1><p class="page-copy">透明感降低，强化文字对比，信息层级对应原生四类 widget。</p></div></div>
+      <div class="grid cols-main">
+        <div class="widget-phone">
+          <div class="phone-top"><span>09:28</span><span>OneGZUS Widgets</span></div>
+          <div class="widget-grid">
+            <div class="widget"><h3>下一节课 <span class="pill good">32 分钟</span></h3><strong>大学体育 II</strong><div class="widget-line"><span>时间</span><b>09:00</b></div><div class="widget-line"><span>地点</span><b>TY101（江）</b></div></div>
+            <div class="widget"><h3>今日课表 <span class="pill">6 节</span></h3><div class="widget-line"><span>09:00</span><b>大学体育 II</b></div><div class="widget-line"><span>10:40</span><b>工程应用数学</b></div><div class="widget-line"><span>15:30</span><b>Python 编程技术</b></div></div>
+            <div class="widget compact"><div><h3>生活缴费</h3><strong>155.28 度</strong><span class="muted">电费</span></div><div><h3>业务进度</h3><strong>70%</strong><span class="muted">请假审批</span></div></div>
+          </div>
+        </div>
+        <aside class="grid">
+          <div class="glass panel"><h2>Widget 设计规则</h2><p class="page-copy">减少背景复杂度，保留圆角、柔和高光、蓝绿粉状态色，确保系统桌面上文字清晰。</p></div>
+          <div class="glass panel"><h2>点击行为</h2><p class="page-copy">下一节课和今日课表打开课表，生活缴费打开一卡通，业务进度打开办事大厅。</p></div>
+        </aside>
+      </div>
+    </section>
+
+    <section class="screen" data-screen="more">
+      <div class="glass screen-head"><div><span class="eyebrow"><i data-lucide="settings"></i>更多设置</span><h1>把配置分成可理解的组。</h1><p class="page-copy">账号、学期、主题、导航、后台运行不混在一起。</p></div></div>
+      <div class="grid cols-2">
+        <div class="glass panel"><div class="panel-title"><h2>账号</h2><span class="pill good">已登录</span></div><div class="list"><div class="setting-row">叶远志 · 2026042042</div><div class="setting-row">数据源：实时 + 缓存</div></div></div>
+        <div class="glass panel"><div class="panel-title"><h2>学期</h2><span class="pill">2025-2026 第二学期</span></div><div class="list"><div class="setting-row">当前第 14 周</div><div class="setting-row">首周 2026-03-02</div></div></div>
+        <div class="glass panel"><div class="panel-title"><h2>界面</h2><span class="pill">流光校园卡</span></div><div class="list"><div class="setting-row">跟随系统主题</div><div class="setting-row">底部导航自动隐藏</div></div></div>
+        <div class="glass panel"><div class="panel-title"><h2>后台运行</h2><span class="pill warn">建议开启</span></div><div class="list"><div class="setting-row">通知提醒</div><div class="setting-row">桌面组件刷新</div></div></div>
+      </div>
+    </section>
+  </main>
+
+  <nav class="dock" aria-label="移动导航">
+    <button class="active" data-target="home"><i data-lucide="home"></i></button>
+    <button data-target="schedule"><i data-lucide="calendar-days"></i></button>
+    <button data-target="leave"><i data-lucide="clipboard-check"></i></button>
+    <button data-target="credits"><i data-lucide="graduation-cap"></i></button>
+    <button data-target="more"><i data-lucide="more-horizontal"></i></button>
+  </nav>
+
+  <script>
+    if (window.lucide) lucide.createIcons({ strokeWidth: 2 });
+    const screens = [...document.querySelectorAll("[data-screen]")];
+    const navButtons = [...document.querySelectorAll("[data-target]")];
+    function showScreen(target) {
+      screens.forEach((screen) => screen.classList.toggle("active", screen.dataset.screen === target));
+      navButtons.forEach((button) => button.classList.toggle("active", button.dataset.target === target));
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+    navButtons.forEach((button) => button.addEventListener("click", () => showScreen(button.dataset.target)));
+    document.querySelectorAll("[data-schedule]").forEach((button) => {
+      button.addEventListener("click", () => {
+        document.querySelectorAll("[data-schedule]").forEach((item) => item.classList.remove("active"));
+        button.classList.add("active");
+        document.querySelector(".schedule-panel").classList.toggle("today-mode", button.dataset.schedule === "today");
+      });
+    });
+    document.querySelectorAll("[data-leave]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const target = button.dataset.leave;
+        document.querySelectorAll("[data-leave-state]").forEach((state) => {
+          state.classList.toggle("active", state.dataset.leaveState === target);
+        });
+      });
+    });
+  </script>
+</body>
+</html>

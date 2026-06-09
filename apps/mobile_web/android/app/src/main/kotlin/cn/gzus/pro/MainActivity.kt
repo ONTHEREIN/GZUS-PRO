@@ -2,6 +2,9 @@ package cn.gzus.pro
 
 import android.content.ComponentName
 import android.content.Intent
+import android.app.AlarmManager
+import android.content.pm.PackageManager
+import android.location.LocationManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -10,7 +13,14 @@ import android.os.Looper
 import android.os.PowerManager
 import android.provider.Settings
 import androidx.annotation.NonNull
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import com.tencent.bugly.crashreport.CrashReport
+import com.tencent.upgrade.bean.UpgradeStrategy
+import com.tencent.upgrade.callback.UpgradeStrategyRequestCallback
+import com.tencent.upgrade.core.DefaultUpgradeStrategyRequestCallback
+import com.tencent.upgrade.core.UpgradeManager
+import com.tencent.upgrade.core.UpgradeReqCallbackForUserManualCheck
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -21,6 +31,9 @@ class MainActivity : FlutterActivity() {
     private val BUGLY_CHANNEL = "cn.gzus.pro/bugly"
     private val HOME_WIDGETS_CHANNEL = "cn.gzus.pro/home_widgets"
     private val PUSH_CHANNEL = "cn.gzus.pro/push"
+    private val LIVE_UPDATE_CHANNEL = "cn.gzus.pro/live_update"
+    private val FTP_CHANNEL = "cn.gzus.pro/ftp"
+    private val UPGRADE_CHANNEL = "cn.gzus.pro/upgrade"
     private var pendingInitialTab: String? = null
     private var pendingWidgetKind: String? = null
     private var homeWidgetsChannel: MethodChannel? = null
@@ -70,11 +83,24 @@ class MainActivity : FlutterActivity() {
                 "checkNotificationPermission" -> {
                     result.success(checkNotificationPermission())
                 }
+                "checkExactAlarmPermission" -> {
+                    result.success(checkExactAlarmPermission())
+                }
+                "checkLocationPermission" -> {
+                    result.success(checkLocationPermission())
+                }
+                "requestLocationPermission" -> {
+                    requestLocationPermission()
+                    result.success(true)
+                }
                 "openAutoStartSettings" -> {
                     result.success(openAutoStartSettings())
                 }
                 "openBatteryOptimizationSettings" -> {
                     result.success(openBatteryOptimizationSettings())
+                }
+                "openExactAlarmSettings" -> {
+                    result.success(openExactAlarmSettings())
                 }
                 "setHideFromRecents" -> {
                     val hide = call.argument<Boolean>("hide") ?: false
@@ -84,6 +110,28 @@ class MainActivity : FlutterActivity() {
                 else -> {
                     result.notImplemented()
                 }
+            }
+        }
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "cn.gzus.pro/location").setMethodCallHandler { call, result ->
+            when (call.method) {
+                "getCoarseLocation" -> {
+                    try {
+                        val loc = getLastKnownLocation()
+                        if (loc != null) {
+                            val map = HashMap<String, Double>()
+                            map["lat"] = loc.latitude
+                            map["lon"] = loc.longitude
+                            result.success(map)
+                        } else {
+                            result.success(null)
+                        }
+                    } catch (e: SecurityException) {
+                        result.error("LOCATION_PERMISSION_DENIED", "定位权限未授予", null)
+                    } catch (e: Exception) {
+                        result.error("LOCATION_ERROR", e.message, null)
+                    }
+                }
+                else -> result.notImplemented()
             }
         }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "cn.gzus.pro/background_service").setMethodCallHandler { call, result ->
@@ -108,6 +156,24 @@ class MainActivity : FlutterActivity() {
                     startService(intent)
                     result.success(true)
                 }
+                "setAppForeground" -> {
+                    val foreground = call.argument<Boolean>("foreground") ?: true
+                    getSharedPreferences(BackgroundService.PREFS_NAME, MODE_PRIVATE)
+                        .edit()
+                        .putBoolean(BackgroundService.KEY_APP_FOREGROUND, foreground)
+                        .apply()
+                    result.success(true)
+                }
+                "updateCourseReminders" -> {
+                    val coursesJson = call.argument<String>("coursesJson") ?: "[]"
+                    val beforeStartMinutes = call.argument<Int>("beforeStartMinutes") ?: 10
+                    val beforeEndMinutes = call.argument<Int>("beforeEndMinutes") ?: 5
+                    val firstWeekStart = call.argument<String>("firstWeekStart") ?: ""
+                    CourseReminderScheduler.saveCourseData(
+                        this, coursesJson, beforeStartMinutes, beforeEndMinutes, firstWeekStart
+                    )
+                    result.success(true)
+                }
                 else -> {
                     result.notImplemented()
                 }
@@ -121,6 +187,92 @@ class MainActivity : FlutterActivity() {
                 }
                 else -> result.notImplemented()
             }
+        }
+
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, LIVE_UPDATE_CHANNEL).setMethodCallHandler { call, result ->
+            val helper = LiveUpdateNotificationHelper(this)
+            when (call.method) {
+                "postLiveUpdate" -> {
+                    try {
+                        val id = call.argument<Int>("id") ?: 0
+                        val title = call.argument<String>("title") ?: ""
+                        val body = call.argument<String>("body") ?: ""
+                        val style = call.argument<String>("style") ?: "timer"
+                        val endTimeMillis = when (val value = call.argument<Any>("endTimeMillis")) {
+                            is Long -> value
+                            is Int -> value.toLong()
+                            is Number -> value.toLong()
+                            else -> 0L
+                        }
+                        val shortCriticalText = call.argument<String>("shortCriticalText")
+                        val extrasJson = call.argument<String>("extras")
+                        val ongoing = call.argument<Boolean>("ongoing") ?: (style != "metric")
+                        val progressMax = call.argument<Int>("progressMax") ?: 0
+                        val progressCurrent = call.argument<Int>("progressCurrent") ?: 0
+                        val posted = helper.postLiveUpdate(
+                            id = id,
+                            title = title,
+                            body = body,
+                            style = style,
+                            endTimeMillis = endTimeMillis,
+                            shortCriticalText = shortCriticalText,
+                            extrasJson = extrasJson,
+                            ongoing = ongoing,
+                            progressMax = progressMax,
+                            progressCurrent = progressCurrent,
+                        )
+                        result.success(posted)
+                    } catch (e: Exception) {
+                        result.error("LIVE_UPDATE_ERROR", e.message, null)
+                    }
+                }
+                "cancelLiveUpdate" -> {
+                    try {
+                        val id = call.argument<Int>("id") ?: 0
+                        helper.cancelLiveUpdate(id)
+                        result.success(true)
+                    } catch (e: Exception) {
+                        result.error("LIVE_UPDATE_ERROR", e.message, null)
+                    }
+                }
+                "canPostPromotedNotifications" -> {
+                    try {
+                        val canPost = helper.canPostPromotedNotifications()
+                        result.success(canPost)
+                    } catch (e: Exception) {
+                        result.error("LIVE_UPDATE_ERROR", e.message, null)
+                    }
+                }
+                else -> result.notImplemented()
+            }
+        }
+
+        val ftpClient = FtpUploadClient()
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, FTP_CHANNEL).setMethodCallHandler { call, result ->
+            val args = call.arguments as? Map<*, *> ?: emptyMap<Any, Any>()
+            Thread {
+                try {
+                    val value = when (call.method) {
+                        "testConnection" -> {
+                            ftpClient.testConnection(args)
+                            true
+                        }
+                        "listDirectory" -> ftpClient.listDirectory(args)
+                        "uploadFile" -> ftpClient.uploadFile(args)
+                        "downloadFile" -> ftpClient.downloadFile(args)
+                        "disconnect" -> true
+                        else -> {
+                            runOnUiThread { result.notImplemented() }
+                            return@Thread
+                        }
+                    }
+                    runOnUiThread { result.success(value) }
+                } catch (e: FtpUploadException) {
+                    runOnUiThread { result.error(e.code, e.message, null) }
+                } catch (e: Exception) {
+                    runOnUiThread { result.error("FTP_ERROR", e.message ?: "FTP 操作失败", null) }
+                }
+            }.start()
         }
 
         homeWidgetsChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, HOME_WIDGETS_CHANNEL)
@@ -173,6 +325,7 @@ class MainActivity : FlutterActivity() {
         
         // Bugly channel
         setupBuglyChannel(flutterEngine)
+        setupUpgradeChannel(flutterEngine)
     }
 
     private fun captureWidgetLaunch(intent: Intent?) {
@@ -281,6 +434,63 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    private fun checkExactAlarmPermission(): Boolean {
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val alarmManager = getSystemService(ALARM_SERVICE) as AlarmManager
+                alarmManager.canScheduleExactAlarms()
+            } else {
+                true
+            }
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    private fun checkLocationPermission(): Boolean {
+        return ContextCompat.checkSelfPermission(
+            this, android.Manifest.permission.ACCESS_COARSE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun requestLocationPermission() {
+        ActivityCompat.requestPermissions(
+            this,
+            arrayOf(android.Manifest.permission.ACCESS_COARSE_LOCATION),
+            LOCATION_PERMISSION_REQUEST_CODE
+        )
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+    }
+
+    private fun getLastKnownLocation(): android.location.Location? {
+        if (!checkLocationPermission()) return null
+        val locationManager = getSystemService(LOCATION_SERVICE) as LocationManager
+        val providers = listOf(
+            LocationManager.NETWORK_PROVIDER,
+            LocationManager.GPS_PROVIDER,
+            LocationManager.PASSIVE_PROVIDER
+        )
+        for (provider in providers) {
+            if (!locationManager.isProviderEnabled(provider)) continue
+            try {
+                val loc = locationManager.getLastKnownLocation(provider)
+                if (loc != null) return loc
+            } catch (_: Exception) { }
+        }
+        return null
+    }
+
+    companion object {
+        private const val LOCATION_PERMISSION_REQUEST_CODE = 1001
+    }
+
     private fun openAutoStartSettings(): Boolean {
         return try {
             val manufacturer = Build.MANUFACTURER.lowercase()
@@ -378,6 +588,34 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    private fun openExactAlarmSettings(): Boolean {
+        return try {
+            val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM).apply {
+                    data = Uri.parse("package:$packageName")
+                }
+            } else {
+                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                    data = Uri.parse("package:$packageName")
+                }
+            }
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(intent)
+            true
+        } catch (e: Exception) {
+            try {
+                val fallback = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                    data = Uri.parse("package:$packageName")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                startActivity(fallback)
+                true
+            } catch (e2: Exception) {
+                false
+            }
+        }
+    }
+
     private fun setHideFromRecents(hide: Boolean) {
         val flag = 0x80000000.toInt() // FLAG_EXCLUDE_FROM_RECENTS
         if (hide) {
@@ -442,5 +680,82 @@ class MainActivity : FlutterActivity() {
                 }
             }
         }
+    }
+
+    private fun setupUpgradeChannel(flutterEngine: FlutterEngine) {
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, UPGRADE_CHANNEL).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "checkUpgrade" -> {
+                    if (!UpgradeManager.getInstance().hasInitialedOrNot()) {
+                        result.error("SHIPLY_NOT_INITIALIZED", "Shiply SDK is not initialized", null)
+                        return@setMethodCallHandler
+                    }
+                    val isManual = call.argument<Boolean>("isManual") ?: false
+                    val uiCallback = if (isManual) {
+                        UpgradeReqCallbackForUserManualCheck()
+                    } else {
+                        DefaultUpgradeStrategyRequestCallback()
+                    }
+                    val callback = object : UpgradeStrategyRequestCallback {
+                        override fun onReceiveStrategy(strategy: UpgradeStrategy) {
+                            uiCallback.onReceiveStrategy(strategy)
+                            runOnUiThread { result.success(upgradeStrategyToMap(strategy, hasUpdate = true)) }
+                        }
+
+                        override fun onFail(code: Int, message: String?) {
+                            uiCallback.onFail(code, message)
+                            runOnUiThread {
+                                result.error("SHIPLY_CHECK_FAILED", message ?: "Shiply upgrade check failed", code)
+                            }
+                        }
+
+                        override fun onReceivedNoStrategy() {
+                            uiCallback.onReceivedNoStrategy()
+                            runOnUiThread { result.success(mapOf("hasUpdate" to false)) }
+                        }
+                    }
+                    UpgradeManager.getInstance().checkUpgrade(isManual, emptyMap(), callback)
+                }
+                "getUpgradeStrategy" -> {
+                    if (!UpgradeManager.getInstance().hasInitialedOrNot()) {
+                        result.success(null)
+                        return@setMethodCallHandler
+                    }
+                    val strategy = UpgradeManager.getInstance().cachedStrategy
+                        ?: UpgradeManager.getInstance().reloadCacheStrategyFromDisk()
+                    result.success(strategy?.let { upgradeStrategyToMap(it, hasUpdate = hasUsableUpgrade(it)) })
+                }
+                else -> result.notImplemented()
+            }
+        }
+    }
+
+    private fun hasUsableUpgrade(strategy: UpgradeStrategy): Boolean {
+        return try {
+            val packageInfo = packageManager.getPackageInfo(packageName, 0)
+            strategy.isLaterThan(packageInfo.versionCode, packageInfo.versionCode, packageInfo.versionName ?: "")
+        } catch (_: Exception) {
+            strategy.apkBasicInfo != null
+        }
+    }
+
+    private fun upgradeStrategyToMap(strategy: UpgradeStrategy, hasUpdate: Boolean): Map<String, Any?> {
+        val apkInfo = strategy.apkBasicInfo
+        return mapOf(
+            "hasUpdate" to hasUpdate,
+            "title" to strategy.title,
+            "newFeature" to strategy.newFeature,
+            "h5Url" to strategy.h5Url,
+            "remindType" to strategy.remindType,
+            "updateStrategy" to strategy.updateStrategy,
+            "publishTime" to strategy.publishTime,
+            "updateTime" to strategy.updateTime,
+            "versionName" to apkInfo?.versionName,
+            "versionCode" to apkInfo?.versionCode,
+            "buildNo" to apkInfo?.buildNo,
+            "downloadUrl" to apkInfo?.downloadUrl,
+            "apkSize" to apkInfo?.apkSize,
+            "apkName" to apkInfo?.apkName,
+        )
     }
 }

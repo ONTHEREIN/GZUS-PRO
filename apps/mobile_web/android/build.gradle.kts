@@ -5,6 +5,7 @@ allprojects {
         maven { url = uri("https://mirrors.tuna.tsinghua.edu.cn/maven-central/") }
         maven { url = uri("https://mirrors.tuna.tsinghua.edu.cn/gradle-plugin/") }
         maven { url = uri("https://storage.flutter-io.cn/download.flutter.io") }
+        maven { url = uri("https://maven.cnb.cool/tencent-tds/shiply-public/-/packages/") }
         google()
         mavenCentral()
     }

@@ -18,15 +18,7 @@ class PushService {
       return;
     }
     if (defaultTargetPlatform == TargetPlatform.android) {
-      try {
-        final opened = await _channel
-            .invokeMapMethod<String, dynamic>('consumeNotificationOpen');
-        if (opened != null && opened.isNotEmpty) {
-          _onTap?.call(Map<String, dynamic>.from(opened));
-        }
-      } on PlatformException {
-        // Native notification-open cache is best effort.
-      }
+      await _consumeNotificationOpen();
     }
   }
 
@@ -34,5 +26,20 @@ class PushService {
     _registrationId = null;
   }
 
-  static void resume() {}
+  static void resume() {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
+    _consumeNotificationOpen();
+  }
+
+  static Future<void> _consumeNotificationOpen() async {
+    try {
+      final opened = await _channel
+          .invokeMapMethod<String, dynamic>('consumeNotificationOpen');
+      if (opened != null && opened.isNotEmpty) {
+        _onTap?.call(Map<String, dynamic>.from(opened));
+      }
+    } on PlatformException {
+      // Native notification-open cache is best effort.
+    }
+  }
 }

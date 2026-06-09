@@ -228,27 +228,59 @@ class _EhallWebViewPageState extends State<_EhallWebViewPage> {
     final uri = Uri.tryParse(widget.initialUrl);
     if (uri == null || uri.host.isEmpty) return;
     final prefs = await SharedPreferences.getInstance();
+    await _injectSavedEhallCookies(prefs, uri);
+    if (_isGzusHost(uri.host) && widget.fillScript == null) {
+      await _primeEhallAuthToken(prefs);
+    }
+    await controller.loadRequest(uri);
+  }
+
+  Future<void> _injectSavedEhallCookies(
+    SharedPreferences prefs,
+    Uri targetUri,
+  ) async {
+    if (!_isGzusHost(targetUri.host)) return;
     final header = prefs.getString('auth.ehallCookies');
-    if (uri.host == 'ehall.gzus.edu.cn' &&
-        header != null &&
-        header.isNotEmpty) {
-      for (final entry in _parseCookieHeader(header).entries) {
+    if (header == null || header.isEmpty) return;
+    final cookies = _parseCookieHeader(header);
+    if (cookies.isEmpty) return;
+    for (final domain in _cookieDomainsFor(targetUri)) {
+      for (final entry in cookies.entries) {
         await cookieManager.setCookie(
           WebViewCookie(
             name: entry.key,
             value: entry.value,
-            domain: uri.host,
+            domain: domain,
             path: '/',
           ),
         );
       }
     }
-    await controller.loadRequest(uri);
-    // 注入持久化的 ehall auth token 到 sessionStorage
-    if (uri.host == 'ehall.gzus.edu.cn') {
-      final authToken = prefs.getString('auth.ehallAuthToken');
-      if (authToken != null && authToken.isNotEmpty) {
-        await controller.runJavaScript('''
+  }
+
+  List<String> _cookieDomainsFor(Uri targetUri) {
+    final host = targetUri.host.toLowerCase();
+    final domains = <String>{host};
+    if (_isGzusHost(host)) {
+      domains
+        ..add('ehall.gzus.edu.cn')
+        ..add('gzus.edu.cn')
+        ..add('.gzus.edu.cn');
+    }
+    return domains.toList(growable: false);
+  }
+
+  bool _isGzusHost(String host) {
+    final normalized = host.toLowerCase();
+    return normalized == 'gzus.edu.cn' || normalized.endsWith('.gzus.edu.cn');
+  }
+
+  Future<void> _primeEhallAuthToken(SharedPreferences prefs) async {
+    final authToken = prefs.getString('auth.ehallAuthToken');
+    if (authToken == null || authToken.isEmpty) return;
+    try {
+      await controller.loadRequest(Uri.parse('https://ehall.gzus.edu.cn/'));
+      await controller.runJavaScript('''
 (() => {
   try {
     const existing = sessionStorage.getItem('userLogin');
@@ -258,8 +290,7 @@ class _EhallWebViewPageState extends State<_EhallWebViewPage> {
   } catch (e) {}
 })()
 ''');
-      }
-    }
+    } catch (_) {}
   }
 
   Map<String, String> _parseCookieHeader(String header) {

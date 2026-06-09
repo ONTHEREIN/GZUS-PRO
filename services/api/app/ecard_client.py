@@ -112,6 +112,21 @@ class EcardClient:
         self._token: str | None = None
         self._openid = self.settings.ecard_openid
         self._unionid = self.settings.ecard_unionid
+        self._http_client: httpx.Client | None = None
+
+    def _get_http_client(self) -> httpx.Client:
+        if self._http_client is None or self._http_client.is_closed:
+            self._http_client = httpx.Client(
+                timeout=self.settings.request_timeout_seconds,
+                verify=self.settings.ecard_verify_tls,
+                limits=httpx.Limits(max_connections=4, max_keepalive_connections=2),
+            )
+        return self._http_client
+
+    def close(self) -> None:
+        if self._http_client is not None and not self._http_client.is_closed:
+            self._http_client.close()
+            self._http_client = None
 
     def post_api(
         self,
@@ -136,13 +151,10 @@ class EcardClient:
         }
         url = f"{self.settings.ecard_base_url.rstrip('/')}/{path.lstrip('/')}"
         try:
-            with httpx.Client(
-                timeout=self.settings.request_timeout_seconds,
-                verify=self.settings.ecard_verify_tls,
-            ) as client:
-                response = client.post(url, data=payload, headers=headers)
-                response.raise_for_status()
-                data = response.json()
+            client = self._get_http_client()
+            response = client.post(url, data=payload, headers=headers)
+            response.raise_for_status()
+            data = response.json()
         except httpx.TimeoutException as exc:
             logger.error("ecard_client: request timeout for %s: %s", path, exc)
             raise EcardApiError("一卡通服务请求超时") from exc

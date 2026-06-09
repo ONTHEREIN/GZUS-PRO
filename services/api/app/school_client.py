@@ -13,7 +13,7 @@ from html.parser import HTMLParser
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
-from app.school_sdk_patches import apply_school_sdk_import_patches, apply_school_sdk_patches
+from app.school_sdk_patches import apply_school_sdk_import_patches, apply_school_sdk_patches, apply_school_sdk_info_patch
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +34,8 @@ CREDIT_FUNC_WIDGET_GUID = "37234863CD24BB76E063860810AC3761"
 CREDIT_GNMKDM = "N255022"
 
 PHOTO_URL = "/jwglxt/xtgl/photo_cxXszp4.html"
+INFO_URL = "/jwglxt/xsxxxggl/xsgrxxwh_cxXsgrxx.html"
+INFO_GNMKDM = "N100801"
 INDEX_URL = "/jwglxt/xtgl/index_initMenu.html"
 NEWS_URL = "/jwglxt/xtgl/index_cxNews.html"
 NOTICE_MORE_URL = "/jwglxt/xtgl/xwck_cxMoreXwList.html"
@@ -90,11 +92,13 @@ class CaptchaRequired(RuntimeError):
 class SchoolSdkClient:
     """Thin adapter over FarmerChillax/new-school-sdk with normalized output."""
 
-    def __init__(self, base_url: str, timeout_seconds: int = 15) -> None:
+    def __init__(self, base_url: str, timeout_seconds: int = 15, httpx_client: Any | None = None) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
         self._client: Any | None = None
         self._account: str | None = None
+        self._student_name: str | None = None
+        self._httpx_client: Any | None = httpx_client
 
     def login(self, account: str, password: str) -> str | None:
         client_cls = self._load_school_client()
@@ -108,7 +112,10 @@ class SchoolSdkClient:
             if self._looks_like_captcha(exc):
                 raise CaptchaRequired(CaptchaChallenge(token="", image="", client=self)) from exc
             raise AuthenticationError("教务系统登录失败") from exc
-        return self._extract_student_name(result)
+        name = self._extract_student_name(result)
+        if name:
+            self._student_name = name
+        return name
 
     def login_with_cookies(self, cookies: Any, account: str) -> str | None:
         cookie = self._select_sdk_cookie(cookies)
@@ -131,7 +138,10 @@ class SchoolSdkClient:
         except Exception as exc:  # noqa: BLE001 - third-party SDK exceptions are not stable.
             self._client = None
             raise AuthenticationError("教务系统 cookie 登录验证失败") from exc
-        return self._student_name_from_logged_in_client(result)
+        name = self._student_name_from_logged_in_client(result)
+        if name:
+            self._student_name = name
+        return name
 
     def submit_captcha(self, code: str) -> str | None:
         if self._client is None:
@@ -142,11 +152,65 @@ class SchoolSdkClient:
             result = self._client.user_login_captcha(code)
         except Exception as exc:  # noqa: BLE001
             raise AuthenticationError("验证码提交失败") from exc
-        return self._extract_student_name(result)
+        name = self._extract_student_name(result)
+        if name:
+            self._student_name = name
+        return name
 
     def get_info(self) -> dict:
-        result = self._call_first(["get_info", "get_student_info", "info"])
-        info = normalize_student_info(result)
+        # Try SDK first
+        info: dict = {}
+        photo_url_from_html: str | None = None
+        try:
+            result = self._call_first(["get_info", "get_student_info", "info"])
+            # Check if SDK's raw HTML is actually a login page (session expired)
+            sdk_html_is_login = False
+            if self._client is not None:
+                info_obj = getattr(self._client, "info", None)
+                if info_obj is not None:
+                    raw_html = getattr(info_obj, "raw_info", None)
+                    if raw_html is not None:
+                        html_text = raw_html if isinstance(raw_html, str) else raw_html.decode("utf-8", errors="replace") if isinstance(raw_html, bytes) else str(raw_html)
+                        if "col_xh" in html_text:
+                            # Valid info page – extract photo URL
+                            photo_url_from_html = _extract_encoded_photo_url(html_text)
+                        elif "login_slogin" in html_text:
+                            logger.warning("get_info: SDK fetched login page instead of info page, session may be stale")
+                            sdk_html_is_login = True
+            if not sdk_html_is_login:
+                info = normalize_student_info(result)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("get_info: SDK get_info failed: %s, trying fallbacks", exc)
+
+        # If SDK returned empty/incomplete data, try fetching info page HTML directly
+        _info_keys = (
+            "studentId", "name", "college", "major", "className", "grade",
+            "gender", "idNumber", "birthDate", "ethnicity", "politicalStatus",
+            "enrollDate", "nativePlace", "studentStatus", "educationLevel",
+            "phone", "email", "address",
+        )
+        _has_incomplete = not info.get("name") or not info.get("className") or not info.get("gender")
+        if _has_incomplete:
+            html_info = self._query_info_via_html()
+            if html_info:
+                for key in _info_keys:
+                    if not info.get(key) and html_info.get(key):
+                        info[key] = html_info[key]
+                if not photo_url_from_html:
+                    photo_url_from_html = html_info.get("_photoUrl")
+
+        # If still empty, try proxy-based JSON query
+        if not info.get("name") or not info.get("className"):
+            try:
+                proxy_info = self._query_info_via_proxy()
+                if proxy_info:
+                    for key in _info_keys:
+                        if not info.get(key) and proxy_info.get(key):
+                            info[key] = proxy_info[key]
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("get_info: proxy info fallback failed: %s", exc)
+
+        # Enrich from credits if major/college/grade still missing
         if not info.get("major"):
             try:
                 credits = self.get_credits()
@@ -156,17 +220,148 @@ class SchoolSdkClient:
                 info["major"] = credits[0].get("major") or info.get("major")
                 info["college"] = credits[0].get("college") or info.get("college")
                 info["grade"] = credits[0].get("grade") or info.get("grade")
+
+        # Backfill studentId from account if still missing
+        if not info.get("studentId") and self._account:
+            info["studentId"] = self._account
+
+        # Backfill name from login if still missing
+        if not info.get("name") and self._student_name:
+            info["name"] = self._student_name
+
         student_id = info.get("studentId") or None
         if student_id:
             self._account = student_id
         try:
-            info["photoDataUrl"] = self.get_student_photo(student_id)
+            info["photoDataUrl"] = self.get_student_photo(
+                student_id, encoded_photo_url=photo_url_from_html,
+            )
         except Exception as exc:  # noqa: BLE001 - photo is optional enrichment, log and continue.
             logger.warning("get_info: get_student_photo failed for student_id=%s: %s", student_id, exc)
             info["photoDataUrl"] = None
         return info
 
-    def get_student_photo(self, student_id: str | None = None) -> str | None:
+    def _query_info_via_html(self) -> dict | None:
+        """Fetch the student info page HTML directly and parse it with the patched _parse."""
+        html = self._fetch_info_page_html()
+        if not html or "col_xh" not in html:
+            return None
+        # Use the patched Info._parse to extract fields from HTML
+        try:
+            from app.school_sdk_patches import apply_school_sdk_info_patch
+            apply_school_sdk_info_patch()
+            from school_sdk.client.api.user_info import Info
+            parsed = Info._parse(None, html)  # type: ignore[arg-type]
+            result = normalize_student_info(parsed)
+            # Also extract photo URL
+            photo_url = _extract_encoded_photo_url(html)
+            if photo_url:
+                result["_photoUrl"] = photo_url
+            return result
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("_query_info_via_html: parse failed: %s", exc)
+            return None
+
+    def _fetch_info_page_html(self) -> str | None:
+        """GET the student info page HTML via httpx_client or proxy."""
+        params = {
+            "gnmkdm": INFO_GNMKDM,
+            "layout": "default",
+            "su": self._account or "",
+        }
+        # Try httpx_client first
+        if self._httpx_client is not None:
+            parsed = urlparse(self.base_url)
+            origin = f"{parsed.scheme}://{parsed.netloc}"
+            full_url = origin + INFO_URL
+            try:
+                response = self._httpx_client.get(full_url, params=params, timeout=self.timeout_seconds)
+                response.raise_for_status()
+                html = response.text
+                if "col_xh" in html:
+                    return html
+                logger.debug("_fetch_info_page_html: httpx_client returned page without col_xh")
+            except Exception as exc:
+                logger.debug("_fetch_info_page_html: httpx_client failed: %s", exc)
+
+        # Try proxy
+        try:
+            response = self._proxy_response("GET", INFO_URL, params=params)
+            html = self._response_text(response)
+            if html and "col_xh" in html:
+                return html
+            logger.debug("_fetch_info_page_html: proxy returned page without col_xh")
+        except (AuthenticationError, MissingProxySlotError):
+            pass
+        except Exception as exc:
+            logger.debug("_fetch_info_page_html: proxy failed: %s", exc)
+
+        return None
+
+    def _extract_photo_url_from_sdk(self) -> str | None:
+        """Extract the encoded photo URL from the SDK's cached raw HTML."""
+        if self._client is None:
+            return None
+        info_obj = getattr(self._client, "info", None)
+        if info_obj is None:
+            return None
+        raw_html = getattr(info_obj, "raw_info", None)
+        if raw_html is None or not isinstance(raw_html, (str, bytes)):
+            return None
+        html_text = raw_html if isinstance(raw_html, str) else raw_html.decode("utf-8", errors="replace")
+        return _extract_encoded_photo_url(html_text)
+
+    def _query_info_via_proxy(self) -> dict | None:
+        """Fetch student info via proxy POST to the JWXT info API endpoint."""
+        try:
+            data = self._proxy_json(
+                "POST",
+                INFO_URL,
+                params={"gnmkdm": INFO_GNMKDM},
+                data={
+                    "xh_id": self._account or "",
+                    "xh": self._account or "",
+                    "_search": "false",
+                    "nd": str(int(time.time() * 1000)),
+                    "queryModel.showCount": "1",
+                    "queryModel.currentPage": "1",
+                    "queryModel.sortName": "",
+                    "queryModel.sortOrder": "asc",
+                    "time": "1",
+                },
+            )
+        except (AuthenticationError, MissingProxySlotError):
+            return None
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("_query_info_via_proxy: request failed: %s", exc)
+            return None
+
+        if not isinstance(data, dict):
+            return None
+
+        # The API may return data in different structures
+        items = data.get("items") or data.get("data") or []
+        if isinstance(items, list) and items:
+            raw = items[0] if isinstance(items[0], dict) else {}
+        elif isinstance(items, dict):
+            raw = items
+        else:
+            # Some endpoints return the student info directly at top level
+            raw = data
+
+        return normalize_student_info(raw)
+
+    def get_student_photo(self, student_id: str | None = None, *, encoded_photo_url: str | None = None) -> str | None:
+        # Try encoded photo URL first (new JWXT format with encrypted student ID)
+        if encoded_photo_url:
+            try:
+                response = self._fetch_encoded_photo_response(encoded_photo_url)
+                result = self._process_photo_response(response, "encoded_url")
+                if result is not None:
+                    return result
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("get_student_photo: encoded URL failed: %s, falling back", exc)
+
         student_id = (student_id or self._account or "").strip()
         if not student_id:
             logger.warning("get_student_photo: no student_id")
@@ -175,13 +370,17 @@ class SchoolSdkClient:
         if response is None:
             logger.warning("get_student_photo: all fallbacks returned None for student_id=%s", student_id)
             return None
+        return self._process_photo_response(response, student_id)
+
+    def _process_photo_response(self, response: Any, label: str) -> str | None:
+        """Convert an HTTP response containing a student photo to a data URL."""
         content = getattr(response, "content", b"") or b""
         if not content:
-            logger.warning("get_student_photo: empty content for student_id=%s", student_id)
+            logger.warning("get_student_photo: empty content for %s", label)
             return None
         content_type = getattr(response, "headers", {}).get("content-type", "image/jpeg")
         if "html" in content_type.lower():
-            logger.warning("get_student_photo: got HTML instead of image for student_id=%s", student_id)
+            logger.warning("get_student_photo: got HTML instead of image for %s", label)
             return None
         detected_type = _detect_image_mime(content)
         if detected_type:
@@ -191,10 +390,39 @@ class SchoolSdkClient:
             content = converted
             content_type = final_type
         encoded = base64.b64encode(content).decode("ascii")
-        logger.info("get_student_photo: success, size=%d bytes, type=%s", len(content), content_type)
+        logger.info("get_student_photo: success for %s, size=%d bytes, type=%s", label, len(content), content_type)
         return f"data:{content_type.split(';', 1)[0]};base64,{encoded}"
 
+    def _fetch_encoded_photo_response(self, encoded_url: str) -> Any:
+        """Fetch photo using the new encoded URL format (photo_cxEncodedXszp.html)."""
+        # encoded_url is a relative path like /jwglxt/photo/photo_cxEncodedXszp.html?...
+        if self._httpx_client is not None:
+            parsed = urlparse(self.base_url)
+            origin = f"{parsed.scheme}://{parsed.netloc}"
+            full_url = origin + encoded_url
+            try:
+                response = self._httpx_client.get(full_url, timeout=self.timeout_seconds)
+                response.raise_for_status()
+                ct = response.headers.get("content-type", "")
+                if "html" not in ct.lower() and len(response.content or b"") > 0:
+                    return response
+            except Exception as exc:
+                logger.debug("_fetch_encoded_photo_response: httpx failed: %s", exc)
+
+        try:
+            return self._proxy_response("GET", encoded_url)
+        except (AuthenticationError, MissingProxySlotError):
+            return None
+        except Exception as exc:
+            logger.debug("_fetch_encoded_photo_response: proxy failed: %s", exc)
+            return None
+
     def _fetch_photo_response(self, student_id: str) -> Any:
+        if self._httpx_client is not None:
+            result = self._fetch_photo_via_httpx_client(student_id)
+            if result is not None:
+                return result
+            logger.debug("_fetch_photo_response: direct httpx_client failed, trying proxy chain")
         try:
             result = self._proxy_response(
                 "GET",
@@ -209,11 +437,40 @@ class SchoolSdkClient:
             logger.warning("_fetch_photo_response: proxy_request failed: %s", exc)
         return self._fetch_photo_via_http(student_id)
 
+    def _fetch_photo_via_httpx_client(self, student_id: str) -> Any:
+        parsed = urlparse(self.base_url)
+        origin = f"{parsed.scheme}://{parsed.netloc}"
+        full_url = origin + PHOTO_URL
+        headers = {
+            "Referer": f"{origin}/jwglxt/xtgl/index_initMenu.html",
+        }
+        try:
+            response = self._httpx_client.get(
+                full_url,
+                params={"xh_id": student_id, "zplx": "rxhzp"},
+                timeout=self.timeout_seconds,
+                headers=headers,
+            )
+            response.raise_for_status()
+            content_type = response.headers.get("content-type", "")
+            if "html" in content_type.lower():
+                logger.debug("_fetch_photo_via_httpx_client: got HTML, session may be stale")
+                return None
+            if len(response.content or b"") > 0:
+                logger.debug("_fetch_photo_via_httpx_client: got %d bytes", len(response.content))
+                return response
+            return None
+        except Exception as exc:
+            logger.debug("_fetch_photo_via_httpx_client: failed: %s", exc)
+            return None
+
     def _fetch_photo_via_http(self, student_id: str) -> Any:
         http = getattr(self._client, "_http", None) if self._client else None
         if http is not None:
             try:
-                photo_url = urljoin(f"{self.base_url}/", PHOTO_URL.lstrip("/"))
+                parsed = urlparse(self.base_url)
+                origin = f"{parsed.scheme}://{parsed.netloc}"
+                photo_url = origin + PHOTO_URL
                 logger.debug("_fetch_photo_via_http: requesting %s", photo_url)
                 return http.get(photo_url, params={"xh_id": student_id, "zplx": "rxhzp"})
             except Exception as exc:  # noqa: BLE001
@@ -230,7 +487,9 @@ class SchoolSdkClient:
         try:
             import httpx as _httpx
             cookies = {name: value for name, value in cookie_jar.items()}
-            photo_url = urljoin(f"{self.base_url}/", PHOTO_URL.lstrip("/"))
+            parsed = urlparse(self.base_url)
+            origin = f"{parsed.scheme}://{parsed.netloc}"
+            photo_url = origin + PHOTO_URL
             with _httpx.Client(timeout=self.timeout_seconds, follow_redirects=True, cookies=cookies) as client:
                 return client.get(photo_url, params={"xh_id": student_id, "zplx": "rxhzp"})
         except Exception:  # noqa: BLE001
@@ -277,6 +536,7 @@ class SchoolSdkClient:
     def _load_school_client(self) -> Any:
         apply_school_sdk_import_patches()
         apply_school_sdk_patches()
+        apply_school_sdk_info_patch()
         candidates = [
             ("school_sdk", "SchoolClient"),
             ("school_sdk.client", "SchoolClient"),
@@ -542,18 +802,22 @@ class SchoolSdkClient:
 
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
+        # Limit items to fetch summaries for (avoid fetching too many at once)
+        max_items = min(len(items_with_url), 20)
+        items_with_url = items_with_url[:max_items]
+
         def fetch_one(idx: int, url: str) -> tuple[int, str | None]:
             return idx, self._fetch_content_summary(url)
 
         try:
-            with ThreadPoolExecutor(max_workers=5) as executor:
+            with ThreadPoolExecutor(max_workers=3) as executor:
                 futures = {
                     executor.submit(fetch_one, idx, item["url"]): idx
                     for idx, item in items_with_url
                 }
-                for future in as_completed(futures, timeout=10.0):
+                for future in as_completed(futures, timeout=8.0):
                     try:
-                        idx, summary = future.result(timeout=5.0)
+                        idx, summary = future.result(timeout=3.0)
                         if summary is not None:
                             items[idx]["content_summary"] = summary
                     except Exception:
@@ -613,21 +877,107 @@ class SchoolSdkClient:
 
     def _proxy_json(self, method: str, url_or_endpoint: str, **kwargs: Any) -> Any:
         response = self._proxy_response(method, url_or_endpoint, **kwargs)
+        # --- Pre-check: detect HTML login page before attempting JSON parse ---
+        # When the JWXT session expires, proxy_request returns an HTML login page
+        # instead of JSON.  Detecting this early avoids a confusing JSONDecodeError
+        # and provides a clearer error message.
+        text = self._response_text(response)
+        if self._looks_like_login_page(text):
+            logger.warning(
+                "proxy_json: response for %s %s appears to be a login page (session expired)",
+                method, url_or_endpoint,
+            )
+            raise AuthenticationError("教务系统会话已失效，请重新登录")
         try:
             return response.json()
         except JSONDecodeError as exc:
+            # Fallback: if JSON parse fails, still treat as session expiry
             raise AuthenticationError("教务系统会话已失效，请重新登录") from exc
 
     def _proxy_response(self, method: str, url_or_endpoint: str, **kwargs: Any) -> Any:
+        if self._httpx_client is not None:
+            return self._proxy_via_httpx(method, url_or_endpoint, **kwargs)
         if self._client is None or not hasattr(self._client, "proxy_request"):
             raise MissingProxySlotError("当前登录方式不支持获取通知，请尝试重新登录")
         logger.debug("proxy_request %s %s", method, url_or_endpoint)
-        return self._client.proxy_request(method, url_or_endpoint, **kwargs)
+        try:
+            return self._client.proxy_request(method, url_or_endpoint, **kwargs)
+        except Exception as exc:
+            err_text = str(exc).lower()
+            if "login_slogin" in err_text or "登录" in err_text:
+                logger.warning(
+                    "proxy_response: SDK exception suggests session expired for %s %s: %s",
+                    method, url_or_endpoint, exc,
+                )
+                raise AuthenticationError("教务系统会话已失效，请重新登录") from exc
+            raise
+
+    def _proxy_via_httpx(self, method: str, url_or_endpoint: str, **kwargs: Any) -> Any:
+        from urllib.parse import urlparse as _urlparse
+
+        parsed = _urlparse(self.base_url)
+        origin = f"{parsed.scheme}://{parsed.netloc}"
+        full_url = origin + (url_or_endpoint if url_or_endpoint.startswith("/") else "/" + url_or_endpoint)
+        request_kwargs: dict[str, Any] = {}
+        params = kwargs.get("params")
+        if params:
+            request_kwargs["params"] = params
+        data = kwargs.get("data")
+        if data:
+            request_kwargs["data"] = data
+        headers = {
+            "Referer": f"{origin}/jwglxt/xtgl/index_initMenu.html",
+            "X-Requested-With": "XMLHttpRequest",
+        }
+        request_kwargs.setdefault("headers", {}).update(headers)
+        logger.debug("proxy_via_httpx %s %s", method, full_url)
+        import httpx
+        try:
+            response = self._httpx_client.request(
+                method.upper(),
+                full_url,
+                timeout=self.timeout_seconds,
+                **request_kwargs,
+            )
+            response.raise_for_status()
+            return response
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
+            logger.warning(
+                "proxy_via_httpx: HTTP %d for %s %s (url=%s)",
+                status, method, url_or_endpoint, full_url,
+            )
+            if status == 404:
+                raise RuntimeError(
+                    f"JWXT 接口返回 404 (url={full_url})，可能接口路径已变更"
+                ) from exc
+            raise AuthenticationError("教务系统会话已失效，请重新登录") from exc
 
     @staticmethod
     def _looks_like_captcha(exc: Exception) -> bool:
         message = str(exc).lower()
         return "captcha" in message or "验证码" in message or "滑块" in message
+
+    @staticmethod
+    def _looks_like_login_page(text: str) -> bool:
+        """Check whether the response text looks like a JWXT login page.
+
+        This is used to detect session expiry: when the JWXT session expires,
+        requests are redirected to the login page which returns HTML instead
+        of the expected JSON.
+        """
+        if not text or len(text) < 50:
+            return False
+        text_lower = text.lower()
+        # Primary marker: the JWXT login page path
+        if "login_slogin" in text_lower:
+            return True
+        # Secondary marker: a password input field (unlikely in JSON API responses)
+        if '<input' in text_lower and 'type="password"' in text_lower:
+            return True
+        if "<title>" in text_lower and "登录" in text_lower:
+            return True
+        return False
 
     @staticmethod
     def _has_academic_methods(value: Any) -> bool:
@@ -738,6 +1088,23 @@ def _normalize_image_to_png(data: bytes, content_type: str) -> tuple[bytes | Non
         return None, content_type
 
 
+_ENCODED_PHOTO_PATTERN = re.compile(
+    r'(?:src|href)=["\']([^"\']*photo_cxEncodedXszp[^"\']*zplx=rxhzp[^"\']*)["\']',
+    re.IGNORECASE,
+)
+
+
+def _extract_encoded_photo_url(html: str) -> str | None:
+    """Extract the encoded photo URL from the student info HTML page."""
+    match = _ENCODED_PHOTO_PATTERN.search(html)
+    if match:
+        url = match.group(1)
+        # Unescape HTML entities
+        url = url.replace("&amp;", "&")
+        return url
+    return None
+
+
 def ensure_list(value: Any) -> list[Any]:
     if value is None:
         return []
@@ -782,13 +1149,25 @@ def normalize_student_info(value: Any) -> dict:
     data = as_dict(value)
     return {
         "studentId": str(
-            pick(data, "studentId", "student_id", "student_number", "xh", "account", "id") or ""
+            pick(data, "studentId", "student_id", "student_number", "xh", "account", "id", "col_xh") or ""
         ),
-        "name": str(pick(data, "name", "xm", "studentName") or ""),
-        "college": pick(data, "college", "xy", "department", "department_name"),
-        "major": pick(data, "major", "zy", "zymc", "majorName", "professionName"),
-        "className": pick(data, "className", "class_name", "bj", "class", "bjmc"),
-        "grade": pick(data, "grade", "nj"),
+        "name": str(pick(data, "name", "xm", "studentName", "col_xm") or ""),
+        "college": pick(data, "college", "xy", "department", "department_name", "col_jg_id"),
+        "major": pick(data, "major", "zy", "zymc", "majorName", "professionName", "col_zyh_id", "col_zyfx_id"),
+        "className": pick(data, "className", "class_name", "bj", "class", "bjmc", "col_bh_id"),
+        "grade": pick(data, "grade", "nj", "col_njdm_id"),
+        "gender": pick(data, "gender", "xb", "xbm", "col_xbm"),
+        "idNumber": pick(data, "idNumber", "id_number", "zjhm", "sfzh", "col_zjhm"),
+        "birthDate": pick(data, "birthDate", "birth_date", "csrq", "col_csrq"),
+        "ethnicity": pick(data, "ethnicity", "mz", "mzm", "col_mzm"),
+        "politicalStatus": pick(data, "politicalStatus", "political_status", "zzmm", "zzmmm", "col_zzmmm"),
+        "enrollDate": pick(data, "enrollDate", "enroll_date", "rxrq", "col_rxrq"),
+        "nativePlace": pick(data, "nativePlace", "native_place", "jg", "col_jg"),
+        "studentStatus": pick(data, "studentStatus", "student_status", "xjzt", "xjztdm", "col_xjztdm"),
+        "educationLevel": pick(data, "educationLevel", "education_level", "pycc", "pyccdm", "col_pyccdm"),
+        "phone": pick(data, "phone", "sjhm", "mobile", "col_sjhm"),
+        "email": pick(data, "email", "dzyx", "col_dzyx"),
+        "address": pick(data, "address", "jtdz", "col_jtdz"),
     }
 
 
@@ -805,6 +1184,7 @@ def normalize_schedule_course(value: Any) -> dict:
         "startSection": start_section,
         "endSection": end_section,
         "weeks": pick(data, "weeks", "zcd", "week"),
+        "kcbmc": pick(data, "kcbmc"),
         "raw": data,
     }
 

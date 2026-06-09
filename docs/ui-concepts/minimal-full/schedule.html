@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>课表 - OneGZUS</title>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700;900&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="app">
+        <aside class="sidebar">
+            <div class="logo">OneGZUS</div>
+            <nav class="nav-main">
+                <a href="index.html" class="nav-item">
+                    <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
+                    <span class="nav-label">首页</span>
+                </a>
+                <a href="schedule.html" class="nav-item active">
+                    <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                    <span class="nav-label">课表</span>
+                </a>
+                <a href="attendance.html" class="nav-item">
+                    <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
+                    <span class="nav-label">考勤</span>
+                </a>
+                <a href="grades.html" class="nav-item">
+                    <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/></svg>
+                    <span class="nav-label">成绩</span>
+                </a>
+                <a href="notifications.html" class="nav-item">
+                    <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg>
+                    <span class="nav-label">通知</span>
+                    <span class="nav-badge">3</span>
+                </a>
+            </nav>
+            <nav class="nav-secondary">
+                <a href="utilities.html" class="nav-item">
+                    <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                    <span class="nav-label">水电</span>
+                </a>
+                <a href="leave.html" class="nav-item">
+                    <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/></svg>
+                    <span class="nav-label">请假</span>
+                </a>
+                <a href="settings.html" class="nav-item">
+                    <svg class="nav-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                    <span class="nav-label">设置</span>
+                </a>
+            </nav>
+        </aside>
+
+        <main class="main">
+            <header class="header">
+                <div class="greeting">
+                    <h1>本周课表</h1>
+                    <p>第 14 周 · 2024年6月3日 - 6月9日</p>
+                </div>
+                <div class="header-actions">
+                    <button class="icon-btn" id="theme-toggle" title="切换主题" onclick="toggleTheme()">
+                        <svg id="theme-icon" width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/></svg>
+                    </button>
+                    <button class="icon-btn" title="周视图">
+                        <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16"/></svg>
+                    </button>
+                    <button class="icon-btn" title="日历">
+                        <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                    </button>
+                </div>
+            </header>
+
+            <div class="schedule-container">
+                <table class="schedule-table">
+                    <thead>
+                        <tr>
+                            <th style="width: 60px;">时间</th>
+                            <th>周一</th>
+                            <th>周二</th>
+                            <th class="today">周三</th>
+                            <th>周四</th>
+                            <th>周五</th>
+                            <th style="color: var(--secondary);">周六</th>
+                            <th style="color: var(--secondary);">周日</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td class="schedule-time">1-2节<br>08:00</td>
+                            <td></td>
+                            <td>
+                                <div class="schedule-class class-type-required">
+                                    <div class="schedule-class-name">高等数学</div>
+                                    <div class="schedule-class-room">A-101</div>
+                                </div>
+                            </td>
+                            <td></td>
+                            <td>
+                                <div class="schedule-class class-type-required">
+                                    <div class="schedule-class-name">高等数学</div>
+                                    <div class="schedule-class-room">A-101</div>
+                                </div>
+                            </td>
+                            <td></td>
+                            <td></td>
+                            <td></td>
+                        </tr>
+                        <tr>
+                            <td class="schedule-time">3-4节<br>10:00</td>
+                            <td></td>
+                            <td></td>
+                            <td>
+                                <div class="schedule-class class-type-required">
+                                    <div class="schedule-class-name">数据结构</div>
+                                    <div class="schedule-class-room">A-302</div>
+                                </div>
+                            </td>
+                            <td></td>
+                            <td>
+                                <div class="schedule-class class-type-lab">
+                                    <div class="schedule-class-name">数据结构实验</div>
+                                    <div class="schedule-class-room">B-105</div>
+                                </div>
+                            </td>
+                            <td></td>
+                            <td></td>
+                        </tr>
+                        <tr>
+                            <td class="schedule-time">5-6节<br>14:00</td>
+                            <td>
+                                <div class="schedule-class class-type-optional">
+                                    <div class="schedule-class-name">英语口语</div>
+                                    <div class="schedule-class-room">C-205</div>
+                                </div>
+                            </td>
+                            <td>
+                                <div class="schedule-class class-type-required">
+                                    <div class="schedule-class-name">操作系统</div>
+                                    <div class="schedule-class-room">A-204</div>
+                                </div>
+                            </td>
+                            <td>
+                                <div class="schedule-class class-type-required">
+                                    <div class="schedule-class-name">操作系统</div>
+                                    <div class="schedule-class-room">A-204</div>
+                                </div>
+                            </td>
+                            <td></td>
+                            <td>
+                                <div class="schedule-class class-type-optional">
+                                    <div class="schedule-class-name">英语口语</div>
+                                    <div class="schedule-class-room">C-205</div>
+                                </div>
+                            </td>
+                            <td></td>
+                            <td></td>
+                        </tr>
+                        <tr>
+                            <td class="schedule-time">7-8节<br>16:00</td>
+                            <td>
+                                <div class="schedule-class class-type-required">
+                                    <div class="schedule-class-name">计算机网络</div>
+                                    <div class="schedule-class-room">C-201</div>
+                                </div>
+                            </td>
+                            <td></td>
+                            <td>
+                                <div class="schedule-class class-type-required">
+                                    <div class="schedule-class-name">计算机网络</div>
+                                    <div class="schedule-class-room">C-201</div>
+                                </div>
+                            </td>
+                            <td>
+                                <div class="schedule-class class-type-lab">
+                                    <div class="schedule-class-name">网络实验</div>
+                                    <div class="schedule-class-room">B-301</div>
+                                </div>
+                            </td>
+                            <td></td>
+                            <td></td>
+                            <td></td>
+                        </tr>
+                        <tr>
+                            <td class="schedule-time">9-10节<br>19:00</td>
+                            <td></td>
+                            <td>
+                                <div class="schedule-class class-type-optional">
+                                    <div class="schedule-class-name">创新创业</div>
+                                    <div class="schedule-class-room">D-102</div>
+                                </div>
+                            </td>
+                            <td></td>
+                            <td></td>
+                            <td></td>
+                            <td></td>
+                            <td></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="section" style="margin-top: 24px;">
+                <h3 class="section-title">课程图例</h3>
+                <div style="display: flex; gap: 12px; flex-wrap: wrap;">
+                    <div style="display: flex; align-items: center; gap: 6px;">
+                        <div style="width: 12px; height: 12px; border-radius: 3px; background: var(--accent-light); border-left: 2px solid var(--accent);"></div>
+                        <span style="font-size: 12px; color: var(--secondary);">必修课</span>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 6px;">
+                        <div style="width: 12px; height: 12px; border-radius: 3px; background: var(--success-light); border-left: 2px solid var(--success);"></div>
+                        <span style="font-size: 12px; color: var(--secondary);">选修课</span>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 6px;">
+                        <div style="width: 12px; height: 12px; border-radius: 3px; background: var(--warning-light); border-left: 2px solid var(--warning);"></div>
+                        <span style="font-size: 12px; color: var(--secondary);">实验课</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="section" style="margin-top: 32px;">
+                <h3 class="section-title">全部课程</h3>
+                <div class="course-list">
+                    <div class="course-item">
+                        <div class="course-color" style="background: var(--accent);"></div>
+                        <div class="course-info">
+                            <div class="course-name">高等数学</div>
+                            <div class="course-meta">必修 · 周二/周四 1-2节 · A-101</div>
+                        </div>
+                        <div class="course-badge">4学分</div>
+                    </div>
+                    <div class="course-item">
+                        <div class="course-color" style="background: var(--accent);"></div>
+                        <div class="course-info">
+                            <div class="course-name">数据结构</div>
+                            <div class="course-meta">必修 · 周三 3-4节 · A-302</div>
+                        </div>
+                        <div class="course-badge">3.5学分</div>
+                    </div>
+                    <div class="course-item">
+                        <div class="course-color" style="background: var(--success);"></div>
+                        <div class="course-info">
+                            <div class="course-name">英语口语</div>
+                            <div class="course-meta">选修 · 周一/周五 5-6节 · C-205</div>
+                        </div>
+                        <div class="course-badge">2学分</div>
+                    </div>
+                    <div class="course-item">
+                        <div class="course-color" style="background: var(--accent);"></div>
+                        <div class="course-info">
+                            <div class="course-name">操作系统</div>
+                            <div class="course-meta">必修 · 周二/周三 5-6节 · A-204</div>
+                        </div>
+                        <div class="course-badge">4学分</div>
+                    </div>
+                    <div class="course-item">
+                        <div class="course-color" style="background: var(--accent);"></div>
+                        <div class="course-info">
+                            <div class="course-name">计算机网络</div>
+                            <div class="course-meta">必修 · 周一/周三 7-8节 · C-201</div>
+                        </div>
+                        <div class="course-badge">3学分</div>
+                    </div>
+                    <div class="course-item">
+                        <div class="course-color" style="background: var(--warning);"></div>
+                        <div class="course-info">
+                            <div class="course-name">数据结构实验</div>
+                            <div class="course-meta">实验 · 周五 3-4节 · B-105</div>
+                        </div>
+                        <div class="course-badge">1学分</div>
+                    </div>
+                    <div class="course-item">
+                        <div class="course-color" style="background: var(--warning);"></div>
+                        <div class="course-info">
+                            <div class="course-name">网络实验</div>
+                            <div class="course-meta">实验 · 周四 7-8节 · B-301</div>
+                        </div>
+                        <div class="course-badge">1学分</div>
+                    </div>
+                    <div class="course-item">
+                        <div class="course-color" style="background: var(--success);"></div>
+                        <div class="course-info">
+                            <div class="course-name">创新创业</div>
+                            <div class="course-meta">选修 · 周二 9-10节 · D-102</div>
+                        </div>
+                        <div class="course-badge">1学分</div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <nav class="mobile-nav">
+        <a href="index.html" class="mobile-nav-item">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
+            <span>首页</span>
+        </a>
+        <a href="schedule.html" class="mobile-nav-item active">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+            <span>课表</span>
+        </a>
+        <a href="attendance.html" class="mobile-nav-item">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
+            <span>考勤</span>
+        </a>
+        <a href="grades.html" class="mobile-nav-item">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/></svg>
+            <span>成绩</span>
+        </a>
+        <a href="more.html" class="mobile-nav-item">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
+            <span>更多</span>
+        </a>
+    </nav>
+    <script>
+        (function() {
+            const saved = localStorage.getItem('theme');
+            if (saved === 'dark') {
+                document.documentElement.setAttribute('data-theme', 'dark');
+            } else if (saved === 'light') {
+                document.documentElement.setAttribute('data-theme', 'light');
+            }
+            function updateThemeUI() {
+                const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+                const icon = document.getElementById('theme-icon');
+                if (icon) {
+                    icon.innerHTML = isDark
+                        ? '<circle cx="12" cy="12" r="5"/><path d="M12 1v2m0 18v2M4.22 4.22l1.42 1.42m12.72 12.72l1.42 1.42M1 12h2m18 0h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>'
+                        : '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/>';
+                }
+                const toggleUI = document.getElementById('theme-toggle-ui');
+                if (toggleUI) {
+                    toggleUI.classList.toggle('active', isDark);
+                }
+            }
+            window.toggleTheme = function() {
+                const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+                const next = isDark ? 'light' : 'dark';
+                document.documentElement.setAttribute('data-theme', next);
+                localStorage.setItem('theme', next);
+                updateThemeUI();
+            };
+            updateThemeUI();
+        })();
+    </script>
+</body>
+</html>

@@ -1,0 +1,367 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OneGZUS Concept F - Glass Campus Card</title>
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+  <style>
+    :root {
+      --ink: #16202d;
+      --muted: #68778c;
+      --glass: rgba(255,255,255,.54);
+      --line: rgba(255,255,255,.72);
+      --blue: #52a7ff;
+      --green: #44c6a1;
+      --pink: #f08ca3;
+      --gold: #d4a94e;
+      font-family: "Avenir Next", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 12% 12%, rgba(82,167,255,.42), transparent 28rem),
+        radial-gradient(circle at 80% 8%, rgba(240,140,163,.34), transparent 24rem),
+        radial-gradient(circle at 48% 92%, rgba(68,198,161,.34), transparent 26rem),
+        linear-gradient(135deg, #eef7ff, #fff6f8 48%, #effaf6);
+      overflow-x: hidden;
+    }
+    body:before, body:after {
+      content: "";
+      position: fixed;
+      width: 38vw;
+      height: 38vw;
+      min-width: 260px;
+      min-height: 260px;
+      border-radius: 38% 62% 55% 45%;
+      pointer-events: none;
+      filter: blur(1px);
+      opacity: .38;
+      animation: morph 9s ease-in-out infinite;
+    }
+    body:before { left: -10vw; top: 18vh; background: rgba(82,167,255,.35); }
+    body:after { right: -12vw; bottom: 8vh; background: rgba(68,198,161,.32); animation-delay: -4s; }
+    button { font: inherit; color: inherit; }
+    .app {
+      position: relative;
+      z-index: 1;
+      width: min(1280px, calc(100% - 28px));
+      margin: 0 auto;
+      padding: 18px 0 34px;
+    }
+    .top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 30px;
+      background: var(--glass);
+      backdrop-filter: blur(24px) saturate(145%);
+      box-shadow: 0 24px 70px rgba(56,89,128,.13);
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 800;
+    }
+    .brand img {
+      width: 42px;
+      height: 42px;
+      border-radius: 15px;
+      background: white;
+      box-shadow: inset 0 0 0 1px rgba(22,32,45,.08);
+    }
+    .nav {
+      display: flex;
+      gap: 6px;
+      padding: 6px;
+      border-radius: 22px;
+      background: rgba(255,255,255,.34);
+    }
+    .nav button, .icon {
+      border: 1px solid transparent;
+      background: transparent;
+      cursor: pointer;
+      transition: transform .25s ease, background .25s ease, border-color .25s ease;
+    }
+    .nav button {
+      min-height: 38px;
+      padding: 0 14px;
+      border-radius: 17px;
+      color: var(--muted);
+    }
+    .nav button.active, .nav button:hover {
+      color: var(--ink);
+      background: rgba(255,255,255,.68);
+      border-color: rgba(255,255,255,.9);
+      transform: translateY(-1px);
+    }
+    .icon {
+      display: grid;
+      place-items: center;
+      width: 42px;
+      height: 42px;
+      border-radius: 16px;
+      background: rgba(255,255,255,.42);
+    }
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 360px;
+      gap: 18px;
+      margin-top: 18px;
+    }
+    .glass {
+      border: 1px solid var(--line);
+      border-radius: 34px;
+      background: var(--glass);
+      backdrop-filter: blur(24px) saturate(150%);
+      box-shadow: 0 26px 80px rgba(56,89,128,.14), inset 0 1px 0 rgba(255,255,255,.7);
+      animation: floatIn .58s ease both;
+    }
+    .main-card {
+      position: relative;
+      min-height: 410px;
+      padding: clamp(24px, 5vw, 48px);
+      overflow: hidden;
+    }
+    .main-card:after {
+      content: "";
+      position: absolute;
+      right: 34px;
+      bottom: 34px;
+      width: 170px;
+      height: 170px;
+      border-radius: 50%;
+      background: conic-gradient(from 140deg, var(--blue), var(--green), var(--pink), var(--blue));
+      opacity: .18;
+      animation: spin 8s linear infinite;
+    }
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: rgba(255,255,255,.46);
+      color: var(--muted);
+    }
+    h1 {
+      margin: 22px 0 14px;
+      max-width: 720px;
+      font-size: clamp(42px, 8vw, 92px);
+      line-height: .96;
+      letter-spacing: 0;
+    }
+    .main-card p {
+      max-width: 580px;
+      color: var(--muted);
+      line-height: 1.85;
+      font-size: 17px;
+    }
+    .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 28px;
+    }
+    .chips span {
+      padding: 10px 12px;
+      border-radius: 16px;
+      background: rgba(255,255,255,.42);
+      font-weight: 700;
+    }
+    .side {
+      display: grid;
+      gap: 14px;
+    }
+    .metric {
+      display: grid;
+      gap: 8px;
+      padding: 18px;
+    }
+    .metric i { color: var(--blue); }
+    .metric strong { font-size: 28px; }
+    .content {
+      display: grid;
+      grid-template-columns: .88fr 1.12fr;
+      gap: 18px;
+      margin-top: 18px;
+    }
+    .panel {
+      padding: 18px;
+    }
+    .panel h2 {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 0 0 16px;
+      font-size: 20px;
+    }
+    .timeline {
+      display: grid;
+      gap: 10px;
+    }
+    .lesson {
+      display: grid;
+      grid-template-columns: 58px 1fr;
+      gap: 12px;
+      align-items: center;
+      padding: 12px;
+      border-radius: 22px;
+      background: rgba(255,255,255,.4);
+      transition: transform .25s ease, background .25s ease;
+    }
+    .lesson:hover { transform: translateY(-3px); background: rgba(255,255,255,.62); }
+    .time {
+      display: grid;
+      place-items: center;
+      width: 58px;
+      height: 58px;
+      border-radius: 20px;
+      background: rgba(82,167,255,.18);
+      color: #1b69b5;
+      font-weight: 800;
+    }
+    .lesson:nth-child(2) .time { background: rgba(68,198,161,.18); color: #147d66; }
+    .lesson:nth-child(3) .time { background: rgba(240,140,163,.18); color: #b84461; }
+    .lesson strong { display: block; margin-bottom: 4px; }
+    .muted { color: var(--muted); font-size: 13px; }
+    .week {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .day {
+      min-height: 220px;
+      padding: 12px;
+      border-radius: 24px;
+      background: rgba(255,255,255,.34);
+    }
+    .day b { display: block; margin-bottom: 10px; }
+    .class {
+      display: block;
+      padding: 10px;
+      border-radius: 17px;
+      color: white;
+      background: linear-gradient(135deg, var(--blue), #6ebaff);
+      font-size: 13px;
+      line-height: 1.45;
+      box-shadow: 0 12px 26px rgba(82,167,255,.22);
+    }
+    .class + .class { margin-top: 8px; background: linear-gradient(135deg, var(--green), #7adfbd); }
+    .class.pink { background: linear-gradient(135deg, var(--pink), #ffb0c0); }
+    .dock {
+      display: none;
+      position: fixed;
+      left: 12px;
+      right: 12px;
+      bottom: 12px;
+      z-index: 10;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 8px;
+      padding: 8px;
+      border: 1px solid var(--line);
+      border-radius: 26px;
+      background: rgba(255,255,255,.62);
+      backdrop-filter: blur(20px);
+      box-shadow: 0 18px 50px rgba(56,89,128,.18);
+    }
+    .dock button {
+      display: grid;
+      place-items: center;
+      min-height: 48px;
+      border: 0;
+      border-radius: 18px;
+      background: transparent;
+      color: var(--muted);
+    }
+    .dock button.active { background: rgba(255,255,255,.74); color: var(--ink); }
+    @keyframes morph {
+      0%,100% { transform: scale(1) rotate(0deg); border-radius: 38% 62% 55% 45%; }
+      50% { transform: scale(1.08) rotate(10deg); border-radius: 58% 42% 36% 64%; }
+    }
+    @keyframes floatIn {
+      from { opacity: 0; transform: translateY(18px) scale(.98); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @media (max-width: 980px) {
+      .hero, .content { grid-template-columns: 1fr; }
+      .side { grid-template-columns: repeat(3, 1fr); }
+      .nav { display: none; }
+    }
+    @media (max-width: 680px) {
+      .app { width: min(100% - 20px, 1280px); padding-bottom: 86px; }
+      .brand span { display: none; }
+      .hero { margin-top: 12px; }
+      .side { grid-template-columns: 1fr; }
+      .week { grid-template-columns: 1fr; }
+      .day { min-height: auto; }
+      .dock { display: grid; }
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <header class="top">
+      <div class="brand"><img src="../../apps/mobile_web/assets/icon.png" alt="OneGZUS"><span>OneGZUS</span></div>
+      <nav class="nav">
+        <button class="active">首页</button><button>课表</button><button>请假</button><button>学分</button><button>更多</button>
+      </nav>
+      <button class="icon" aria-label="设置"><i data-lucide="sliders-horizontal"></i></button>
+    </header>
+    <section class="hero">
+      <article class="glass main-card">
+        <span class="eyebrow"><i data-lucide="sparkles"></i>第 14 周 · 今日校园卡</span>
+        <h1>下一节，体育课。</h1>
+        <p>09:00 在 TY101（江），赵国宾。今天 6 节课，课程、余额、审批状态已经合并到一个轻量视图。</p>
+        <div class="chips"><span>32 分钟后</span><span>17 / 21 课程</span><span>请假审批 1</span></div>
+      </article>
+      <aside class="side">
+        <div class="glass metric"><i data-lucide="droplets"></i><span class="muted">冷水余额</span><strong>17.99 吨</strong></div>
+        <div class="glass metric"><i data-lucide="flame"></i><span class="muted">热水余额</span><strong>18.488 元</strong></div>
+        <div class="glass metric"><i data-lucide="zap"></i><span class="muted">电费余额</span><strong>155.28 度</strong></div>
+      </aside>
+    </section>
+    <section class="content">
+      <article class="glass panel">
+        <h2><i data-lucide="list-checks"></i>今日时间线</h2>
+        <div class="timeline">
+          <div class="lesson"><div class="time">09</div><div><strong>大学体育 II</strong><span class="muted">TY101（江） · 赵国宾</span></div></div>
+          <div class="lesson"><div class="time">10</div><div><strong>工程应用数学</strong><span class="muted">H3-205（江） · 关文超</span></div></div>
+          <div class="lesson"><div class="time">15</div><div><strong>Python 编程技术</strong><span class="muted">S-201（江） · 胡军成</span></div></div>
+        </div>
+      </article>
+      <article class="glass panel">
+        <h2><i data-lucide="calendar-days"></i>周课表</h2>
+        <div class="week">
+          <div class="day"><b>一</b><span class="class">形势与政策 II</span><span class="class">计算机网络</span></div>
+          <div class="day"><b>二</b><span class="class pink">管理信息系统导论</span></div>
+          <div class="day"><b>三</b><span class="class">大学体育 II</span><span class="class">工程应用数学</span></div>
+          <div class="day"><b>四</b><span class="class">Python 编程技术</span></div>
+          <div class="day"><b>五</b><span class="class pink">心理健康教育</span></div>
+        </div>
+      </article>
+    </section>
+  </main>
+  <nav class="dock">
+    <button class="active"><i data-lucide="home"></i></button><button><i data-lucide="calendar-days"></i></button><button><i data-lucide="clipboard-check"></i></button><button><i data-lucide="graduation-cap"></i></button><button><i data-lucide="more-horizontal"></i></button>
+  </nav>
+  <script>
+    lucide.createIcons({ strokeWidth: 2 });
+    document.querySelectorAll(".nav button, .dock button").forEach((button) => {
+      button.addEventListener("click", () => {
+        const group = button.closest(".nav, .dock");
+        group.querySelectorAll("button").forEach((item) => item.classList.remove("active"));
+        button.classList.add("active");
+      });
+    });
+  </script>
+</body>
+</html>

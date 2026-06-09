@@ -23,13 +23,32 @@ __pycache__/
 *.db
 *.sqlite
 *.sqlite3
+*.db-wal
+*.db-shm
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3-wal
+*.sqlite3-shm
 
 # Log files
 *.log
 .server-logs/
 
+# Crash dumps / local runtime artifacts
+*.hprof
+java_pid*.hprof
+nul
+=*
+
+# Local agent/tool state
+.codebuddy/
+.workbuddy/
+.trae/
+
 # Gradle
 .gradle-home/
+.gradle/
+.kotlin/
 
 # Android SDK (large binaries, should not be in repo)
 android-sdk/
@@ -56,6 +75,12 @@ build_log.txt
 .idea/
 .vscode/
 *.iml
+
+# HTTP archive / network trace files
+*.har
+
+# Android local properties (contains local SDK paths)
+local.properties
 
 # OS
 Thumbs.db

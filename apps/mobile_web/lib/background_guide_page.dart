@@ -1,48 +1,91 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'api_client.dart';
 import 'permission_service.dart';
 import 'background_service.dart';
+import 'web_push_service.dart';
 
 class BackgroundGuidePage extends StatefulWidget {
-  const BackgroundGuidePage({super.key});
+  const BackgroundGuidePage({super.key, required this.api, this.onComplete});
+
+  final ApiClient api;
+  final VoidCallback? onComplete;
 
   @override
   State<BackgroundGuidePage> createState() => _BackgroundGuidePageState();
 }
 
-class _BackgroundGuidePageState extends State<BackgroundGuidePage> {
+class _BackgroundGuidePageState extends State<BackgroundGuidePage>
+    with WidgetsBindingObserver {
   bool _autoStartGranted = false;
   bool _batteryOptimizationDisabled = false;
   bool _notificationGranted = false;
+  bool _exactAlarmGranted = false;
   bool _hideFromRecents = false;
   bool _checking = true;
+  bool _webPushSubscribed = false;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _checkPermissions();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _checkPermissions();
+    }
   }
 
   Future<void> _checkPermissions() async {
     if (!mounted) return;
     setState(() => _checking = true);
-    final autoStart = await PermissionService.checkAutoStart();
-    final battery = await PermissionService.checkBatteryOptimization();
-    final notification = await PermissionService.checkNotificationPermission();
-    if (!mounted) return;
-    setState(() {
-      _autoStartGranted = autoStart;
-      _batteryOptimizationDisabled = battery;
-      _notificationGranted = notification;
-      _checking = false;
-    });
+    if (kIsWeb) {
+      final webPush = WebPushService.instance;
+      await webPush.init();
+      _webPushSubscribed = await webPush.isSubscribed();
+      if (!mounted) return;
+      setState(() {
+        _notificationGranted = _webPushSubscribed;
+        _checking = false;
+      });
+    } else {
+      final autoStart = await PermissionService.checkAutoStart();
+      final battery = await PermissionService.checkBatteryOptimization();
+      final notification =
+          await PermissionService.checkNotificationPermission();
+      final exactAlarm = Platform.isAndroid
+          ? await PermissionService.checkExactAlarmPermission()
+          : true;
+      if (!mounted) return;
+      setState(() {
+        _autoStartGranted = autoStart;
+        _batteryOptimizationDisabled = battery;
+        _notificationGranted = notification;
+        _exactAlarmGranted = exactAlarm;
+        _checking = false;
+      });
+    }
   }
 
-  bool get _allGranted =>
-      _autoStartGranted && _batteryOptimizationDisabled && _notificationGranted;
+  bool get _allGranted => kIsWeb
+      ? _webPushSubscribed
+      : (_autoStartGranted &&
+          _batteryOptimizationDisabled &&
+          _notificationGranted &&
+          (!Platform.isAndroid || _exactAlarmGranted));
 
   Future<void> _openAutoStart() async {
     await PermissionService.openAutoStartSettings();
@@ -52,31 +95,90 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage> {
     await PermissionService.openBatteryOptimizationSettings();
   }
 
+  Future<void> _openExactAlarm() async {
+    await PermissionService.openExactAlarmSettings();
+  }
+
   Future<void> _requestNotification() async {
-    await PermissionService.checkNotificationPermission();
-    await _checkPermissions();
+    if (kIsWeb) {
+      final webPush = WebPushService.instance;
+      await webPush.init();
+      final granted = await webPush.requestPermission();
+      if (granted) {
+        try {
+          final config = await _fetchWebPushConfig();
+          if (config != null && config['enabled'] == true) {
+            final publicKey = config['publicKey'] as String?;
+            if (publicKey != null && publicKey.isNotEmpty) {
+              await webPush.subscribe(
+                publicKey,
+                apiBaseUrl: widget.api.baseUrl,
+                sessionId: widget.api.sessionId ?? '',
+              );
+            }
+          }
+        } catch (_) {}
+      }
+      await _checkPermissions();
+    } else {
+      await PermissionService.checkNotificationPermission();
+      await _checkPermissions();
+    }
+  }
+
+  Future<Map<String, dynamic>?> _fetchWebPushConfig() async {
+    try {
+      return await widget.api.getWebPushConfig();
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<void> _complete() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('background_guide_completed', true);
-    await prefs.setBool('hide_from_recents', _hideFromRecents);
-    if (_hideFromRecents) {
-      await PermissionService.setHideFromRecents(true);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('background_guide_completed', true);
+      if (!kIsWeb) {
+        await prefs.setBool('foreground_service_enabled', true);
+        await prefs.setBool('hide_from_recents', _hideFromRecents);
+        if (_hideFromRecents) {
+          await PermissionService.setHideFromRecents(true);
+        }
+        await BackgroundService.enableForegroundService(
+          apiBaseUrl: widget.api.baseUrl,
+          sessionId: widget.api.sessionId ?? '',
+        );
+      }
+    } catch (_) {
+      // Ignore errors and proceed to navigate away.
     }
-    await BackgroundService.enableForegroundService();
-    if (mounted) {
-      Navigator.of(context).pushReplacementNamed('/dashboard');
+    if (!mounted) return;
+    if (widget.onComplete != null) {
+      widget.onComplete!();
+    } else {
+      Navigator.of(context).pop();
     }
   }
 
   Future<void> _skip() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('background_guide_completed', true);
-    await prefs.setBool('foreground_service_enabled', true);
-    await BackgroundService.enableForegroundService();
-    if (mounted) {
-      Navigator.of(context).pushReplacementNamed('/dashboard');
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('background_guide_completed', true);
+      if (!kIsWeb) {
+        await prefs.setBool('foreground_service_enabled', true);
+        await BackgroundService.enableForegroundService(
+          apiBaseUrl: widget.api.baseUrl,
+          sessionId: widget.api.sessionId ?? '',
+        );
+      }
+    } catch (_) {
+      // Ignore errors and proceed to navigate away.
+    }
+    if (!mounted) return;
+    if (widget.onComplete != null) {
+      widget.onComplete!();
+    } else {
+      Navigator.of(context).pop();
     }
   }
 
@@ -99,8 +201,8 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage> {
                     Container(
                       padding: const EdgeInsets.all(18),
                       decoration: BoxDecoration(
-                        color:
-                            colorScheme.tertiaryContainer.withValues(alpha: 0.5),
+                        color: colorScheme.tertiaryContainer
+                            .withValues(alpha: 0.5),
                         borderRadius: BorderRadius.circular(24),
                       ),
                       child: Row(
@@ -112,7 +214,9 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage> {
                           const SizedBox(width: 12),
                           Expanded(
                             child: Text(
-                              '为了确保您能及时收到教务通知，请完成以下权限配置。',
+                              kIsWeb
+                                  ? '为了确保您能及时收到教务通知，请完成以下配置。'
+                                  : '为了确保您能及时收到教务通知和课程提醒，请完成以下权限配置。',
                               style: TextStyle(
                                 color: colorScheme.onTertiaryContainer,
                               ),
@@ -122,33 +226,46 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage> {
                       ),
                     ),
                     const SizedBox(height: 24),
-                    _PermissionCard(
-                      icon: Icons.power_settings_new,
-                      title: '自启动权限',
-                      description: '允许应用在开机时自动启动',
-                      isGranted: _autoStartGranted,
-                      onAction: _openAutoStart,
-                      actionLabel: '打开设置',
-                    ),
-                    const SizedBox(height: 12),
-                    _PermissionCard(
-                      icon: Icons.battery_charging_full,
-                      title: '电池优化',
-                      description: '关闭电池优化以保持后台运行',
-                      isGranted: _batteryOptimizationDisabled,
-                      onAction: _openBatteryOptimization,
-                      actionLabel: '关闭优化',
-                    ),
-                    const SizedBox(height: 12),
+                    if (!kIsWeb) ...[
+                      _PermissionCard(
+                        icon: Icons.power_settings_new,
+                        title: '自启动权限',
+                        description: '允许应用在开机时自动启动',
+                        isGranted: _autoStartGranted,
+                        onAction: _openAutoStart,
+                        actionLabel: '打开设置',
+                      ),
+                      const SizedBox(height: 12),
+                      _PermissionCard(
+                        icon: Icons.battery_charging_full,
+                        title: '电池优化',
+                        description: '关闭电池优化以保持后台运行',
+                        isGranted: _batteryOptimizationDisabled,
+                        onAction: _openBatteryOptimization,
+                        actionLabel: '关闭优化',
+                      ),
+                      const SizedBox(height: 12),
+                      if (Platform.isAndroid) ...[
+                        _PermissionCard(
+                          icon: Icons.alarm,
+                          title: '精确闹钟',
+                          description: '允许按课程时间准点触发上下课提醒',
+                          isGranted: _exactAlarmGranted,
+                          onAction: _openExactAlarm,
+                          actionLabel: '去授权',
+                        ),
+                        const SizedBox(height: 12),
+                      ],
+                    ],
                     _PermissionCard(
                       icon: Icons.notifications,
                       title: '通知权限',
-                      description: '允许发送通知提醒',
+                      description: kIsWeb ? '允许浏览器发送通知提醒' : '允许发送通知提醒',
                       isGranted: _notificationGranted,
                       onAction: _requestNotification,
                       actionLabel: '授予权限',
                     ),
-                    if (Platform.isAndroid) ...[
+                    if (!kIsWeb && Platform.isAndroid) ...[
                       const SizedBox(height: 24),
                       SwitchListTile(
                         title: const Text('在最近任务中隐藏应用'),
@@ -203,8 +320,7 @@ class _PermissionCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
-    final stateColor =
-        isGranted ? colorScheme.secondary : colorScheme.primary;
+    final stateColor = isGranted ? colorScheme.secondary : colorScheme.primary;
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
@@ -251,7 +367,8 @@ class _PermissionCard extends StatelessWidget {
                 Text(
                   isGranted ? '已开启' : '未开启',
                   style: TextStyle(
-                    color: isGranted ? colorScheme.secondary : colorScheme.error,
+                    color:
+                        isGranted ? colorScheme.secondary : colorScheme.error,
                     fontSize: 13,
                     fontWeight: FontWeight.w600,
                   ),

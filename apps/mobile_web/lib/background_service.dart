@@ -36,4 +36,30 @@ class BackgroundService {
       // Native bridge is unavailable on unsupported Android builds.
     }
   }
+
+  static Future<void> updateCourseReminders({
+    required String coursesJson,
+    int beforeStartMinutes = 10,
+    int beforeEndMinutes = 5,
+    String firstWeekStart = '',
+  }) async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
+    try {
+      await _channel.invokeMethod('updateCourseReminders', {
+        'coursesJson': coursesJson,
+        'beforeStartMinutes': beforeStartMinutes,
+        'beforeEndMinutes': beforeEndMinutes,
+        'firstWeekStart': firstWeekStart,
+      });
+    } on PlatformException {}
+  }
+
+  static Future<void> setAppForeground(bool foreground) async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
+    try {
+      await _channel.invokeMethod('setAppForeground', {'foreground': foreground});
+    } on PlatformException {
+      // Native bridge is unavailable on unsupported Android builds.
+    }
+  }
 }

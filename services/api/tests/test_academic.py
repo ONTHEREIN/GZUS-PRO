@@ -32,7 +32,11 @@ class FakeClient:
         return [{"studentId": "20240001", "name": "测试学生", "totalCredit": "120"}]
 
     def get_notices(self):
-        return [{"category": "通知公告", "title": "测试通知", "date": "2026-05-22"}]
+        return getattr(
+            self,
+            "notices",
+            [{"category": "通知公告", "title": "测试通知", "date": "2026-05-22"}],
+        )
 
     def get_notice_detail(self, url):
         return {"title": "测试通知详情", "date": "2026-05-22", "contentHtml": "<p>正文内容</p>", "url": url}
@@ -117,6 +121,20 @@ def test_notices_merge_ehall_tasks():
 
     assert [item["title"] for item in notices] == ["测试通知", "网上申请"]
     assert notices[1]["category"] == "办事大厅·申请"
+
+
+def test_notices_filter_garbled_items():
+    app = create_app()
+    client = TestClient(app)
+    session = app.state.sessions.create(FakeClient(), "测试学生")
+    session.client.notices = [
+        {"category": "通知公告", "title": "æ–°é€šçŸ¥", "url": "/bad"},
+        {"category": "通知公告", "title": "正常通知", "url": "/ok"},
+    ]
+
+    notices = client.get("/notices", headers={"X-Session-Id": session.id}).json()
+
+    assert [item["title"] for item in notices] == ["正常通知"]
 
 
 def test_ehall_tasks_route_returns_ehall_items():
