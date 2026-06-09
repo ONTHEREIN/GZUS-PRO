@@ -3,9 +3,6 @@ name: Deploy Website to Cloudflare Pages
 on:
   push:
     branches: [master]
-    paths:
-      - 'website/**'
-      - '.github/workflows/deploy-cloudflare-pages.yml'
   workflow_dispatch:
 
 jobs:
