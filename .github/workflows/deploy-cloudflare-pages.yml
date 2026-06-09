@@ -14,18 +14,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Wrangler
-        run: npm install -g wrangler
-
-      - name: Create project if needed
-        run: |
-          wrangler pages project create onegzus --production-branch=master 2>/dev/null || echo "Project may already exist"
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-
       - name: Deploy
-        run: wrangler pages deploy website --project-name=onegzus --branch=master --commit-dirty=true
+        run: npx wrangler@latest pages deploy website --project-name=onegzus --branch=master --commit-dirty=true
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
