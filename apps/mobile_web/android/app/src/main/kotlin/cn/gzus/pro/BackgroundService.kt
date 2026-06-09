@@ -137,17 +137,24 @@ class BackgroundService : Service() {
                 clearConfig()
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
+                return START_NOT_STICKY
             }
             else -> {
                 saveConfig(intent)
-                startForeground(NOTIFICATION_ID, createForegroundNotification())
+                try {
+                    startForeground(NOTIFICATION_ID, createForegroundNotification())
+                } catch (_: Exception) {
+                    stopPolling()
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
                 startPolling()
                 scheduleKeepAlive(this)
                 checkAppProcessAlive()
                 CourseReminderScheduler(this).scheduleAll()
             }
         }
-        return START_STICKY
+        return START_NOT_STICKY
     }
 
     override fun onDestroy() {

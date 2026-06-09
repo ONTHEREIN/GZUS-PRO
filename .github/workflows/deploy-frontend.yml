@@ -27,12 +27,8 @@ jobs:
 
       - name: Build Web
         env:
-          API_BASE_URL: ${{ vars.API_BASE_URL || secrets.API_BASE_URL }}
+          API_BASE_URL: ${{ vars.API_BASE_URL || secrets.API_BASE_URL || 'https://onegzus-onweb.pages.dev/api' }}
         run: |
-          if [ -z "$API_BASE_URL" ]; then
-            echo "::error::Set repository variable or secret API_BASE_URL to your Vercel API URL."
-            exit 1
-          fi
           cd apps/mobile_web
           flutter build web --release --base-href "/" --dart-define=API_BASE_URL="$API_BASE_URL"
 

@@ -2,7 +2,7 @@ $ErrorActionPreference = "Stop"
 $ProjectRoot = "D:\REINs\Documents\GZUS-PRO"
 $FlutterBin = "D:\REINs\Documents\flutter\bin\flutter.bat"
 $ApkPath = "$ProjectRoot\apps\mobile_web\build\app\outputs\flutter-apk\app-release.apk"
-$CloudApiUrl = if ($env:API_BASE_URL) { $env:API_BASE_URL } else { "https://api-one-zeta-dc0jrazxzq.vercel.app" }
+$CloudApiUrl = if ($env:API_BASE_URL) { $env:API_BASE_URL } else { "https://onegzus-onweb.pages.dev/api" }
 
 # 使用 -Cloud 参数构建云端版本（默认），-Local 构建局域网版本
 $UseCloud = $true

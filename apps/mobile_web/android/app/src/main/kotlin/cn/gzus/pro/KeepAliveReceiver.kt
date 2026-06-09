@@ -21,10 +21,14 @@ class KeepAliveReceiver : BroadcastReceiver() {
         val serviceIntent = Intent(context, BackgroundService::class.java).apply {
             action = BackgroundService.ACTION_START
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            context.startForegroundService(serviceIntent)
-        } else {
-            context.startService(serviceIntent)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(serviceIntent)
+            } else {
+                context.startService(serviceIntent)
+            }
+        } catch (_: Exception) {
+            return
         }
 
         // Re-schedule the next keep-alive alarm

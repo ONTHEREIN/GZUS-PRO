@@ -142,12 +142,16 @@ class MainActivity : FlutterActivity() {
                         putExtra(BackgroundService.EXTRA_API_BASE_URL, call.argument<String>("apiBaseUrl"))
                         putExtra(BackgroundService.EXTRA_SESSION_ID, call.argument<String>("sessionId"))
                     }
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        startForegroundService(intent)
-                    } else {
-                        startService(intent)
+                    try {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            startForegroundService(intent)
+                        } else {
+                            startService(intent)
+                        }
+                        result.success(true)
+                    } catch (e: Exception) {
+                        result.error("FOREGROUND_SERVICE_START_FAILED", e.message, null)
                     }
-                    result.success(true)
                 }
                 "stopForegroundService" -> {
                     val intent = Intent(this, BackgroundService::class.java).apply {
