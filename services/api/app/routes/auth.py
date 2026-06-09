@@ -3,6 +3,7 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from urllib.parse import quote as url_quote, urlparse
 import logging
+import time
 import uuid
 
 from app.config import get_settings
@@ -260,6 +261,7 @@ def relogin(payload: ReloginRequest, request: Request) -> dict:
 def auto_login(payload: AutoLoginRequest, request: Request) -> dict:
     from app.cas_auto_login import CasAutoLogin
 
+    t_total = time.time()
     sessions = request.app.state.sessions
     settings = get_settings()
 
@@ -272,7 +274,9 @@ def auto_login(payload: AutoLoginRequest, request: Request) -> dict:
         ehall_url=settings.ehall_base_url,
         timeout=settings.cas_login_timeout_seconds,
     )
+    t1 = time.time()
     result = cas_auto_login.auto_login(payload.account, payload.password)
+    logger.info("[TIMING] cas_auto_login.auto_login: %.2fs", time.time() - t1)
 
     if result.error:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=result.error)
@@ -282,10 +286,12 @@ def auto_login(payload: AutoLoginRequest, request: Request) -> dict:
         timeout_seconds=settings.request_timeout_seconds,
         httpx_client=result.httpx_client,
     )
+    t2 = time.time()
     try:
         student_name = client.login_with_cookies(result.cookies, result.account)
     except AuthenticationError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc))
+    logger.info("[TIMING] login_with_cookies: %.2fs", time.time() - t2)
 
     ehall_client = None
     if result.ehall_auth_token:
@@ -307,6 +313,7 @@ def auto_login(payload: AutoLoginRequest, request: Request) -> dict:
     from app.sessions import encrypt_credentials
 
     cred_token = encrypt_credentials(payload.account, payload.password, settings.credential_encryption_key)
+    logger.info("[TIMING] auto_login endpoint total: %.2fs", time.time() - t_total)
     return {
         "status": "ok",
         "sessionId": session.id,

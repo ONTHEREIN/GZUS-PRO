@@ -206,15 +206,20 @@ class CasAutoLogin:
         this client to SchoolSdkClient(..., httpx_client=result.httpx_client)
         so that proxy_request uses the already-authenticated session directly.
         """
+        t_start = time.time()
         try:
             client = httpx.Client(follow_redirects=False, timeout=self.timeout)
             # Step 1: GET CAS login page to establish session
             # Retry on transient DNS/connection errors
+            t0 = time.time()
             self._fetch_cas_page_with_retry(client)
+            logger.info("[TIMING] fetch_cas_page: %.2fs", time.time() - t0)
 
             for attempt in range(1, MAX_CAPTCHA_RETRIES + 1):
                 # Step 2: GET kaptcha (returns uid + image)
+                t1 = time.time()
                 kaptcha_uid, captcha_bytes = self._download_kaptcha(client)
+                logger.info("[TIMING] download_kaptcha: %.2fs", time.time() - t1)
                 if not captcha_bytes:
                     return CasLoginResult(
                         account=account, cookies="", error="无法获取验证码图片"
@@ -222,7 +227,9 @@ class CasAutoLogin:
 
                 # Step 3: OCR the captcha and solve arithmetic
                 try:
+                    t2 = time.time()
                     ocr_text = captcha_ocr.recognize(captcha_bytes)
+                    logger.info("[TIMING] ocr_recognize: %.2fs", time.time() - t2)
                 except RuntimeError as exc:
                     logger.error("CAPTCHA OCR unavailable: %s", exc)
                     return CasLoginResult(
@@ -238,9 +245,11 @@ class CasAutoLogin:
                     continue
 
                 # Step 4: POST /v1/tickets with RSA-encrypted password
+                t3 = time.time()
                 result = self._submit_login(
                     client, account, password, kaptcha_uid, captcha_code
                 )
+                logger.info("[TIMING] submit_login: %.2fs", time.time() - t3)
                 if result is not None:
                     if result.error:
                         result.httpx_client = None
@@ -248,6 +257,7 @@ class CasAutoLogin:
                         # Switch to follow_redirects for authenticated requests
                         self._enable_follow_redirects(client)
                         result.httpx_client = client
+                    logger.info("[TIMING] auto_login total: %.2fs", time.time() - t_start)
                     return result
 
                 # Login returned CODEFALSE – captcha was wrong, retry
@@ -465,6 +475,7 @@ class CasAutoLogin:
         # Fetch JWXT cookies and ehall session in parallel
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
+        t_finalize = time.time()
         jwxt_cookies = ""
         ehall_cookies = None
         ehall_token = None
@@ -491,16 +502,18 @@ class CasAutoLogin:
             futures[executor.submit(_fetch_jwxt)] = "jwxt"
             futures[executor.submit(_fetch_ehall)] = "ehall"
 
-            for future in as_completed(futures, timeout=self.timeout):
+            for future in as_completed(futures, timeout=min(self.timeout, 8)):
                 label = futures[future]
                 try:
-                    result = future.result(timeout=self.timeout)
+                    result = future.result(timeout=min(self.timeout, 5))
                     if label == "jwxt":
                         jwxt_cookies = result
                     elif label == "ehall":
                         ehall_cookies, ehall_token = result
                 except Exception as exc:
                     logger.warning("Parallel fetch failed for %s: %s", label, exc)
+
+        logger.info("[TIMING] finalize_login (parallel jwxt+ehall): %.2fs", time.time() - t_finalize)
 
         if not jwxt_cookies and not ehall_cookies:
             logger.warning("No session cookies obtained after login")

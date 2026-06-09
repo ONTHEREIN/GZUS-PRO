@@ -1054,16 +1054,47 @@ class SchoolSdkClient:
         name = self._extract_student_name(result)
         if name:
             return name
+        # Try fetching the JWXT index page which contains the student name
+        # This is much lighter than calling get_info() which downloads photos etc.
         try:
-            info = normalize_student_info(
-                self._call_first(["get_info", "get_student_info", "info"])
-            )
-            student_id = info.get("studentId")
-            if student_id:
-                self._account = student_id
-            return info.get("name")
-        except Exception:  # noqa: BLE001 - cookie login can still be valid without a readable name.
-            return None
+            name = self._fetch_student_name_from_index()
+            if name:
+                return name
+        except Exception:  # noqa: BLE001
+            pass
+        return None
+
+    def _fetch_student_name_from_index(self) -> str | None:
+        """Fetch student name from the JWXT info page (lightweight, no photo download)."""
+        try:
+            if self._httpx_client is not None:
+                parsed = urlparse(self.base_url)
+                origin = f"{parsed.scheme}://{parsed.netloc}"
+                full_url = origin + INFO_URL
+                response = self._httpx_client.get(
+                    full_url,
+                    params={"gnmkdm": INFO_GNMKDM, "su": self._account or ""},
+                    timeout=min(self.timeout_seconds, 8),
+                )
+                html = response.text
+            else:
+                response = self._proxy_response(
+                    "GET", INFO_URL,
+                    params={"gnmkdm": INFO_GNMKDM, "su": self._account or ""},
+                )
+                html = self._response_text(response)
+            # Extract name from info page HTML: <p id="col_xm">张三</p>
+            import re
+            match = re.search(r'id="col_xm"[^>]*>\s*<p[^>]*>\s*([^<]+?)\s*</p>', html)
+            if match and match.group(1).strip():
+                return match.group(1).strip()
+            # Fallback: try col_xm without p tag
+            match = re.search(r'id="col_xm"[^>]*>([^<]+)', html)
+            if match and match.group(1).strip():
+                return match.group(1).strip()
+        except Exception:  # noqa: BLE001
+            pass
+        return None
 
     @staticmethod
     def _select_sdk_cookie(cookies: Any) -> str:
