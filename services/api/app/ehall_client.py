@@ -34,6 +34,10 @@ LEAVE_WORKFLOW_NUMBER = "R_S003_B036"
 LEAVE_WORKFLOW_PROCESS_ID = "c6a5de7f061020438c0a03707374e7b85d85"
 ATTACHMENT_WORKFLOW_NUMBER = "R_S004_B002"
 
+# Retry configuration for ehall upstream requests
+_EHALL_MAX_RETRIES = 2
+_EHALL_RETRY_BACKOFF_BASE = 0.5  # seconds
+
 
 class EhallClient:
     def __init__(
@@ -55,10 +59,10 @@ class EhallClient:
             self._http_client = httpx.Client(
                 base_url=self.base_url,
                 cookies=self._cookies,
-                timeout=self.timeout_seconds,
+                timeout=httpx.Timeout(self.timeout_seconds, connect=5.0),
                 follow_redirects=True,
                 headers=self._auth_headers(),
-                limits=httpx.Limits(max_connections=6, max_keepalive_connections=3),
+                limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
             )
         return self._http_client
 
@@ -382,17 +386,46 @@ class EhallClient:
             ).hexdigest(),
         }
         client = self._get_http_client()
-        response = client.get(endpoint, params=query)
-        if _looks_like_login(response):
-            raise EhallAuthenticationError("办事大厅会话已失效，请重新登录")
-        response.raise_for_status()
-        data = response.json()
-        meta = data.get("meta") if isinstance(data, dict) else None
-        if isinstance(meta, dict) and meta.get("success") is False:
-            message = str(meta.get("message") or "")
-            if "登录" in message or "会话" in message or "权限" in message:
-                raise EhallAuthenticationError("办事大厅会话已失效，请重新登录")
-        return data
+        last_exc: Exception | None = None
+        for attempt in range(_EHALL_MAX_RETRIES + 1):
+            try:
+                response = client.get(endpoint, params=query)
+                if _looks_like_login(response):
+                    raise EhallAuthenticationError("办事大厅会话已失效，请重新登录")
+                response.raise_for_status()
+                data = response.json()
+                meta = data.get("meta") if isinstance(data, dict) else None
+                if isinstance(meta, dict) and meta.get("success") is False:
+                    message = str(meta.get("message") or "")
+                    if "登录" in message or "会话" in message or "权限" in message:
+                        raise EhallAuthenticationError("办事大厅会话已失效，请重新登录")
+                return data
+            except EhallAuthenticationError:
+                raise
+            except (httpx.TimeoutException, httpx.ConnectError) as exc:
+                last_exc = exc
+                if attempt < _EHALL_MAX_RETRIES:
+                    wait = _EHALL_RETRY_BACKOFF_BASE * (2 ** attempt)
+                    import time as _time
+                    _time.sleep(wait)
+                    # Refresh timestamp for retry
+                    timestamp = str(int(time.time() * 1000))
+                    query = {
+                        **params,
+                        "csrfTimestamp": timestamp,
+                        "csrfToken": hashlib.md5(
+                            f"timestamp={timestamp},key={csrf_key}".encode("utf-8")
+                        ).hexdigest(),
+                    }
+                    continue
+                raise RuntimeError(f"办事大厅请求失败: {exc}") from exc
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code >= 500 and attempt < _EHALL_MAX_RETRIES:
+                    wait = _EHALL_RETRY_BACKOFF_BASE * (2 ** attempt)
+                    import time as _time
+                    _time.sleep(wait)
+                    continue
+                raise
 
 
 def extract_records(payload: Any) -> list[dict]:

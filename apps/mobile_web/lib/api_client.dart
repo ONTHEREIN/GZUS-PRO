@@ -348,6 +348,13 @@ class ExamItem {
   final String? location;
   final String? seat;
   final String? type;
+
+  /// 只显示时间部分（如 "09:00-11:00"），去掉日期部分
+  String get timeDisplay {
+    final t = time ?? '';
+    final spaceIdx = t.indexOf(' ');
+    return spaceIdx > 0 ? t.substring(spaceIdx + 1) : t;
+  }
 }
 
 class AcademicPeriod {
@@ -1221,6 +1228,14 @@ class ApiClient {
   String? get ehallCookies => _ehallCookies;
   String? get ehallAuthToken => _ehallAuthToken;
 
+  void setEhallCookies(String? value) {
+    _ehallCookies = value;
+  }
+
+  void setEhallAuthToken(String? value) {
+    _ehallAuthToken = value;
+  }
+
   void useSession(String? value) {
     if (sessionId != value) _cache.clear();
     sessionId = value;
@@ -1532,17 +1547,24 @@ class ApiClient {
 
   Future<bool> checkHealth() async {
     if (_candidates.isEmpty) return false;
-    for (final candidate in _candidates) {
-      try {
-        final response = await _http
-            .get(Uri.parse('$candidate/health'))
-            .timeout(const Duration(seconds: 5));
-        if (response.statusCode == 200) {
-          _currentBaseUrl = candidate;
-          return true;
-        }
-      } catch (_) {
-        continue;
+    // Probe all candidates in parallel
+    final results = await Future.wait(
+      _candidates.map((candidate) async {
+        try {
+          final response = await _http
+              .get(Uri.parse('$candidate/health'))
+              .timeout(const Duration(seconds: 5));
+          if (response.statusCode == 200) {
+            return candidate;
+          }
+        } catch (_) {}
+        return null;
+      }),
+    );
+    for (final result in results) {
+      if (result != null) {
+        _currentBaseUrl = result;
+        return true;
       }
     }
     return false;
@@ -1641,13 +1663,23 @@ class ApiClient {
     if (result.sessionId != null && result.sessionId!.isNotEmpty) {
       await prefs.setString('auth.sessionId', result.sessionId!);
     }
-    await prefs.remove('auth.ehallCookies');
-    await prefs.remove('auth.ehallAuthToken');
+    if (result.ehallCookies != null && result.ehallCookies!.isNotEmpty) {
+      await prefs.setString('auth.ehallCookies', result.ehallCookies!);
+    } else {
+      await prefs.remove('auth.ehallCookies');
+    }
+    if (result.ehallAuthToken != null && result.ehallAuthToken!.isNotEmpty) {
+      await prefs.setString('auth.ehallAuthToken', result.ehallAuthToken!);
+    } else {
+      await prefs.remove('auth.ehallAuthToken');
+    }
   }
 
   Future<void> loadSavedCredentials() async {
     final prefs = await SharedPreferences.getInstance();
     _credentialToken = prefs.getString('auth.credentialToken');
+    _ehallCookies = prefs.getString('auth.ehallCookies');
+    _ehallAuthToken = prefs.getString('auth.ehallAuthToken');
     await prefs.remove('auth.password');
   }
 
@@ -2159,7 +2191,9 @@ class ApiClient {
     return data;
   }
 
-  static const Duration _requestTimeout = Duration(seconds: 45);
+  static const Duration _requestTimeout = Duration(seconds: 30);
+  static const Duration _connectTimeout = Duration(seconds: 10);
+  static const int _maxRetries = 1;
 
   Future<Map<String, dynamic>> _get(String path) async {
     return _withReloginRetry(
@@ -2167,6 +2201,7 @@ class ApiClient {
         final url = _requireBaseUrl();
         final response = await _http
             .get(Uri.parse('$url$path'), headers: _headers())
+            .timeout(_connectTimeout, onTimeout: (sink) => sink.close())
             .timeout(_requestTimeout);
         return _decodeObject(response);
       },
@@ -2179,6 +2214,7 @@ class ApiClient {
         final url = _requireBaseUrl();
         final response = await _http
             .get(Uri.parse('$url$path'), headers: _headers())
+            .timeout(_connectTimeout, onTimeout: (sink) => sink.close())
             .timeout(_requestTimeout);
         final decoded = _decode(response);
         if (decoded is! List<dynamic>) {
@@ -2200,6 +2236,7 @@ class ApiClient {
               headers: _headers(),
               body: jsonEncode(body),
             )
+            .timeout(_connectTimeout, onTimeout: (sink) => sink.close())
             .timeout(_requestTimeout);
         return _decodeObject(response);
       },
@@ -2217,6 +2254,7 @@ class ApiClient {
               headers: _headers(),
               body: jsonEncode(body),
             )
+            .timeout(_connectTimeout, onTimeout: (sink) => sink.close())
             .timeout(_requestTimeout);
         return _decodeObject(response);
       },
@@ -2247,21 +2285,31 @@ class ApiClient {
 
   Future<void> _doWarmup() async {
     try {
-      for (final candidate in _candidates) {
-        try {
-          final response = await _http
-              .get(Uri.parse('$candidate/health'), headers: _headers())
-              .timeout(const Duration(seconds: 5));
-          if (response.statusCode == 200) {
-            _currentBaseUrl = candidate;
-            return;
+      // Probe all candidates in parallel, pick the first one that responds
+      final results = await Future.wait(
+        _candidates.map((candidate) async {
+          try {
+            final response = await _http
+                .get(Uri.parse('$candidate/health'), headers: _headers())
+                .timeout(const Duration(seconds: 5));
+            if (response.statusCode == 200) {
+              return candidate;
+            }
+          } on TimeoutException {
+            // ignore
+          } on http.ClientException {
+            // ignore
+          } on SocketException {
+            // ignore
           }
-        } on TimeoutException {
-          continue;
-        } on http.ClientException {
-          continue;
-        } on SocketException {
-          continue;
+          return null;
+        }),
+      );
+      // Pick the first healthy candidate
+      for (final result in results) {
+        if (result != null) {
+          _currentBaseUrl = result;
+          return;
         }
       }
     } finally {
@@ -2278,6 +2326,7 @@ class ApiClient {
   Future<T> _withFallback<T>(
     Future<T> Function() request, {
     required Set<String> tried,
+    int retryCount = 0,
   }) async {
     try {
       return await request();
@@ -2319,8 +2368,16 @@ class ApiClient {
           return await request();
         }
       }
+      // 5xx errors: retry once on same host before switching
+      if ((e.statusCode ?? 0) >= 500 && retryCount < _maxRetries) {
+        return _withFallback(request, tried: tried, retryCount: retryCount + 1);
+      }
       rethrow;
     } on TimeoutException {
+      // Retry once on same host before switching candidates
+      if (retryCount < _maxRetries) {
+        return _withFallback(request, tried: tried, retryCount: retryCount + 1);
+      }
       final next = _nextUntriedCandidate(tried);
       if (next != null) {
         _currentBaseUrl = next;
@@ -2329,6 +2386,10 @@ class ApiClient {
       final target = _resolveBaseUrl();
       throw ApiException('请求超时 ($target)，请检查网络连接');
     } on http.ClientException {
+      // Retry once on same host before switching candidates
+      if (retryCount < _maxRetries) {
+        return _withFallback(request, tried: tried, retryCount: retryCount + 1);
+      }
       final next = _nextUntriedCandidate(tried);
       if (next != null) {
         _currentBaseUrl = next;
@@ -2337,6 +2398,10 @@ class ApiClient {
       final target = _resolveBaseUrl();
       throw ApiException('无法连接服务器 ($target)，请确认服务已启动且设备在同一网络');
     } on SocketException {
+      // Retry once on same host before switching candidates
+      if (retryCount < _maxRetries) {
+        return _withFallback(request, tried: tried, retryCount: retryCount + 1);
+      }
       final next = _nextUntriedCandidate(tried);
       if (next != null) {
         _currentBaseUrl = next;

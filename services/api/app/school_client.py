@@ -11,9 +11,15 @@ from html.parser import HTMLParser
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
+import httpx
+
 from app.school_sdk_patches import apply_school_sdk_import_patches, apply_school_sdk_patches, apply_school_sdk_info_patch
 
 logger = logging.getLogger(__name__)
+
+# Retry configuration for upstream JWXT requests
+_MAX_RETRIES = 2
+_RETRY_BACKOFF_BASE = 0.5  # seconds
 
 TERM_TO_XQM = {1: "3", 2: "12", 3: "16"}
 
@@ -244,12 +250,31 @@ class SchoolSdkClient:
         html = self._fetch_info_page_html()
         if not html or "col_xh" not in html:
             return None
-        # Use the patched Info._parse to extract fields from HTML
+        # Parse HTML directly with pyquery instead of relying on SDK's _parse patch
         try:
-            from app.school_sdk_patches import apply_school_sdk_info_patch
-            apply_school_sdk_info_patch()
-            from school_sdk.client.api.user_info import Info
-            parsed = Info._parse(None, html)  # type: ignore[arg-type]
+            from pyquery import PyQuery as pq
+
+            doc = pq(html)
+            parsed = {
+                "student_number": doc("#col_xh > p").text(),
+                "name": doc("#col_xm > p").text(),
+                "department_name": doc("#col_jg_id > p").text() or doc("#col_jg > p").text(),
+                "class_name": doc("#col_bh_id > p").text() or doc("#col_bh > p").text(),
+                "grade": doc("#col_njdm_id > p").text() or doc("#col_nj > p").text(),
+                "major": doc("#col_zyh_id > p").text() or doc("#col_zyfx_id > p").text() or doc("#col_zy > p").text(),
+                "gender": doc("#col_xbm > p").text(),
+                "zjhm": doc("#col_zjhm > p").text(),
+                "csrq": doc("#col_csrq > p").text(),
+                "mzm": doc("#col_mzm > p").text(),
+                "zzmmm": doc("#col_zzmmm > p").text(),
+                "rxrq": doc("#col_rxrq > p").text(),
+                "jg": doc("#col_jg > p").text(),
+                "xjztdm": doc("#col_xjztdm > p").text(),
+                "pyccdm": doc("#col_pyccdm > p").text(),
+                "sjhm": doc("#col_sjhm > p").text(),
+                "dzyx": doc("#col_dzyx > p").text(),
+                "jtdz": doc("#col_jtdz > p").text(),
+            }
             result = normalize_student_info(parsed)
             # Also extract photo URL
             photo_url = _extract_encoded_photo_url(html)
@@ -923,26 +948,71 @@ class SchoolSdkClient:
         request_kwargs.setdefault("headers", {}).update(headers)
         logger.debug("proxy_via_httpx %s %s", method, full_url)
         import httpx
-        try:
-            response = self._httpx_client.request(
-                method.upper(),
-                full_url,
-                timeout=self.timeout_seconds,
-                **request_kwargs,
-            )
-            response.raise_for_status()
-            return response
-        except httpx.HTTPStatusError as exc:
-            status = exc.response.status_code
-            logger.warning(
-                "proxy_via_httpx: HTTP %d for %s %s (url=%s)",
-                status, method, url_or_endpoint, full_url,
-            )
-            if status == 404:
-                raise RuntimeError(
-                    f"JWXT 接口返回 404 (url={full_url})，可能接口路径已变更"
-                ) from exc
-            raise AuthenticationError("教务系统会话已失效，请重新登录") from exc
+
+        last_exc: Exception | None = None
+        for attempt in range(_MAX_RETRIES + 1):
+            try:
+                response = self._httpx_client.request(
+                    method.upper(),
+                    full_url,
+                    timeout=self.timeout_seconds,
+                    **request_kwargs,
+                )
+                response.raise_for_status()
+                return response
+            except httpx.TimeoutException as exc:
+                last_exc = exc
+                if attempt < _MAX_RETRIES:
+                    wait = _RETRY_BACKOFF_BASE * (2 ** attempt)
+                    logger.warning(
+                        "proxy_via_httpx: timeout on attempt %d/%d for %s %s, retrying in %.1fs",
+                        attempt + 1, _MAX_RETRIES + 1, method, url_or_endpoint, wait,
+                    )
+                    import time as _time
+                    _time.sleep(wait)
+                    continue
+                logger.error(
+                    "proxy_via_httpx: timeout after %d attempts for %s %s",
+                    _MAX_RETRIES + 1, method, url_or_endpoint,
+                )
+                raise RuntimeError("教务系统请求超时，请稍后重试") from exc
+            except httpx.ConnectError as exc:
+                last_exc = exc
+                if attempt < _MAX_RETRIES:
+                    wait = _RETRY_BACKOFF_BASE * (2 ** attempt)
+                    logger.warning(
+                        "proxy_via_httpx: connection error on attempt %d/%d for %s %s, retrying in %.1fs",
+                        attempt + 1, _MAX_RETRIES + 1, method, url_or_endpoint, wait,
+                    )
+                    import time as _time
+                    _time.sleep(wait)
+                    continue
+                logger.error(
+                    "proxy_via_httpx: connection failed after %d attempts for %s %s",
+                    _MAX_RETRIES + 1, method, url_or_endpoint,
+                )
+                raise RuntimeError("无法连接教务系统，请稍后重试") from exc
+            except httpx.HTTPStatusError as exc:
+                status = exc.response.status_code
+                logger.warning(
+                    "proxy_via_httpx: HTTP %d for %s %s (url=%s)",
+                    status, method, url_or_endpoint, full_url,
+                )
+                if status == 404:
+                    raise RuntimeError(
+                        f"JWXT 接口返回 404 (url={full_url})，可能接口路径已变更"
+                    ) from exc
+                # 5xx errors are retryable
+                if status >= 500 and attempt < _MAX_RETRIES:
+                    wait = _RETRY_BACKOFF_BASE * (2 ** attempt)
+                    logger.warning(
+                        "proxy_via_httpx: HTTP %d on attempt %d/%d for %s %s, retrying in %.1fs",
+                        status, attempt + 1, _MAX_RETRIES + 1, method, url_or_endpoint, wait,
+                    )
+                    import time as _time
+                    _time.sleep(wait)
+                    continue
+                raise AuthenticationError("教务系统会话已失效，请重新登录") from exc
 
     @staticmethod
     def _looks_like_captcha(exc: Exception) -> bool:

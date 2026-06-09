@@ -2,6 +2,7 @@ package cn.gzus.pro
 
 import org.apache.commons.net.ftp.FTP
 import org.apache.commons.net.ftp.FTPClient
+import org.apache.commons.net.ftp.FTPCmd
 import org.apache.commons.net.ftp.FTPFile
 import org.apache.commons.net.ftp.FTPReply
 import java.io.File
@@ -25,9 +26,13 @@ class FtpUploadClient {
     fun listDirectory(args: Map<*, *>): List<Map<String, Any>> {
         val path = normalizeDirectory(args["path"]?.toString() ?: "/")
         return withClient(args) { ftp ->
-            // 直接用 listFiles(path) 列出指定目录，避免 CWD 改变工作目录后
-            // 被动模式数据连接路径解析不一致导致返回空列表
-            val files = ftp.listFiles(path)
+            // 参考 FTPclient-android：优先使用 MLSD 命令（结构化数据，解析更可靠）
+            val supportsMls = ftp.hasFeature(FTPCmd.MLST)
+            val files = if (supportsMls) {
+                ftp.mlistDir(path)
+            } else {
+                ftp.listFiles(path)
+            }
             if (files == null || files.isEmpty()) {
                 return@withClient emptyList()
             }
@@ -36,8 +41,8 @@ class FtpUploadClient {
                 .map { file ->
                     mapOf(
                         "name" to file.name,
-                        "path" to childPath(path, file.name),
-                        "isDirectory" to (file.isDirectory || file.type == FTPFile.UNKNOWN_TYPE && file.name.isNotEmpty()),
+                        "path" to childPath(path, file.name, file),
+                        "isDirectory" to (file.isDirectory || file.isSymbolicLink),
                         "size" to safeSize(file)
                     )
                 }
@@ -52,7 +57,7 @@ class FtpUploadClient {
             throw FtpUploadException("FILE_NOT_FOUND", "本地文件不存在")
         }
         return withClient(args) { ftp ->
-            val remotePath = childPath(remoteDirectory, localFile.name)
+            val remotePath = childPath(remoteDirectory, localFile.name, null)
             FileInputStream(localFile).use { input ->
                 val uploaded = ftp.storeFile(remotePath, input)
                 if (!uploaded) {
@@ -111,9 +116,9 @@ class FtpUploadClient {
             throw FtpUploadException("INVALID_ARGUMENT", "FTP 参数不完整")
         }
 
+        // 参考 FTPclient-android：使用 autodetectUTF8 自动检测编码
         val ftp = FTPClient()
-        // 默认 UTF-8 编码，解决中文文件名乱码
-        ftp.controlEncoding = "UTF-8"
+        ftp.autodetectUTF8 = true
         ftp.connectTimeout = timeoutMillis
         ftp.defaultTimeout = timeoutMillis
         ftp.dataTimeout = Duration.ofMillis(timeoutMillis.toLong())
@@ -165,7 +170,18 @@ class FtpUploadClient {
         return if (trimmed.startsWith("/")) trimmed else "/$trimmed"
     }
 
-    private fun childPath(directory: String, name: String): String {
+    /**
+     * 参考 FTPclient-android 的 File.joinPaths 和符号链接处理：
+     * 符号链接的 link 如果是绝对路径则直接使用，否则拼接当前目录
+     */
+    private fun childPath(directory: String, name: String, file: FTPFile?): String {
+        // 处理符号链接：如果 link 是绝对路径则直接使用
+        if (file != null && file.isSymbolicLink) {
+            val link = file.link
+            if (!link.isNullOrEmpty() && link.startsWith("/")) {
+                return link
+            }
+        }
         val normalized = normalizeDirectory(directory)
         return if (normalized == "/") "/$name" else "$normalized/$name"
     }

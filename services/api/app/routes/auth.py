@@ -254,6 +254,8 @@ def relogin(payload: ReloginRequest, request: Request) -> dict:
         "studentName": student_name,
         "studentId": student_id,
         "credentialToken": payload.credential_token,
+        "ehallCookies": result.ehall_cookies,
+        "ehallAuthToken": result.ehall_auth_token,
     }
 
 
@@ -316,6 +318,8 @@ def auto_login(payload: AutoLoginRequest, request: Request) -> dict:
         "studentName": student_name,
         "studentId": student_id,
         "credentialToken": cred_token,
+        "ehallCookies": result.ehall_cookies,
+        "ehallAuthToken": result.ehall_auth_token,
     }
 
 

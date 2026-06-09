@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     session_ttl_seconds: int = 7200
     sso_ttl_seconds: int = 300
     request_timeout_seconds: int = 15
+    request_connect_timeout_seconds: int = 5
     cas_login_timeout_seconds: int = 60
     jpush_app_key: str = ""
     jpush_master_secret: str = ""

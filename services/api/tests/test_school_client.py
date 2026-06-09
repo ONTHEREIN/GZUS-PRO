@@ -132,6 +132,15 @@ def test_normalize_schedule_course_from_school_fields():
 
 def test_normalize_exam_and_grade():
     assert normalize_exam_item({"kcmc": "英语", "zwh": "12"})["seat"] == "12"
+    # date extracted from kssj
+    exam_with_time = normalize_exam_item({"kcmc": "高数", "kssj": "2026-06-15 09:00-11:00"})
+    assert exam_with_time["date"] == "2026-06-15"
+    assert exam_with_time["weekday"] == "周一"
+    assert exam_with_time["time"] == "2026-06-15 09:00-11:00"
+    # explicit date takes priority
+    exam_with_date = normalize_exam_item({"kcmc": "高数", "date": "2026-07-01", "kssj": "2026-07-01 14:00-16:00"})
+    assert exam_with_date["date"] == "2026-07-01"
+    assert exam_with_date["weekday"] == "周三"
     assert normalize_grade_item({"kcmc": "英语", "cj": "88", "jd": "3.8"})["gradePoint"] == "3.8"
     sdk_grade = normalize_grade_item(
         {"course_name": "高等数学", "exam_score": "51", "credit": "4.0", "grade_point": "0.00"}

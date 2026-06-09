@@ -314,6 +314,15 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
     if (savedStudentId != null && savedStudentId.isNotEmpty) {
       api.setStudentId(savedStudentId);
     }
+    // 恢复 ehall 凭证到 ApiClient
+    final savedEhallCookies = prefs.getString('auth.ehallCookies');
+    if (savedEhallCookies != null && savedEhallCookies.isNotEmpty) {
+      api.setEhallCookies(savedEhallCookies);
+    }
+    final savedEhallAuthToken = prefs.getString('auth.ehallAuthToken');
+    if (savedEhallAuthToken != null && savedEhallAuthToken.isNotEmpty) {
+      api.setEhallAuthToken(savedEhallAuthToken);
+    }
 
     final pcache = PersistentCache(namespace: api.namespace);
     await pcache.init();
@@ -521,8 +530,16 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
     if (result.loginMethod != null) {
       await prefs.setString('auth.loginMethod', result.loginMethod!);
     }
-    await prefs.remove('auth.ehallCookies');
-    await prefs.remove('auth.ehallAuthToken');
+    if (result.ehallCookies != null && result.ehallCookies!.isNotEmpty) {
+      await prefs.setString('auth.ehallCookies', result.ehallCookies!);
+    } else {
+      await prefs.remove('auth.ehallCookies');
+    }
+    if (result.ehallAuthToken != null && result.ehallAuthToken!.isNotEmpty) {
+      await prefs.setString('auth.ehallAuthToken', result.ehallAuthToken!);
+    } else {
+      await prefs.remove('auth.ehallAuthToken');
+    }
   }
 
   Future<void> _logout() async {
@@ -1730,7 +1747,7 @@ class _DashboardShellState extends State<DashboardShell> {
                             top: false,
                             bottom: false,
                             child: Padding(
-                              padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
+                              padding: EdgeInsets.fromLTRB(10, 8, 10, _autoHideNavBar ? 10 : _mobileNavBarHeight + MediaQuery.paddingOf(context).bottom + 16 + 10),
                               child: _CenteredPage(
                                 maxWidth: 720,
                                 child: AnimatedSwitcher(
@@ -3457,6 +3474,7 @@ class _HomePageState extends State<HomePage> {
           future: _weatherFuture,
           title: '今日天气',
           icon: Icons.wb_sunny,
+          allowNull: true,
           builder: (data) => _WeatherHomeCard(weather: data),
         );
       case 'grades':
@@ -3757,12 +3775,14 @@ class _AsyncModuleCard<T> extends StatelessWidget {
     required this.title,
     required this.icon,
     required this.builder,
+    this.allowNull = false,
   });
 
   final Future<T> future;
   final String title;
   final IconData icon;
   final Widget Function(T data) builder;
+  final bool allowNull;
 
   @override
   Widget build(BuildContext context) {
@@ -3776,8 +3796,20 @@ class _AsyncModuleCard<T> extends StatelessWidget {
             child: const _ShimmerPlaceholder(),
           );
         }
+        if (snapshot.hasError) {
+          return _HomeCard(
+            title: title,
+            icon: icon,
+            child: const Center(
+              child: Padding(
+                padding: EdgeInsets.symmetric(vertical: 24),
+                child: Text('加载失败', style: TextStyle(fontSize: 13)),
+              ),
+            ),
+          );
+        }
         final data = snapshot.data;
-        if (data == null) {
+        if (!allowNull && data == null) {
           return _HomeCard(
             title: title,
             icon: icon,
@@ -3789,7 +3821,7 @@ class _AsyncModuleCard<T> extends StatelessWidget {
             ),
           );
         }
-        return builder(data);
+        return builder(data as T);
       },
     );
   }
@@ -4182,21 +4214,30 @@ class _TodayTimelineHomeCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final display = courses.length > 6 ? courses.sublist(0, 6) : courses;
+    final hasMore = courses.length > 6;
     return _HomeCard(
       title: '今日时间线',
       icon: Icons.view_timeline,
       badge: '${courses.length} 节',
       child: courses.isEmpty
           ? const EmptyState(message: '今日无课')
-          : SizedBox(
-              height: 190,
-              child: SingleChildScrollView(
-                child: Column(
-                  children: [
-                    for (final item in courses) _TimelineMiniRow(course: item),
-                  ],
-                ),
-              ),
+          : Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (final item in display) _TimelineMiniRow(course: item),
+                if (hasMore)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Text(
+                      '还有 ${courses.length - 6} 节课',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+              ],
             ),
     );
   }
@@ -5245,25 +5286,37 @@ class _ExamCountdownHomeCard extends StatelessWidget {
   final List<ExamItem>? exams;
   final VoidCallback onTap;
 
-  String _examDateStr(ExamItem e) {
-    if (e.date.isNotEmpty) return e.date;
-    final t = e.time ?? '';
-    final spaceIdx = t.indexOf(' ');
-    return spaceIdx > 0 ? t.substring(0, spaceIdx) : t;
+  DateTime? _examDate(ExamItem e) {
+    var dateStr = e.date;
+    if (dateStr.isEmpty) {
+      final t = e.time ?? '';
+      final spaceIdx = t.indexOf(' ');
+      dateStr = spaceIdx > 0 ? t.substring(0, spaceIdx) : t;
+    }
+    return DateTime.tryParse(dateStr);
   }
 
   int _calcCountdown(ExamItem e) {
-    final dateStr = _examDateStr(e);
+    final target = _examDate(e);
+    if (target == null) return 9999;
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
-    final target = DateTime.tryParse(dateStr);
-    if (target == null) return -1;
     return target.difference(today).inDays;
   }
 
   List<ExamItem> _upcoming(List<ExamItem> list) {
-    return list.where((e) => _calcCountdown(e) >= 0).toList()
-      ..sort((a, b) => _examDateStr(a).compareTo(_examDateStr(b)));
+    return list.where((e) {
+      final days = _calcCountdown(e);
+      return days >= -7 || days == 9999;
+    }).toList()
+      ..sort((a, b) {
+        final da = _calcCountdown(a);
+        final db = _calcCountdown(b);
+        if (da == 9999 && db == 9999) return 0;
+        if (da == 9999) return 1;
+        if (db == 9999) return -1;
+        return da.compareTo(db);
+      });
   }
 
   @override
@@ -5285,10 +5338,11 @@ class _ExamCountdownHomeCard extends StatelessWidget {
               itemBuilder: (context, i) {
                 final exam = upcoming[i];
                 final days = _calcCountdown(exam);
-                final dateObj = DateTime.tryParse(_examDateStr(exam));
+                final dateObj = _examDate(exam);
                 final day = dateObj?.day ?? 0;
                 final month = dateObj?.month ?? 0;
-                final isUrgent = days <= 3;
+                final isPast = days < 0;
+                final isUrgent = days >= 0 && days <= 3;
                 final isToday = days == 0;
 
                 return Container(
@@ -5367,7 +5421,7 @@ class _ExamCountdownHomeCard extends StatelessWidget {
                                 style: const TextStyle(
                                     fontSize: 14, fontWeight: FontWeight.w700)),
                             const SizedBox(height: 2),
-                            Text('${exam.weekday} · ${exam.time}',
+                            Text('${exam.weekday ?? ''}${(exam.weekday ?? '').isNotEmpty && exam.timeDisplay.isNotEmpty ? ' · ' : ''}${exam.timeDisplay}',
                                 style: TextStyle(
                                     fontSize: 12,
                                     color: Theme.of(context)
@@ -5388,23 +5442,44 @@ class _ExamCountdownHomeCard extends StatelessWidget {
                         decoration: BoxDecoration(
                           color: isToday
                               ? Theme.of(context).colorScheme.error
-                              : Theme.of(context)
-                                  .colorScheme
-                                  .surfaceContainerHighest,
+                              : isPast
+                                  ? Theme.of(context)
+                                      .colorScheme
+                                      .surfaceContainerHighest
+                                      .withValues(alpha: 0.6)
+                                  : Theme.of(context)
+                                      .colorScheme
+                                      .surfaceContainerHighest,
                           borderRadius: BorderRadius.circular(10),
                         ),
                         child: Column(
                           children: [
-                            Text(isToday ? '!' : '$days',
+                            Text(
+                                days == 9999
+                                    ? '?'
+                                    : isToday
+                                        ? '!'
+                                        : '${days.abs()}',
                                 style: TextStyle(
                                     fontSize: 20,
                                     fontWeight: FontWeight.w800,
                                     color: isToday
                                         ? Colors.white
-                                        : Theme.of(context)
-                                            .colorScheme
-                                            .onSurface)),
-                            Text(isToday ? '今天' : '天',
+                                        : isPast
+                                            ? Theme.of(context)
+                                                .colorScheme
+                                                .onSurfaceVariant
+                                            : Theme.of(context)
+                                                .colorScheme
+                                                .onSurface)),
+                            Text(
+                                days == 9999
+                                    ? '待定'
+                                    : isToday
+                                        ? '今天'
+                                        : isPast
+                                            ? '天前'
+                                            : '天',
                                 style: TextStyle(
                                     fontSize: 10,
                                     fontWeight: FontWeight.w600,

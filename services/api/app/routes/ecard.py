@@ -27,30 +27,28 @@ router = APIRouter(prefix="/ecard", tags=["ecard"])
 
 
 def _student_info(session: AppSession) -> tuple[str, str]:
-    student_id = ""
+    # 优先从 session 缓存中获取学号，避免每次都请求教务系统
+    student_id = getattr(session.client, "_account", None)
+    if student_id:
+        student_id = str(student_id)
     name = session.student_name or ""
-    
-    try:
-        info = session.client.get_info()
-        if isinstance(info, dict):
-            student_id = str(info.get("studentId") or info.get("student_id") or info.get("sno") or "")
-            name = str(info.get("name") or info.get("xm") or name)
-    except AuthenticationError as exc:
-        logger.warning("ecard: get_info auth failed for session: %s", exc)
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
-    except Exception as exc:
-        logger.error("ecard: get_info failed: %s", exc, exc_info=True)
-    
+
     if not student_id:
-        student_id = getattr(session.client, "_account", None)
-        if student_id:
-            student_id = str(student_id)
-            logger.info("ecard: fallback to client._account for student_id")
-    
+        try:
+            info = session.client.get_info()
+            if isinstance(info, dict):
+                student_id = str(info.get("studentId") or info.get("student_id") or info.get("sno") or "")
+                name = str(info.get("name") or info.get("xm") or name)
+        except AuthenticationError as exc:
+            logger.warning("ecard: get_info auth failed for session: %s", exc)
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+        except Exception as exc:
+            logger.error("ecard: get_info failed: %s", exc, exc_info=True)
+
     if not student_id:
         logger.error("ecard: no student_id available")
         raise HTTPException(status_code=502, detail="当前用户缺少学号")
-    
+
     return student_id, name
 
 
