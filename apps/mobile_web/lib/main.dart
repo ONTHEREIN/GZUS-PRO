@@ -2766,83 +2766,73 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<_HomeDashboardData> _loadData({bool forceRefresh = false}) async {
-    final info = await _safeLoad(
-      widget.api.me(forceRefresh: forceRefresh).then((r) => r.data),
-      StudentInfo(studentId: '', name: 'OneGZUS'),
-    );
-    final schedule = await _safeLoad(
-      widget.api
-          .schedule(
-            year: widget.year,
-            term: widget.term,
-            forceRefresh: forceRefresh,
-          )
-          .then((r) => r.data),
-      ScheduleResult(items: const [], raw: const []),
-    );
-    final notices = await _safeLoad(
-      widget.api.notices(forceRefresh: forceRefresh).then((r) => r.data),
-      const <NoticeItem>[],
-    );
-    final attendance = await _safeLoad(
-      widget.api
-          .attendance(
-            year: widget.year,
-            term: widget.term,
-            forceRefresh: forceRefresh,
-          )
-          .then((r) => r.data),
-      AttendanceResponse.fromJson({'status': 'empty', 'items': []}),
-    );
-    final credits = await _safeLoad(
-      widget.api.credits(forceRefresh: forceRefresh).then((r) => r.data),
-      const <CreditItem>[],
-    );
-    final ecard = await _safeLoad(
-      widget.api.ecardSummary(forceRefresh: forceRefresh).then((r) => r.data),
-      EcardSummary.fromJson({'status': 'not_bound'}),
-    );
-    final apps = await _safeLoad(
-      widget.api.ehallApplications(forceRefresh: forceRefresh),
-      const <EhallApplicationItem>[],
-    );
-    final progressOverview = await _safeLoad(
-      widget.api.ehallProgressOverview(forceRefresh: forceRefresh),
-      EhallProgressOverview.fromItems(const <EhallProgressItem>[]),
-    );
-    final loc = await _safeLoad(
-      _getLocationWithPermission(),
-      null,
-    );
+    final results = await Future.wait([
+      // Wave 1 — 8 independent school API calls
+      _safeLoad(
+        widget.api.me(forceRefresh: forceRefresh).then((r) => r.data),
+        StudentInfo(studentId: '', name: 'OneGZUS'),
+      ),
+      _safeLoad(
+        widget.api.schedule(year: widget.year, term: widget.term, forceRefresh: forceRefresh).then((r) => r.data),
+        ScheduleResult(items: const [], raw: const []),
+      ),
+      _safeLoad(
+        widget.api.notices(forceRefresh: forceRefresh).then((r) => r.data),
+        const <NoticeItem>[],
+      ),
+      _safeLoad(
+        widget.api.attendance(year: widget.year, term: widget.term, forceRefresh: forceRefresh).then((r) => r.data),
+        AttendanceResponse.fromJson({'status': 'empty', 'items': []}),
+      ),
+      _safeLoad(
+        widget.api.credits(forceRefresh: forceRefresh).then((r) => r.data),
+        const <CreditItem>[],
+      ),
+      _safeLoad(
+        widget.api.ecardSummary(forceRefresh: forceRefresh).then((r) => r.data),
+        EcardSummary.fromJson({'status': 'not_bound'}),
+      ),
+      _safeLoad(
+        widget.api.ehallApplications(forceRefresh: forceRefresh),
+        const <EhallApplicationItem>[],
+      ),
+      _safeLoad(
+        widget.api.ehallProgressOverview(forceRefresh: forceRefresh),
+        EhallProgressOverview.fromItems(const <EhallProgressItem>[]),
+      ),
+      _safeLoad(_getLocationWithPermission(), null),
+      _safeLoad(
+        widget.api.grades(year: widget.year, term: widget.term, forceRefresh: forceRefresh).then((r) => r.data),
+        const <GradeItem>[],
+      ),
+      _safeLoad(
+        widget.api.exams(year: widget.year, term: widget.term, forceRefresh: forceRefresh).then((r) => r.data),
+        const <ExamItem>[],
+      ),
+    ]);
+
+    final info             = results[0] as StudentInfo;
+    final schedule         = results[1] as ScheduleResult;
+    final notices          = results[2] as List<NoticeItem>;
+    final attendance       = results[3] as AttendanceResponse;
+    final credits          = results[4] as List<CreditItem>;
+    final ecard            = results[5] as EcardSummary;
+    final apps             = results[6] as List<EhallApplicationItem>;
+    final progressOverview = results[7] as EhallProgressOverview;
+    final loc              = results[8] as ({double lat, double lon})?;
+
+    // Wave 2 — weather depends on location
     final weather = await _safeLoad(
-      widget.api
-          .weather(
-              forceRefresh: forceRefresh, lat: loc?.lat, lon: loc?.lon)
-          .then((r) => r.data),
+      widget.api.weather(forceRefresh: forceRefresh, lat: loc?.lat, lon: loc?.lon).then((r) => r.data),
       null,
     );
     final WeatherData? effectiveWeather = weather ?? await _loadLocalWeather();
     if (weather != null) _saveLocalWeather(weather);
 
-    final grades = await _safeLoad(
-      widget.api
-          .grades(
-              year: widget.year, term: widget.term, forceRefresh: forceRefresh)
-          .then((r) => r.data),
-      const <GradeItem>[],
-    );
-    final List<GradeItem> effectiveGrades =
-        grades.isNotEmpty ? grades : await _loadLocalGrades();
-
-    final exams = await _safeLoad(
-      widget.api
-          .exams(
-              year: widget.year, term: widget.term, forceRefresh: forceRefresh)
-          .then((r) => r.data),
-      const <ExamItem>[],
-    );
-    final List<ExamItem> effectiveExams =
-        exams.isNotEmpty ? exams : await _loadLocalExams();
+    final grades        = results[9] as List<GradeItem>;
+    final exams         = results[10] as List<ExamItem>;
+    final List<GradeItem> effectiveGrades = grades.isNotEmpty ? grades : await _loadLocalGrades();
+    final List<ExamItem>  effectiveExams  = exams.isNotEmpty  ? exams  : await _loadLocalExams();
     final data = _HomeDashboardData(
       info: info,
       courses: schedule.items,
