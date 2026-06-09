@@ -265,7 +265,7 @@ class CasAutoLogin:
     # ------------------------------------------------------------------
 
     _CONNECT_RETRIES = 3
-    _CONNECT_RETRY_DELAY = 2  # seconds
+    _CONNECT_RETRY_DELAY = 0.5  # seconds (reduced from 2s for faster retry)
 
     @staticmethod
     def _enable_follow_redirects(client: httpx.Client) -> None:
@@ -450,7 +450,10 @@ class CasAutoLogin:
         ticket: str,
         tgt: str,
     ) -> CasLoginResult:
-        """Follow the service URL with the ticket to establish session cookies."""
+        """Follow the service URL with the ticket to establish session cookies.
+
+        JWXT cookies and ehall session are fetched in parallel to reduce total time.
+        """
         service_url = self._service_url
         if "?" in service_url:
             redirect_url = f"{service_url}&ticket={ticket}"
@@ -458,16 +461,46 @@ class CasAutoLogin:
             redirect_url = f"{service_url}?ticket={ticket}"
 
         jwxt_host = urlparse(self._service_url).hostname or "jwxt.seig.edu.cn"
-        self._follow_service_ticket(client, redirect_url)
-        jwxt_cookies = self._extract_cookies_for_hosts(client, [jwxt_host])
-        if not jwxt_cookies and tgt:
-            fallback_ticket = self._request_service_ticket(client, tgt, self._service_url)
-            if fallback_ticket:
-                fallback_url = self._service_ticket_url(self._service_url, fallback_ticket)
-                self._follow_service_ticket(client, fallback_url)
-                jwxt_cookies = self._extract_cookies_for_hosts(client, [jwxt_host])
 
-        ehall_cookies, ehall_token = self._get_ehall_session(client, tgt)
+        # Fetch JWXT cookies and ehall session in parallel
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        jwxt_cookies = ""
+        ehall_cookies = None
+        ehall_token = None
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = {}
+
+            # Task 1: Follow service ticket for JWXT cookies
+            def _fetch_jwxt():
+                self._follow_service_ticket(client, redirect_url)
+                cookies = self._extract_cookies_for_hosts(client, [jwxt_host])
+                if not cookies and tgt:
+                    fallback_ticket = self._request_service_ticket(client, tgt, self._service_url)
+                    if fallback_ticket:
+                        fallback_url = self._service_ticket_url(self._service_url, fallback_ticket)
+                        self._follow_service_ticket(client, fallback_url)
+                        cookies = self._extract_cookies_for_hosts(client, [jwxt_host])
+                return cookies
+
+            # Task 2: Get ehall session
+            def _fetch_ehall():
+                return self._get_ehall_session(client, tgt)
+
+            futures[executor.submit(_fetch_jwxt)] = "jwxt"
+            futures[executor.submit(_fetch_ehall)] = "ehall"
+
+            for future in as_completed(futures, timeout=self.timeout):
+                label = futures[future]
+                try:
+                    result = future.result(timeout=self.timeout)
+                    if label == "jwxt":
+                        jwxt_cookies = result
+                    elif label == "ehall":
+                        ehall_cookies, ehall_token = result
+                except Exception as exc:
+                    logger.warning("Parallel fetch failed for %s: %s", label, exc)
 
         if not jwxt_cookies and not ehall_cookies:
             logger.warning("No session cookies obtained after login")

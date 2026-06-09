@@ -68,8 +68,7 @@ def login(payload: LoginRequest, request: Request) -> dict:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc))
 
     session = sessions.create(client, student_name or payload.account)
-    student_id = _try_get_student_id(client)
-    return {"status": "ok", "sessionId": session.id, "studentName": student_name, "studentId": student_id}
+    return {"status": "ok", "sessionId": session.id, "studentName": student_name, "studentId": None}
 
 
 def _try_get_student_id(client) -> str | None:
@@ -98,8 +97,7 @@ def submit_captcha(payload: CaptchaRequest, request: Request) -> dict:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc))
 
     session = sessions.create(client, student_name)
-    student_id = _try_get_student_id(client)
-    return {"status": "ok", "sessionId": session.id, "studentName": student_name, "studentId": student_id}
+    return {"status": "ok", "sessionId": session.id, "studentName": student_name, "studentId": None}
 
 
 @router.get("/ly/start")
@@ -191,8 +189,7 @@ def ly_sso_complete(payload: SsoCompleteRequest, request: Request) -> dict:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc))
 
     session = sessions.create(client, student_name)
-    student_id = _try_get_student_id(client)
-    return {"status": "ok", "sessionId": session.id, "studentName": student_name, "studentId": student_id}
+    return {"status": "ok", "sessionId": session.id, "studentName": student_name, "studentId": None}
 
 
 @router.post("/relogin", response_model=AuthResponse)
@@ -246,13 +243,12 @@ def relogin(payload: ReloginRequest, request: Request) -> dict:
         )
 
     session = sessions.create(client, student_name=student_name, ehall_client=ehall_client)
-    student_id = _try_get_student_id(client)
 
     return {
         "status": "ok",
         "sessionId": session.id,
         "studentName": student_name,
-        "studentId": student_id,
+        "studentId": None,
         "credentialToken": payload.credential_token,
         "ehallCookies": result.ehall_cookies,
         "ehallAuthToken": result.ehall_auth_token,
@@ -307,7 +303,6 @@ def auto_login(payload: AutoLoginRequest, request: Request) -> dict:
         )
 
     session = sessions.create(client, student_name, ehall_client=ehall_client)
-    student_id = _try_get_student_id(client)
 
     from app.sessions import encrypt_credentials
 
@@ -316,10 +311,44 @@ def auto_login(payload: AutoLoginRequest, request: Request) -> dict:
         "status": "ok",
         "sessionId": session.id,
         "studentName": student_name,
-        "studentId": student_id,
+        "studentId": None,
         "credentialToken": cred_token,
         "ehallCookies": result.ehall_cookies,
         "ehallAuthToken": result.ehall_auth_token,
+    }
+
+
+@router.get("/student-info")
+def get_student_info(request: Request) -> dict:
+    """Async endpoint to fetch student info after login.
+
+    This is called by the client after login completes to avoid blocking
+    the login response while fetching detailed student info (which includes
+    photo download and can take several seconds).
+    """
+    sessions = request.app.state.sessions
+    session_id = request.headers.get("X-Session-Id")
+    if not session_id:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="未登录")
+    session = sessions.get(session_id)
+    if not session:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="会话已过期")
+
+    client = session.client
+    if not client:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="会话无效")
+
+    try:
+        info = client.get_info()
+    except Exception as exc:
+        logger.warning("get_student_info failed: %s", exc)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="获取学生信息失败")
+
+    student_id = info.get("studentId") or None
+    return {
+        "status": "ok",
+        "studentId": student_id,
+        "info": info,
     }
 
 

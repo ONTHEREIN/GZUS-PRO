@@ -506,13 +506,21 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
       loginMethod = result.loginMethod;
     });
 
-    // 设置 Bugly 用户标识
-    if (result.studentId != null && result.studentId!.isNotEmpty) {
-      await BuglyService.setUserId(result.studentId!);
-    }
+    // Fetch student info asynchronously (studentId, photo, etc.)
+    // This was separated from the login flow to speed up login response time.
+    unawaited(_fetchStudentInfoAfterLogin());
 
     _initPushServices();
     _checkForUpdate();
+  }
+
+  Future<void> _fetchStudentInfoAfterLogin() async {
+    final info = await api.fetchStudentInfo();
+    if (info == null || !mounted) return;
+    final studentId = info.studentId;
+    if (studentId.isNotEmpty) {
+      await BuglyService.setUserId(studentId);
+    }
   }
 
   Future<void> _persistLogin(LoginResult result) async {

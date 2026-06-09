@@ -1,8 +1,9 @@
 import 'dart:convert';
 import 'dart:async';
-import 'dart:io' show SocketException;
+import 'dart:io' show HttpClient, SocketException;
 
 import 'package:flutter/foundation.dart';
+import 'package:http/io_client.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -1167,9 +1168,15 @@ double? _doubleFromJson(dynamic value) {
   return null;
 }
 
+http.Client _createDefaultClient() {
+  final ioClient = HttpClient();
+  ioClient.userAgent = 'GZUS-PRO/1.0';
+  return IOClient(ioClient);
+}
+
 class ApiClient {
   ApiClient({http.Client? httpClient, String? baseUrl, RequestCache? cache})
-      : _http = httpClient ?? http.Client(),
+      : _http = httpClient ?? _createDefaultClient(),
         _cache = cache ?? RequestCache() {
     final raw = baseUrl ?? apiBaseUrl;
     _candidates = _buildCandidates(raw);
@@ -1552,7 +1559,7 @@ class ApiClient {
       _candidates.map((candidate) async {
         try {
           final response = await _http
-              .get(Uri.parse('$candidate/health'))
+              .get(Uri.parse('$candidate/health'), headers: _headers())
               .timeout(const Duration(seconds: 5));
           if (response.statusCode == 200) {
             return candidate;
@@ -1695,6 +1702,25 @@ class ApiClient {
         fromJson: (json) => StudentInfo.fromJson(json),
         forceRefresh: forceRefresh,
       );
+
+  /// Fetch student info asynchronously after login.
+  /// This calls the /auth/student-info endpoint which was separated from
+  /// the login flow to speed up login response time.
+  Future<StudentInfo?> fetchStudentInfo() async {
+    try {
+      final data = await _get('/auth/student-info');
+      final info = StudentInfo.fromJson(data['info'] as Map<String, dynamic>);
+      final studentId = data['studentId'] as String?;
+      if (studentId != null && studentId.isNotEmpty) {
+        setStudentId(studentId);
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('auth.studentId', studentId);
+      }
+      return info;
+    } catch (_) {
+      return null;
+    }
+  }
 
   Future<DataResult<ScheduleResult>> schedule(
       {required int year, required int term, bool forceRefresh = false}) async {
@@ -2423,6 +2449,7 @@ class ApiClient {
 
   Map<String, String> _headers() => {
         'Content-Type': 'application/json',
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 16) GZUS-PRO/1.0',
         if (sessionId != null) 'X-Session-Id': sessionId!,
       };
 
