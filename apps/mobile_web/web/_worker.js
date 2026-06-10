@@ -735,8 +735,12 @@ async function createSessionOnBackend(loginResult, account, env) {
 // ─── Proxy to Vercel ───────────────────────────────────────────────
 async function proxyToVercel(request, env, url) {
   const origin = (env.API_ORIGIN || 'https://api-one-zeta-dc0jrazxzq.vercel.app').replace(/\/$/, '');
-  // Preserve original path - Vercel expects full path including /auth/, /academic/, etc.
-  const upstreamUrl = new URL(url.pathname + url.search, origin);
+  // Strip /api/ prefix for Vercel backend compatibility
+  let upstreamPath = url.pathname;
+  if (upstreamPath.startsWith('/api/')) {
+    upstreamPath = upstreamPath.slice(4); // Remove /api
+  }
+  const upstreamUrl = new URL(upstreamPath + url.search, origin);
   const upstreamRequest = new Request(upstreamUrl, request);
   const response = await fetch(upstreamRequest);
   const headers = new Headers(response.headers);
