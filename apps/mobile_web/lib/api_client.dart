@@ -1713,7 +1713,20 @@ class ApiClient {
   /// the login flow to speed up login response time.
   Future<StudentInfo?> fetchStudentInfo() async {
     try {
-      final data = await _get('/auth/student-info');
+      // Use a direct HTTP call without _withReloginRetry to avoid
+      // triggering onReloginFailed->_logout() when called immediately
+      // after login (Neon/Vercel cold-start can transiently return 401).
+      final url = _resolveBaseUrl();
+      if (url.isEmpty) return null;
+      final response = await _http
+          .get(Uri.parse('$url/auth/student-info'), headers: _headers())
+          .timeout(_connectTimeout)
+          .timeout(_requestTimeout);
+      if (response.statusCode >= 400) {
+        // Silently ignore errors — this is a best-effort fetch after login.
+        return null;
+      }
+      final data = _decodeObject(response);
       final info = StudentInfo.fromJson(data['info'] as Map<String, dynamic>);
       final studentId = data['studentId'] as String?;
       if (studentId != null && studentId.isNotEmpty) {

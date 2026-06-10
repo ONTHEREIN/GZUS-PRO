@@ -91,6 +91,9 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
   /// 防止 _logout() 被并发调用
   bool _logoutInProgress = false;
 
+  /// 最近一次登录成功的时间，用于防止登录后立即因瞬态 401 被踢出
+  DateTime? _lastLoginAt;
+
   @override
   void initState() {
     super.initState();
@@ -99,8 +102,17 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
         WidgetsBinding.instance.platformDispatcher.platformBrightness ==
             Brightness.dark;
     // 当 relogin 失败时（credential token 已失效），触发 logout
+    // 添加 5 秒冷却期，防止登录后立即因 Vercel/Neon 瞬态错误被踢出
     api.onReloginFailed = () {
-      if (loggedIn) _logout();
+      if (!loggedIn) return;
+      final now = DateTime.now();
+      if (_lastLoginAt != null &&
+          now.difference(_lastLoginAt!) < const Duration(seconds: 5)) {
+        debugPrint(
+            'Ignoring relogin failure within 5s of login (transient)');
+        return;
+      }
+      _logout();
     };
     _loadThemePreference();
     _loadSeedColorPreference();
@@ -554,6 +566,7 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
   }
 
   Future<void> _persistLogin(LoginResult result) async {
+    _lastLoginAt = DateTime.now();
     final prefs = await SharedPreferences.getInstance();
     if (result.sessionId != null) {
       api.useSession(result.sessionId);

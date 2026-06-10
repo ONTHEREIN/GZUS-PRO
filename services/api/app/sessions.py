@@ -4,6 +4,7 @@ import asyncio
 import base64
 import hashlib
 import logging
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -206,7 +207,14 @@ class SessionStore:
         try:
             row = db.query(AppSessionModel).filter(AppSessionModel.id == session_id).first()
             if row is None:
-                return None
+                # Neon PostgreSQL may have a slight read-after-write delay
+                # after a session is created on a different serverless instance.
+                # Retry once after a short wait.
+                time.sleep(0.5)
+                db.commit()  # refresh any stale transaction snapshot
+                row = db.query(AppSessionModel).filter(AppSessionModel.id == session_id).first()
+                if row is None:
+                    return None
 
             # Absolute TTL check
             now_utc = datetime.now(timezone.utc)
