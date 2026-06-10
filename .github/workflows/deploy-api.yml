@@ -1,0 +1,15 @@
+name: Deploy API to Vercel
+
+on:
+  push:
+    branches: [ master ]
+    paths:
+      - 'services/api/**'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cd services/api && npx vercel --prod --yes --token ${{ secrets.VERCEL_TOKEN }}
