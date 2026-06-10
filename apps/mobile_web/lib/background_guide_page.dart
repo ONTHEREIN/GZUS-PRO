@@ -62,6 +62,9 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
     if (!mounted || _busy) return;
     _busy = true;
     setState(() => _checking = true);
+    bool autoStart = false, battery = false, notif = false, alarm = true;
+    String permStatus = 'default';
+    bool webSub = false;
     try {
       if (kIsWeb) {
         final webPush = WebPushService.instance;
@@ -70,12 +73,8 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
           webPush.getPermissionStatus(),
           webPush.isSubscribed(),
         ]);
-        if (!mounted) return;
-        setState(() {
-          _notificationGranted = results[0] == 'granted';
-          _webPushSubscribed = results[1] == true;
-          _checking = false;
-        });
+        permStatus = results[0];
+        webSub = results[1] == true;
       } else {
         final futures = <Future<bool>>[
           PermissionService.checkAutoStart(),
@@ -85,18 +84,34 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
         if (Platform.isAndroid) {
           futures.add(PermissionService.checkExactAlarmPermission());
         }
-        final results = await Future.wait(futures);
-        if (!mounted) return;
+        // 5秒超时保护，防止 MethodChannel 调用挂死
+        final results = await Future.wait(futures).timeout(
+          const Duration(seconds: 5),
+        );
+        autoStart = results[0];
+        battery = results[1];
+        notif = results[2];
+        if (Platform.isAndroid && results.length > 3) {
+          alarm = results[3];
+        }
+      }
+    } catch (_) {
+      // 超时或异常：保持现有状态，不清零
+    } finally {
+      if (mounted) {
         setState(() {
-          _autoStartGranted = results[0];
-          _batteryOptimizationDisabled = results[1];
-          _notificationGranted = results[2];
-          _exactAlarmGranted =
-              Platform.isAndroid ? results[3] : true;
           _checking = false;
+          if (kIsWeb) {
+            _notificationGranted = permStatus == 'granted';
+            _webPushSubscribed = webSub;
+          } else {
+            _autoStartGranted = autoStart;
+            _batteryOptimizationDisabled = battery;
+            _notificationGranted = notif;
+            _exactAlarmGranted = alarm;
+          }
         });
       }
-    } finally {
       _busy = false;
     }
   }
@@ -121,7 +136,7 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
   }
 
   Future<void> _requestNotification() async {
-    if (_busy) return; // 防止与 lifecycle 回调冲突
+    if (_busy) return;
     if (kIsWeb) {
       final webPush = WebPushService.instance;
       await webPush.init();
@@ -141,12 +156,9 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
           }
         } catch (_) {}
       }
-      // lifecycle 回调已处理重检，不重复调用
     } else {
-      // Android: 请求通知权限（可能跳转系统设置）
       await PermissionService.checkNotificationPermission();
     }
-    // 统一重检权限状态
     _checkPermissions();
   }
 
