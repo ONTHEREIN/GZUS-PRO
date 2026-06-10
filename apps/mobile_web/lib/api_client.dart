@@ -42,10 +42,8 @@ String _defaultApiBaseUrl() {
   const customDomain = 'https://onegzus.cc.cd';
   const cloudflareWorker = 'https://onegzus-onweb.pages.dev';
 
-  if (kReleaseMode) return customDomain;
-
-  // 开发环境：优先使用自定义域名，同时保留 Cloudflare Worker 作为回退候选
-  return customDomain;
+  // 返回两个候选：自定义域名优先，pages.dev 子域名作为回退
+  return '$customDomain,$cloudflareWorker';
 }
 
 class DataSourceInfo {
@@ -1197,7 +1195,12 @@ class ApiClient {
         merged.add(defaultUrl);
       }
     }
-    return merged;
+    // 排除 Vercel 直连 URL：Cloudflare Worker 已代理所有 API 到 Vercel，
+    // Web 端直连 Vercel 会因为 CORS/GFW 导致超时，影响 fallback 候选切换。
+    return merged.where((url) {
+      final host = Uri.tryParse(url)?.host ?? '';
+      return !host.contains('vercel.app');
+    }).toList();
   }
 
   final http.Client _http;
