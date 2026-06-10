@@ -29,6 +29,12 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
   bool _checking = true;
   bool _webPushSubscribed = false;
 
+  /// 防止 _checkPermissions() 重入
+  bool _busy = false;
+
+  /// 防抖：上次 resume 时间戳，跳过 1 秒内的重复回调
+  int _lastResumeMs = 0;
+
   @override
   void initState() {
     super.initState();
@@ -45,40 +51,53 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
+      final now = DateTime.now().millisecondsSinceEpoch;
+      if (now - _lastResumeMs < 1000) return; // 1s 防抖
+      _lastResumeMs = now;
       _checkPermissions();
     }
   }
 
   Future<void> _checkPermissions() async {
-    if (!mounted) return;
+    if (!mounted || _busy) return;
+    _busy = true;
     setState(() => _checking = true);
-    if (kIsWeb) {
-      final webPush = WebPushService.instance;
-      await webPush.init();
-      // Check both: browser permission status AND push subscription status
-      final permStatus = await webPush.getPermissionStatus();
-      _webPushSubscribed = await webPush.isSubscribed();
-      if (!mounted) return;
-      setState(() {
-        _notificationGranted = permStatus == 'granted';
-        _checking = false;
-      });
-    } else {
-      final autoStart = await PermissionService.checkAutoStart();
-      final battery = await PermissionService.checkBatteryOptimization();
-      final notification =
-          await PermissionService.checkNotificationPermission();
-      final exactAlarm = Platform.isAndroid
-          ? await PermissionService.checkExactAlarmPermission()
-          : true;
-      if (!mounted) return;
-      setState(() {
-        _autoStartGranted = autoStart;
-        _batteryOptimizationDisabled = battery;
-        _notificationGranted = notification;
-        _exactAlarmGranted = exactAlarm;
-        _checking = false;
-      });
+    try {
+      if (kIsWeb) {
+        final webPush = WebPushService.instance;
+        await webPush.init();
+        final results = await Future.wait([
+          webPush.getPermissionStatus(),
+          webPush.isSubscribed(),
+        ]);
+        if (!mounted) return;
+        setState(() {
+          _notificationGranted = results[0] == 'granted';
+          _webPushSubscribed = results[1] == true;
+          _checking = false;
+        });
+      } else {
+        final futures = <Future<bool>>[
+          PermissionService.checkAutoStart(),
+          PermissionService.checkBatteryOptimization(),
+          PermissionService.checkNotificationPermission(),
+        ];
+        if (Platform.isAndroid) {
+          futures.add(PermissionService.checkExactAlarmPermission());
+        }
+        final results = await Future.wait(futures);
+        if (!mounted) return;
+        setState(() {
+          _autoStartGranted = results[0];
+          _batteryOptimizationDisabled = results[1];
+          _notificationGranted = results[2];
+          _exactAlarmGranted =
+              Platform.isAndroid ? results[3] : true;
+          _checking = false;
+        });
+      }
+    } finally {
+      _busy = false;
     }
   }
 
@@ -102,6 +121,7 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
   }
 
   Future<void> _requestNotification() async {
+    if (_busy) return; // 防止与 lifecycle 回调冲突
     if (kIsWeb) {
       final webPush = WebPushService.instance;
       await webPush.init();
@@ -121,11 +141,13 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
           }
         } catch (_) {}
       }
-      await _checkPermissions();
+      // lifecycle 回调已处理重检，不重复调用
     } else {
+      // Android: 请求通知权限（可能跳转系统设置）
       await PermissionService.checkNotificationPermission();
-      await _checkPermissions();
     }
+    // 统一重检权限状态
+    _checkPermissions();
   }
 
   Future<Map<String, dynamic>?> _fetchWebPushConfig() async {

@@ -20,7 +20,7 @@ class CourseReminderSettings {
 class CourseReminderSlot {
   const CourseReminderSlot({
     required this.id,
-    required this.when,
+    required this.remindAt,
     required this.title,
     required this.body,
     required this.courseName,
@@ -29,7 +29,7 @@ class CourseReminderSlot {
   });
 
   final int id;
-  final DateTime when;
+  final DateTime remindAt;
   final String title;
   final String body;
   final String courseName;
@@ -63,7 +63,7 @@ class ReminderService {
       now: now,
     );
     for (final slot in slots) {
-      final delay = slot.when.difference(now);
+      final delay = slot.remindAt.difference(now);
       _courseTimers.add(Timer(delay, () async {
         final extras = {
           'type': 'course_reminder',
@@ -87,7 +87,7 @@ class ReminderService {
           id: slot.id,
           title: slot.title,
           body: slot.body,
-          startTimeMillis: slot.when.millisecondsSinceEpoch,
+          startTimeMillis: slot.remindAt.millisecondsSinceEpoch,
           endTimeMillis: slot.countdownTarget.millisecondsSinceEpoch,
           shortCriticalText: '上课',
           extras: extras,
@@ -170,7 +170,7 @@ class ReminderService {
         if (startReminder.isAfter(now) && !startReminder.isAfter(endAt)) {
           slots.add(CourseReminderSlot(
             id: _slotId(course, startReminder, 'start'),
-            when: startReminder,
+            remindAt: startReminder,
             title: '即将上课',
             body: _courseBody(course, classStart,
                 prefix: '${settings.beforeStartMinutes} 分钟后'),
@@ -182,7 +182,7 @@ class ReminderService {
         if (endReminder.isAfter(now) && !endReminder.isAfter(endAt)) {
           slots.add(CourseReminderSlot(
             id: _slotId(course, endReminder, 'end'),
-            when: endReminder,
+            remindAt: endReminder,
             title: '即将下课',
             body: _courseBody(course, classEnd,
                 prefix: '${settings.beforeEndMinutes} 分钟后下课'),
@@ -193,7 +193,7 @@ class ReminderService {
         }
       }
     }
-    slots.sort((a, b) => a.when.compareTo(b.when));
+    slots.sort((a, b) => a.remindAt.compareTo(b.remindAt));
     return slots.take(64).toList();
   }
 
@@ -226,9 +226,9 @@ class ReminderService {
     return '$prefix：${_timeText(time)} ${course.name}$room$teacher';
   }
 
-  static int _slotId(ScheduleCourse course, DateTime when, String kind) {
+  static int _slotId(ScheduleCourse course, DateTime remindAt, String kind) {
     return Object.hash(course.name, course.weekday, course.startSection,
-            course.endSection, when.millisecondsSinceEpoch, kind)
+            course.endSection, remindAt.millisecondsSinceEpoch, kind)
         .abs();
   }
 
@@ -260,9 +260,9 @@ class ReminderService {
   }
 
   static double _slotProgress(CourseReminderSlot slot) {
-    final total = slot.countdownTarget.difference(slot.when).inMilliseconds;
+    final total = slot.countdownTarget.difference(slot.remindAt).inMilliseconds;
     if (total <= 0) return 1;
-    final elapsed = DateTime.now().difference(slot.when).inMilliseconds;
+    final elapsed = DateTime.now().difference(slot.remindAt).inMilliseconds;
     return (elapsed / total).clamp(0.0, 1.0);
   }
 }

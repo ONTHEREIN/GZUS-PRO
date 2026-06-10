@@ -10,7 +10,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
 from app.config import get_settings
-from app.database import init_db
+from app.database import get_sync_session_factory, init_db
 from app.jobs import ExamReminderCache, GradeUpdateCache, NoticeCache, run_ecard_reminder_poller, run_exam_reminder_poller, run_grade_update_poller, run_notice_poller
 from app.rate_limit import limiter
 from app.routes import academic, auth, ecard, ehall, push, weather
@@ -54,7 +54,7 @@ async def lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(title="OneGZUS API", version="0.1.0", lifespan=lifespan)
-    app.state.sessions = SessionStore(settings.session_ttl_seconds)
+    app.state.sessions = SessionStore(settings.session_ttl_seconds, db_factory=get_sync_session_factory)
     app.state.pending_captcha = {}
     app.state.ly_sso_states = {}
     app.state.ws_manager = ConnectionManager()

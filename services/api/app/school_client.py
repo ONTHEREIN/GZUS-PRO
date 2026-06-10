@@ -556,6 +556,40 @@ class SchoolSdkClient:
         if self._client is not None and hasattr(self._client, "logout"):
             self._client.logout()
 
+    def get_jwxt_cookies_string(self) -> str:
+        """Extract JWXT session cookies as a cookie header string.
+
+        Used to persist cookies for session reconstruction after serverless cold start.
+        Returns cookies from _httpx_client (preferred, richer) or _client._http fallback.
+        """
+        seen: set[str] = set()
+        parts: list[str] = []
+
+        # Prefer httpx_client cookies (full jar with domain/path metadata)
+        if self._httpx_client is not None:
+            try:
+                for cookie in self._httpx_client.cookies.jar:
+                    name = cookie.name
+                    if name and name not in seen:
+                        seen.add(name)
+                        parts.append(f"{name}={cookie.value}")
+            except Exception:
+                pass
+
+        # Fallback to school_client._http cookies
+        if not parts and self._client is not None:
+            try:
+                cookie_jar = getattr(getattr(self._client, "_http", None), "cookies", None)
+                if cookie_jar is not None:
+                    for name, value in cookie_jar.items():
+                        if name not in seen:
+                            seen.add(name)
+                            parts.append(f"{name}={value}")
+            except Exception:
+                pass
+
+        return "; ".join(parts)
+
     def _load_school_client(self) -> Any:
         apply_school_sdk_import_patches()
         apply_school_sdk_patches()

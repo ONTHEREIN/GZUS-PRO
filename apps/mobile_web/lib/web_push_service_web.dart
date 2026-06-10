@@ -101,7 +101,9 @@ class WebPushServiceImpl implements WebPushService {
   Future<bool> isSubscribed() async {
     await _initCompleter.future;
     try {
-      return await _callbackBool(gzusWebPushIsSubscribed);
+      // 权限检查场景用较短超时（5s），订阅场景在 subscribe() 中用较长超时
+      return await _callbackBool(gzusWebPushIsSubscribed,
+          timeout: const Duration(seconds: 5));
     } catch (_) {
       return false;
     }
@@ -111,7 +113,8 @@ class WebPushServiceImpl implements WebPushService {
   Future<bool> requestPermission() async {
     await _initCompleter.future;
     try {
-      return await _callbackBool(gzusWebPushRequestPermission);
+      return await _callbackBool(gzusWebPushRequestPermission,
+          timeout: const Duration(seconds: 8));
     } catch (_) {
       return false;
     }
@@ -141,6 +144,7 @@ class WebPushServiceImpl implements WebPushService {
         sessionId,
         callback,
       ),
+      timeout: const Duration(seconds: 30),
     );
     if (!ok) {
       throw Exception('Failed to subscribe');
@@ -160,6 +164,7 @@ class WebPushServiceImpl implements WebPushService {
           sessionId,
           callback,
         ),
+        timeout: const Duration(seconds: 10),
       );
     } catch (_) {}
   }
@@ -176,15 +181,13 @@ class WebPushServiceImpl implements WebPushService {
 
 WebPushService createWebPushService() => WebPushServiceImpl();
 
-Future<bool> _callbackBool(void Function(Function callback) invoke) {
+Future<bool> _callbackBool(void Function(Function callback) invoke,
+    {Duration timeout = const Duration(seconds: 20)}) {
   final completer = Completer<bool>();
   invoke((value) {
     if (!completer.isCompleted) {
       completer.complete(value == true);
     }
   });
-  return completer.future.timeout(
-    const Duration(seconds: 20),
-    onTimeout: () => false,
-  );
+  return completer.future.timeout(timeout, onTimeout: () => false);
 }

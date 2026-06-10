@@ -13,36 +13,34 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:share_plus/share_plus.dart';
 import 'api_client.dart';
-import 'avatar_open.dart';
-import 'browser_redirect.dart';
-import 'ics_download.dart';
-import 'leave_attachment.dart';
-import 'location_service.dart';
-import 'mobile_sso.dart';
-import 'permission_service.dart';
-import 'push_service.dart';
-import 'ws_service.dart';
-import 'local_notification_service.dart';
-import 'reminder_service.dart';
-import 'bugly_service.dart';
-import 'background_service.dart';
-import 'background_guide_page.dart';
-import 'live_activity_service.dart';
-import 'live_update_service.dart';
 import 'gzus_design.dart';
-import 'persistent_cache.dart';
+import 'services_deferred.dart';
+
+import 'background_guide_page.dart';
+import 'browser_redirect.dart';
+import 'live_activity_service.dart';
 import 'ftp_upload_service.dart';
-import 'update_service.dart';
-import 'web_push_service.dart';
-import 'web_pwa_cache.dart';
+import 'leave_attachment.dart';
+
+import 'persistent_cache.dart' deferred as persistent_cache;
+import 'ws_service.dart' deferred as ws_service;
+import 'mobile_sso.dart' deferred as mobile_sso;
+import 'permission_service.dart' deferred as permission_service;
+import 'location_service.dart' deferred as location_service;
+import 'avatar_open.dart' deferred as avatar_open;
+import 'background_service.dart' deferred as background_service;
+import 'reminder_service.dart' deferred as reminder_service;
+import 'ics_download.dart' deferred as ics_download;
+import 'local_notification_service.dart' deferred as local_notification_service;
+import 'live_update_service.dart' deferred as live_update_service;
+import 'update_service.dart' deferred as update_service;
+import 'web_pwa_cache.dart' deferred as web_pwa_cache;
+import 'push_service.dart' deferred as push_service;
+import 'web_push_service.dart' deferred as web_push_service;
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // 启用 Android Edge-to-Edge（Flutter 3.44+ 自动启用，无需手动调用）
-  // AndroidEdgeToEdge.enable(); // 已移除 - Flutter 默认启用
-
-  // 设置默认系统 UI 样式（透明状态栏 + 导航栏）
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
     statusBarColor: Colors.transparent,
     statusBarIconBrightness: Brightness.dark,
@@ -51,13 +49,15 @@ void main() async {
     systemNavigationBarIconBrightness: Brightness.dark,
   ));
 
-  // 设置 Bugly 全局异常捕获
-  BuglyService.setupErrorHandling();
-
-  // 初始化 Bugly
-  await BuglyService.init();
-
   runApp(const OneGzusApp());
+
+  unawaited(_initDeferredServices());
+}
+
+Future<void> _initDeferredServices() async {
+  try {
+    await DeferredServices().initialize();
+  } catch (_) {}
 }
 
 ThemeData _appTheme(Brightness brightness, {Color seedColor = GzusColors.blue}) {
@@ -125,9 +125,7 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
       _hasBeenResumed = true;
       debugPrint(
           '[AppLifecycle] Resuming - calling WsService.resume() and setAppForeground(true)');
-      PushService.resume();
-      WsService.resume();
-      unawaited(BackgroundService.setAppForeground(true));
+      unawaited(_handleAppResume());
       unawaited(_drainPendingPushMessages());
     } else if (_hasBeenResumed &&
         (state == AppLifecycleState.paused ||
@@ -136,9 +134,34 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
             state == AppLifecycleState.detached)) {
       debugPrint(
           '[AppLifecycle] Pausing - calling WsService.pause() and setAppForeground(false)');
-      WsService.pause();
-      unawaited(BackgroundService.setAppForeground(false));
+      unawaited(_handleAppPause());
     }
+  }
+
+  Future<void> _handleAppResume() async {
+    try {
+      await push_service.loadLibrary();
+      push_service.PushService.resume();
+    } catch (_) {}
+    try {
+      await ws_service.loadLibrary();
+      ws_service.WsService.resume();
+    } catch (_) {}
+    try {
+      await background_service.loadLibrary();
+      await background_service.BackgroundService.setAppForeground(true);
+    } catch (_) {}
+  }
+
+  Future<void> _handleAppPause() async {
+    try {
+      await ws_service.loadLibrary();
+      ws_service.WsService.pause();
+    } catch (_) {}
+    try {
+      await background_service.loadLibrary();
+      await background_service.BackgroundService.setAppForeground(false);
+    } catch (_) {}
   }
 
   @override
@@ -271,7 +294,15 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
       await _completeSsoLogin(ssoCode, uri);
       return;
     }
-    await _restoreSession();
+    // 添加 5 秒超时保护，防止 API 响应慢导致 LoadingPage 永远卡住
+    try {
+      await _restoreSession().timeout(const Duration(seconds: 5));
+    } on TimeoutException {
+      debugPrint('Session restore timed out after 5 seconds, showing login page');
+      if (mounted) {
+        setState(() => initializing = false);
+      }
+    }
   }
 
   Future<void> _completeSsoLogin(String ssoCode, Uri uri) async {
@@ -324,7 +355,8 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
       api.setEhallAuthToken(savedEhallAuthToken);
     }
 
-    final pcache = PersistentCache(namespace: api.namespace);
+    await persistent_cache.loadLibrary();
+    final pcache = persistent_cache.PersistentCache(namespace: api.namespace);
     await pcache.init();
     final cachedMe = pcache.getRaw('me');
     if (cachedMe != null && cachedMe is Map<String, dynamic>) {
@@ -362,7 +394,6 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
 
       final studentId = prefs.getString('auth.studentId') ?? info.studentId;
       if (studentId.isNotEmpty) {
-        await BuglyService.setUserId(studentId);
         api.setStudentId(studentId);
       }
 
@@ -396,7 +427,6 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
       final studentId =
           prefs.getString('auth.studentId') ?? result.data.studentId;
       if (studentId.isNotEmpty) {
-        await BuglyService.setUserId(studentId);
         api.setStudentId(studentId);
       }
       _initPushServices();
@@ -416,39 +446,24 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
   }
 
   Future<void> _initPushServices() async {
-    await WebPushService.instance.init(
-      onTap: (extras) {
-        _handleNotificationTap(extras);
-      },
+    await LoginRequiredServices.initialize(
+      apiBaseUrl: api.baseUrl,
+      sessionId: api.sessionId ?? '',
+      onNotificationTap: _handleNotificationTap,
     );
-    await LocalNotificationService.init(
-      onTap: (extras) {
-        _handleNotificationTap(extras);
-      },
-    );
-    await PushService.init(
-      onTap: (extras) {
-        _handleNotificationTap(extras);
-      },
-    );
-    final regId = PushService.registrationId;
-    if (regId != null && regId.isNotEmpty) {
-      try {
+    unawaited(_registerPushIfNeeded());
+    unawaited(_drainPendingPushMessages());
+  }
+
+  Future<void> _registerPushIfNeeded() async {
+    try {
+      final regId = await LoginRequiredServices.getPushRegistrationId();
+      if (regId != null && regId.isNotEmpty) {
         await api.registerPush(regId);
-      } on ApiException {
-        // WebSocket/native polling still cover notifications if JPush is absent.
       }
-    }
-    await BackgroundService.enableForegroundService(
-      apiBaseUrl: api.baseUrl,
-      sessionId: api.sessionId ?? '',
-    );
-    WsService.configure(
-      apiBaseUrl: api.baseUrl,
-      sessionId: api.sessionId ?? '',
-    );
-    await WsService.connect();
-    await _drainPendingPushMessages();
+    } on ApiException {
+      // WebSocket/native polling still cover notifications if JPush is absent.
+    } catch (_) {}
   }
 
   void _handleNotificationTap(Map<String, dynamic> extras) {
@@ -458,19 +473,27 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       if (url != null && url.isNotEmpty) {
-        openAuthenticatedEhallUrl(context, url);
+        unawaited(_openAuthenticatedUrl(url));
         return;
       }
       if (tab != null) _NotificationOpenBridge.openTab(tab);
     });
   }
 
+  Future<void> _openAuthenticatedUrl(String url) async {
+    try {
+      await mobile_sso.loadLibrary();
+      await mobile_sso.openAuthenticatedEhallUrl(context, url);
+    } catch (_) {}
+  }
+
   Future<void> _drainPendingPushMessages() async {
     if (api.sessionId == null || api.sessionId!.isEmpty) return;
     try {
       final messages = await api.pollPushMessages();
+      await ws_service.loadLibrary();
       for (final message in messages) {
-        await WsService.handleNotificationMessage(message);
+        await ws_service.WsService.handleNotificationMessage(message);
       }
     } catch (_) {}
   }
@@ -492,7 +515,14 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
 
   void _checkForUpdate() {
     if (!mounted) return;
-    UpdateService().checkForUpdateIfNeeded();
+    unawaited(_checkForUpdateDeferred());
+  }
+
+  Future<void> _checkForUpdateDeferred() async {
+    try {
+      await update_service.loadLibrary();
+      update_service.UpdateService().checkForUpdateIfNeeded();
+    } catch (_) {}
   }
 
   Future<void> _finishLogin(LoginResult result) async {
@@ -519,7 +549,7 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
     if (info == null || !mounted) return;
     final studentId = info.studentId;
     if (studentId.isNotEmpty) {
-      await BuglyService.setUserId(studentId);
+      api.setStudentId(studentId);
     }
   }
 
@@ -554,9 +584,8 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
     if (_logoutInProgress || !loggedIn) return;
     _logoutInProgress = true;
     api.clearCredentials();
-    WsService.disconnect();
+    LoginRequiredServices.disconnect();
 
-    // 立即更新 UI 跳转到登录页，不等异步清理完成
     if (!mounted) {
       _logoutInProgress = false;
       return;
@@ -569,41 +598,34 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
       loginMethod = null;
       loginError = null;
     });
-    // 清除 Navigator 路由栈，确保 home 属性变化后能正确显示登录页
     _navigatorKey.currentState?.popUntil((route) => route.isFirst);
 
-    // 以下异步清理操作在后台执行，不阻塞 UI
+    unawaited(_performLogoutCleanup());
+  }
+
+  Future<void> _performLogoutCleanup() async {
     try {
-      // unregisterPush 和 logout 需要 sessionId，在请求完成后再清除
       try {
         await api.unregisterPush();
       } catch (_) {}
       if (kIsWeb && (api.sessionId?.isNotEmpty ?? false)) {
-        try {
-          await WebPushService.instance.unsubscribe(
-            apiBaseUrl: api.baseUrl,
-            sessionId: api.sessionId!,
-          );
-        } catch (_) {}
+        await LoginRequiredServices.unsubscribeWebPush(api.baseUrl, api.sessionId!);
       }
       try {
         await api.logout();
       } catch (_) {}
 
-      // 请求完成后清除 session
       api.useSession(null);
 
       try {
-        await BuglyService.setUserId('');
-        await clearMobileSsoCookies();
-
         final studentId = api.studentId;
         if (studentId != null && studentId.isNotEmpty) {
-          await PersistentCache.clearForStudent(studentId);
+          await persistent_cache.loadLibrary();
+          await persistent_cache.PersistentCache.clearForStudent(studentId);
         }
 
-        await BackgroundService.disableForegroundService();
-        ReminderService.cancelCourseReminders();
+        await LoginRequiredServices.disableBackgroundService();
+        LoginRequiredServices.cancelCourseReminders();
         await _clearSavedSession();
       } catch (_) {}
     } finally {
@@ -624,7 +646,10 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
     await prefs.remove('auth.password');
     await prefs.remove('auth.rememberPassword');
     await prefs.remove('background_guide_completed');
-    clearPwaApiCache();
+    try {
+      await web_pwa_cache.loadLibrary();
+      web_pwa_cache.clearPwaApiCache();
+    } catch (_) {}
     api.useSession(null);
   }
 
@@ -687,6 +712,8 @@ class _LoginPageState extends State<LoginPage>
   bool rememberPassword = true;
   bool agreedToTerms = false;
   String? error;
+  String _appVersion = '';
+  String _appBuild = '';
   late final _appearController = AnimationController(
     vsync: this,
     duration: const Duration(milliseconds: 500),
@@ -702,6 +729,7 @@ class _LoginPageState extends State<LoginPage>
     error = widget.initialError;
     unawaited(_loadSavedLoginForm());
     unawaited(_loadAgreementState());
+    unawaited(_loadVersionInfo());
     _appearController.forward();
   }
 
@@ -723,6 +751,17 @@ class _LoginPageState extends State<LoginPage>
     final agreed = prefs.getBool('auth.agreedToTerms') ?? false;
     if (!mounted) return;
     setState(() => agreedToTerms = agreed);
+  }
+
+  Future<void> _loadVersionInfo() async {
+    try {
+      final info = await PackageInfo.fromPlatform();
+      if (!mounted) return;
+      setState(() {
+        _appVersion = info.version;
+        _appBuild = info.buildNumber;
+      });
+    } catch (_) {}
   }
 
   Future<void> _saveAgreementState() async {
@@ -1044,6 +1083,23 @@ class _LoginPageState extends State<LoginPage>
                                     ),
                                   ),
                                 ],
+                                if (_appVersion.isNotEmpty) ...[
+                                  const SizedBox(height: 20),
+                                  Center(
+                                    child: Text(
+                                      'v$_appVersion (build $_appBuild)',
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .bodySmall
+                                          ?.copyWith(
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .onSurfaceVariant
+                                                .withOpacity(0.45),
+                                          ),
+                                    ),
+                                  ),
+                                ],
                               ],
                             ),
                           ),
@@ -1300,11 +1356,8 @@ class _LoadingPageState extends State<LoadingPage>
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(
-                Icons.school,
-                size: 36,
-                color: Theme.of(context).colorScheme.primary,
-              ),
+              // Icons.school 被 tree-shaking 移除，替换为 emoji 避免白屏
+              const Text('🎓', style: TextStyle(fontSize: 36)),
               const SizedBox(height: 14),
               const CircularProgressIndicator(),
             ],
@@ -3236,13 +3289,19 @@ class _HomePageState extends State<HomePage> {
 
   Future<({double lat, double lon})?> _getLocationWithPermission() async {
     try {
-      final hasPermission = await PermissionService.checkLocationPermission();
+      await permission_service.loadLibrary();
+      final hasPermission = await permission_service.PermissionService.checkLocationPermission();
       if (!hasPermission) {
-        await PermissionService.requestLocationPermission();
+        await permission_service.PermissionService.requestLocationPermission();
         await Future.delayed(const Duration(milliseconds: 500));
       }
     } catch (_) {}
-    return LocationService.getCoarseLocation();
+    try {
+      await location_service.loadLibrary();
+      return location_service.LocationService.getCoarseLocation();
+    } catch (_) {
+      return null;
+    }
   }
 
   @override
@@ -5980,7 +6039,9 @@ class _AvatarOverlayDialog extends StatelessWidget {
   }
 
   void _openInNewTab(BuildContext context) {
-    openAvatarInNewTab(photoDataUrl, name);
+    avatar_open.loadLibrary().then((_) {
+      avatar_open.openAvatarInNewTab(photoDataUrl, name);
+    });
     Navigator.of(context).pop();
   }
 }
@@ -7853,14 +7914,17 @@ class _LeaveResultBanner extends StatelessWidget {
             ),
           if (result.formUrl != null)
             TextButton(
-              onPressed: () => openAuthenticatedEhallUrl(
-                context,
-                result.formUrl!,
-                fillScript: script,
-                api: api,
-                attachmentName: attachment?.name,
-                attachmentBytes: attachment?.bytes,
-              ),
+              onPressed: () async {
+                await mobile_sso.loadLibrary();
+                await mobile_sso.openAuthenticatedEhallUrl(
+                  context,
+                  result.formUrl!,
+                  fillScript: script,
+                  api: api,
+                  attachmentName: attachment?.name,
+                  attachmentBytes: attachment?.bytes,
+                );
+              },
               child: Text(script == null ? '打开' : '打开并填到提交前'),
             ),
         ],
@@ -7957,7 +8021,8 @@ class _BusinessItemTile extends StatelessWidget {
 
 Future<void> _openInAppBrowser(BuildContext context, String? url) async {
   if (url == null || url.isEmpty) return;
-  final opened = await openAuthenticatedEhallUrl(context, url);
+  await mobile_sso.loadLibrary();
+  final opened = await mobile_sso.openAuthenticatedEhallUrl(context, url);
   if (!opened && context.mounted) {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('无法打开链接')),
@@ -8725,7 +8790,8 @@ class _SchedulePageState extends State<SchedulePage> {
     final coursesJson = jsonEncode(coursesList);
     final firstWeekStr =
         '${firstWeekStart.year.toString().padLeft(4, '0')}-${firstWeekStart.month.toString().padLeft(2, '0')}-${firstWeekStart.day.toString().padLeft(2, '0')}';
-    await BackgroundService.updateCourseReminders(
+    await background_service.loadLibrary();
+    await background_service.BackgroundService.updateCourseReminders(
       coursesJson: coursesJson,
       beforeStartMinutes: beforeStartMinutes,
       beforeEndMinutes: beforeEndMinutes,
@@ -8756,15 +8822,17 @@ class _SchedulePageState extends State<SchedulePage> {
             ..sort(_compareScheduleCourses);
           final displayItems =
               _viewMode == ScheduleViewMode.all ? result.items : weekItems;
-          ReminderService.configureCourseReminders(
-            courses: result.items,
-            firstWeekStart: widget.firstWeekStart,
-            settings: CourseReminderSettings(
-              enabled: courseRemindersEnabled,
-              beforeStartMinutes: courseStartReminderMinutes,
-              beforeEndMinutes: courseEndReminderMinutes,
-            ),
-          );
+          reminder_service.loadLibrary().then((_) {
+            reminder_service.ReminderService.configureCourseReminders(
+              courses: result.items,
+              firstWeekStart: widget.firstWeekStart,
+              settings: reminder_service.CourseReminderSettings(
+                enabled: courseRemindersEnabled,
+                beforeStartMinutes: courseStartReminderMinutes,
+                beforeEndMinutes: courseEndReminderMinutes,
+              ),
+            );
+          });
           // Sync course data to native Android layer for background reminders
           unawaited(_syncCourseRemindersToNative(
             result.items,
@@ -9004,7 +9072,8 @@ class _SchedulePageState extends State<SchedulePage> {
                                           final filename =
                                               '课表_${widget.year}_${widget.term}.ics';
                                           if (kIsWeb) {
-                                            await downloadIcs(ics, filename);
+                                            await ics_download.loadLibrary();
+                                            await ics_download.downloadIcs(ics, filename);
                                           } else {
                                             await Share.shareXFiles(
                                               [
@@ -9049,7 +9118,8 @@ class _SchedulePageState extends State<SchedulePage> {
                                           final filename =
                                               '课表_${widget.year}_${widget.term}.ics';
                                           if (kIsWeb) {
-                                            await downloadIcs(ics, filename);
+                                            await ics_download.loadLibrary();
+                                            await ics_download.downloadIcs(ics, filename);
                                           } else {
                                             await Share.shareXFiles(
                                               [
@@ -9149,7 +9219,11 @@ class _SchedulePageState extends State<SchedulePage> {
     setState(() => courseRemindersEnabled = value);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('schedule.courseRemindersEnabled', value);
-    if (!value) ReminderService.cancelCourseReminders();
+    if (!value) {
+      reminder_service.loadLibrary().then((_) {
+        reminder_service.ReminderService.cancelCourseReminders();
+      });
+    }
   }
 }
 
@@ -10876,7 +10950,8 @@ class _AttendancePageState extends State<AttendancePage> {
     final first = changes.first;
     final more = changes.length > 1 ? ' 等 ${changes.length} 条' : '';
     try {
-      await LocalNotificationService.show(
+      await local_notification_service.loadLibrary();
+      await local_notification_service.LocalNotificationService.show(
         id: 7301,
         title: '考勤异常更新',
         body:
@@ -11609,7 +11684,8 @@ class _ExamsPageState extends State<ExamsPage> {
                                             year: year,
                                             term: term);
                                         if (kIsWeb) {
-                                          downloadIcs(
+                                          await ics_download.loadLibrary();
+                                          ics_download.downloadIcs(
                                               ics, '考试_${year}_$term.ics');
                                         } else {
                                           await Share.shareXFiles(
@@ -11714,7 +11790,8 @@ class _ExamsPageState extends State<ExamsPage> {
                                       final ics = generateExamIcs(
                                           exams: items, year: year, term: term);
                                       if (kIsWeb) {
-                                        downloadIcs(
+                                        await ics_download.loadLibrary();
+                                        ics_download.downloadIcs(
                                             ics, '考试_${year}_$term.ics');
                                       } else {
                                         await Share.shareXFiles(
@@ -12147,7 +12224,8 @@ class _GradesPageState extends State<GradesPage> {
       progress: 1,
     ));
     final notificationId = eventId.hashCode.abs();
-    final posted = await LiveUpdateService.postLiveUpdate(
+    await live_update_service.loadLibrary();
+    final posted = await live_update_service.LiveUpdateService.postLiveUpdate(
       id: notificationId,
       title: title,
       body: body,
@@ -12159,7 +12237,8 @@ class _GradesPageState extends State<GradesPage> {
       progressCurrent: 100,
     );
     if (!posted) {
-      await LocalNotificationService.show(
+      await local_notification_service.loadLibrary();
+      await local_notification_service.LocalNotificationService.show(
         id: notificationId,
         title: title,
         body: body,
@@ -12909,8 +12988,11 @@ class _EcardPageState extends State<EcardPage> {
   }
 
   void _handleError(Object exc) {
-    // 不再在 401 时触发 onSessionExpired，_withFallback 已处理 relogin
     if (!mounted) return;
+    if (exc is ApiException && exc.statusCode == 401 && widget.onSessionExpired != null) {
+      widget.onSessionExpired!();
+      return;
+    }
     setState(() => _error = exc is ApiException ? exc.message : exc.toString());
   }
 
@@ -12937,7 +13019,10 @@ class _EcardPageState extends State<EcardPage> {
         }
         if (snapshot.hasError) {
           final error = snapshot.error;
-          // 不再在 401 时触发 onSessionExpired，_withFallback 已处理 relogin
+          final isSessionError = error is ApiException && error.statusCode == 401;
+          if (isSessionError && widget.onSessionExpired != null) {
+            return _SessionExpiredPrompt(onRelogin: widget.onSessionExpired!);
+          }
           return EmptyState(
             message: error is ApiException ? error.message : '生活缴费加载失败',
           );
@@ -12994,6 +13079,63 @@ class _EcardPageState extends State<EcardPage> {
           ),
         );
       },
+    );
+  }
+}
+
+class _SessionExpiredPrompt extends StatelessWidget {
+  const _SessionExpiredPrompt({required this.onRelogin});
+
+  final VoidCallback onRelogin;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(28),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 24),
+          decoration: BoxDecoration(
+            color: gzusSurface(context),
+            borderRadius: BorderRadius.circular(GzusRadii.lg),
+            border: Border.all(color: gzusBorder(context)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: Theme.of(context)
+                      .colorScheme
+                      .errorContainer
+                      .withValues(alpha: 0.3),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Icon(
+                  Icons.lock_outline,
+                  color: Theme.of(context).colorScheme.error,
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                '登录已过期，请重新登录',
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+              ),
+              const SizedBox(height: 16),
+              FilledButton.icon(
+                onPressed: onRelogin,
+                icon: const Icon(Icons.login, size: 18),
+                label: const Text('重新登录'),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -14882,7 +15024,8 @@ class _AboutPageState extends State<AboutPage> {
 
   Future<void> _silentCheckForUpdate() async {
     try {
-      final hasUpdate = await UpdateService().hasUpdate();
+      await update_service.loadLibrary();
+      final hasUpdate = await update_service.UpdateService().hasUpdate();
       if (mounted) {
         setState(() => _hasUpdate = hasUpdate);
       }
@@ -14893,7 +15036,8 @@ class _AboutPageState extends State<AboutPage> {
     if (_checkingUpdate) return;
     setState(() => _checkingUpdate = true);
     try {
-      await UpdateService().forceCheckForUpdate();
+      await update_service.loadLibrary();
+      await update_service.UpdateService().forceCheckForUpdate();
       await _silentCheckForUpdate();
     } catch (_) {
       if (mounted) {

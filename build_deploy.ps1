@@ -2,7 +2,21 @@ $ErrorActionPreference = "Stop"
 $ProjectRoot = "D:\REINs\Documents\GZUS-PRO"
 $FlutterBin = "D:\REINs\Documents\flutter\bin\flutter.bat"
 $ApkPath = "$ProjectRoot\apps\mobile_web\build\app\outputs\flutter-apk\app-release.apk"
+$PubspecPath = "$ProjectRoot\apps\mobile_web\pubspec.yaml"
 $CloudApiUrl = if ($env:API_BASE_URL) { $env:API_BASE_URL } else { "https://onegzus-onweb.pages.dev/api" }
+
+# ---------- 自动递增构建号 ----------
+$pubspecContent = Get-Content $PubspecPath -Raw
+if ($pubspecContent -match 'version:\s*(\d+\.\d+\.\d+)\+(\d+)') {
+    $versionStr = $Matches[1]
+    $buildNum = [int]$Matches[2] + 1
+    $newVersionLine = "version: $versionStr+$buildNum"
+    $pubspecContent = $pubspecContent -replace 'version:\s*\d+\.\d+\.\d+\+\d+', $newVersionLine
+    Set-Content $PubspecPath $pubspecContent -NoNewline
+    Write-Host "Build number: $($Matches[2]) -> $buildNum (version $versionStr)" -ForegroundColor Magenta
+} else {
+    Write-Host "WARNING: Could not parse version from pubspec.yaml" -ForegroundColor Yellow
+}
 
 # 使用 -Cloud 参数构建云端版本（默认），-Local 构建局域网版本
 $UseCloud = $true

@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.os.Bundle
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import org.json.JSONObject
@@ -113,6 +114,10 @@ class LiveUpdateNotificationHelper(private val context: Context) {
                 if (endTimeMillis > 0) {
                     builder.setWhen(endTimeMillis)
                     builder.setUsesChronometer(true)
+                    // Set chronometer to count down via extras before build()
+                    builder.addExtras(Bundle().apply {
+                        putBoolean("android.chronometerCountDown", true)
+                    })
                 }
             }
             "metric" -> {
@@ -140,16 +145,6 @@ class LiveUpdateNotificationHelper(private val context: Context) {
 
         var notification = builder.build()
 
-        // Post-build modifications on the notification extras
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val extras = notification.extras
-            if (extras != null) {
-                // Timer countdown: set chronometer to count down instead of up
-                if (style == "timer" && endTimeMillis > 0) {
-                    extras.putBoolean("android.chronometerCountDown", true)
-                }
-            }
-        }
         notification = XiaomiLiveUpdateAdapter(context).decorate(
             notification = notification,
             title = title,

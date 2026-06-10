@@ -362,54 +362,20 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    /**
+     * Best-effort proxy for auto-start permission.
+     *
+     * On most Chinese ROMs (Xiaomi, Huawei, OPPO, VIVO, etc.) the true
+     * auto-start permission is governed by a private vendor API that has no
+     * public SDK equivalent.  In practice the battery-optimisation bypass is
+     * the strongest signal we can query; apps that are allowed to ignore
+     * battery optimisations are also much more likely to survive process
+     * death and receive broadcasts.
+     *
+     * If a vendor-specific check becomes available in the future, update here.
+     */
     private fun checkAutoStartPermission(): Boolean {
-        return try {
-            val manufacturer = Build.MANUFACTURER.lowercase()
-            when {
-                manufacturer.contains("huawei") || manufacturer.contains("honor") -> {
-                    val pm = getSystemService(POWER_SERVICE) as PowerManager
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                        pm.isIgnoringBatteryOptimizations(packageName)
-                    } else {
-                        true
-                    }
-                }
-                manufacturer.contains("xiaomi") || manufacturer.contains("redmi") -> {
-                    val pm = getSystemService(POWER_SERVICE) as PowerManager
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                        pm.isIgnoringBatteryOptimizations(packageName)
-                    } else {
-                        true
-                    }
-                }
-                manufacturer.contains("oppo") || manufacturer.contains("realme") -> {
-                    val pm = getSystemService(POWER_SERVICE) as PowerManager
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                        pm.isIgnoringBatteryOptimizations(packageName)
-                    } else {
-                        true
-                    }
-                }
-                manufacturer.contains("vivo") -> {
-                    val pm = getSystemService(POWER_SERVICE) as PowerManager
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                        pm.isIgnoringBatteryOptimizations(packageName)
-                    } else {
-                        true
-                    }
-                }
-                else -> {
-                    val pm = getSystemService(POWER_SERVICE) as PowerManager
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                        pm.isIgnoringBatteryOptimizations(packageName)
-                    } else {
-                        true
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            false
-        }
+        return checkBatteryOptimization()
     }
 
     private fun checkBatteryOptimization(): Boolean {

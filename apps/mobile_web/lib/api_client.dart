@@ -2199,7 +2199,9 @@ class ApiClient {
       if (e.statusCode == 401) {
         await loadSavedCredentials();
         if (_credentialToken == null) {
-          rethrow;
+          // 无凭证 token 则无法自动 relogin（如密码登录场景），
+          // 抛出友好提示引导用户手动重新登录
+          throw ApiException('登录已过期，请重新登录', statusCode: 401);
         }
         // --- Relogin with backoff ---
         // Avoid hammering CAS if relogin keeps failing.

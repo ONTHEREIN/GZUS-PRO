@@ -59,10 +59,15 @@ class XiaomiLiveUpdateAdapter(private val context: Context) {
             }
         }.toString()
 
-        notification.extras.putString("miui.focus.param", params)
-        notification.extras.putBoolean("miui.focus.enable", true)
-        notification.extras.putInt("miui.focus.protocol", capability.focusProtocolVersion)
-        notification.extras.putBoolean("miui.focus.island", capability.canUseIsland)
+        // Create new extras Bundle and reassign — post-build Notification.extras
+        // is immutable on API 19+, so in-place putXxx() silently fails.
+        val newExtras = Bundle(notification.extras).apply {
+            putString("miui.focus.param", params)
+            putBoolean("miui.focus.enable", true)
+            putInt("miui.focus.protocol", capability.focusProtocolVersion)
+            putBoolean("miui.focus.island", capability.canUseIsland)
+        }
+        notification.extras = newExtras
         return notification
     }
 

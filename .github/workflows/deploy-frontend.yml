@@ -30,7 +30,7 @@ jobs:
           API_BASE_URL: ${{ vars.API_BASE_URL || secrets.API_BASE_URL || 'https://onegzus-onweb.pages.dev/api' }}
         run: |
           cd apps/mobile_web
-          flutter build web --release --base-href "/" --dart-define=API_BASE_URL="$API_BASE_URL"
+          flutter build web --release --base-href "/" --dart-define=API_BASE_URL="$API_BASE_URL" --no-web-resources-cdn
 
       - name: Deploy to Cloudflare Pages
         run: npx wrangler@latest pages deploy apps/mobile_web/build/web --project-name=onegzus-onweb --commit-dirty=true

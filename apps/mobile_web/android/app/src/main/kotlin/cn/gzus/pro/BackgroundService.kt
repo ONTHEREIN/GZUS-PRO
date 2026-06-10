@@ -9,6 +9,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -41,6 +42,11 @@ class BackgroundService : Service() {
         const val KEY_SESSION_ID = "sessionId"
         const val KEY_APP_FOREGROUND = "appForeground"
         const val KEY_PENDING_OPEN = "pendingOpen"
+        const val KEY_LAST_RESTART_TIME = "lastRestartTime"
+        const val KEY_RESTART_COUNT = "restartCount"
+        const val RESTART_COOLDOWN_MS = 60_000L // 1分钟内不重复重启
+        const val RESTART_COUNT_WINDOW_MS = 300_000L // 5分钟内
+        const val MAX_RESTART_COUNT = 3 // 5分钟内最多重启3次
         const val EXTRA_API_BASE_URL = "apiBaseUrl"
         const val EXTRA_SESSION_ID = "sessionId"
         const val EXTRA_PUSH_EXTRAS = "pushExtras"
@@ -58,6 +64,45 @@ class BackgroundService : Service() {
             val value = prefs.getString(KEY_PENDING_OPEN, null) ?: return null
             prefs.edit().remove(KEY_PENDING_OPEN).apply()
             return jsonObjectToMap(JSONObject(value))
+        }
+
+        fun canRestartService(context: Context): Boolean {
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val now = System.currentTimeMillis()
+            val lastRestartTime = prefs.getLong(KEY_LAST_RESTART_TIME, 0L)
+            val restartCount = prefs.getInt(KEY_RESTART_COUNT, 0)
+
+            // 冷却时间内不允许重启
+            if (now - lastRestartTime < RESTART_COOLDOWN_MS) {
+                return false
+            }
+
+            // 超过窗口期，重置计数器
+            if (now - lastRestartTime > RESTART_COUNT_WINDOW_MS) {
+                prefs.edit().putInt(KEY_RESTART_COUNT, 0).apply()
+                return true
+            }
+
+            // 窗口期内重启次数超限
+            return restartCount < MAX_RESTART_COUNT
+        }
+
+        fun recordRestartAttempt(context: Context) {
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val now = System.currentTimeMillis()
+            val lastRestartTime = prefs.getLong(KEY_LAST_RESTART_TIME, 0L)
+
+            // 超过窗口期，重置计数器
+            val newCount = if (now - lastRestartTime > RESTART_COUNT_WINDOW_MS) {
+                1
+            } else {
+                prefs.getInt(KEY_RESTART_COUNT, 0) + 1
+            }
+
+            prefs.edit()
+                .putLong(KEY_LAST_RESTART_TIME, now)
+                .putInt(KEY_RESTART_COUNT, newCount)
+                .apply()
         }
 
         private fun jsonObjectToMap(json: JSONObject): Map<String, Any?> {
@@ -142,7 +187,12 @@ class BackgroundService : Service() {
             else -> {
                 saveConfig(intent)
                 try {
-                    startForeground(NOTIFICATION_ID, createForegroundNotification())
+                    val notification = createForegroundNotification()
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                        startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+                    } else {
+                        startForeground(NOTIFICATION_ID, notification)
+                    }
                 } catch (_: Exception) {
                     stopPolling()
                     stopSelf()
@@ -168,17 +218,31 @@ class BackgroundService : Service() {
         val apiBaseUrl = prefs.getString(KEY_API_BASE_URL, null)
         val sessionId = prefs.getString(KEY_SESSION_ID, null)
 
+        // Check if we can restart (anti-loop protection)
+        if (!canRestartService(this)) {
+            super.onTaskRemoved(rootIntent)
+            return
+        }
+
+        // Record restart attempt
+        recordRestartAttempt(this)
+
         // Immediate restart via Handler
         Handler(Looper.getMainLooper()).postDelayed({
+            if (!canRestartService(this)) return@postDelayed
             val restartIntent = Intent(this, BackgroundService::class.java).apply {
                 action = ACTION_START
                 if (apiBaseUrl != null) putExtra(EXTRA_API_BASE_URL, apiBaseUrl)
                 if (sessionId != null) putExtra(EXTRA_SESSION_ID, sessionId)
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                startForegroundService(restartIntent)
-            } else {
-                startService(restartIntent)
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    startForegroundService(restartIntent)
+                } else {
+                    startService(restartIntent)
+                }
+            } catch (_: Exception) {
+                // Service start failed (e.g. quota exhausted), ignore
             }
         }, 1000L)
 

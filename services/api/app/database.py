@@ -96,6 +96,28 @@ class StaffMember(Base):
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
+class AppSessionModel(Base):
+    """Persistent session storage for serverless deployments.
+
+    Stores session metadata and cookie strings needed to reconstruct
+    SchoolSdkClient / EhallClient after a cold start.  The live client
+    objects are rebuilt on demand via login_with_cookies().
+    """
+
+    __tablename__ = "app_sessions"
+
+    id = Column(String(64), primary_key=True)
+    student_name = Column(String(100), nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
+    last_active_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    push_registration_id = Column(String(300), nullable=True)
+    push_platform = Column(String(50), default="android", nullable=False)
+    jwxt_cookies = Column(Text, nullable=True)
+    ehall_cookies = Column(Text, nullable=True)
+    ehall_auth_token = Column(Text, nullable=True)
+    encrypted_credentials = Column(Text, nullable=True)
+
+
 _engine = None
 _async_engine = None
 _session_factory = None

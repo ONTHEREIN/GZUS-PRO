@@ -115,9 +115,16 @@ def unregister_web_push(
 def register_push(
     payload: PushRegisterRequest,
     session: AppSession = Depends(require_session),
+    request: Request = None,
 ) -> dict[str, str]:
     session.push_registration_id = payload.registration_id
     session.push_platform = payload.platform
+    if request is not None:
+        request.app.state.sessions.update(
+            session.id,
+            push_registration_id=payload.registration_id,
+            push_platform=payload.platform,
+        )
     _upsert_push_registration(session, payload.registration_id, payload.platform)
     return {"status": "ok"}
 
@@ -125,10 +132,17 @@ def register_push(
 @router.post("/unregister")
 def unregister_push(
     session: AppSession = Depends(require_session),
+    request: Request = None,
 ) -> dict[str, str]:
     registration_id = session.push_registration_id
     session.push_registration_id = None
     session.push_platform = None
+    if request is not None:
+        request.app.state.sessions.update(
+            session.id,
+            push_registration_id=None,
+            push_platform=None,
+        )
     if registration_id:
         factory = get_sync_session_factory()
         with factory() as db:

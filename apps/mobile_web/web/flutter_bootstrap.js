@@ -10,6 +10,7 @@ if ('serviceWorker' in navigator) {
 }
 
 _flutter.loader.load({
+  canvasKitBaseUrl: 'canvaskit/',
   serviceWorkerSettings: {
     serviceWorkerUrl: 'gzus_pwa_sw.js?v=' + {{flutter_service_worker_version}},
     serviceWorkerVersion: {{flutter_service_worker_version}},

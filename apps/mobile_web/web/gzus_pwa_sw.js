@@ -1,10 +1,15 @@
-const CACHE_NAME = 'gzus-pwa-cache-v1';
+const CACHE_NAME = 'gzus-pwa-cache-v2';
 const API_CACHE_NAME = 'gzus-api-cache-v1';
 const STATIC_ASSETS = [
   './',
   './index.html',
-  './flutter.js',
+  './flutter_bootstrap.js',
   './main.dart.js',
+  './canvaskit/canvaskit.js',
+  './canvaskit/canvaskit.wasm',
+  './manifest.json',
+  './gzus_pwa.js',
+  './icons/Icon-192.png',
   './icons/icon-192x192.png',
   './icons/icon-512x512.png',
 ];
