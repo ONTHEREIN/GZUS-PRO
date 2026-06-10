@@ -283,8 +283,26 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
                       })
                   : _buildDashboardShell(),
       routes: {
-        '/dashboard': (context) => _buildDashboardShell(),
-        '/background-guide': (context) => BackgroundGuidePage(api: api),
+        '/dashboard': (context) {
+          if (!loggedIn) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              _navigatorKey.currentState?.pushNamedAndRemoveUntil(
+                  '/', (route) => false);
+            });
+            return const LoadingPage();
+          }
+          return _buildDashboardShell();
+        },
+        '/background-guide': (context) {
+          if (!loggedIn) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              _navigatorKey.currentState?.pushNamedAndRemoveUntil(
+                  '/', (route) => false);
+            });
+            return const LoadingPage();
+          }
+          return BackgroundGuidePage(api: api);
+        },
       },
     );
   }

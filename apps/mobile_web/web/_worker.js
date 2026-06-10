@@ -502,7 +502,7 @@ async function ocrRecognize(imageBytes, env) {
   return '';
 }
 
-// ─── Credential Encryption (Web Crypto) ────────────────────────────
+// ─── Credential Encryption/Decryption (Web Crypto AES-GCM) ──────────
 async function encryptCredentials(account, password, key) {
   const encoder = new TextEncoder();
   const keyData = await crypto.subtle.digest('SHA-256', encoder.encode(key));
@@ -520,6 +520,29 @@ async function encryptCredentials(account, password, key) {
   combined.set(iv);
   combined.set(new Uint8Array(encrypted), iv.length);
   return btoa(String.fromCharCode(...combined));
+}
+
+async function decryptCredentials(token, key) {
+  const encoder = new TextEncoder();
+  const keyData = await crypto.subtle.digest('SHA-256', encoder.encode(key));
+  const cryptoKey = await crypto.subtle.importKey(
+    'raw', keyData, { name: 'AES-GCM' }, false, ['decrypt']
+  );
+  const combined = Uint8Array.from(atob(token), c => c.charCodeAt(0));
+  const iv = combined.slice(0, 12);
+  const ciphertext = combined.slice(12);
+  const decrypted = await crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv },
+    cryptoKey,
+    ciphertext
+  );
+  const plaintext = new TextDecoder().decode(decrypted);
+  const colonIdx = plaintext.indexOf(':');
+  if (colonIdx === -1) throw new Error('Invalid credential format');
+  return {
+    account: plaintext.substring(0, colonIdx),
+    password: plaintext.substring(colonIdx + 1),
+  };
 }
 
 // ─── Fetch with cookie management ──────────────────────────────────
@@ -679,6 +702,10 @@ export default {
         // Create session via Vercel backend
         const sessionId = await createSessionOnBackend(result, account, env);
 
+        if (!sessionId) {
+          return errorResponse('会话创建失败，请重试', 502, request);
+        }
+
         return jsonResponse({
           status: 'ok',
           sessionId,
@@ -695,9 +722,52 @@ export default {
 
     // ─── Relogin (edge) ────────────────────────────────────────
     if (path === 'auth/relogin' && request.method === 'POST') {
-      // Proxy to Vercel for credential decryption, then do CAS login
-      // For now, proxy to Vercel since relogin needs Fernet decryption
-      return proxyToVercel(request, env, url);
+      try {
+        const body = await request.json();
+        const { credentialToken } = body;
+        if (!credentialToken) {
+          return errorResponse('凭据不能为空', 400, request);
+        }
+
+        const key = env.CREDENTIAL_ENCRYPTION_KEY || '';
+        if (!key) {
+          return errorResponse('服务器配置错误', 500, request);
+        }
+
+        // Decrypt credentials using AES-GCM (same algorithm as encryptCredentials)
+        let credentials;
+        try {
+          credentials = await decryptCredentials(credentialToken, key);
+        } catch (e) {
+          return errorResponse('凭据已失效，请重新登录', 401, request);
+        }
+
+        // Perform CAS auto-login with decrypted credentials
+        const result = await casAutoLogin(credentials.account, credentials.password, env);
+
+        if (result.error) {
+          return errorResponse(result.error, 401, request);
+        }
+
+        // Create session via Vercel backend
+        const sessionId = await createSessionOnBackend(result, credentials.account, env);
+
+        if (!sessionId) {
+          return errorResponse('会话创建失败，请重试', 502, request);
+        }
+
+        return jsonResponse({
+          status: 'ok',
+          sessionId,
+          studentName: result.studentName,
+          studentId: null,
+          credentialToken: result.credentialToken || credentialToken,
+          ehallCookies: result.ehallCookies,
+          ehallAuthToken: null,
+        }, 200, request);
+      } catch (e) {
+        return errorResponse(`重新登录失败: ${e.message}`, 500, request);
+      }
     }
 
     // ─── All other routes: proxy to Vercel ─────────────────────
@@ -728,7 +798,12 @@ async function createSessionOnBackend(loginResult, account, env) {
       const data = await res.json();
       return data.sessionId;
     }
-  } catch {}
+    // Log non-OK response for debugging
+    const errorText = await res.text().catch(() => '');
+    console.error(`createSessionOnBackend failed: status=${res.status} body=${errorText}`);
+  } catch (e) {
+    console.error(`createSessionOnBackend error: ${e.message}`);
+  }
   return null;
 }
 

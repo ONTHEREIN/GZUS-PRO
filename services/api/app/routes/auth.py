@@ -6,6 +6,7 @@ import logging
 import time
 import uuid
 
+from app.rsa_keys import rsa_key_manager
 from app.config import get_settings
 from app.ehall_client import EhallClient
 from app.rate_limit import limiter
@@ -15,6 +16,14 @@ from app.school_client import AuthenticationError, CaptchaRequired, SchoolSdkCli
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+@router.get("/public-key")
+def get_public_key() -> dict:
+    return {
+        "publicKey": rsa_key_manager.get_public_key_pem(),
+        "keyId": rsa_key_manager.get_key_id(),
+    }
 
 
 class LySsoStartRequest(BaseModel):
@@ -56,7 +65,12 @@ def login(payload: LoginRequest, request: Request) -> dict:
     pending_captcha = request.app.state.pending_captcha
 
     try:
-        student_name = client.login(payload.account, payload.password)
+        password = payload.resolve_password()
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+    try:
+        student_name = client.login(payload.account, password)
     except CaptchaRequired as exc:
         token = exc.challenge.token or "captcha"
         pending_captcha[token] = client
@@ -261,6 +275,11 @@ def relogin(payload: ReloginRequest, request: Request) -> dict:
 def auto_login(payload: AutoLoginRequest, request: Request) -> dict:
     from app.cas_auto_login import CasAutoLogin
 
+    try:
+        password = payload.resolve_password()
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
     t_total = time.time()
     sessions = request.app.state.sessions
     settings = get_settings()
@@ -275,7 +294,7 @@ def auto_login(payload: AutoLoginRequest, request: Request) -> dict:
         timeout=settings.cas_login_timeout_seconds,
     )
     t1 = time.time()
-    result = cas_auto_login.auto_login(payload.account, payload.password)
+    result = cas_auto_login.auto_login(payload.account, password)
     logger.info("[TIMING] cas_auto_login.auto_login: %.2fs", time.time() - t1)
 
     if result.error:
@@ -312,7 +331,7 @@ def auto_login(payload: AutoLoginRequest, request: Request) -> dict:
 
     from app.sessions import encrypt_credentials
 
-    cred_token = encrypt_credentials(payload.account, payload.password, settings.credential_encryption_key)
+    cred_token = encrypt_credentials(payload.account, password, settings.credential_encryption_key)
     logger.info("[TIMING] auto_login endpoint total: %.2fs", time.time() - t_total)
     return {
         "status": "ok",

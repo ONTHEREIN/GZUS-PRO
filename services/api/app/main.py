@@ -14,6 +14,7 @@ from app.database import get_sync_session_factory, init_db
 from app.jobs import ExamReminderCache, GradeUpdateCache, NoticeCache, run_ecard_reminder_poller, run_exam_reminder_poller, run_grade_update_poller, run_notice_poller
 from app.rate_limit import limiter
 from app.routes import academic, auth, ecard, ehall, push, weather
+from app.rsa_keys import rsa_key_manager
 from app.sessions import SessionStore
 from app.ws import ConnectionManager, ws_router
 
@@ -61,6 +62,7 @@ def create_app() -> FastAPI:
     app.state.notice_cache = NoticeCache()
     app.state.exam_reminder_cache = ExamReminderCache()
     app.state.grade_update_cache = GradeUpdateCache()
+    app.state.rsa_key_manager = rsa_key_manager
 
     security_headers = _security_headers(settings)
 

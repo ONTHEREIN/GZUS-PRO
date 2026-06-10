@@ -6,6 +6,8 @@ import 'package:flutter/foundation.dart';
 import 'package:http/io_client.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:encrypt/encrypt.dart' as encrypt;
+import 'package:pointycastle/asymmetric/api.dart';
 
 import 'persistent_cache.dart';
 
@@ -1215,6 +1217,8 @@ class ApiClient {
   String? _credentialToken;
   String? _ehallCookies;
   String? _ehallAuthToken;
+  String? _rsaPublicKeyPem;
+  String? _rsaKeyId;
 
   /// 当前使用的 baseUrl（可能因连接失败自动切换）
   String _currentBaseUrl = '';
@@ -1510,10 +1514,20 @@ class ApiClient {
   }
 
   Future<LoginResult> login(String account, String password) async {
-    final response = await _post('/auth/login', {
-      'account': account,
-      'password': password,
-    });
+    await fetchPublicKey();
+    Map<String, dynamic> body = {'account': account};
+    if (_rsaPublicKeyPem != null && _rsaKeyId != null) {
+      final encrypted = _rsaEncrypt(password, _rsaPublicKeyPem!);
+      if (encrypted != null) {
+        body['encryptedPassword'] = encrypted;
+        body['keyId'] = _rsaKeyId;
+      } else {
+        body['password'] = password;
+      }
+    } else {
+      body['password'] = password;
+    }
+    final response = await _post('/auth/login', body);
     final result = LoginResult.fromJson(response);
     sessionId = result.sessionId;
     _captureTransientEhallAuth(result);
@@ -1543,10 +1557,20 @@ class ApiClient {
   }
 
   Future<LoginResult> autoLogin(String account, String password) async {
-    final response = await _post('/auth/auto-login', {
-      'account': account,
-      'password': password,
-    });
+    await fetchPublicKey();
+    Map<String, dynamic> body = {'account': account};
+    if (_rsaPublicKeyPem != null && _rsaKeyId != null) {
+      final encrypted = _rsaEncrypt(password, _rsaPublicKeyPem!);
+      if (encrypted != null) {
+        body['encryptedPassword'] = encrypted;
+        body['keyId'] = _rsaKeyId;
+      } else {
+        body['password'] = password;
+      }
+    } else {
+      body['password'] = password;
+    }
+    final response = await _post('/auth/auto-login', body);
     final result = LoginResult.fromJson(response);
     sessionId = result.sessionId;
     _captureTransientEhallAuth(result);
@@ -1693,6 +1717,45 @@ class ApiClient {
     _ehallCookies = prefs.getString('auth.ehallCookies');
     _ehallAuthToken = prefs.getString('auth.ehallAuthToken');
     await prefs.remove('auth.password');
+  }
+
+  Future<void> fetchPublicKey() async {
+    try {
+      final url = _resolveBaseUrl();
+      final response = await _http
+          .get(Uri.parse('$url/auth/public-key'), headers: {'Content-Type': 'application/json'})
+          .timeout(const Duration(seconds: 10));
+      final data = _decodeObject(response);
+      final pem = data['publicKey'] as String? ?? '';
+      final keyId = data['keyId'] as String? ?? '';
+      if (pem.isNotEmpty && keyId.isNotEmpty) {
+        if (_rsaKeyId != null && _rsaKeyId != keyId) {
+          // Key rotated - update cached key
+          _rsaPublicKeyPem = pem;
+          _rsaKeyId = keyId;
+        } else if (_rsaPublicKeyPem == null) {
+          _rsaPublicKeyPem = pem;
+          _rsaKeyId = keyId;
+        }
+      }
+    } catch (_) {
+      // If public key fetch fails, we'll fall back to plaintext password
+    }
+  }
+
+  String? _rsaEncrypt(String plaintext, String publicKeyPem) {
+    try {
+      final parser = encrypt.RSAKeyParser();
+      final publicKey = parser.parse(publicKeyPem) as RSAPublicKey;
+      final encrypter = encrypt.Encrypter(encrypt.RSA(
+        publicKey: publicKey,
+        encoding: encrypt.RSAEncoding.PKCS1,
+      ));
+      final encrypted = encrypter.encrypt(plaintext);
+      return encrypted.base64;
+    } catch (_) {
+      return null;
+    }
   }
 
   void _captureTransientEhallAuth(LoginResult result) {

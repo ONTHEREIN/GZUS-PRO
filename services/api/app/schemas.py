@@ -6,7 +6,21 @@ from pydantic import BaseModel, Field
 
 class LoginRequest(BaseModel):
     account: str = Field(min_length=1)
-    password: str = Field(min_length=1)
+    password: str | None = Field(default=None, min_length=1)
+    encrypted_password: str | None = Field(default=None, alias="encryptedPassword")
+    key_id: str | None = Field(default=None, alias="keyId")
+
+    def resolve_password(self) -> str:
+        """Return the plaintext password, decrypting encrypted_password if needed."""
+        if self.encrypted_password is not None:
+            from app.rsa_keys import rsa_key_manager
+            try:
+                return rsa_key_manager.decrypt(self.encrypted_password)
+            except Exception:
+                raise ValueError("密码解密失败，请重新登录")
+        if self.password is not None:
+            return self.password
+        raise ValueError("必须提供 password 或 encryptedPassword")
 
 
 class CaptchaRequest(BaseModel):
@@ -345,7 +359,21 @@ class EhallLoginRequest(BaseModel):
 
 class AutoLoginRequest(BaseModel):
     account: str = Field(min_length=1)
-    password: str = Field(min_length=1)
+    password: str | None = Field(default=None, min_length=1)
+    encrypted_password: str | None = Field(default=None, alias="encryptedPassword")
+    key_id: str | None = Field(default=None, alias="keyId")
+
+    def resolve_password(self) -> str:
+        """Return the plaintext password, decrypting encrypted_password if needed."""
+        if self.encrypted_password is not None:
+            from app.rsa_keys import rsa_key_manager
+            try:
+                return rsa_key_manager.decrypt(self.encrypted_password)
+            except Exception:
+                raise ValueError("密码解密失败，请重新登录")
+        if self.password is not None:
+            return self.password
+        raise ValueError("必须提供 password 或 encryptedPassword")
 
 
 class EhallLoginResponse(BaseModel):
