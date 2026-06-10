@@ -620,12 +620,35 @@ export default {
       return new Response(null, { status: 204, headers: corsHeaders(request) });
     }
 
-    // Non-API paths: serve static assets
-    if (!url.pathname.startsWith('/api/')) {
+    // API paths: handle in worker or proxy to Vercel
+    let path;
+    let isApiPath = url.pathname.startsWith('/api/');
+    
+    if (isApiPath) {
+      path = url.pathname.slice(5); // Remove /api/
+    } else if (url.pathname.startsWith('/auth/') || 
+               url.pathname.startsWith('/health') ||
+               url.pathname.startsWith('/academic/') ||
+               url.pathname.startsWith('/ehall/') ||
+               url.pathname.startsWith('/ecard/') ||
+               url.pathname.startsWith('/push/')) {
+      // Handle non-/api/ prefixed paths for backward compatibility
+      path = url.pathname.slice(1); // Remove leading /
+      isApiPath = true;
+    }
+    
+    if (!isApiPath) {
+      // Non-API paths: serve static assets directly
+      // For HTML pages, explicitly request /index.html from ASSETS
+      if (url.pathname === '/' || url.pathname === '/index.html') {
+        const indexRequest = new Request(new URL('/index.html', request.url).toString(), {
+          method: request.method,
+          headers: request.headers,
+        });
+        return env.ASSETS.fetch(indexRequest);
+      }
       return env.ASSETS.fetch(request);
     }
-
-    const path = url.pathname.slice(5); // Remove /api/
 
     // ─── Health check ──────────────────────────────────────────
     if (path === 'health') {
@@ -706,7 +729,8 @@ async function createSessionOnBackend(loginResult, account, env) {
 // ─── Proxy to Vercel ───────────────────────────────────────────────
 async function proxyToVercel(request, env, url) {
   const origin = (env.API_ORIGIN || 'https://api-one-zeta-dc0jrazxzq.vercel.app').replace(/\/$/, '');
-  const upstreamUrl = new URL(url.pathname.slice(4) + url.search, origin);
+  // Preserve original path - Vercel expects full path including /auth/, /academic/, etc.
+  const upstreamUrl = new URL(url.pathname + url.search, origin);
   const upstreamRequest = new Request(upstreamUrl, request);
   const response = await fetch(upstreamRequest);
   const headers = new Headers(response.headers);
