@@ -73,8 +73,8 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
           webPush.getPermissionStatus(),
           webPush.isSubscribed(),
         ]);
-        permStatus = results[0];
-        webSub = results[1] == true;
+        permStatus = results[0] as String;
+        webSub = results[1] as bool;
       } else {
         final futures = <Future<bool>>[
           PermissionService.checkAutoStart(),
