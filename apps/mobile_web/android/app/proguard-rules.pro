@@ -44,3 +44,22 @@
 -keepclassmembers class **.R$color {
     public static <fields>;
 }
+
+# Keep Flutter font resources and Material Icons
+# Note: io.flutter.embedding.* is NOT kept here because it references
+# unavailable Play Core classes. Flutter SDK ships its own R8 rules.
+-dontwarn com.google.android.play.core.**
+-dontwarn com.google.android.play.**
+-dontwarn io.flutter.embedding.**
+-keepclassmembers class **.R$font {
+    public static <fields>;
+}
+-keepclassmembers class **.R$raw {
+    public static <fields>;
+}
+-keepclassmembers class **.R$mipmap {
+    public static <fields>;
+}
+-keepclassmembers class **.R$drawable {
+    public static <fields>;
+}

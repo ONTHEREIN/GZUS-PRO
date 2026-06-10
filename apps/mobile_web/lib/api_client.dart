@@ -36,16 +36,14 @@ String _normalizeSingle(String url) {
 }
 
 String _defaultApiBaseUrl() {
-  if (kReleaseMode) return '';
+  // 默认指向 Cloudflare Pages Worker（亚太节点，大陆用户延迟较低）
+  // 可通过 `flutter build --dart-define=API_BASE_URL=...` 覆盖
+  const cloudflareWorker = 'https://onegzus-onweb.pages.dev';
 
-  // 开发环境默认使用本地后端；生产构建必须显式传 API_BASE_URL。
-  if (kIsWeb) {
-    return 'http://127.0.0.1:8000';
-  }
-  if (defaultTargetPlatform == TargetPlatform.android) {
-    return 'http://10.0.2.2:8000';
-  }
-  return 'http://127.0.0.1:8000';
+  if (kReleaseMode) return cloudflareWorker;
+
+  // 开发环境：优先使用 Cloudflare Worker，同时保留本地后端作为回退候选
+  return cloudflareWorker;
 }
 
 class DataSourceInfo {

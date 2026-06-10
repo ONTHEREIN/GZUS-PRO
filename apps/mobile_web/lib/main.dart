@@ -797,11 +797,13 @@ class _LoginPageState extends State<LoginPage>
                                         color: _accentFill(context),
                                         borderRadius: BorderRadius.circular(14),
                                       ),
-                                      child: Icon(
-                                        Icons.school,
-                                        color: Theme.of(context)
-                                            .colorScheme
-                                            .primary,
+                                      child: Center(
+                                        child: Text(
+                                          '🎓',
+                                          style: TextStyle(
+                                            fontSize: compact ? 24 : 28,
+                                          ),
+                                        ),
                                       ),
                                     ),
                                     SizedBox(height: compact ? 18 : 22),
@@ -2273,7 +2275,7 @@ class AppSidebar extends StatelessWidget {
                         color: _accentFill(context),
                         borderRadius: BorderRadius.circular(14),
                       ),
-                      child: Icon(Icons.school, color: colorScheme.primary),
+                      child: const Center(child: Text('🎓', style: TextStyle(fontSize: 22))),
                     ),
                   )
                 else
