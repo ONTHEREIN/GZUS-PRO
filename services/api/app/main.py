@@ -13,7 +13,7 @@ from app.config import get_settings
 from app.database import init_db
 from app.jobs import ExamReminderCache, GradeUpdateCache, NoticeCache, run_ecard_reminder_poller, run_exam_reminder_poller, run_grade_update_poller, run_notice_poller
 from app.rate_limit import limiter
-from app.routes import academic, auth, ecard, ehall, push
+from app.routes import academic, auth, ecard, ehall, push, weather
 from app.sessions import SessionStore
 from app.ws import ConnectionManager, ws_router
 
@@ -108,6 +108,7 @@ def create_app() -> FastAPI:
     app.include_router(ehall.router)
     app.include_router(ecard.router)
     app.include_router(push.router)
+    app.include_router(weather.router)
     app.include_router(ws_router)
 
     # Internal endpoints for Cloudflare Worker
