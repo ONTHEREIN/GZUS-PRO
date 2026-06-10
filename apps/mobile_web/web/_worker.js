@@ -817,15 +817,50 @@ async function proxyToVercel(request, env, url) {
   }
   const upstreamUrl = new URL(upstreamPath + url.search, origin);
   const upstreamRequest = new Request(upstreamUrl, request);
-  const response = await fetch(upstreamRequest);
-  const headers = new Headers(response.headers);
-  for (const [key, value] of Object.entries(corsHeaders(request))) {
-    headers.set(key, value);
+
+  // Retry on 5xx from Vercel (up to 2 retries with exponential backoff)
+  const maxRetries = 2;
+  let lastError = null;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const response = await fetch(upstreamRequest);
+      // If it's not a 5xx, return immediately
+      if (response.status < 500) {
+        const headers = new Headers(response.headers);
+        for (const [key, value] of Object.entries(corsHeaders(request))) {
+          headers.set(key, value);
+        }
+        return new Response(response.body, {
+          status: response.status,
+          statusText: response.statusText,
+          headers,
+        });
+      }
+      // 5xx — clone body and retry (body can only be consumed once)
+      lastError = new Error(`Vercel returned ${response.status}`);
+      if (attempt < maxRetries) {
+        await sleep(Math.min(200 * Math.pow(2, attempt), 2000));
+      }
+    } catch (e) {
+      lastError = e;
+      if (attempt < maxRetries) {
+        await sleep(Math.min(200 * Math.pow(2, attempt), 2000));
+      }
+    }
   }
-  return new Response(response.body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers,
+
+  // All retries exhausted — return a friendly error
+  const errorBody = JSON.stringify({
+    detail: `后端服务暂时不可用，请稍后重试`,
+  });
+  console.error(`proxyToVercel failed after ${maxRetries + 1} attempts: ${lastError?.message}`);
+  return new Response(errorBody, {
+    status: 502,
+    statusText: 'Bad Gateway',
+    headers: {
+      'Content-Type': 'application/json',
+      ...corsHeaders(request),
+    },
   });
 }
-// trigger redeploy 2026-06-10T23:17:16+08:00
+// trigger redeploy 2026-06-11T01:21:17+08:00

@@ -183,8 +183,16 @@ def poll_push(
     request: Request,
     session: AppSession = Depends(require_session),
 ) -> dict[str, list[dict]]:
-    manager = request.app.state.ws_manager
-    return {"messages": manager.drain(session.id)}
+    try:
+        manager = request.app.state.ws_manager
+        return {"messages": manager.drain(session.id)}
+    except Exception:
+        import logging
+        _logger = logging.getLogger(__name__)
+        _logger.warning(
+            "Error draining push messages for session %s", session.id[:8], exc_info=True
+        )
+        return {"messages": []}
 
 
 def _upsert_push_registration(session: AppSession, registration_id: str, platform: str) -> None:

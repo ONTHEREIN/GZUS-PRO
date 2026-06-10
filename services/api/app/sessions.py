@@ -203,7 +203,17 @@ class SessionStore:
     def get(self, session_id: str, *, touch: bool = True) -> AppSession | None:
         from app.database import AppSessionModel
 
-        db = self._get_db()
+        db = None
+        try:
+            db = self._get_db()
+        except Exception:
+            logger.error(
+                "Failed to acquire database session for session %s",
+                session_id[:8] if session_id else "?",
+                exc_info=True,
+            )
+            return None
+
         try:
             row = db.query(AppSessionModel).filter(AppSessionModel.id == session_id).first()
             if row is None:
@@ -269,13 +279,29 @@ class SessionStore:
                 self.touch(session_id)
 
             return session
+        except Exception:
+            logger.error(
+                "Unexpected error retrieving session %s from database",
+                session_id[:8] if session_id else "?",
+                exc_info=True,
+            )
+            return None
         finally:
-            db.close()
+            if db is not None:
+                try:
+                    db.close()
+                except Exception:
+                    pass
 
     def touch(self, session_id: str) -> None:
         from app.database import AppSessionModel
 
-        db = self._get_db()
+        db = None
+        try:
+            db = self._get_db()
+        except Exception:
+            logger.warning("Failed to acquire DB for touch session %s", session_id[:8])
+            return
         try:
             row = db.query(AppSessionModel).filter(AppSessionModel.id == session_id).first()
             if row is not None:
@@ -283,8 +309,13 @@ class SessionStore:
                 db.commit()
         except Exception:
             db.rollback()
+            logger.warning("Failed to touch session %s", session_id[:8], exc_info=True)
         finally:
-            db.close()
+            if db is not None:
+                try:
+                    db.close()
+                except Exception:
+                    pass
 
     def update(self, session_id: str, **fields: Any) -> None:
         """Persist mutable session fields (e.g. push_registration_id) to DB."""
@@ -295,7 +326,12 @@ class SessionStore:
         if not updates:
             return
 
-        db = self._get_db()
+        db = None
+        try:
+            db = self._get_db()
+        except Exception:
+            logger.warning("Failed to acquire DB for update session %s", session_id[:8])
+            return
         try:
             db.query(AppSessionModel).filter(AppSessionModel.id == session_id).update(
                 updates, synchronize_session=False
@@ -303,13 +339,23 @@ class SessionStore:
             db.commit()
         except Exception:
             db.rollback()
+            logger.warning("Failed to update session %s", session_id[:8], exc_info=True)
         finally:
-            db.close()
+            if db is not None:
+                try:
+                    db.close()
+                except Exception:
+                    pass
 
     def remove(self, session_id: str) -> None:
         from app.database import AppSessionModel
 
-        db = self._get_db()
+        db = None
+        try:
+            db = self._get_db()
+        except Exception:
+            logger.warning("Failed to acquire DB for remove session %s", session_id[:8])
+            return
         try:
             row = db.query(AppSessionModel).filter(AppSessionModel.id == session_id).first()
             if row is not None:
@@ -317,8 +363,13 @@ class SessionStore:
                 db.commit()
         except Exception:
             db.rollback()
+            logger.warning("Failed to remove session %s", session_id[:8], exc_info=True)
         finally:
-            db.close()
+            if db is not None:
+                try:
+                    db.close()
+                except Exception:
+                    pass
 
     # ------------------------------------------------------------------
     # Cleanup
