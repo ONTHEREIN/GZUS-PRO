@@ -688,7 +688,19 @@ export default {
     if (path === 'auth/auto-login' && request.method === 'POST') {
       try {
         const body = await request.json();
-        const { account, password } = body;
+        const { account, password, encryptedPassword, keyId } = body;
+
+        // If password is RSA-encrypted, proxy to Vercel (has the private key)
+        if (encryptedPassword && keyId) {
+          // Re-create request with preserved body (original body was consumed)
+          const newReq = new Request(request.url, {
+            method: request.method,
+            headers: request.headers,
+            body: JSON.stringify(body),
+          });
+          return proxyToVercel(newReq, env, url);
+        }
+
         if (!account || !password) {
           return errorResponse('账号和密码不能为空', 400, request);
         }
