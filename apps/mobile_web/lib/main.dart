@@ -12797,6 +12797,8 @@ class _EcardPageState extends State<EcardPage> {
   int _refreshVersion = 0;
   String? _error;
   Timer? _periodicRefreshTimer;
+  Timer? _searchDebounce;
+  String _lastSearchQuery = '';
 
   @override
   void initState() {
@@ -12820,6 +12822,7 @@ class _EcardPageState extends State<EcardPage> {
   @override
   void dispose() {
     _periodicRefreshTimer?.cancel();
+    _searchDebounce?.cancel();
     _searchController.dispose();
     super.dispose();
   }
@@ -12858,7 +12861,9 @@ class _EcardPageState extends State<EcardPage> {
       _summaryFuture =
           widget.api.ecardSummary(forceRefresh: true).then((r) => r.data);
       if (_roomsFuture != null) {
-        _roomsFuture = widget.api.ecardRooms(forceRefresh: true);
+        _roomsFuture = widget.api.ecardRooms(
+          query: _lastSearchQuery, forceRefresh: true,
+        );
       }
     });
     await _summaryFuture;
@@ -12907,6 +12912,19 @@ class _EcardPageState extends State<EcardPage> {
     setState(() => _error = exc is ApiException ? exc.message : exc.toString());
   }
 
+  void _onRoomSearch(String query) {
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(const Duration(milliseconds: 400), () {
+      final trimmed = query.trim();
+      if (trimmed == _lastSearchQuery) return;
+      _lastSearchQuery = trimmed;
+      if (!mounted) return;
+      setState(() {
+        _roomsFuture = widget.api.ecardRooms(query: trimmed);
+      });
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return FutureBuilder<EcardSummary>(
@@ -12937,8 +12955,9 @@ class _EcardPageState extends State<EcardPage> {
               ],
               if (!summary.isBound)
                 _RoomBindingPanel(
-                  roomsFuture: _roomsFuture ??= widget.api.ecardRooms(),
+                  roomsFuture: _roomsFuture,
                   searchController: _searchController,
+                  onSearchChanged: _onRoomSearch,
                   onRoomSelected: _bindRoom,
                 )
               else ...[
@@ -12955,6 +12974,7 @@ class _EcardPageState extends State<EcardPage> {
                   _RoomBindingPanel(
                     roomsFuture: _roomsFuture!,
                     searchController: _searchController,
+                    onSearchChanged: _onRoomSearch,
                     onRoomSelected: _bindRoom,
                   ),
                 const SizedBox(height: 12),
@@ -13193,11 +13213,13 @@ class _RoomBindingPanel extends StatefulWidget {
   const _RoomBindingPanel({
     required this.roomsFuture,
     required this.searchController,
+    required this.onSearchChanged,
     required this.onRoomSelected,
   });
 
-  final Future<List<EcardRoomItem>> roomsFuture;
+  final Future<List<EcardRoomItem>>? roomsFuture;
   final TextEditingController searchController;
+  final ValueChanged<String> onSearchChanged;
   final ValueChanged<EcardRoomItem> onRoomSelected;
 
   @override
@@ -13205,8 +13227,6 @@ class _RoomBindingPanel extends StatefulWidget {
 }
 
 class _RoomBindingPanelState extends State<_RoomBindingPanel> {
-  String _keyword = '';
-
   @override
   Widget build(BuildContext context) {
     return PagePanel(
@@ -13219,49 +13239,46 @@ class _RoomBindingPanelState extends State<_RoomBindingPanel> {
             controller: widget.searchController,
             decoration: const InputDecoration(
               prefixIcon: Icon(Icons.search),
-              hintText: '搜索楼栋或房间',
+              hintText: '输入楼栋或房间号搜索',
               border: OutlineInputBorder(),
             ),
-            onChanged: (value) => setState(() => _keyword = value.trim()),
+            onChanged: widget.onSearchChanged,
           ),
           const SizedBox(height: 12),
-          FutureBuilder<List<EcardRoomItem>>(
-            future: widget.roomsFuture,
-            builder: (context, snapshot) {
-              if (snapshot.connectionState != ConnectionState.done) {
-                return const Center(child: CircularProgressIndicator());
-              }
-              if (snapshot.hasError) {
-                return const EmptyState(message: '宿舍列表加载失败');
-              }
-              final rooms = (snapshot.data ?? const [])
-                  .where((room) =>
-                      _keyword.isEmpty ||
-                      room.displayName.contains(_keyword) ||
-                      room.room.contains(_keyword))
-                  .take(80)
-                  .toList();
-              if (rooms.isEmpty) return const EmptyState(message: '未找到宿舍');
-              return SizedBox(
-                height: 360,
-                child: ListView.separated(
-                  itemCount: rooms.length,
-                  separatorBuilder: (_, __) => const Divider(height: 1),
-                  itemBuilder: (context, index) {
-                    final room = rooms[index];
-                    return ListTile(
-                      leading: const Icon(Icons.meeting_room),
-                      title: Text(room.displayName,
-                          overflow: TextOverflow.ellipsis),
-                      subtitle: Text('${room.schoolArea} ${room.building}'),
-                      trailing: const Icon(Icons.chevron_right),
-                      onTap: () => widget.onRoomSelected(room),
-                    );
-                  },
-                ),
-              );
-            },
-          ),
+          if (widget.roomsFuture == null)
+            const EmptyState(message: '请输入关键词搜索宿舍')
+          else
+            FutureBuilder<List<EcardRoomItem>>(
+              future: widget.roomsFuture,
+              builder: (context, snapshot) {
+                if (snapshot.connectionState != ConnectionState.done) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+                if (snapshot.hasError) {
+                  return const EmptyState(message: '宿舍列表加载失败');
+                }
+                final rooms = snapshot.data ?? const [];
+                if (rooms.isEmpty) return const EmptyState(message: '未找到宿舍');
+                return SizedBox(
+                  height: 360,
+                  child: ListView.separated(
+                    itemCount: rooms.length,
+                    separatorBuilder: (_, __) => const Divider(height: 1),
+                    itemBuilder: (context, index) {
+                      final room = rooms[index];
+                      return ListTile(
+                        leading: const Icon(Icons.meeting_room),
+                        title: Text(room.displayName,
+                            overflow: TextOverflow.ellipsis),
+                        subtitle: Text('${room.schoolArea} ${room.building}'),
+                        trailing: const Icon(Icons.chevron_right),
+                        onTap: () => widget.onRoomSelected(room),
+                      );
+                    },
+                  ),
+                );
+              },
+            ),
         ],
       ),
     );

@@ -1,5 +1,594 @@
-const API_ORIGIN = 'https://api-one-zeta-dc0jrazxzq.vercel.app';
+/**
+ * GZUS-PRO API Cloudflare Worker
+ *
+ * Handles CAS SSO login directly on the edge (low latency to China),
+ * proxies all other requests to the Vercel backend.
+ *
+ * Routes handled locally (edge):
+ *   POST /auth/auto-login  — full CAS login flow
+ *   POST /auth/relogin     — re-login with stored credentials
+ *   GET  /health           — health check
+ *
+ * Routes proxied to Vercel:
+ *   Everything else (academic, ehall, ecard, push, etc.)
+ */
 
+// ─── RSA Constants (from CAS frontend JS) ──────────────────────────
+const RSA_E = 0x010001n;
+const RSA_N = BigInt(
+  '0x00b5eeb166e069920e80bebd1fea4829d3d1f3216f2aabe79b6c47a3c18dcee5' +
+  'fd22c2e7ac519cab59198ece036dcf289ea8201e2a0b9ded307f8fb704136ea' +
+  'eb670286f5ad44e691005ba9ea5af04ada5367cd724b5a26fdb5120cc95b6431' +
+  '604bd219c6b7d83a6f8f24b43918ea988a76f93c333aa5a20991493d4eb1117' +
+  'e7b1'
+);
+const RSA_TAG = 'lyasp';
+
+// CAS URLs
+const CAS_BASE = 'https://cas.gzus.edu.cn';
+const SERVICE_URL = 'https://jwxt.seig.edu.cn/sso/lyiotlogin';
+const EHALL_URL = 'https://ehall.gzus.edu.cn';
+const JWXT_BASE = 'https://jwxt.seig.edu.cn/jwglxt';
+
+// OCR character fixes for arithmetic captcha
+const OCR_CHAR_FIXES = {
+  'o': '0', 'O': '0',
+  'l': '1', 'I': '1', '|': '1',
+  'S': '5', 's': '5',
+  'b': '6', 'G': '6',
+  'B': '8',
+  'g': '9', 'q': '9',
+};
+
+const MAX_CAPTCHA_RETRIES = 15;
+
+// ─── RSA Encryption (BigInt.js-style, zero-padded) ─────────────────
+function rsaEncrypt(plaintext) {
+  const modulusBits = RSA_N.toString(16).length * 4;
+  const modulusBytes = Math.ceil(modulusBits / 8);
+  const numDigits = Math.floor(modulusBytes / 2);
+  const chunkSize = numDigits;
+  const hexDigitsPerChunk = numDigits * 4;
+
+  const charCodes = [];
+  for (let i = 0; i < plaintext.length; i++) {
+    charCodes.push(plaintext.charCodeAt(i));
+  }
+  while (charCodes.length % chunkSize !== 0) {
+    charCodes.push(0);
+  }
+
+  const parts = [];
+  for (let i = 0; i < charCodes.length; i += chunkSize) {
+    let m = 0n;
+    for (let r = 0; r < chunkSize / 2; r++) {
+      const low = BigInt(charCodes[i + r * 2]);
+      const high = BigInt(charCodes[i + r * 2 + 1]);
+      const digitVal = low + (high << 8n);
+      m += digitVal << BigInt(16 * r);
+    }
+    const c = modPow(m, RSA_E, RSA_N);
+    let hex = c.toString(16);
+    while (hex.length < hexDigitsPerChunk) hex = '0' + hex;
+    parts.push(hex);
+  }
+  return parts.join(' ');
+}
+
+function modPow(base, exp, mod) {
+  let result = 1n;
+  base = base % mod;
+  while (exp > 0n) {
+    if (exp & 1n) result = (result * base) % mod;
+    exp >>= 1n;
+    base = (base * base) % mod;
+  }
+  return result;
+}
+
+// ─── Arithmetic Captcha Solver ─────────────────────────────────────
+function solveArithmeticCaptcha(ocrText) {
+  for (const text of [ocrText.trim(), fixOcrChars(ocrText.trim())]) {
+    const match = text.match(/(\d+)\s*([+\-*/xX×÷])\s*(\d+)/);
+    if (!match) continue;
+    const a = parseInt(match[1], 10);
+    const op = match[2];
+    const b = parseInt(match[3], 10);
+    if (a > 20 || b > 20 || a === 0 || b === 0) continue;
+    const ops = {
+      '+': a + b, '-': a - b,
+      'x': a * b, 'X': a * b, '*': a * b, '×': a * b,
+      '/': Math.floor(a / b), '÷': Math.floor(a / b),
+    };
+    const result = ops[op];
+    if (result !== undefined && result >= 0 && result <= 82) {
+      return String(result);
+    }
+  }
+  return null;
+}
+
+function fixOcrChars(text) {
+  let result = '';
+  for (const ch of text) {
+    if ('+-*/xX×÷='.includes(ch)) {
+      result += ch;
+    } else {
+      result += OCR_CHAR_FIXES[ch] || ch;
+    }
+  }
+  return result;
+}
+
+// ─── Cookie jar (simple) ───────────────────────────────────────────
+class CookieJar {
+  constructor() {
+    this.cookies = new Map(); // domain -> Map(name -> value)
+  }
+
+  addFromResponse(url, response) {
+    // Cloudflare Workers: use getAll or getSetCookie for multiple set-cookie headers
+    let setCookies = [];
+    if (typeof response.headers.getAll === 'function') {
+      setCookies = response.headers.getAll('set-cookie');
+    } else if (typeof response.headers.getSetCookie === 'function') {
+      setCookies = response.headers.getSetCookie();
+    } else {
+      const sc = response.headers.get('set-cookie');
+      if (sc) setCookies = [sc];
+    }
+    const defaultDomain = new URL(url).hostname;
+    for (const header of setCookies) {
+      this._parseSetCookie(header, defaultDomain);
+    }
+  }
+
+  _parseSetCookie(header, defaultDomain = '') {
+    const parts = header.split(';');
+    if (parts.length === 0) return;
+    const [nameValue] = parts;
+    const eqIdx = nameValue.indexOf('=');
+    if (eqIdx === -1) return;
+    const name = nameValue.substring(0, eqIdx).trim();
+    const value = nameValue.substring(eqIdx + 1).trim();
+    // Extract domain from cookie attributes
+    let domain = '';
+    for (const part of parts.slice(1)) {
+      const trimmed = part.trim().toLowerCase();
+      if (trimmed.startsWith('domain=')) {
+        domain = trimmed.substring(7).replace(/^\./, '');
+      }
+    }
+    if (!domain) domain = defaultDomain;
+    if (!domain) return;
+    if (!this.cookies.has(domain)) {
+      this.cookies.set(domain, new Map());
+    }
+    this.cookies.get(domain).set(name, value);
+  }
+
+  getHeaderForHost(host) {
+    const parts = [];
+    const hostLower = host.toLowerCase();
+    for (const [domain, nameMap] of this.cookies) {
+      const domainLower = domain.toLowerCase();
+      if (hostLower === domainLower || hostLower.endsWith('.' + domainLower)) {
+        for (const [name, value] of nameMap) {
+          parts.push(`${name}=${value}`);
+        }
+      }
+    }
+    return parts.join('; ');
+  }
+
+  getCookiesForDomain(keyword) {
+    const parts = [];
+    for (const [domain, nameMap] of this.cookies) {
+      if (domain.includes(keyword)) {
+        for (const [name, value] of nameMap) {
+          parts.push(`${name}=${value}`);
+        }
+      }
+    }
+    return parts.join('; ');
+  }
+
+  getEhallSid() {
+    for (const [domain, nameMap] of this.cookies) {
+      if (domain.includes('ehall') && nameMap.has('sid')) {
+        return nameMap.get('sid');
+      }
+    }
+    return null;
+  }
+}
+
+// ─── CAS Login Flow ────────────────────────────────────────────────
+async function casAutoLogin(account, password, env) {
+  const jar = new CookieJar();
+  const timeout = 30000;
+
+  // Step 1: GET CAS page to establish session
+  let casPageRes;
+  for (let retry = 0; retry < 3; retry++) {
+    try {
+      casPageRes = await fetchWithCookies(
+        `${CAS_BASE}/lyuapServer/login?service=${encodeURIComponent(SERVICE_URL)}`,
+        { signal: AbortSignal.timeout(timeout) },
+        jar
+      );
+      break;
+    } catch (e) {
+      if (retry === 2) return { error: `CAS 页面获取失败: ${e.message}` };
+      await sleep(500);
+    }
+  }
+
+  // Step 2-4: Captcha + Login loop
+  for (let attempt = 1; attempt <= MAX_CAPTCHA_RETRIES; attempt++) {
+    // Step 2: Download kaptcha
+    let kaptchaUid = '';
+    let captchaBytes = null;
+    try {
+      const kaptchaRes = await fetchWithCookies(
+        `${CAS_BASE}/lyuapServer/kaptcha?_t=${Date.now()}&uid=`,
+        { signal: AbortSignal.timeout(timeout) },
+        jar
+      );
+      const data = await kaptchaRes.json();
+      kaptchaUid = data.uid || '';
+      const content = data.content || '';
+      if (content && content.includes(',')) {
+        captchaBytes = base64ToUint8Array(content.split(',')[1]);
+      } else if (content) {
+        captchaBytes = base64ToUint8Array(content);
+      }
+    } catch (e) {
+      return { error: `验证码获取失败: ${e.message}` };
+    }
+
+    if (!captchaBytes) {
+      return { error: '无法获取验证码图片' };
+    }
+
+    // Step 3: OCR captcha
+    let captchaCode = null;
+    try {
+      const ocrResult = await ocrRecognize(captchaBytes, env);
+      if (ocrResult) {
+        captchaCode = solveArithmeticCaptcha(ocrResult);
+      }
+    } catch (e) {
+      return { error: `验证码识别失败: ${e.message}` };
+    }
+
+    if (!captchaCode) continue;
+
+    // Step 4: POST login
+    const encryptedPassword = rsaEncrypt(password);
+    const timestamp = String(Date.now());
+    const token = rsaEncrypt(`${RSA_TAG}${timestamp}`);
+
+    let loginRes;
+    try {
+      loginRes = await fetchWithCookies(
+        `${CAS_BASE}/lyuapServer/v1/tickets`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'token': token,
+          },
+          body: new URLSearchParams({
+            username: account,
+            password: encryptedPassword,
+            service: SERVICE_URL,
+            loginType: '',
+            id: kaptchaUid,
+            code: captchaCode,
+          }),
+          redirect: 'manual',
+          signal: AbortSignal.timeout(timeout),
+        },
+        jar
+      );
+    } catch (e) {
+      return { error: `登录请求失败: ${e.message}` };
+    }
+
+    if (loginRes.status === 200 || loginRes.status === 201) {
+      let respData;
+      try {
+        respData = await loginRes.json();
+      } catch {
+        // Try TGT location header
+        if (loginRes.status === 201) {
+          const location = loginRes.headers.get('location') || '';
+          if (location) {
+            const tgt = location.split('/').pop();
+            try {
+              const stRes = await fetchWithCookies(location, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: new URLSearchParams({ service: SERVICE_URL }),
+                signal: AbortSignal.timeout(timeout),
+              }, jar);
+              if (stRes.ok) {
+                const ticket = (await stRes.text()).trim();
+                return await finalizeLogin(account, password, ticket, tgt, jar, timeout, env);
+              }
+            } catch {}
+          }
+        }
+        continue;
+      }
+
+      const dataObj = respData.data || {};
+      if (typeof dataObj === 'object' && dataObj.code) {
+        const err = handleErrorCode(dataObj, kaptchaUid);
+        if (err === 'retry') continue;
+        return { error: err };
+      }
+
+      const ticket = respData.ticket || '';
+      const tgt = respData.tgt || '';
+      if (ticket) {
+        return await finalizeLogin(account, password, ticket, tgt, jar, timeout, env);
+      }
+    }
+  }
+
+  return { error: '验证码识别失败，请重试' };
+}
+
+function handleErrorCode(dataObj, uid) {
+  const code = dataObj.code || '';
+  const messages = {
+    'FALSE': '用户名或密码错误',
+    'CODEFALSE': 'retry',
+    'PASSERROR': dataObj.message || '密码错误',
+    'NOUSER': '账号不存在',
+    'USERDISABLED': '账号已被禁用',
+    'USERLOCK': '账号已被锁定',
+    'ISPHONEOREMAILORANSWER': '需要二次验证',
+    'ISMODIFYPASS': '需要修改密码',
+    'NETWORKCOMMITMENT': '需要网络承诺',
+    'PEOPLEMOREACCOUNT': '存在多个关联账号',
+  };
+  return messages[code] || `登录失败 (${code})`;
+}
+
+async function finalizeLogin(account, password, ticket, tgt, jar, timeout, env) {
+  // Follow JWXT service ticket + get ehall session in parallel
+  const [jwxtResult, ehallResult] = await Promise.allSettled([
+    fetchJwxtCookies(ticket, tgt, jar, timeout),
+    fetchEhallSession(tgt, jar, timeout),
+  ]);
+
+  const jwxtCookies = jwxtResult.status === 'fulfilled' ? jwxtResult.value : '';
+  const ehallCookies = ehallResult.status === 'fulfilled' ? ehallResult.value : null;
+
+  // Get student name from JWXT info page
+  let studentName = null;
+  try {
+    const nameResult = await fetchStudentName(jar, timeout);
+    if (typeof nameResult === 'object' && nameResult.name) {
+      studentName = nameResult.name;
+    }
+  } catch {}
+
+  // Encrypt credentials
+  let credentialToken = null;
+  try {
+    const key = env.CREDENTIAL_ENCRYPTION_KEY || '';
+    if (key) {
+      credentialToken = await encryptCredentials(account, password, key);
+    }
+  } catch {}
+
+  return {
+    cookies: jwxtCookies,
+    ehallCookies: ehallCookies ? `sid=${ehallCookies}` : null,
+    studentName,
+    credentialToken,
+  };
+}
+
+async function fetchJwxtCookies(ticket, tgt, jar, timeout) {
+  const redirectUrl = `${SERVICE_URL}?ticket=${ticket}`;
+  try {
+    await fetchWithCookies(redirectUrl, {
+      signal: AbortSignal.timeout(timeout),
+    }, jar);
+  } catch {}
+
+  let cookies = jar.getCookiesForDomain('jwxt');
+  if (!cookies && tgt) {
+    // Fallback: request new service ticket
+    try {
+      const stRes = await fetchWithCookies(
+        `${CAS_BASE}/lyuapServer/v1/tickets/${tgt}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ service: SERVICE_URL }),
+          signal: AbortSignal.timeout(timeout),
+        },
+        jar
+      );
+      if (stRes.ok) {
+        const newTicket = (await stRes.text()).trim();
+        const newUrl = `${SERVICE_URL}?ticket=${newTicket}`;
+        await fetchWithCookies(newUrl, { signal: AbortSignal.timeout(timeout) }, jar);
+        cookies = jar.getCookiesForDomain('jwxt');
+      }
+    } catch {}
+  }
+  return cookies || '';
+}
+
+async function fetchEhallSession(tgt, jar, timeout) {
+  if (!tgt) return null;
+  const ehallServiceUrl = `${EHALL_URL}/shiro-cas`;
+  try {
+    const stRes = await fetchWithCookies(
+      `${CAS_BASE}/lyuapServer/v1/tickets/${tgt}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ service: ehallServiceUrl }),
+        signal: AbortSignal.timeout(timeout),
+      },
+      jar
+    );
+    if (stRes.ok) {
+      const ehallTicket = (await stRes.text()).trim();
+      if (ehallTicket) {
+        await fetchWithCookies(
+          `${ehallServiceUrl}?ticket=${ehallTicket}`,
+          { signal: AbortSignal.timeout(timeout) },
+          jar
+        );
+        return jar.getEhallSid();
+      }
+    }
+  } catch {}
+  return null;
+}
+
+async function fetchStudentName(jar, timeout) {
+  const infoUrl = `${JWXT_BASE}/xsxxxggl/xsgrxxwh_cxXsgrxxIndex.html`;
+
+  try {
+    const res = await fetchWithCookies(infoUrl, {
+      signal: AbortSignal.timeout(8000),
+    }, jar);
+    const html = await res.text();
+    // Extract name from info page: <p id="col_xm">张三</p>
+    let match = html.match(/id="col_xm"[^>]*>\s*<p[^>]*>\s*([^<]+?)\s*<\/p>/);
+    if (match && match[1].trim()) return { name: match[1].trim() };
+    match = html.match(/id="col_xm"[^>]*>([^<]+)/);
+    if (match && match[1].trim()) return { name: match[1].trim() };
+    return { name: null };
+  } catch {
+    return { name: null };
+  }
+}
+
+// ─── OCR via external API ──────────────────────────────────────────
+async function ocrRecognize(imageBytes, env) {
+  // Use the Vercel backend's OCR endpoint if available,
+  // or fall back to a simple base64 submission
+  const vercelOrigin = (env.API_ORIGIN || 'https://api-one-zeta-dc0jrazxzq.vercel.app').replace(/\/$/, '');
+
+  try {
+    const b64 = uint8ArrayToBase64(imageBytes);
+    const res = await fetch(`${vercelOrigin}/internal/ocr`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Internal-Key': env.INTERNAL_API_KEY || '',
+      },
+      body: JSON.stringify({ image: b64 }),
+      signal: AbortSignal.timeout(10000),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      return data.text || '';
+    }
+  } catch {}
+
+  // Fallback: return empty string (captcha will be retried)
+  return '';
+}
+
+// ─── Credential Encryption (Web Crypto) ────────────────────────────
+async function encryptCredentials(account, password, key) {
+  const encoder = new TextEncoder();
+  const keyData = await crypto.subtle.digest('SHA-256', encoder.encode(key));
+  const cryptoKey = await crypto.subtle.importKey(
+    'raw', keyData, { name: 'AES-GCM' }, false, ['encrypt']
+  );
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const plaintext = `${account}:${password}`;
+  const encrypted = await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv },
+    cryptoKey,
+    encoder.encode(plaintext)
+  );
+  const combined = new Uint8Array(iv.length + encrypted.byteLength);
+  combined.set(iv);
+  combined.set(new Uint8Array(encrypted), iv.length);
+  return btoa(String.fromCharCode(...combined));
+}
+
+// ─── Fetch with cookie management ──────────────────────────────────
+async function fetchWithCookies(url, options = {}, jar) {
+  const maxRedirects = 10;
+  let currentUrl = url;
+  let currentOptions = { ...options };
+
+  for (let i = 0; i < maxRedirects; i++) {
+    const parsedUrl = new URL(currentUrl);
+    const host = parsedUrl.hostname;
+
+    // Add cookies from jar
+    const cookieHeader = jar.getHeaderForHost(host);
+    const headers = new Headers(currentOptions.headers || {});
+    if (cookieHeader) {
+      headers.set('Cookie', cookieHeader);
+    }
+    if (!headers.has('User-Agent')) {
+      headers.set('User-Agent', 'Mozilla/5.0 (Linux; Android 16) GZUS-PRO/1.0');
+    }
+
+    // Use manual redirect so we can attach cookies to each hop
+    const response = await fetch(currentUrl, { ...currentOptions, headers, redirect: 'manual' });
+
+    // Collect cookies from response
+    jar.addFromResponse(currentUrl, response);
+
+    // Check for redirect
+    const status = response.status;
+    if (status >= 300 && status < 400) {
+      const location = response.headers.get('location');
+      if (location) {
+        currentUrl = new URL(location, currentUrl).href;
+        // Follow redirect as GET (drop body and method)
+        currentOptions = { method: 'GET', headers: {} };
+        continue;
+      }
+    }
+
+    return response;
+  }
+
+  throw new Error('Too many redirects');
+}
+
+// ─── Utility functions ─────────────────────────────────────────────
+function base64ToUint8Array(b64) {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+function uint8ArrayToBase64(bytes) {
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// ─── CORS Headers ──────────────────────────────────────────────────
 function corsHeaders(request) {
   return {
     'Access-Control-Allow-Origin': request.headers.get('Origin') || '*',
@@ -9,29 +598,124 @@ function corsHeaders(request) {
   };
 }
 
+function jsonResponse(data, status = 200, request = null) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (request) {
+    Object.assign(headers, corsHeaders(request));
+  }
+  return new Response(JSON.stringify(data), { status, headers });
+}
+
+function errorResponse(message, status = 401, request = null) {
+  return jsonResponse({ detail: message }, status, request);
+}
+
+// ─── Main Worker Handler ───────────────────────────────────────────
 export default {
   async fetch(request, env, context) {
     const url = new URL(request.url);
-    if (!url.pathname.startsWith('/api/')) {
-      return env.ASSETS.fetch(request);
-    }
 
+    // Handle CORS preflight
     if (request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: corsHeaders(request) });
     }
 
-    const origin = (env.API_ORIGIN || API_ORIGIN).replace(/\/$/, '');
-    const upstreamUrl = new URL(url.pathname.slice(4) + url.search, origin);
-    const upstreamRequest = new Request(upstreamUrl, request);
-    const response = await fetch(upstreamRequest);
-    const headers = new Headers(response.headers);
-    for (const [key, value] of Object.entries(corsHeaders(request))) {
-      headers.set(key, value);
+    // Non-API paths: serve static assets
+    if (!url.pathname.startsWith('/api/')) {
+      return env.ASSETS.fetch(request);
     }
-    return new Response(response.body, {
-      status: response.status,
-      statusText: response.statusText,
-      headers,
-    });
+
+    const path = url.pathname.slice(5); // Remove /api/
+
+    // ─── Health check ──────────────────────────────────────────
+    if (path === 'health') {
+      return jsonResponse({ status: 'ok', edge: true }, 200, request);
+    }
+
+    // ─── Auto-login (edge) ─────────────────────────────────────
+    if (path === 'auth/auto-login' && request.method === 'POST') {
+      try {
+        const body = await request.json();
+        const { account, password } = body;
+        if (!account || !password) {
+          return errorResponse('账号和密码不能为空', 400, request);
+        }
+
+        const result = await casAutoLogin(account, password, env);
+
+        if (result.error) {
+          return errorResponse(result.error, 401, request);
+        }
+
+        // Create session via Vercel backend
+        const sessionId = await createSessionOnBackend(result, account, env);
+
+        return jsonResponse({
+          status: 'ok',
+          sessionId,
+          studentName: result.studentName,
+          studentId: null,
+          credentialToken: result.credentialToken,
+          ehallCookies: result.ehallCookies,
+          ehallAuthToken: null,
+        }, 200, request);
+      } catch (e) {
+        return errorResponse(`登录失败: ${e.message}`, 500, request);
+      }
+    }
+
+    // ─── Relogin (edge) ────────────────────────────────────────
+    if (path === 'auth/relogin' && request.method === 'POST') {
+      // Proxy to Vercel for credential decryption, then do CAS login
+      // For now, proxy to Vercel since relogin needs Fernet decryption
+      return proxyToVercel(request, env, url);
+    }
+
+    // ─── All other routes: proxy to Vercel ─────────────────────
+    return proxyToVercel(request, env, url);
   },
 };
+
+// ─── Create session on Vercel backend ──────────────────────────────
+async function createSessionOnBackend(loginResult, account, env) {
+  const vercelOrigin = (env.API_ORIGIN || 'https://api-one-zeta-dc0jrazxzq.vercel.app').replace(/\/$/, '');
+
+  try {
+    const res = await fetch(`${vercelOrigin}/internal/create-session`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Internal-Key': env.INTERNAL_API_KEY || '',
+      },
+      body: JSON.stringify({
+        account,
+        cookies: loginResult.cookies,
+        ehall_cookies: loginResult.ehallCookies,
+        student_name: loginResult.studentName,
+      }),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      return data.sessionId;
+    }
+  } catch {}
+  return null;
+}
+
+// ─── Proxy to Vercel ───────────────────────────────────────────────
+async function proxyToVercel(request, env, url) {
+  const origin = (env.API_ORIGIN || 'https://api-one-zeta-dc0jrazxzq.vercel.app').replace(/\/$/, '');
+  const upstreamUrl = new URL(url.pathname.slice(4) + url.search, origin);
+  const upstreamRequest = new Request(upstreamUrl, request);
+  const response = await fetch(upstreamRequest);
+  const headers = new Headers(response.headers);
+  for (const [key, value] of Object.entries(corsHeaders(request))) {
+    headers.set(key, value);
+  }
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}

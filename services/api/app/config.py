@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     ecard_daily_reminder_minute: int = 0
     ehall_csrf_key: str = ""
     credential_encryption_key: str = ""
+    internal_api_key: str = ""  # Key for Cloudflare Worker to call internal endpoints
     web_push_vapid_public_key: str = ""
     web_push_vapid_private_key: str = ""
     web_push_vapid_subject: str = "mailto:example@example.com"

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 from datetime import datetime, timezone
 from typing import Any
 
@@ -24,6 +25,43 @@ from app.sessions import AppSession
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/ecard", tags=["ecard"])
+
+# ---------------------------------------------------------------------------
+# Room list cache – the full list is ~6700 items / 880 KB; fetching it from
+# the ecard API takes ~2.5 s.  Caching avoids repeated slow calls and lets
+# us do server-side filtering so the client only receives a small payload.
+# ---------------------------------------------------------------------------
+_rooms_cache_lock = threading.Lock()
+_rooms_cache: list[dict[str, str]] = []
+_rooms_cache_at: float = 0.0
+_ROOMS_CACHE_TTL = 3600  # seconds
+
+
+def _get_rooms_cached() -> list[dict[str, str]]:
+    """Return the cached room list, refreshing if stale."""
+    global _rooms_cache, _rooms_cache_at
+    import time
+
+    now = time.time()
+    with _rooms_cache_lock:
+        if _rooms_cache and now - _rooms_cache_at < _ROOMS_CACHE_TTL:
+            return _rooms_cache
+
+    # Cache miss – fetch from ecard API (outside lock to avoid blocking)
+    try:
+        fresh = _client().rooms()
+    except (EcardConfigurationError, EcardApiError):
+        # If fetch fails, return stale cache if available
+        with _rooms_cache_lock:
+            if _rooms_cache:
+                logger.warning("ecard: rooms fetch failed, serving stale cache")
+                return _rooms_cache
+        raise
+
+    with _rooms_cache_lock:
+        _rooms_cache = fresh
+        _rooms_cache_at = now
+    return fresh
 
 
 def _student_info(session: AppSession) -> tuple[str, str]:
@@ -106,14 +144,32 @@ def refresh_binding(binding: EcardBinding, student_id: str, client: EcardClient 
 
 
 @router.get("/rooms", response_model=list[EcardRoomItem])
-def rooms(session: AppSession = Depends(require_session)) -> list[dict[str, str]]:
+def rooms(
+    q: str | None = Query(default=None, max_length=50, description="搜索关键词"),
+    limit: int = Query(default=100, ge=1, le=500, description="最大返回数量"),
+    session: AppSession = Depends(require_session),
+) -> list[dict[str, str]]:
     try:
-        return _client().rooms()
+        all_rooms = _get_rooms_cached()
     except EcardConfigurationError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except EcardApiError as exc:
         logger.error("ecard: rooms API error: %s", exc, exc_info=True)
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    if q:
+        keyword = q.strip().lower()
+        filtered = [
+            r for r in all_rooms
+            if keyword in r.get("displayName", "").lower()
+            or keyword in r.get("building", "").lower()
+            or keyword in r.get("room", "").lower()
+            or keyword in r.get("schoolArea", "").lower()
+        ]
+        return filtered[:limit]
+
+    # No query – return limited list (full list is ~6700 items / 880 KB)
+    return all_rooms[:limit]
 
 
 @router.post("/binding", response_model=EcardSummary)

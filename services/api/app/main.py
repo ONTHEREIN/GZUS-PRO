@@ -110,6 +110,10 @@ def create_app() -> FastAPI:
     app.include_router(push.router)
     app.include_router(ws_router)
 
+    # Internal endpoints for Cloudflare Worker
+    from app.routes.internal import router as internal_router
+    app.include_router(internal_router)
+
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}

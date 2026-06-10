@@ -2107,15 +2107,25 @@ class ApiClient {
           {bool forceRefresh = false}) async =>
       (await ehallProgressOverview(forceRefresh: forceRefresh)).items;
 
-  Future<List<EcardRoomItem>> ecardRooms({bool forceRefresh = false}) async =>
-      (await _cacheFirstList<EcardRoomItem>(
-        cacheKey: 'ecard_rooms',
-        fetch: () => _getList('/ecard/rooms'),
-        fromJson: (json) => EcardRoomItem.fromJson(json),
-        forceRefresh: forceRefresh,
-        memoryTtl: const Duration(minutes: 30),
-      ))
-          .data;
+  Future<List<EcardRoomItem>> ecardRooms({
+    String? query,
+    int limit = 100,
+    bool forceRefresh = false,
+  }) async {
+    final path = query != null && query.trim().isNotEmpty
+        ? '/ecard/rooms?q=${Uri.encodeQueryComponent(query.trim())}&limit=$limit'
+        : '/ecard/rooms?limit=$limit';
+    final result = await _cacheFirstList<EcardRoomItem>(
+      cacheKey: query != null && query.trim().isNotEmpty
+          ? 'ecard_rooms_q_${query.trim().toLowerCase()}'
+          : 'ecard_rooms',
+      fetch: () => _getList(path),
+      fromJson: (json) => EcardRoomItem.fromJson(json),
+      forceRefresh: forceRefresh,
+      memoryTtl: const Duration(minutes: 30),
+    );
+    return result.data;
+  }
 
   Future<DataResult<EcardSummary>> ecardSummary({bool forceRefresh = false}) =>
       _cacheFirstObject<EcardSummary>(
