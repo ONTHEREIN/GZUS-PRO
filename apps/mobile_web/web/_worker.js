@@ -631,7 +631,13 @@ export default {
                url.pathname.startsWith('/academic/') ||
                url.pathname.startsWith('/ehall/') ||
                url.pathname.startsWith('/ecard/') ||
-               url.pathname.startsWith('/push/')) {
+               url.pathname.startsWith('/push/') ||
+               url.pathname === '/me' ||
+               url.pathname.startsWith('/internal/') ||
+               url.pathname.startsWith('/staff/') ||
+               url.pathname.startsWith('/leave/') ||
+               url.pathname === '/weather' ||
+               url.pathname.startsWith('/ws')) {
       // Handle non-/api/ prefixed paths for backward compatibility
       path = url.pathname.slice(1); // Remove leading /
       isApiPath = true;
