@@ -32,6 +32,9 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
   /// 防止 _checkPermissions() 重入
   bool _busy = false;
 
+  /// 首次检查是否已完成，用于决定是否显示加载指示器
+  bool _initialCheckDone = false;
+
   /// 防抖：上次 resume 时间戳，跳过 1 秒内的重复回调
   int _lastResumeMs = 0;
 
@@ -54,14 +57,42 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
       final now = DateTime.now().millisecondsSinceEpoch;
       if (now - _lastResumeMs < 1000) return; // 1s 防抖
       _lastResumeMs = now;
-      _checkPermissions();
+      // 后台切回前台时只刷新权限状态，不显示加载指示器
+      _refreshPermissions();
     }
   }
 
+  /// 首次加载时的完整权限检查（显示加载指示器）
   Future<void> _checkPermissions() async {
     if (!mounted || _busy) return;
     _busy = true;
-    setState(() => _checking = true);
+    if (!_initialCheckDone) {
+      setState(() => _checking = true);
+    }
+    try {
+      await _doCheckPermissions();
+    } finally {
+      if (mounted && !_initialCheckDone) {
+        setState(() => _checking = false);
+        _initialCheckDone = true;
+      }
+      _busy = false;
+    }
+  }
+
+  /// 静默刷新权限状态（不显示加载指示器，用于 resume/操作后）
+  Future<void> _refreshPermissions() async {
+    if (!mounted || _busy) return;
+    _busy = true;
+    try {
+      await _doCheckPermissions();
+    } finally {
+      _busy = false;
+    }
+  }
+
+  /// 核心权限检查逻辑（不含 UI 状态变更）
+  Future<void> _doCheckPermissions() async {
     bool autoStart = false, battery = false, notif = false, alarm = true;
     String permStatus = 'default';
     bool webSub = false;
@@ -84,7 +115,6 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
         if (Platform.isAndroid) {
           futures.add(PermissionService.checkExactAlarmPermission());
         }
-        // 5秒超时保护，防止 MethodChannel 调用挂死
         final results = await Future.wait(futures).timeout(
           const Duration(seconds: 5),
         );
@@ -97,22 +127,19 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
       }
     } catch (_) {
       // 超时或异常：保持现有状态，不清零
-    } finally {
-      if (mounted) {
-        setState(() {
-          _checking = false;
-          if (kIsWeb) {
-            _notificationGranted = permStatus == 'granted';
-            _webPushSubscribed = webSub;
-          } else {
-            _autoStartGranted = autoStart;
-            _batteryOptimizationDisabled = battery;
-            _notificationGranted = notif;
-            _exactAlarmGranted = alarm;
-          }
-        });
-      }
-      _busy = false;
+    }
+    if (mounted) {
+      setState(() {
+        if (kIsWeb) {
+          _notificationGranted = permStatus == 'granted';
+          _webPushSubscribed = webSub;
+        } else {
+          _autoStartGranted = autoStart;
+          _batteryOptimizationDisabled = battery;
+          _notificationGranted = notif;
+          _exactAlarmGranted = alarm;
+        }
+      });
     }
   }
 
@@ -142,6 +169,7 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
       await webPush.init();
       final granted = await webPush.requestPermission();
       if (granted) {
+        bool subscribed = false;
         try {
           final config = await _fetchWebPushConfig();
           if (config != null && config['enabled'] == true) {
@@ -152,14 +180,24 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
                 apiBaseUrl: widget.api.baseUrl,
                 sessionId: widget.api.sessionId ?? '',
               );
+              subscribed = true;
             }
           }
         } catch (_) {}
+        // 权限已授予，直接更新状态，无需重新走完整的异步检查
+        if (mounted) {
+          setState(() {
+            _notificationGranted = true;
+            _webPushSubscribed = subscribed;
+          });
+        }
+        return;
       }
     } else {
       await PermissionService.checkNotificationPermission();
     }
-    _checkPermissions();
+    // 权限未授予（或非 Web 平台），静默刷新状态
+    _refreshPermissions();
   }
 
   Future<Map<String, dynamic>?> _fetchWebPushConfig() async {

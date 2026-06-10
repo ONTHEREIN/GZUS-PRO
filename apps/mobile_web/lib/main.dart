@@ -138,7 +138,10 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
       debugPrint(
           '[AppLifecycle] Resuming - calling WsService.resume() and setAppForeground(true)');
       unawaited(_handleAppResume());
-      unawaited(_drainPendingPushMessages());
+      // 仅在推送体验引导完成后才拉取离线消息，避免引导页触发不必要的 /push/poll 请求
+      if (_backgroundGuideCompleted) {
+        unawaited(_drainPendingPushMessages());
+      }
     } else if (_hasBeenResumed &&
         (state == AppLifecycleState.paused ||
             state == AppLifecycleState.inactive ||
