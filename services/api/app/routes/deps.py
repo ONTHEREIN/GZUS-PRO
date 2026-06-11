@@ -9,22 +9,15 @@ logger = logging.getLogger(__name__)
 
 # How long a session can be idle before we consider the JWXT session
 # potentially expired.  JWXT sessions typically expire after ~30 min of
-# inactivity.
+# inactivity.  We proactively return 401 so the frontend can relogin
+# before the user notices a slow failed round-trip to JWXT.
 SESSION_IDLE_STALE_THRESHOLD = timedelta(minutes=25)
-
-# In-memory cache of sessions that have been auto-relogined on THIS
-# Vercel instance.  Prevents repeated expensive CAS logins (5-15s each)
-# when the Worker edge is not injecting cookies.
-_AUTO_RELOGIN_COOLDOWN = timedelta(minutes=10)
-_auto_relogin_cache: dict[str, datetime] = {}
 
 
 def _inject_worker_cookies(session: AppSession, request: Request) -> bool:
     """Override session client cookies with fresh ones from the Cloudflare Worker.
 
     Returns True if at least JWXT cookies were injected, False otherwise.
-    The return value signals whether the Worker edge is actively managing
-    this session's cookies.
     """
     worker_auth = request.headers.get("X-Worker-Auth")
     if not worker_auth:
@@ -43,7 +36,7 @@ def _inject_worker_cookies(session: AppSession, request: Request) -> bool:
 
             if isinstance(session.client, SchoolSdkClient):
                 logger.info(
-                    "Session %s: injecting Worker JWXT cookies (%d chars, %d keys) into SchoolSdkClient",
+                    "Session %s: injecting Worker JWXT cookies (%d chars, %d keys)",
                     session.id[:8],
                     len(cookie_header),
                     cookie_header.count("="),
@@ -52,7 +45,7 @@ def _inject_worker_cookies(session: AppSession, request: Request) -> bool:
                 injected = True
             else:
                 logger.warning(
-                    "Session %s: client is %s, not SchoolSdkClient — cannot inject JWXT cookies",
+                    "Session %s: client is %s, not SchoolSdkClient",
                     session.id[:8],
                     type(session.client).__name__,
                 )
@@ -78,7 +71,6 @@ def _inject_worker_cookies(session: AppSession, request: Request) -> bool:
             from app.ehall_client import EhallClient
 
             if isinstance(session.ehall_client, EhallClient):
-                # Update the internal cookies dict and the live httpx client
                 new_cookies = {}
                 for part in ehall_cookie_header.split(";"):
                     part = part.strip()
@@ -89,7 +81,7 @@ def _inject_worker_cookies(session: AppSession, request: Request) -> bool:
                         if key:
                             new_cookies[key] = value
                 logger.info(
-                    "Session %s: injecting Worker ehall cookies (%d keys) into EhallClient",
+                    "Session %s: injecting Worker ehall cookies (%d keys)",
                     session.id[:8],
                     len(new_cookies),
                 )
@@ -104,10 +96,7 @@ def _inject_worker_cookies(session: AppSession, request: Request) -> bool:
                 exc_info=True,
             )
     elif not ehall_cookie_header:
-        logger.debug(
-            "Session %s: no X-Ehall-Cookies header from Worker",
-            session.id[:8],
-        )
+        logger.debug("Session %s: no X-Ehall-Cookies header from Worker", session.id[:8])
     elif session.ehall_client is None:
         logger.debug(
             "Session %s: X-Ehall-Cookies present but session.ehall_client is None",
@@ -117,173 +106,19 @@ def _inject_worker_cookies(session: AppSession, request: Request) -> bool:
     return injected
 
 
-def _try_auto_relogin(session: AppSession, request: Request) -> bool:
-    """Attempt to refresh the session by re-authenticating via CAS from Vercel's IP.
-
-    This is the fallback when the Cloudflare Worker edge cannot inject fresh
-    JWXT cookies (e.g. Worker cold-start lost the in-memory localSessions Map).
-    By performing CAS login from Vercel's own IP, we obtain cookies that are
-    IP-bounded to Vercel — so they will actually work for subsequent API calls.
-
-    Returns True if the relogin succeeded and session.client was replaced
-    with a freshly authenticated client.
-    """
-    from urllib.parse import quote as url_quote
-
-    from app.cas_auto_login import CasAutoLogin
-    from app.config import get_settings
-    from app.school_client import SchoolSdkClient
-    from app.sessions import decrypt_credentials
-
-    settings = get_settings()
-
-    encrypted_creds = getattr(session, "encrypted_credentials", None)
-    if not encrypted_creds:
-        logger.info(
-            "Session %s: no encrypted credentials stored — cannot auto-relogin",
-            session.id[:8],
-        )
-        return False
-
-    try:
-        account, password = decrypt_credentials(
-            encrypted_creds,
-            settings.credential_encryption_key,
-            ttl_seconds=settings.ehall_session_ttl_hours * 3600,
-        )
-    except Exception as exc:
-        logger.warning(
-            "Session %s: failed to decrypt stored credentials: %s",
-            session.id[:8],
-            exc,
-        )
-        return False
-
-    logger.info(
-        "Session %s: attempting auto-relogin for account=%s from Vercel IP",
-        session.id[:8],
-        account,
-    )
-
-    try:
-        cas_url = (
-            f"{settings.cas_login_url}?service="
-            f"{url_quote(settings.jwxt_sso_service_url, safe='')}"
-        )
-        cas_auto_login = CasAutoLogin(
-            cas_url=cas_url,
-            ehall_url=settings.ehall_base_url,
-            timeout=settings.cas_login_timeout_seconds,
-        )
-        result = cas_auto_login.auto_login(account, password)
-
-        if result.error:
-            logger.warning(
-                "Session %s: auto-relogin CAS failed: %s",
-                session.id[:8],
-                result.error,
-            )
-            return False
-
-        # Build fresh SchoolSdkClient with Vercel-IP-bounded cookies
-        client = SchoolSdkClient(
-            base_url=settings.jw_base_url,
-            timeout_seconds=settings.request_timeout_seconds,
-            httpx_client=result.httpx_client,
-        )
-        try:
-            student_name = client.login_with_cookies(
-                result.cookies, account=result.account
-            )
-            if student_name:
-                session.student_name = student_name
-        except Exception as exc:
-            logger.warning(
-                "Session %s: login_with_cookies failed after CAS: %s",
-                session.id[:8],
-                exc,
-            )
-            return False
-
-        # Replace session client with freshly authenticated one
-        session.client = client
-
-        # Persist new cookies to DB so future cold-starts have them
-        jwxt_cookies = result.cookies or ""
-        ehall_cookies = result.ehall_cookies or ""
-        ehall_auth_token = result.ehall_auth_token or ""
-
-        try:
-            request.app.state.sessions.update(
-                session.id,
-                jwxt_cookies=jwxt_cookies,
-                ehall_cookies=ehall_cookies,
-                ehall_auth_token=ehall_auth_token,
-                student_name=session.student_name,
-            )
-        except Exception:
-            logger.warning(
-                "Session %s: failed to persist refreshed cookies to DB",
-                session.id[:8],
-                exc_info=True,
-            )
-
-        # Rebuild ehall client if available
-        if ehall_cookies or ehall_auth_token:
-            try:
-                from app.ehall_client import EhallClient
-
-                session.ehall_client = EhallClient(
-                    base_url=settings.ehall_base_url,
-                    cookies=ehall_cookies,
-                    auth_token=ehall_auth_token,
-                    timeout_seconds=settings.request_timeout_seconds,
-                )
-            except Exception:
-                logger.warning(
-                    "Session %s: failed to rebuild ehall client after relogin",
-                    session.id[:8],
-                )
-
-        logger.info(
-            "Session %s: auto-relogin SUCCEEDED — cookies now bound to Vercel IP",
-            session.id[:8],
-        )
-        return True
-
-    except Exception as exc:
-        logger.error(
-            "Session %s: auto-relogin unexpected error: %s",
-            session.id[:8],
-            exc,
-            exc_info=True,
-        )
-        return False
-
-
 def require_session(
     request: Request,
     x_session_id: str | None = Header(default=None, alias="X-Session-Id"),
 ) -> AppSession:
     """FastAPI dependency: resolve and validate the user session.
 
-    Resolution order:
-    1. Load session from DB by X-Session-Id header.
-    2. Inject fresh JWXT cookies from Cloudflare Worker if available.
-    3. If Worker cookies are NOT available (X-Worker-Auth missing):
-       a. Check in-memory cache to avoid repeated expensive CAS logins.
-       b. If not recently auto-relogined on this instance → attempt auto-relogin
-          using stored Fernet credentials (CAS login from Vercel's own IP).
-       c. If auto-relogin fails AND session is stale → 401.
-       d. If auto-relogin fails but session is fresh → proceed with DB cookies
-          (they might already be Vercel-IP from a previous instance's relogin).
-    4. Return the session (ready for use) or raise 401.
-
-    The in-memory cache (_auto_relogin_cache) prevents repeated CAS logins
-    on the same Vercel instance.  After auto-relogin, DB cookies are updated
-    to Vercel-IP, so even a different instance loading from DB will have
-    working cookies.  A cache miss on a different instance will trigger
-    one extra CAS login (performance cost, not correctness issue).
+    1. Load session from DB.
+    2. Inject fresh JWXT cookies from Cloudflare Worker (edge).
+       The Worker stores cookies in memory + Cloudflare KV for
+       cross-instance persistence.
+    3. If no Worker cookies AND session idle > threshold → 401.
+       The frontend will trigger a Worker-side relogin (fast, near China).
+    4. Touch and return.
     """
     if not x_session_id:
         logger.warning(
@@ -317,56 +152,26 @@ def require_session(
         int(idle_time.total_seconds()),
     )
 
-    # Step 1: Inject fresh cookies from the Cloudflare Worker edge.
-    # Worker cookies are IP-bounded to the Worker's edge location and are
-    # the most reliable.  This must happen before any API call.
+    # Inject fresh cookies from the Cloudflare Worker edge.
+    # Worker cookies come from memory (fast) or Cloudflare KV (cross-instance).
     worker_injected = _inject_worker_cookies(session, request)
 
-    # Step 2: If the Worker did NOT inject cookies, we need another source
-    # of valid JWXT cookies.  The Worker's in-memory localSessions Map can
-    # be lost at any time (cold-start, different colo, eviction) — NOT just
-    # after prolonged idle.  We attempt auto-relogin from Vercel's own IP,
-    # throttled by an in-memory cache to avoid repeated expensive CAS logins.
-    if not worker_injected:
-        last_relogin = _auto_relogin_cache.get(session.id)
-        cooldown_ok = last_relogin is None or (datetime.now() - last_relogin) > _AUTO_RELOGIN_COOLDOWN
+    # If Worker couldn't inject cookies AND the session has been idle
+    # beyond the JWXT expiration window, return 401 proactively.
+    # The frontend will trigger a Worker-side relogin, which is fast
+    # (edge near China) and creates fresh IP-bounded cookies.
+    if not worker_injected and idle_time > SESSION_IDLE_STALE_THRESHOLD:
+        logger.info(
+            "Session %s: no Worker cookies + idle %ds > %ds — returning 401 for frontend relogin",
+            session.id[:8],
+            int(idle_time.total_seconds()),
+            int(SESSION_IDLE_STALE_THRESHOLD.total_seconds()),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="会话已过期，请重新登录",
+        )
 
-        if cooldown_ok:
-            logger.info(
-                "Session %s: no Worker cookies (idle=%ds) — attempting auto-relogin from Vercel IP",
-                session.id[:8],
-                int(idle_time.total_seconds()),
-            )
-            if _try_auto_relogin(session, request):
-                _auto_relogin_cache[session.id] = datetime.now()
-                # Touch last_active_at so idle check doesn't immediately
-                # expire this freshly-relogined session.
-                session.last_active_at = datetime.now()
-            elif idle_time > SESSION_IDLE_STALE_THRESHOLD:
-                # Relogin failed AND session is genuinely stale → 401
-                logger.warning(
-                    "Session %s: auto-relogin failed + idle %ds > threshold — returning 401",
-                    session.id[:8],
-                    int(idle_time.total_seconds()),
-                )
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="会话已过期，请重新登录",
-                )
-            else:
-                # Relogin failed but session is fresh — cookies might still
-                # be valid (e.g. Vercel-IP from a previous instance's relogin).
-                logger.info(
-                    "Session %s: auto-relogin failed but session is fresh — proceeding with DB cookies",
-                    session.id[:8],
-                )
-        else:
-            logger.debug(
-                "Session %s: auto-relogin cooldown active (last=%ds ago)",
-                session.id[:8],
-                int((datetime.now() - last_relogin).total_seconds()),
-            )
-
-    # Step 3: Touch and return
+    # Touch and return
     request.app.state.sessions.touch(session.id)
     return session

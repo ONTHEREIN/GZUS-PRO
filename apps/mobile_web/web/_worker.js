@@ -633,7 +633,11 @@ function errorResponse(message, status = 401, request = null) {
   return jsonResponse({ detail: message }, status, request);
 }
 
-// ─── Local session store (bypass Vercel session IP-binding issues) ─
+// ─── Session store (memory + Cloudflare KV fallback) ─────────────
+// Memory is fast but per-instance.  KV provides cross-instance
+// persistence so a Worker cold-start or different colo can still
+// inject JWXT cookies (which are IP-bounded to the Worker edge).
+const SESSION_KV_TTL = 7200; // 2 hours, matches Vercel session TTL
 const localSessions = new Map(); // sessionId -> { cookies, ehallCookies, studentName }
 
 function generateSessionId() {
@@ -642,10 +646,44 @@ function generateSessionId() {
   return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
 }
 
-function getLocalSession(request) {
+async function saveSessionToKV(sessionId, data, env) {
+  try {
+    if (env && env.SESSIONS_KV) {
+      await env.SESSIONS_KV.put(
+        `session:${sessionId}`,
+        JSON.stringify(data),
+        { expirationTtl: SESSION_KV_TTL }
+      );
+    }
+  } catch (e) {
+    console.warn(`[kv] Failed to save session ${sessionId.slice(0, 8)}:`, e.message);
+  }
+}
+
+async function getLocalSession(request, env) {
   const sessionId = request.headers.get('X-Session-Id');
   if (!sessionId) return null;
-  return localSessions.get(sessionId) || null;
+
+  // 1. In-memory (same Worker instance that handled login)
+  let data = localSessions.get(sessionId);
+  if (data) return data;
+
+  // 2. KV fallback (different Worker instance, cold-start, etc.)
+  try {
+    if (env && env.SESSIONS_KV) {
+      const raw = await env.SESSIONS_KV.get(`session:${sessionId}`);
+      if (raw) {
+        data = JSON.parse(raw);
+        localSessions.set(sessionId, data); // cache for subsequent requests
+        console.log(`[kv] Session ${sessionId.slice(0, 8)} restored from KV`);
+        return data;
+      }
+    }
+  } catch (e) {
+    console.warn(`[kv] Failed to restore session ${sessionId.slice(0, 8)}:`, e.message);
+  }
+
+  return null;
 }
 
 function injectSessionCookies(request, session) {
@@ -770,11 +808,14 @@ export default {
         // Vercel (different IP) cannot validate them — we must inject them
         // on every proxied request.
         const sessionId = vercelResult.sessionId;
-        localSessions.set(sessionId, {
+        const sessionData = {
           cookies: result.cookies,
           ehallCookies: result.ehallCookies,
           studentName: result.studentName,
-        });
+        };
+        localSessions.set(sessionId, sessionData);
+        // Also persist to KV so other Worker instances can inject cookies
+        context.waitUntil(saveSessionToKV(sessionId, sessionData, env));
 
         return jsonResponse({
           status: 'ok',
@@ -832,11 +873,13 @@ export default {
         }
 
         const sessionId = vercelResult.sessionId;
-        localSessions.set(sessionId, {
+        const sessionData = {
           cookies: result.cookies,
           ehallCookies: result.ehallCookies,
           studentName: result.studentName,
-        });
+        };
+        localSessions.set(sessionId, sessionData);
+        context.waitUntil(saveSessionToKV(sessionId, sessionData, env));
 
         return jsonResponse({
           status: 'ok',
@@ -853,9 +896,10 @@ export default {
     }
 
     // ─── All other routes: proxy to Vercel ─────────────────────
-    // Inject local session cookies if available (bypass Vercel's IP-bounded cookie issue)
+    // Inject local session cookies if available (bypass Vercel's IP-bounded cookie issue).
+    // Check memory first, then Cloudflare KV for cross-instance persistence.
     const sessionId = request.headers.get('X-Session-Id');
-    const localSession = getLocalSession(request);
+    const localSession = await getLocalSession(request, env);
     let hadLocalSession = !!localSession;
     if (localSession) {
       request = injectSessionCookies(request, localSession);
