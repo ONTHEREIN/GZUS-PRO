@@ -9,9 +9,14 @@ logger = logging.getLogger(__name__)
 
 # How long a session can be idle before we consider the JWXT session
 # potentially expired.  JWXT sessions typically expire after ~30 min of
-# inactivity.  When no Worker cookie injection is available, we attempt
-# auto-relogin at this threshold instead of returning 401 immediately.
+# inactivity.
 SESSION_IDLE_STALE_THRESHOLD = timedelta(minutes=25)
+
+# In-memory cache of sessions that have been auto-relogined on THIS
+# Vercel instance.  Prevents repeated expensive CAS logins (5-15s each)
+# when the Worker edge is not injecting cookies.
+_AUTO_RELOGIN_COOLDOWN = timedelta(minutes=10)
+_auto_relogin_cache: dict[str, datetime] = {}
 
 
 def _inject_worker_cookies(session: AppSession, request: Request) -> bool:
@@ -265,12 +270,20 @@ def require_session(
     Resolution order:
     1. Load session from DB by X-Session-Id header.
     2. Inject fresh JWXT cookies from Cloudflare Worker if available.
-    3. If Worker cookies are NOT available (X-Worker-Auth missing) and the
-       session has been idle beyond the stale threshold, attempt an automatic
-       CAS relogin from Vercel's own IP using stored encrypted credentials.
-       This bypasses the Worker's ephemeral in-memory localSessions Map,
-       which is lost on Worker cold-start / eviction.
+    3. If Worker cookies are NOT available (X-Worker-Auth missing):
+       a. Check in-memory cache to avoid repeated expensive CAS logins.
+       b. If not recently auto-relogined on this instance → attempt auto-relogin
+          using stored Fernet credentials (CAS login from Vercel's own IP).
+       c. If auto-relogin fails AND session is stale → 401.
+       d. If auto-relogin fails but session is fresh → proceed with DB cookies
+          (they might already be Vercel-IP from a previous instance's relogin).
     4. Return the session (ready for use) or raise 401.
+
+    The in-memory cache (_auto_relogin_cache) prevents repeated CAS logins
+    on the same Vercel instance.  After auto-relogin, DB cookies are updated
+    to Vercel-IP, so even a different instance loading from DB will have
+    working cookies.  A cache miss on a different instance will trigger
+    one extra CAS login (performance cost, not correctness issue).
     """
     if not x_session_id:
         logger.warning(
@@ -309,25 +322,49 @@ def require_session(
     # the most reliable.  This must happen before any API call.
     worker_injected = _inject_worker_cookies(session, request)
 
-    # Step 2: If the Worker did NOT inject cookies, the DB-stored cookies
-    # may be stale (IP-bounded to a previous Worker instance).  Attempt
-    # auto-relogin from Vercel's own IP when the session has been idle
-    # long enough that JWXT expiration is likely.
-    if not worker_injected and idle_time > SESSION_IDLE_STALE_THRESHOLD:
-        logger.info(
-            "Session %s: no Worker cookies + idle %ds > threshold %ds — attempting auto-relogin",
-            session.id[:8],
-            int(idle_time.total_seconds()),
-            int(SESSION_IDLE_STALE_THRESHOLD.total_seconds()),
-        )
-        if not _try_auto_relogin(session, request):
-            logger.warning(
-                "Session %s: auto-relogin failed, returning 401",
+    # Step 2: If the Worker did NOT inject cookies, we need another source
+    # of valid JWXT cookies.  The Worker's in-memory localSessions Map can
+    # be lost at any time (cold-start, different colo, eviction) — NOT just
+    # after prolonged idle.  We attempt auto-relogin from Vercel's own IP,
+    # throttled by an in-memory cache to avoid repeated expensive CAS logins.
+    if not worker_injected:
+        last_relogin = _auto_relogin_cache.get(session.id)
+        cooldown_ok = last_relogin is None or (datetime.now() - last_relogin) > _AUTO_RELOGIN_COOLDOWN
+
+        if cooldown_ok:
+            logger.info(
+                "Session %s: no Worker cookies (idle=%ds) — attempting auto-relogin from Vercel IP",
                 session.id[:8],
+                int(idle_time.total_seconds()),
             )
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="会话已过期，请重新登录",
+            if _try_auto_relogin(session, request):
+                _auto_relogin_cache[session.id] = datetime.now()
+                # Touch last_active_at so idle check doesn't immediately
+                # expire this freshly-relogined session.
+                session.last_active_at = datetime.now()
+            elif idle_time > SESSION_IDLE_STALE_THRESHOLD:
+                # Relogin failed AND session is genuinely stale → 401
+                logger.warning(
+                    "Session %s: auto-relogin failed + idle %ds > threshold — returning 401",
+                    session.id[:8],
+                    int(idle_time.total_seconds()),
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="会话已过期，请重新登录",
+                )
+            else:
+                # Relogin failed but session is fresh — cookies might still
+                # be valid (e.g. Vercel-IP from a previous instance's relogin).
+                logger.info(
+                    "Session %s: auto-relogin failed but session is fresh — proceeding with DB cookies",
+                    session.id[:8],
+                )
+        else:
+            logger.debug(
+                "Session %s: auto-relogin cooldown active (last=%ds ago)",
+                session.id[:8],
+                int((datetime.now() - last_relogin).total_seconds()),
             )
 
     # Step 3: Touch and return
