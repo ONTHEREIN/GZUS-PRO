@@ -136,17 +136,21 @@ class SessionStore:
         self._cleanup_task: asyncio.Task | None = None
 
     def _get_db(self) -> DbSession:
+        from sqlalchemy.orm import sessionmaker as SessionMaker
+
         if self._db_factory is None:
             from app.database import get_sync_session_factory
 
             self._db_factory = get_sync_session_factory()
-        # _db_factory is always a sessionmaker instance.
-        # It may have been set via lazy init above (sessionmaker) or via
-        # the db_factory constructor param (a callable returning sessionmaker).
-        # Normalize: if it's callable but lacks .query, it's a factory function
-        # that returns a sessionmaker — resolve it once.
-        if callable(self._db_factory) and not hasattr(self._db_factory, 'query'):
+
+        # Normalize: _db_factory must be a sessionmaker instance.
+        # If it's a plain callable (e.g. the get_sync_session_factory function
+        # passed as db_factory parameter), resolve it once to get the actual
+        # sessionmaker.  We must use isinstance — sessionmaker is also callable,
+        # so a callable check alone would mis-identify it as a factory function.
+        if not isinstance(self._db_factory, SessionMaker) and callable(self._db_factory):
             self._db_factory = self._db_factory()
+
         return self._db_factory()
 
     # ------------------------------------------------------------------
