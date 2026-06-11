@@ -42,6 +42,7 @@ class DecryptPasswordRequest(BaseModel):
 class CreateSessionRequest(BaseModel):
     account: str
     cookies: str
+    password: str | None = None  # for generating Fernet credential token server-side
     ehall_cookies: str | None = None
     student_name: str | None = None
 
@@ -139,6 +140,22 @@ def create_session_endpoint(
     except Exception as exc:
         logger.warning("login_with_cookies failed in create-session: %s", exc)
 
+    # Generate Fernet-encrypted credential token for server-side auto-relogin.
+    # This is separate from the AES-GCM token the Worker gives to the frontend.
+    # Vercel needs Fernet tokens for its own transparent session recovery.
+    encrypted_credentials = None
+    if payload.password:
+        try:
+            from app.sessions import encrypt_credentials
+            encrypted_credentials = encrypt_credentials(
+                payload.account,
+                payload.password,
+                settings.credential_encryption_key,
+            )
+            logger.debug("create-session: generated Fernet credential for account=%s", payload.account)
+        except Exception as exc:
+            logger.warning("Failed to encrypt credentials for session: %s", exc)
+
     # Create ehall client if ehall cookies are available
     ehall_client = None
     if payload.ehall_cookies:
@@ -157,9 +174,10 @@ def create_session_endpoint(
             client,
             student_name=student_name or payload.student_name,
             ehall_client=ehall_client,
+            encrypted_credentials=encrypted_credentials,
         )
     except Exception as exc:
         logger.error("Failed to create session in DB: %s", exc, exc_info=True)
         raise HTTPException(status_code=503, detail=f"会话写入数据库失败: {exc}")
 
-    return {"sessionId": session.id}
+    return {"sessionId": session.id, "credentialToken": encrypted_credentials}

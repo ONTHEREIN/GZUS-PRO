@@ -754,11 +754,11 @@ export default {
         // This is NOT best-effort — if it fails, the frontend will get
         // a sessionId that doesn't exist in the DB, causing immediate
         // 401 "会话已过期" on subsequent API calls.
-        let vercelResult = await createSessionOnBackend(result, account, env);
+        let vercelResult = await createSessionOnBackend(result, account, password, env);
         if (!vercelResult.sessionId) {
           // Retry once after a short delay (Vercel cold-start / Neon wake-up)
           await sleep(2000);
-          vercelResult = await createSessionOnBackend(result, account, env);
+          vercelResult = await createSessionOnBackend(result, account, password, env);
         }
         if (!vercelResult.sessionId) {
           console.error(`createSessionOnBackend failed twice after auto-login: ${vercelResult.error}`);
@@ -821,10 +821,10 @@ export default {
 
         // Always keep a local session (cookies are IP-bounded to this Worker).
         // Create session on Vercel backend — retry once on failure.
-        let vercelResult = await createSessionOnBackend(result, credentials.account, env);
+        let vercelResult = await createSessionOnBackend(result, credentials.account, credentials.password, env);
         if (!vercelResult.sessionId) {
           await sleep(2000);
-          vercelResult = await createSessionOnBackend(result, credentials.account, env);
+          vercelResult = await createSessionOnBackend(result, credentials.account, credentials.password, env);
         }
         if (!vercelResult.sessionId) {
           console.error(`createSessionOnBackend failed twice after relogin: ${vercelResult.error}`);
@@ -894,7 +894,7 @@ async function decryptPasswordOnVercel(encryptedPassword, keyId, env) {
 
 // ─── Create session on Vercel backend ──────────────────────────────
 // Returns { sessionId: string } on success, or { error: string, status: number } on failure.
-async function createSessionOnBackend(loginResult, account, env) {
+async function createSessionOnBackend(loginResult, account, password, env) {
   const vercelOrigin = (env.API_ORIGIN || 'https://api-one-zeta-dc0jrazxzq.vercel.app').replace(/\/$/, '');
 
   try {
@@ -907,6 +907,7 @@ async function createSessionOnBackend(loginResult, account, env) {
       body: JSON.stringify({
         account,
         cookies: loginResult.cookies,
+        password: password || null,
         ehall_cookies: loginResult.ehallCookies,
         student_name: loginResult.studentName,
       }),
@@ -914,7 +915,7 @@ async function createSessionOnBackend(loginResult, account, env) {
     });
     if (res.ok) {
       const data = await res.json();
-      return { sessionId: data.sessionId };
+      return { sessionId: data.sessionId, credentialToken: data.credentialToken || null };
     }
     // Log non-OK response for debugging
     const errorText = await res.text().catch(() => '');

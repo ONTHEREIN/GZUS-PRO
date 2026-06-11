@@ -257,7 +257,17 @@ def relogin(payload: ReloginRequest, request: Request) -> dict:
             timeout_seconds=settings.request_timeout_seconds,
         )
 
-    session = sessions.create(client, student_name=student_name, ehall_client=ehall_client)
+    # Generate a fresh Fernet credential token for server-side auto-relogin.
+    # The frontend's credential_token may be AES-GCM (from Worker), which
+    # Vercel cannot decrypt.  We need our own Fernet token stored in the session.
+    from app.sessions import encrypt_credentials as _encrypt_creds
+    fernet_token = _encrypt_creds(account, password, settings.credential_encryption_key)
+
+    session = sessions.create(
+        client, student_name=student_name,
+        ehall_client=ehall_client,
+        encrypted_credentials=fernet_token,
+    )
 
     return {
         "status": "ok",
@@ -327,11 +337,16 @@ def auto_login(payload: AutoLoginRequest, request: Request) -> dict:
             timeout_seconds=settings.request_timeout_seconds,
         )
 
-    session = sessions.create(client, student_name, ehall_client=ehall_client)
-
     from app.sessions import encrypt_credentials
 
     cred_token = encrypt_credentials(payload.account, password, settings.credential_encryption_key)
+
+    session = sessions.create(
+        client, student_name,
+        ehall_client=ehall_client,
+        encrypted_credentials=cred_token,
+    )
+
     logger.info("[TIMING] auto_login endpoint total: %.2fs", time.time() - t_total)
     return {
         "status": "ok",

@@ -382,7 +382,11 @@ class SessionStore:
         """Persist mutable session fields (e.g. push_registration_id) to DB."""
         from app.database import AppSessionModel
 
-        allowed = {"push_registration_id", "push_platform", "encrypted_credentials", "student_name"}
+        allowed = {
+            "push_registration_id", "push_platform",
+            "encrypted_credentials", "student_name",
+            "jwxt_cookies", "ehall_cookies", "ehall_auth_token",
+        }
         updates = {k: v for k, v in fields.items() if k in allowed}
         if not updates:
             return
