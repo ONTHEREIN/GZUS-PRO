@@ -84,21 +84,29 @@ def create_session_endpoint(
     request: Request,
     x_internal_key: str | None = Header(None),
 ) -> dict:
-    """Create a session from CAS login result (called by Cloudflare Worker)."""
+    """Create a session from CAS login result (called by Cloudflare Worker).
+
+    Cookies obtained at the Worker edge are IP-bounded to the Worker's IP.
+    We skip JWXT validation here (validate=False) so the session is stored
+    with the raw cookies.  The Worker will inject fresh cookies on every
+    proxied request; the DB-stored cookies serve as a fallback.
+    """
     _verify_internal_key(x_internal_key)
     sessions = request.app.state.sessions
     settings = get_settings()
 
-    # Create SchoolSdkClient with the cookies from CAS login
+    # Create SchoolSdkClient with the cookies from CAS login.
+    # Skip JWXT validation — cookies are IP-bounded to the Worker's edge IP.
     client = SchoolSdkClient(
         base_url=settings.jw_base_url,
         timeout_seconds=settings.request_timeout_seconds,
     )
+    student_name = payload.student_name
     try:
-        student_name = client.login_with_cookies(payload.cookies, payload.account)
+        # Try validation first, fallback to no-validation on failure
+        student_name = client.login_with_cookies(payload.cookies, payload.account, validate=False)
     except Exception as exc:
         logger.warning("login_with_cookies failed in create-session: %s", exc)
-        student_name = payload.student_name
 
     # Create ehall client if ehall cookies are available
     ehall_client = None

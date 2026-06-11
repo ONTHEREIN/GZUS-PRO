@@ -78,8 +78,14 @@ def decrypt_credentials(token: str, key: str, ttl_seconds: int | None = None) ->
     return account, password
 
 
-def _rebuild_school_client(jwxt_cookies: str) -> Any:
-    """Rebuild a SchoolSdkClient from stored cookies."""
+def _rebuild_school_client(jwxt_cookies: str, validate_cookies: bool = False) -> Any:
+    """Rebuild a SchoolSdkClient from stored cookies.
+
+    By default does NOT validate cookies against JWXT (validate_cookies=False)
+    because cookies obtained from the Cloudflare Worker edge are IP-bounded
+    and cannot be verified from Vercel's IP.  The real validation happens on
+    the first actual API call; the caller handles AuthenticationError gracefully.
+    """
     from app.config import get_settings
     from app.school_client import SchoolSdkClient
 
@@ -88,7 +94,7 @@ def _rebuild_school_client(jwxt_cookies: str) -> Any:
         settings.jw_base_url,
         timeout_seconds=settings.request_timeout_seconds,
     )
-    client.login_with_cookies(jwxt_cookies, "")
+    client.login_with_cookies(jwxt_cookies, "", validate=validate_cookies)
     return client
 
 

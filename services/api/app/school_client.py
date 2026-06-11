@@ -121,17 +121,27 @@ class SchoolSdkClient:
             self._student_name = name
         return name
 
-    def login_with_cookies(self, cookies: Any, account: str) -> str | None:
+    def login_with_cookies(self, cookies: Any, account: str, validate: bool = True) -> str | None:
         cookie = self._select_sdk_cookie(cookies)
         if not cookie:
             raise AuthenticationError("未获取到教务系统 cookie")
         cookie_pairs = self._cookie_pairs(cookies)
         client_cls = self._load_school_client()
         school_client = self._build_client(client_cls)
+        self._account = account
+
+        if not validate:
+            # Skip JWXT validation.  Used when cookies are IP-bounded to
+            # the Cloudflare Worker edge and Vercel (different IP) cannot
+            # validate them.  Just set cookies and return; real validation
+            # will happen on first actual API call.
+            self._client = school_client
+            self._apply_cookie_pairs(cookie_pairs)
+            return None
+
         method = getattr(school_client, "user_login_with_cookies", None)
         if method is None:
             raise AuthenticationError("当前 SDK 未提供 cookie 登录方法")
-        self._account = account
         try:
             result = method(cookie, account=account)
             if self._has_academic_methods(result):

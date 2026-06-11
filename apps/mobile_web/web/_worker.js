@@ -657,6 +657,9 @@ function injectSessionCookies(request, session) {
   if (session.ehallCookies) {
     headers.set('X-Ehall-Cookies', session.ehallCookies);
   }
+  // Tell Vercel that cookies are injected from the Worker edge.
+  // Vercel should skip JWXT cookie validation (IP-bounded cookies).
+  headers.set('X-Worker-Auth', '1');
   return new Request(request.url, {
     method: request.method,
     headers,
@@ -740,18 +743,28 @@ export default {
           return errorResponse(result.error, 401, request);
         }
 
-        // Create session (try Vercel first, fall back to local session)
-        let sessionId = await createSessionOnBackend(result, account, env);
+        // Try to create a session on Vercel backend (best-effort).
+        // Even if it succeeds, we ALWAYS keep a local session because
+        // JWXT cookies are IP-bounded to this Worker's edge location.
+        // Vercel (different IP) cannot validate them, so we must inject
+        // them on every proxied request.
+        let sessionId = generateSessionId();
+        localSessions.set(sessionId, {
+          cookies: result.cookies,
+          ehallCookies: result.ehallCookies,
+          studentName: result.studentName,
+        });
 
-        if (!sessionId) {
-          // Vercel session creation failed (likely IP-bounded cookies).
-          // Fall back to local session managed by this Worker.
-          sessionId = generateSessionId();
-          localSessions.set(sessionId, {
+        // Best-effort: also create session on Vercel for tracking
+        const vercelSid = await createSessionOnBackend(result, account, env);
+        // Store mapping so proxied requests can use the Vercel session
+        if (vercelSid) {
+          localSessions.set(vercelSid, {
             cookies: result.cookies,
             ehallCookies: result.ehallCookies,
             studentName: result.studentName,
           });
+          sessionId = vercelSid; // prefer Vercel session ID
         }
 
         return jsonResponse({
@@ -797,16 +810,23 @@ export default {
           return errorResponse(result.error, 401, request);
         }
 
-        // Create session (try Vercel first, fall back to local session)
-        let sessionId = await createSessionOnBackend(result, credentials.account, env);
+        // Always keep a local session (cookies are IP-bounded to this Worker).
+        let sessionId = generateSessionId();
+        localSessions.set(sessionId, {
+          cookies: result.cookies,
+          ehallCookies: result.ehallCookies,
+          studentName: result.studentName,
+        });
 
-        if (!sessionId) {
-          sessionId = generateSessionId();
-          localSessions.set(sessionId, {
+        // Best-effort: also create on Vercel
+        const vercelSid = await createSessionOnBackend(result, credentials.account, env);
+        if (vercelSid) {
+          localSessions.set(vercelSid, {
             cookies: result.cookies,
             ehallCookies: result.ehallCookies,
             studentName: result.studentName,
           });
+          sessionId = vercelSid;
         }
 
         return jsonResponse({
