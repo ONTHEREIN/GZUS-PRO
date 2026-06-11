@@ -96,10 +96,14 @@ def _student_info(session: AppSession) -> tuple[str, str]:
             logger.warning("ecard: get_info auth failed for session %s: %s", session.id[:8], exc)
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
         except Exception as exc:
-            logger.error("ecard: get_info failed for session %s: %s: %s", session.id[:8], type(exc).__name__, exc, exc_info=True)
+            # Stale JWXT cookies (expired session) → the downstream
+            # call almost certainly failed because of invalid auth.
+            # Return 401 so the frontend triggers a relogin rather
+            # than cascading into 502 retry storms.
+            logger.warning("ecard: get_info failed for session %s: %s: %s — treating as expired session", session.id[:8], type(exc).__name__, exc)
             raise HTTPException(
-                status_code=502,
-                detail=f"获取学号失败: {type(exc).__name__}: {exc}",
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="会话已过期，请重新登录",
             ) from exc
 
     if not student_id:

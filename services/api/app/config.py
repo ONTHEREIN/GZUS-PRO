@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     cors_origin_regex: str = r"^https?://(localhost|127\.0\.0\.1|192\.168\.\d{1,3}\.\d{1,3})(:\d+)?$"
     session_ttl_seconds: int = 7200
     sso_ttl_seconds: int = 300
-    request_timeout_seconds: int = 15
+    request_timeout_seconds: int = 6
     request_connect_timeout_seconds: int = 5
     cas_login_timeout_seconds: int = 60
     jpush_app_key: str = ""
@@ -33,8 +33,8 @@ class Settings(BaseSettings):
     ws_heartbeat_seconds: int = 30
     debug: bool = False
     database_url: str = ""
-    db_pool_size: int = 1
-    db_max_overflow: int = 2
+    db_pool_size: int = 3
+    db_max_overflow: int = 5
     db_pool_timeout: int = 10
     db_pool_recycle: int = 300
     ehall_session_ttl_hours: int = 24

@@ -54,15 +54,17 @@ def _run_academic_call(call: Callable[[], T]) -> T:
             detail=str(exc),
         ) from exc
     except Exception as exc:
-        logger.error(
-            "Academic API call failed: %s: %s",
+        # Stale JWXT cookies → downstream call failed with
+        # non-auth error.  Return 401 so the frontend triggers
+        # a relogin rather than cascading into 502 retry storms.
+        logger.warning(
+            "Academic API call failed: %s: %s — treating as expired session",
             type(exc).__name__,
             exc,
-            exc_info=True,
         )
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"教务系统数据获取失败: {type(exc).__name__}: {exc}",
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="会话已过期，请重新登录",
         ) from exc
 
 

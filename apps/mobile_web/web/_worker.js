@@ -856,12 +856,13 @@ export default {
     // Inject local session cookies if available (bypass Vercel's IP-bounded cookie issue)
     const sessionId = request.headers.get('X-Session-Id');
     const localSession = getLocalSession(request);
+    let hadLocalSession = !!localSession;
     if (localSession) {
       request = injectSessionCookies(request, localSession);
     } else if (sessionId) {
       console.warn(`[proxy] No localSession found for sessionId=${sessionId.slice(0,8)}... — cookies will NOT be injected`);
     }
-    return proxyToVercel(request, env, url);
+    return proxyToVercel(request, env, url, hadLocalSession);
   },
 };
 
@@ -926,7 +927,7 @@ async function createSessionOnBackend(loginResult, account, env) {
 }
 
 // ─── Proxy to Vercel ───────────────────────────────────────────────
-async function proxyToVercel(request, env, url) {
+async function proxyToVercel(request, env, url, hadLocalSession = true) {
   const origin = (env.API_ORIGIN || 'https://api-one-zeta-dc0jrazxzq.vercel.app').replace(/\/$/, '');
   // Strip /api/ prefix for Vercel backend compatibility
   let upstreamPath = url.pathname;
@@ -990,14 +991,20 @@ async function proxyToVercel(request, env, url) {
     }
   }
 
-  // All retries exhausted — return a friendly error
+  // All retries exhausted — return a friendly error.
+  // If the Worker had no local session cookies to inject, the downstream
+  // failures are almost certainly due to stale DB-stored cookies.
+  // Return 401 so the frontend triggers a relogin immediately.
+  const status = hadLocalSession ? 502 : 401;
   const errorBody = JSON.stringify({
-    detail: `后端服务暂时不可用，请稍后重试`,
+    detail: hadLocalSession
+      ? '后端服务暂时不可用，请稍后重试'
+      : '会话已过期，请重新登录',
   });
-  console.error(`proxyToVercel failed after ${maxRetries + 1} attempts: ${lastError?.message}`);
+  console.error(`proxyToVercel failed after ${maxRetries + 1} attempts (hadLocalSession=${hadLocalSession}): ${lastError?.message}`);
   return new Response(errorBody, {
-    status: 502,
-    statusText: 'Bad Gateway',
+    status,
+    statusText: status === 401 ? 'Unauthorized' : 'Bad Gateway',
     headers: {
       'Content-Type': 'application/json',
       ...corsHeaders(request),
