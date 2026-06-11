@@ -23,6 +23,7 @@ def _inject_worker_cookies(session: AppSession, request: Request) -> None:
     """
     worker_auth = request.headers.get("X-Worker-Auth")
     if not worker_auth:
+        logger.debug("Session %s: no X-Worker-Auth header, skipping cookie injection", session.id[:8])
         return
 
     cookie_header = request.headers.get("Cookie")
@@ -30,9 +31,25 @@ def _inject_worker_cookies(session: AppSession, request: Request) -> None:
         try:
             from app.school_client import SchoolSdkClient
             if isinstance(session.client, SchoolSdkClient):
+                logger.info(
+                    "Session %s: injecting Worker JWXT cookies (%d chars, %d keys) into SchoolSdkClient",
+                    session.id[:8],
+                    len(cookie_header),
+                    cookie_header.count("="),
+                )
                 session.client.apply_cookie_header(cookie_header)
+            else:
+                logger.warning(
+                    "Session %s: client is %s, not SchoolSdkClient — cannot inject JWXT cookies",
+                    session.id[:8],
+                    type(session.client).__name__,
+                )
         except Exception:
             logger.warning("Failed to inject Worker JWXT cookies into session client", exc_info=True)
+    elif not cookie_header:
+        logger.warning("Session %s: X-Worker-Auth present but no Cookie header from Worker", session.id[:8])
+    elif session.client is None:
+        logger.warning("Session %s: Cookie header present but session.client is None", session.id[:8])
 
     ehall_cookie_header = request.headers.get("X-Ehall-Cookies")
     if ehall_cookie_header and session.ehall_client is not None:
@@ -49,6 +66,11 @@ def _inject_worker_cookies(session: AppSession, request: Request) -> None:
                         value = value.strip()
                         if key:
                             new_cookies[key] = value
+                logger.info(
+                    "Session %s: injecting Worker ehall cookies (%d keys) into EhallClient",
+                    session.id[:8],
+                    len(new_cookies),
+                )
                 session.ehall_client._cookies.update(new_cookies)
                 http_client = getattr(session.ehall_client, "_http_client", None)
                 if http_client is not None and not getattr(http_client, "is_closed", True):
@@ -56,15 +78,21 @@ def _inject_worker_cookies(session: AppSession, request: Request) -> None:
                         http_client.cookies.set(key, value)
         except Exception:
             logger.warning("Failed to inject Worker ehall cookies into session client", exc_info=True)
+    elif not ehall_cookie_header:
+        logger.debug("Session %s: no X-Ehall-Cookies header from Worker", session.id[:8])
+    elif session.ehall_client is None:
+        logger.debug("Session %s: X-Ehall-Cookies present but session.ehall_client is None", session.id[:8])
 
 
 def require_session(
     request: Request, x_session_id: str | None = Header(default=None, alias="X-Session-Id")
 ) -> AppSession:
     if not x_session_id:
+        logger.warning("require_session: no X-Session-Id header in request to %s", request.url.path)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="登录已过期，请重新登录")
     session = request.app.state.sessions.get(x_session_id, touch=False)
     if session is None:
+        logger.warning("require_session: session %s not found in DB for %s", x_session_id[:8], request.url.path)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="会话已过期")
 
     # Proactively check if the session has been idle too long.
@@ -85,6 +113,15 @@ def require_session(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="会话已过期，请重新登录",
         )
+
+    logger.info(
+        "Session %s resolved for %s (client=%s, ehall=%s, idle=%ds)",
+        session.id[:8],
+        request.url.path,
+        type(session.client).__name__ if session.client else "None",
+        type(session.ehall_client).__name__ if session.ehall_client else "None",
+        int(idle_time.total_seconds()),
+    )
 
     # Inject fresh cookies from the Cloudflare Worker edge.
     # This must happen AFTER session retrieval but BEFORE the session is

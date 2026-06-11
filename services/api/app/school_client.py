@@ -1203,6 +1203,15 @@ class SchoolSdkClient:
                 if key:
                     pairs.append((key, value))
 
+        logger.info(
+            "apply_cookie_header: parsed %d cookie pairs from Worker header (%d chars), "
+            "SDK client=%s, httpx_client=%s",
+            len(pairs),
+            len(cookie_header),
+            "present" if self._client is not None else "None",
+            "present" if self._httpx_client is not None else "None",
+        )
+
         # Apply to SDK client (requests-based cookie jar)
         self._apply_cookie_pairs(pairs)
 
@@ -1212,6 +1221,7 @@ class SchoolSdkClient:
             for key, value in pairs:
                 self._httpx_client.cookies.set(key, value, domain="jwxt.seig.edu.cn", path="/")
                 self._httpx_client.cookies.set(key, value, domain="jwxt.seig.edu.cn", path="/jwglxt")
+            logger.info("apply_cookie_header: applied %d pairs to httpx_client cookie jar", len(pairs))
 
 
 def _detect_image_mime(data: bytes) -> str | None:

@@ -48,9 +48,15 @@ def _run_academic_call(call: Callable[[], T]) -> T:
             detail=str(exc),
         ) from exc
     except Exception as exc:
+        logger.error(
+            "Academic API call failed: %s: %s",
+            type(exc).__name__,
+            exc,
+            exc_info=True,
+        )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="教务系统数据获取失败，请稍后重试",
+            detail=f"教务系统数据获取失败: {type(exc).__name__}: {exc}",
         ) from exc
 
 

@@ -651,10 +651,14 @@ function getLocalSession(request) {
 function injectSessionCookies(request, session) {
   const headers = new Headers(request.headers);
   if (session.cookies) {
+    console.log(`[inject] Setting Cookie header (${session.cookies.length} chars) for ${request.url}`);
     headers.set('Cookie', session.cookies);
+  } else {
+    console.warn(`[inject] No JWXT cookies in localSession for ${request.url}`);
   }
   // Store ehall cookies for ehall-specific routes
   if (session.ehallCookies) {
+    console.log(`[inject] Setting X-Ehall-Cookies (${session.ehallCookies.length} chars) for ${request.url}`);
     headers.set('X-Ehall-Cookies', session.ehallCookies);
   }
   // Tell Vercel that cookies are injected from the Worker edge.
@@ -847,9 +851,12 @@ export default {
 
     // ─── All other routes: proxy to Vercel ─────────────────────
     // Inject local session cookies if available (bypass Vercel's IP-bounded cookie issue)
+    const sessionId = request.headers.get('X-Session-Id');
     const localSession = getLocalSession(request);
     if (localSession) {
       request = injectSessionCookies(request, localSession);
+    } else if (sessionId) {
+      console.warn(`[proxy] No localSession found for sessionId=${sessionId.slice(0,8)}... — cookies will NOT be injected`);
     }
     return proxyToVercel(request, env, url);
   },

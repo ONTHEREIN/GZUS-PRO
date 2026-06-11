@@ -71,20 +71,33 @@ def _student_info(session: AppSession) -> tuple[str, str]:
         student_id = str(student_id)
     name = session.student_name or ""
 
+    logger.info(
+        "ecard: _student_info session=%s client=%s account=%s name=%s",
+        session.id[:8] if session.id else "?",
+        type(session.client).__name__ if session.client else "None",
+        student_id or "(not cached)",
+        name or "(empty)",
+    )
+
     if not student_id:
         try:
             info = session.client.get_info()
             if isinstance(info, dict):
                 student_id = str(info.get("studentId") or info.get("student_id") or info.get("sno") or "")
                 name = str(info.get("name") or info.get("xm") or name)
+                logger.info("ecard: get_info returned student_id=%s name=%s", student_id, name)
         except AuthenticationError as exc:
-            logger.warning("ecard: get_info auth failed for session: %s", exc)
+            logger.warning("ecard: get_info auth failed for session %s: %s", session.id[:8], exc)
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
         except Exception as exc:
-            logger.error("ecard: get_info failed: %s", exc, exc_info=True)
+            logger.error("ecard: get_info failed for session %s: %s: %s", session.id[:8], type(exc).__name__, exc, exc_info=True)
+            raise HTTPException(
+                status_code=502,
+                detail=f"获取学号失败: {type(exc).__name__}: {exc}",
+            ) from exc
 
     if not student_id:
-        logger.error("ecard: no student_id available")
+        logger.error("ecard: no student_id available for session %s", session.id[:8])
         raise HTTPException(status_code=502, detail="当前用户缺少学号")
 
     return student_id, name
