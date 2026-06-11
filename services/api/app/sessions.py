@@ -203,14 +203,26 @@ class SessionStore:
     def get(self, session_id: str, *, touch: bool = True) -> AppSession | None:
         from app.database import AppSessionModel
 
+        # Retry DB connection acquisition (Vercel cold starts may fail
+        # transiently, e.g. Neon compute waking from auto-suspend)
         db = None
-        try:
-            db = self._get_db()
-        except Exception:
+        for attempt in range(3):
+            try:
+                db = self._get_db()
+                break
+            except Exception:
+                logger.warning(
+                    "DB connection attempt %d/3 for session %s failed",
+                    attempt + 1,
+                    session_id[:8] if session_id else "?",
+                    exc_info=False,
+                )
+                if attempt < 2:
+                    time.sleep(1.0 * (attempt + 1))
+        if db is None:
             logger.error(
-                "Failed to acquire database session for session %s",
+                "All DB connection attempts failed for session %s",
                 session_id[:8] if session_id else "?",
-                exc_info=True,
             )
             return None
 
@@ -218,12 +230,27 @@ class SessionStore:
             row = db.query(AppSessionModel).filter(AppSessionModel.id == session_id).first()
             if row is None:
                 # Neon PostgreSQL may have a slight read-after-write delay
-                # after a session is created on a different serverless instance.
-                # Retry once after a short wait.
-                time.sleep(0.5)
-                db.commit()  # refresh any stale transaction snapshot
-                row = db.query(AppSessionModel).filter(AppSessionModel.id == session_id).first()
+                # after a session is created on a different serverless
+                # instance.  Retry up to 3 times with increasing backoff.
+                for attempt in range(3):
+                    delay = 0.8 * (attempt + 1)
+                    logger.debug(
+                        "Session %s not found on attempt %d/3, retrying after %.1fs",
+                        session_id[:8],
+                        attempt + 1,
+                        delay,
+                    )
+                    time.sleep(delay)
+                    db.commit()  # refresh transaction snapshot
+                    row = db.query(AppSessionModel).filter(AppSessionModel.id == session_id).first()
+                    if row is not None:
+                        break
                 if row is None:
+                    logger.warning(
+                        "Session %s not found after %d retries (read-after-write lag?)",
+                        session_id[:8],
+                        3,
+                    )
                     return None
 
             # Absolute TTL check
