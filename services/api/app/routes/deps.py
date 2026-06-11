@@ -56,48 +56,11 @@ def _inject_worker_cookies(session: AppSession, request: Request) -> bool:
                     "Failed to inject Worker JWXT cookies into session client",
                     exc_info=True,
                 )
-        else:
-            # session.client is None (DB cookies were stale/empty).
-            # Recovery: build a fresh client from Worker-injected cookies.
-            try:
-                from app.config import get_settings
-                from app.school_client import SchoolSdkClient
-
-                settings = get_settings()
-                new_client = SchoolSdkClient(
-                    settings.jw_base_url,
-                    timeout_seconds=settings.request_timeout_seconds,
-                    session_id=session.id,
-                    worker_proxy_origin=settings.jwxt_worker_proxy_origin or None,
-                )
-                new_client.login_with_cookies(cookie_header, "", validate=False)
-                session.client = new_client
-                injected = True
-                logger.info(
-                    "Session %s: RECOVERED — built new client from Worker cookies (%d chars, %d keys)",
-                    session.id[:8],
-                    len(cookie_header),
-                    cookie_header.count("="),
-                )
-                # Persist recovered cookies to DB so future get() calls
-                # (without Worker cookies) have something to work with.
-                try:
-                    request.app.state.sessions.update(
-                        session.id,
-                        jwxt_cookies=cookie_header,
-                    )
-                except Exception:
-                    logger.warning(
-                        "Session %s: failed to persist recovered JWXT cookies to DB",
-                        session.id[:8],
-                        exc_info=True,
-                    )
-            except Exception:
-                logger.warning(
-                    "Session %s: recovery failed — could not build client from Worker cookies",
-                    session.id[:8],
-                    exc_info=True,
-                )
+        elif session.client is None:
+            logger.warning(
+                "Session %s: Cookie header present but session.client is None",
+                session.id[:8],
+            )
     elif not cookie_header:
         logger.warning(
             "Session %s: X-Worker-Auth present but no Cookie header from Worker",
