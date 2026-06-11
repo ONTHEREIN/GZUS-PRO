@@ -146,10 +146,10 @@ class SchoolSdkClient:
     def _install_worker_proxy(self) -> None:
         """Route the SDK client's JWXT HTTP requests through the Cloudflare Worker.
 
-        Uses a custom ``requests.HTTPAdapter`` mounted on the SDK's
-        ``requests.Session``.  All requests to ``jwxt.seig.edu.cn`` are
-        transparently rewritten to go through the Worker proxy, preserving
-        the Worker's edge IP (JWXT cookies are IP-bounded).
+        Replaces the SDK's ``requests.Session`` adapter so all JWXT requests
+        are forwarded through the Worker's ``/api/_proxy`` JSON endpoint.
+        The Worker injects IP-bounded JWXT cookies and sends the real request
+        to JWXT from its edge IP.
         """
         if not self._session_id or not self._worker_proxy_origin:
             return
@@ -158,29 +158,69 @@ class SchoolSdkClient:
 
         http_session = self._client._http  # requests.Session
         if getattr(http_session, "_gz_worker_proxy_installed", False):
-            return  # already mounted
+            return
 
-        import requests.adapters
+        import requests as _requests
+        from requests.adapters import HTTPAdapter
 
         session_id = self._session_id
-        proxy_origin = self._worker_proxy_origin
+        proxy_api = f"{self._worker_proxy_origin}/api/_proxy"
 
-        class _WorkerProxyAdapter(requests.adapters.HTTPAdapter):
+        # Use a raw session for the proxy calls (avoids recursion).
+        _raw_session = _requests.Session()
+
+        class _WorkerProxyAdapter(HTTPAdapter):
             def send(self, request, **kwargs):
-                parsed = urlparse(request.url)
-                if "jwxt.seig.edu.cn" in parsed.netloc:
-                    request.url = f"{proxy_origin}{parsed.path}"
-                    if parsed.query:
-                        request.url += f"?{parsed.query}"
-                    request.headers["X-Jwxt-Session-Id"] = session_id
-                return super().send(request, **kwargs)
+                try:
+                    proxy_resp = _raw_session.post(
+                        proxy_api,
+                        json={
+                            "url": request.url,
+                            "method": request.method,
+                            "headers": dict(request.headers),
+                            "session_id": session_id,
+                        },
+                        timeout=30,
+                    )
+                    if proxy_resp.status_code != 200:
+                        raise Exception(f"Worker proxy returned {proxy_resp.status_code}")
+                    # Reconstruct a requests.Response
+                    resp = _requests.Response()
+                    resp.status_code = int(
+                        proxy_resp.headers.get("X-Proxy-Status", 502)
+                    )
+                    for k, v in proxy_resp.headers.items():
+                        if k.lower() in (
+                            "content-encoding", "transfer-encoding",
+                            "content-length", "connection",
+                            "x-proxy-status", "x-proxy-content-type",
+                        ):
+                            continue
+                        resp.headers[k] = v
+                    ct = proxy_resp.headers.get("X-Proxy-Content-Type", "")
+                    if ct:
+                        resp.headers["Content-Type"] = ct
+                    resp._content = proxy_resp.content
+                    resp.encoding = "utf-8"
+                    resp.request = request
+                    resp.url = request.url
+                    return resp
+                except Exception:
+                    logger.warning(
+                        "Worker proxy failed for %s %s, fallback direct",
+                        request.method,
+                        request.url,
+                        exc_info=True,
+                    )
+                    return super().send(request, **kwargs)
 
-        http_session.mount("https://jwxt.seig.edu.cn", _WorkerProxyAdapter())
+        # Mount for ALL HTTPS traffic — the Worker proxy handles JWXT routing
+        http_session.mount("https://", _WorkerProxyAdapter())
         http_session._gz_worker_proxy_installed = True
         logger.info(
-            "Installed Worker proxy for session %s → %s",
+            "Installed Worker proxy adapter for session %s → %s",
             session_id[:8],
-            proxy_origin,
+            proxy_api,
         )
 
     def login(self, account: str, password: str) -> str | None:

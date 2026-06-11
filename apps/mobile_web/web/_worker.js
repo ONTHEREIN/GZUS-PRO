@@ -820,6 +820,63 @@ export default {
       return jsonResponse({ status: 'ok', edge: true }, 200, request);
     }
 
+    // ─── Worker HTTP proxy (for Vercel → JWXT) ────────────────
+    // Vercel sends HTTP requests through this endpoint so JWXT
+    // cookies (IP-bounded to the Worker's edge IP) remain valid.
+    if (path === '_proxy' && request.method === 'POST') {
+      try {
+        const body = await request.json();
+        const { url: targetUrl, method, headers: proxyHeaders, session_id } = body;
+        if (!targetUrl || !session_id) {
+          return errorResponse('Missing url or session_id', 400, request);
+        }
+        // Load cookies from memory → KV
+        let cookies = null;
+        const localData = localSessions.get(session_id);
+        if (localData && localData.cookies) {
+          cookies = localData.cookies;
+        } else if (env && env.SESSIONS_KV) {
+          try {
+            const raw = await env.SESSIONS_KV.get(`session:${session_id}`);
+            if (raw) {
+              const data = JSON.parse(raw);
+              cookies = data.cookies;
+              localSessions.set(session_id, data);
+            }
+          } catch (e) {}
+        }
+        if (!cookies) {
+          return new Response('JWXT session cookies not found', { status: 502 });
+        }
+        // Forward the request to JWXT
+        const fwdHeaders = new Headers(proxyHeaders || {});
+        fwdHeaders.set('Cookie', cookies);
+        if (!fwdHeaders.has('User-Agent')) {
+          fwdHeaders.set('User-Agent', 'Mozilla/5.0 (Linux; Android 16) GZUS-PRO/1.0');
+        }
+        const jwxtRes = await fetch(targetUrl, {
+          method: method || 'GET',
+          headers: fwdHeaders,
+          signal: AbortSignal.timeout(20000),
+        });
+        const respHeaders = new Headers(jwxtRes.headers);
+        respHeaders.set('X-Proxy-Status', String(jwxtRes.status));
+        // Return body + status as JSON so Vercel can reconstruct
+        const respBody = await jwxtRes.arrayBuffer();
+        return new Response(respBody, {
+          status: 200,
+          headers: {
+            'Content-Type': 'application/octet-stream',
+            'X-Proxy-Status': String(jwxtRes.status),
+            'X-Proxy-Content-Type': jwxtRes.headers.get('Content-Type') || '',
+            ...corsHeaders(request),
+          },
+        });
+      } catch (e) {
+        return new Response('Proxy error: ' + e.message, { status: 502 });
+      }
+    }
+
     // ─── JWXT direct proxy test ──────────────────────────────
     if (path === 'jwxt-test') {
       const sessionId = request.headers.get('X-Session-Id');
