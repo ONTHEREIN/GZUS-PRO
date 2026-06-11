@@ -1184,7 +1184,7 @@ export default {
             jwxtUrl = 'https://jwxt.seig.edu.cn/jwglxt/kwgl/kscx_cxXsksxxIndex.html?doType=query&gnmkdm=N358105';
             postData = new URLSearchParams({ ...baseParams, ksmcdmb_id: '', kch: '', kc: '', ksrq: '' });
           } else if (path === 'schedule') {
-            jwxtUrl = 'https://jwxt.seig.edu.cn/jwglxt/kbcx/xskbcx_cxXsKb.html?doType=query&gnmkdm=N2151';
+            jwxtUrl = 'https://jwxt.seig.edu.cn/jwglxt/kbcx/xskbcx_cxXsKb.html';
             postData = new URLSearchParams({ ...baseParams, kzlx: 'ck' });
           } else if (path === 'grades') {
             jwxtUrl = 'https://jwxt.seig.edu.cn/jwglxt/cjcx/cjcx_cxXsgrcj.html?doType=query&gnmkdm=N305005';
@@ -1212,13 +1212,11 @@ export default {
 
             if (jwxtRes.ok) {
               const data = await jwxtRes.json().catch(() => null);
-              if (data && data.items) {
-                return jsonResponse(data.items, 200, request);
-              }
-              if (data && Array.isArray(data)) {
-                return jsonResponse(data, 200, request);
-              }
-              // credits returns a single object with totals
+              // Common JWXT response formats
+              if (data && data.items) return jsonResponse(data.items, 200, request);
+              if (data && data.kbList) return jsonResponse(data.kbList, 200, request); // schedule
+              if (data && Array.isArray(data)) return jsonResponse(data, 200, request);
+              // Single object (credits totals, etc.)
               if (data && typeof data === 'object' && !Array.isArray(data)) {
                 return jsonResponse(data, 200, request);
               }
