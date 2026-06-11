@@ -1174,7 +1174,13 @@ export default {
     const localSession = await getLocalSession(request, env);
     let hadLocalSession = !!localSession;
     if (localSession) {
-      request = injectSessionCookies(request, localSession);
+      try {
+        request = injectSessionCookies(request, localSession);
+      } catch (e) {
+        console.error(`[proxy] injectSessionCookies failed: ${e.message}`);
+        // Fall through without injected cookies — Vercel will use DB-stored cookies
+        hadLocalSession = false;
+      }
     } else if (sessionId) {
       console.warn(`[proxy] No localSession found for sessionId=${sessionId.slice(0,8)}... — cookies will NOT be injected`);
     }
