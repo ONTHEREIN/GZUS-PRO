@@ -731,10 +731,13 @@ export default {
         // If password is RSA-encrypted, call Vercel's fast decrypt endpoint
         // instead of proxying the entire auto-login (CAS login is too slow).
         if (encryptedPassword && keyId) {
-          password = await decryptPasswordOnVercel(encryptedPassword, env);
+          console.log(`[auto-login] Decrypting password: keyId=${keyId}, encryptedPassword length=${encryptedPassword.length}`);
+          password = await decryptPasswordOnVercel(encryptedPassword, keyId, env);
           if (!password) {
+            console.error(`[auto-login] Password decryption failed for account=${account}, keyId=${keyId}`);
             return errorResponse('密码解密失败，请重试', 400, request);
           }
+          console.log(`[auto-login] Password decrypted successfully for account=${account}`);
         }
 
         if (!account || !password) {
@@ -863,7 +866,7 @@ export default {
 };
 
 // ─── Decrypt password via Vercel (fast, < 1s) ──────────────────────
-async function decryptPasswordOnVercel(encryptedPassword, env) {
+async function decryptPasswordOnVercel(encryptedPassword, keyId, env) {
   const vercelOrigin = (env.API_ORIGIN || 'https://api-one-zeta-dc0jrazxzq.vercel.app').replace(/\/$/, '');
 
   try {
@@ -873,14 +876,15 @@ async function decryptPasswordOnVercel(encryptedPassword, env) {
         'Content-Type': 'application/json',
         'X-Internal-Key': env.INTERNAL_API_KEY || '',
       },
-      body: JSON.stringify({ encrypted_password: encryptedPassword }),
+      body: JSON.stringify({ encrypted_password: encryptedPassword, key_id: keyId }),
       signal: AbortSignal.timeout(10000),
     });
     if (res.ok) {
       const data = await res.json();
       return data.password;
     }
-    console.error(`decryptPasswordOnVercel failed: status=${res.status}`);
+    const errorBody = await res.text().catch(() => '');
+    console.error(`decryptPasswordOnVercel failed: status=${res.status} body=${errorBody.slice(0, 300)}`);
   } catch (e) {
     console.error(`decryptPasswordOnVercel error: ${e.message}`);
   }

@@ -37,6 +37,7 @@ class OcrRequest(BaseModel):
 
 class DecryptPasswordRequest(BaseModel):
     encrypted_password: str
+    key_id: str | None = None  # sent by Worker for key mismatch detection
 
 class CreateSessionRequest(BaseModel):
     account: str
@@ -72,9 +73,39 @@ def decrypt_password_endpoint(
     _verify_internal_key(x_internal_key)
     try:
         from app.rsa_keys import rsa_key_manager
+        current_key_id = rsa_key_manager.get_key_id()
+        logger.info(
+            "decrypt-password: client_keyId=%s, server_keyId=%s, encrypted_password length=%d, key_match=%s",
+            payload.key_id,
+            current_key_id,
+            len(payload.encrypted_password),
+            payload.key_id == current_key_id if payload.key_id else "unknown",
+        )
+        if payload.key_id and payload.key_id != current_key_id:
+            logger.warning(
+                "decrypt-password: KEY MISMATCH! client_keyId=%s != server_keyId=%s. "
+                "This usually means RSA_PRIVATE_KEY is not set on Vercel, causing key rotation on cold start.",
+                payload.key_id,
+                current_key_id,
+            )
+            raise HTTPException(
+                status_code=400,
+                detail=f"RSA密钥不匹配: 前端keyId={payload.key_id}, 后端keyId={current_key_id}. "
+                       "请刷新页面获取新公钥后重试。",
+            )
         password = rsa_key_manager.decrypt(payload.encrypted_password)
         return {"password": password}
+    except HTTPException:
+        raise
     except Exception as exc:
+        from app.rsa_keys import rsa_key_manager
+        logger.error(
+            "decrypt-password FAILED: keyId=%s, error=%s: %s",
+            rsa_key_manager.get_key_id(),
+            type(exc).__name__,
+            exc,
+            exc_info=True,
+        )
         raise HTTPException(status_code=400, detail=f"密码解密失败: {exc}")
 
 
