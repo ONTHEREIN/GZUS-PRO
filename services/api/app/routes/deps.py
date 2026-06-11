@@ -30,66 +30,38 @@ def _inject_worker_cookies(session: AppSession, request: Request) -> bool:
     injected = False
 
     cookie_header = request.headers.get("Cookie")
-    if cookie_header:
-        if session.client is not None:
-            # Inject fresh cookies into existing client
-            try:
-                from app.school_client import SchoolSdkClient
+    if cookie_header and session.client is not None:
+        try:
+            from app.school_client import SchoolSdkClient
 
-                if isinstance(session.client, SchoolSdkClient):
-                    logger.info(
-                        "Session %s: injecting Worker JWXT cookies (%d chars, %d keys)",
-                        session.id[:8],
-                        len(cookie_header),
-                        cookie_header.count("="),
-                    )
-                    session.client.apply_cookie_header(cookie_header)
-                    injected = True
-                else:
-                    logger.warning(
-                        "Session %s: client is %s, not SchoolSdkClient",
-                        session.id[:8],
-                        type(session.client).__name__,
-                    )
-            except Exception:
-                logger.warning(
-                    "Failed to inject Worker JWXT cookies into session client",
-                    exc_info=True,
-                )
-        else:
-            # session.client is None (DB cookies were stale/empty).
-            # Build a fresh client from Worker-injected cookies so the
-            # request can proceed instead of failing with 401.
-            logger.warning(
-                "Session %s: Cookie header present but session.client is None — attempting recovery",
-                session.id[:8],
-            )
-            try:
-                from app.school_client import SchoolSdkClient
-                from app.config import get_settings
-                settings = get_settings()
-                new_client = SchoolSdkClient(
-                    settings.jw_base_url,
-                    timeout_seconds=settings.request_timeout_seconds,
-                    session_id=session.id,
-                    worker_proxy_origin=settings.jwxt_worker_proxy_origin or None,
-                )
-                new_client.login_with_cookies(cookie_header, "", validate=False)
-                session.client = new_client
-                injected = True
+            if isinstance(session.client, SchoolSdkClient):
                 logger.info(
-                    "Session %s: RECOVERED — built new client from Worker cookies",
+                    "Session %s: injecting Worker JWXT cookies (%d chars, %d keys)",
                     session.id[:8],
+                    len(cookie_header),
+                    cookie_header.count("="),
                 )
-            except Exception:
+                session.client.apply_cookie_header(cookie_header)
+                injected = True
+            else:
                 logger.warning(
-                    "Session %s: recovery failed",
+                    "Session %s: client is %s, not SchoolSdkClient",
                     session.id[:8],
-                    exc_info=True,
+                    type(session.client).__name__,
                 )
+        except Exception:
+            logger.warning(
+                "Failed to inject Worker JWXT cookies into session client",
+                exc_info=True,
+            )
     elif not cookie_header:
         logger.warning(
             "Session %s: X-Worker-Auth present but no Cookie header from Worker",
+            session.id[:8],
+        )
+    elif session.client is None:
+        logger.warning(
+            "Session %s: Cookie header present but session.client is None",
             session.id[:8],
         )
 
