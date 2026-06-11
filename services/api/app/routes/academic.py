@@ -31,6 +31,12 @@ T = TypeVar("T")
 
 def _get_student_id(session: AppSession) -> str:
     client = session.client
+    if client is None:
+        logger.error("academic: session.client is None for session %s", session.id[:8])
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="会话已过期，请重新登录",
+        )
     account = getattr(client, "_account", None)
     if account:
         return account

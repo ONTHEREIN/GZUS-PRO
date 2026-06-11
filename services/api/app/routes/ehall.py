@@ -83,6 +83,12 @@ def leave_preview(
     payload: LeavePreviewRequest,
     session: AppSession = Depends(require_session),
 ) -> dict:
+    if session.client is None:
+        logger.error("ehall: session.client is None for session %s (leave_preview)", session.id[:8])
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="会话已过期，请重新登录",
+        )
     try:
         courses = session.client.get_schedule(str(payload.year), str(payload.term))
         return build_leave_preview(
@@ -110,6 +116,12 @@ def leave_fill(
             "items": [],
             "unmatchedTeachers": [],
         }
+    if session.client is None:
+        logger.error("ehall: session.client is None for session %s (leave_fill)", session.id[:8])
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="会话已过期，请重新登录",
+        )
     try:
         courses = session.client.get_schedule(str(payload.year), str(payload.term))
         preview = build_leave_preview(
