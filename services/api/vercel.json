@@ -38,7 +38,7 @@
     "DB_MAX_OVERFLOW": "5",
     "DB_POOL_TIMEOUT": "10",
     "DB_POOL_RECYCLE": "300",
-    "JWXT_WORKER_PROXY_ORIGIN": "https://onegzus-onweb.pages.dev"
+    "JWXT_WORKER_PROXY_ORIGIN": "https://onegzus.cc.cd"
   }
 }
 
