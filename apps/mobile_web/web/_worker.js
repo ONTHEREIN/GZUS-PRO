@@ -715,11 +715,9 @@ async function getLocalSession(request, env) {
 
 function injectSessionCookies(request, session) {
   const headers = new Headers(request.headers);
-  let injectedSomething = false;
   if (session.cookies) {
     console.log(`[inject] Setting Cookie header (${session.cookies.length} chars) for ${request.url}`);
     headers.set('Cookie', session.cookies);
-    injectedSomething = true;
   } else {
     console.warn(`[inject] No JWXT cookies in localSession for ${request.url}`);
   }
@@ -727,14 +725,10 @@ function injectSessionCookies(request, session) {
   if (session.ehallCookies) {
     console.log(`[inject] Setting X-Ehall-Cookies (${session.ehallCookies.length} chars) for ${request.url}`);
     headers.set('X-Ehall-Cookies', session.ehallCookies);
-    injectedSomething = true;
   }
-  // Only signal Vercel when we actually injected real cookies.
-  // An empty X-Worker-Auth would mislead Vercel into thinking fresh
-  // cookies are available when they're not.
-  if (injectedSomething) {
-    headers.set('X-Worker-Auth', '1');
-  }
+  // Tell Vercel that cookies are injected from the Worker edge.
+  // Vercel should skip JWXT cookie validation (IP-bounded cookies).
+  headers.set('X-Worker-Auth', '1');
   return new Request(request.url, {
     method: request.method,
     headers,
