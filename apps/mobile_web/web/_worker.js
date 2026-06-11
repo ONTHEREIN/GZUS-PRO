@@ -735,8 +735,24 @@ export default {
     // Worker's edge IP (JWXT cookies are IP-bounded).
     const jwxtSessionId = request.headers.get('X-Jwxt-Session-Id');
     if (jwxtSessionId && (url.pathname.startsWith('/jwglxt/') || url.pathname.startsWith('/xtgl/'))) {
-      const session = await getLocalSession(request, env);
-      if (!session || !session.cookies) {
+      let jwxtCookies = null;
+      // Look up cookies in memory first, then KV
+      const localData = localSessions.get(jwxtSessionId);
+      if (localData && localData.cookies) {
+        jwxtCookies = localData.cookies;
+      } else {
+        try {
+          if (env && env.SESSIONS_KV) {
+            const raw = await env.SESSIONS_KV.get(`session:${jwxtSessionId}`);
+            if (raw) {
+              const data = JSON.parse(raw);
+              jwxtCookies = data.cookies;
+              localSessions.set(jwxtSessionId, data); // cache
+            }
+          }
+        } catch (e) {}
+      }
+      if (!jwxtCookies) {
         return new Response('JWXT session not found', { status: 502 });
       }
       const jwxtUrl = 'https://jwxt.seig.edu.cn' + url.pathname + url.search;
@@ -744,7 +760,7 @@ export default {
         const jwxtRes = await fetch(jwxtUrl, {
           method: request.method,
           headers: {
-            'Cookie': session.cookies,
+            'Cookie': jwxtCookies,
             'User-Agent': 'Mozilla/5.0 (Linux; Android 16) GZUS-PRO/1.0',
             'Referer': 'https://jwxt.seig.edu.cn/jwglxt/xtgl/index_initMenu.html',
             ...(request.method === 'POST' ? { 'Content-Type': request.headers.get('Content-Type') || 'application/x-www-form-urlencoded' } : {}),

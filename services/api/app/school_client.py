@@ -144,13 +144,12 @@ class SchoolSdkClient:
         return headers
 
     def _install_worker_proxy(self) -> None:
-        """Monkey-patch the SDK client's ``requests.Session`` to route JWXT
-        requests through the Cloudflare Worker.
+        """Route the SDK client's JWXT HTTP requests through the Cloudflare Worker.
 
-        JWXT cookies are IP-bounded to the Worker's edge IP.  Vercel (different
-        IP) cannot validate them directly.  By rewriting JWXT URLs to go through
-        the Worker proxy, all JWXT API calls preserve the Worker's IP and cookies
-        remain valid.
+        Uses a custom ``requests.HTTPAdapter`` mounted on the SDK's
+        ``requests.Session``.  All requests to ``jwxt.seig.edu.cn`` are
+        transparently rewritten to go through the Worker proxy, preserving
+        the Worker's edge IP (JWXT cookies are IP-bounded).
         """
         if not self._session_id or not self._worker_proxy_origin:
             return
@@ -159,24 +158,24 @@ class SchoolSdkClient:
 
         http_session = self._client._http  # requests.Session
         if getattr(http_session, "_gz_worker_proxy_installed", False):
-            return  # already patched
+            return  # already mounted
 
-        original_request = http_session.request
+        import requests.adapters
+
         session_id = self._session_id
         proxy_origin = self._worker_proxy_origin
 
-        def patched_request(method, url, **kwargs):
-            parsed = urlparse(url)
-            if "jwxt.seig.edu.cn" in parsed.netloc:
-                url = f"{proxy_origin}{parsed.path}"
-                if parsed.query:
-                    url += f"?{parsed.query}"
-                headers = kwargs.get("headers") or {}
-                headers["X-Jwxt-Session-Id"] = session_id
-                kwargs["headers"] = headers
-            return original_request(method, url, **kwargs)
+        class _WorkerProxyAdapter(requests.adapters.HTTPAdapter):
+            def send(self, request, **kwargs):
+                parsed = urlparse(request.url)
+                if "jwxt.seig.edu.cn" in parsed.netloc:
+                    request.url = f"{proxy_origin}{parsed.path}"
+                    if parsed.query:
+                        request.url += f"?{parsed.query}"
+                    request.headers["X-Jwxt-Session-Id"] = session_id
+                return super().send(request, **kwargs)
 
-        http_session.request = patched_request
+        http_session.mount("https://jwxt.seig.edu.cn", _WorkerProxyAdapter())
         http_session._gz_worker_proxy_installed = True
         logger.info(
             "Installed Worker proxy for session %s → %s",
