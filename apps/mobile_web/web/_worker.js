@@ -688,17 +688,15 @@ export default {
     if (path === 'auth/auto-login' && request.method === 'POST') {
       try {
         const body = await request.json();
-        const { account, password, encryptedPassword, keyId } = body;
+        let { account, password, encryptedPassword, keyId } = body;
 
-        // If password is RSA-encrypted, proxy to Vercel (has the private key)
+        // If password is RSA-encrypted, call Vercel's fast decrypt endpoint
+        // instead of proxying the entire auto-login (CAS login is too slow).
         if (encryptedPassword && keyId) {
-          // Re-create request with preserved body (original body was consumed)
-          const newReq = new Request(request.url, {
-            method: request.method,
-            headers: request.headers,
-            body: JSON.stringify(body),
-          });
-          return proxyToVercel(newReq, env, url);
+          password = await decryptPasswordOnVercel(encryptedPassword, env);
+          if (!password) {
+            return errorResponse('密码解密失败，请重试', 400, request);
+          }
         }
 
         if (!account || !password) {
@@ -786,6 +784,31 @@ export default {
     return proxyToVercel(request, env, url);
   },
 };
+
+// ─── Decrypt password via Vercel (fast, < 1s) ──────────────────────
+async function decryptPasswordOnVercel(encryptedPassword, env) {
+  const vercelOrigin = (env.API_ORIGIN || 'https://api-one-zeta-dc0jrazxzq.vercel.app').replace(/\/$/, '');
+
+  try {
+    const res = await fetch(`${vercelOrigin}/internal/decrypt-password`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Internal-Key': env.INTERNAL_API_KEY || '',
+      },
+      body: JSON.stringify({ encrypted_password: encryptedPassword }),
+      signal: AbortSignal.timeout(10000),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      return data.password;
+    }
+    console.error(`decryptPasswordOnVercel failed: status=${res.status}`);
+  } catch (e) {
+    console.error(`decryptPasswordOnVercel error: ${e.message}`);
+  }
+  return null;
+}
 
 // ─── Create session on Vercel backend ──────────────────────────────
 async function createSessionOnBackend(loginResult, account, env) {

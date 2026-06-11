@@ -35,6 +35,9 @@ class OcrRequest(BaseModel):
     image: str  # base64-encoded image bytes
 
 
+class DecryptPasswordRequest(BaseModel):
+    encrypted_password: str
+
 class CreateSessionRequest(BaseModel):
     account: str
     cookies: str
@@ -58,6 +61,21 @@ def ocr_endpoint(
     except Exception as exc:
         logger.warning("OCR failed: %s", exc)
         return {"text": ""}
+
+
+@router.post("/decrypt-password")
+def decrypt_password_endpoint(
+    payload: DecryptPasswordRequest,
+    x_internal_key: str | None = Header(None),
+) -> dict:
+    """Decrypt an RSA-encrypted password. Fast endpoint (< 1s)."""
+    _verify_internal_key(x_internal_key)
+    try:
+        from app.rsa_keys import rsa_key_manager
+        password = rsa_key_manager.decrypt(payload.encrypted_password)
+        return {"password": password}
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"密码解密失败: {exc}")
 
 
 @router.post("/create-session")
