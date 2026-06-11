@@ -1164,7 +1164,7 @@ export default {
     // ─── Edge academic API: /exams & /schedule ────────────────
     // Handle exams and schedule at the Worker edge to avoid Vercel's
     // 10-second Hobby-plan timeout on the double-proxy chain.
-    const academicPaths = { exams: true, schedule: true };
+    const academicPaths = { exams: true, schedule: true, grades: true, credits: true, attendance: true };
     if (academicPaths[path] && request.method === 'GET') {
       const session = await getLocalSession(request, env);
       if (session && session.cookies) {
@@ -1174,50 +1174,58 @@ export default {
           const term = urlParams.get('term') || '';
           const termMap = { '1': '3', '2': '12', '3': '16' };
           const xqm = termMap[term] || '';
+          const nd = String(Date.now());
+          const baseParams = { xnm: year, xqm: xqm, _search: 'false', nd: nd,
+            'queryModel.showCount': '100', 'queryModel.currentPage': '1',
+            'queryModel.sortName': '', 'queryModel.sortOrder': 'asc', time: '1' };
 
           let jwxtUrl, postData;
           if (path === 'exams') {
             jwxtUrl = 'https://jwxt.seig.edu.cn/jwglxt/kwgl/kscx_cxXsksxxIndex.html?doType=query&gnmkdm=N358105';
-            postData = new URLSearchParams({
-              xnm: year, xqm: xqm, ksmcdmb_id: '', kch: '', kc: '', ksrq: '',
-              _search: 'false', nd: String(Date.now()),
-              'queryModel.showCount': '50', 'queryModel.currentPage': '1',
-              'queryModel.sortName': '', 'queryModel.sortOrder': 'asc', time: '1',
-            });
-          } else {
+            postData = new URLSearchParams({ ...baseParams, ksmcdmb_id: '', kch: '', kc: '', ksrq: '' });
+          } else if (path === 'schedule') {
             jwxtUrl = 'https://jwxt.seig.edu.cn/jwglxt/kbcx/xskbcx_cxXsKb.html?doType=query&gnmkdm=N2151';
-            postData = new URLSearchParams({
-              xnm: year, xqm: xqm, kch: '', kc: '',
-              _search: 'false', nd: String(Date.now()),
-              'queryModel.showCount': '50', 'queryModel.currentPage': '1',
-              'queryModel.sortName': '', 'queryModel.sortOrder': 'asc', time: '1',
-            });
+            postData = new URLSearchParams({ ...baseParams, kzlx: 'ck' });
+          } else if (path === 'grades') {
+            jwxtUrl = 'https://jwxt.seig.edu.cn/jwglxt/cjcx/cjcx_cxXsgrcj.html?doType=query&gnmkdm=N305005';
+            postData = new URLSearchParams({ ...baseParams, kch: '', kc: '' });
+          } else if (path === 'credits') {
+            jwxtUrl = 'https://jwxt.seig.edu.cn/jwglxt/xsxy/xsxyqk_cxXsxyqkIndex.html?doType=query&gnmkdm=N105515';
+            postData = new URLSearchParams(baseParams);
+          } else {
+            // attendance — fall through for now
+            jwxtUrl = null;
           }
 
-          const jwxtRes = await fetch(jwxtUrl, {
-            method: 'POST',
-            headers: {
-              'Cookie': session.cookies,
-              'Content-Type': 'application/x-www-form-urlencoded',
-              'User-Agent': 'Mozilla/5.0 (Linux; Android 16) GZUS-PRO/1.0',
-              'Referer': 'https://jwxt.seig.edu.cn/jwglxt/xtgl/index_initMenu.html',
-            },
-            body: postData.toString(),
-            signal: AbortSignal.timeout(15000),
-          });
+          if (jwxtUrl) {
+            const jwxtRes = await fetch(jwxtUrl, {
+              method: 'POST',
+              headers: {
+                'Cookie': session.cookies,
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'User-Agent': 'Mozilla/5.0 (Linux; Android 16) GZUS-PRO/1.0',
+                'Referer': 'https://jwxt.seig.edu.cn/jwglxt/xtgl/index_initMenu.html',
+              },
+              body: postData.toString(),
+              signal: AbortSignal.timeout(15000),
+            });
 
-          if (jwxtRes.ok) {
-            const data = await jwxtRes.json().catch(() => null);
-            if (data && data.items) {
-              return jsonResponse(data.items, 200, request);
+            if (jwxtRes.ok) {
+              const data = await jwxtRes.json().catch(() => null);
+              if (data && data.items) {
+                return jsonResponse(data.items, 200, request);
+              }
+              if (data && Array.isArray(data)) {
+                return jsonResponse(data, 200, request);
+              }
+              // credits returns a single object with totals
+              if (data && typeof data === 'object' && !Array.isArray(data)) {
+                return jsonResponse(data, 200, request);
+              }
+              console.warn(`[edge-${path}] JWXT returned unexpected format, falling through to Vercel`);
+            } else {
+              console.warn(`[edge-${path}] JWXT returned ${jwxtRes.status}, falling through to Vercel`);
             }
-            // Some JWXT endpoints return data in a different format
-            if (data && Array.isArray(data)) {
-              return jsonResponse(data, 200, request);
-            }
-            console.warn(`[edge-${path}] JWXT returned unexpected format, falling through to Vercel`);
-          } else {
-            console.warn(`[edge-${path}] JWXT returned ${jwxtRes.status}, falling through to Vercel`);
           }
         } catch (e) {
           console.warn(`[edge-${path}] JWXT direct fetch failed: ${e.message}, falling through to Vercel`);
