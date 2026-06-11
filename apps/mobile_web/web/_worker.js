@@ -828,14 +828,37 @@ async function proxyToVercel(request, env, url) {
     upstreamPath = upstreamPath.slice(4); // Remove /api
   }
   const upstreamUrl = new URL(upstreamPath + url.search, origin);
-  const upstreamRequest = new Request(upstreamUrl, request);
+
+  // Save the original request body so we can re-create it for each retry.
+  // request.body is a ReadableStream that can only be consumed once.
+  let savedBody = null;
+  try {
+    if (request.body) {
+      savedBody = await request.clone().text();
+    }
+  } catch {}
 
   // Retry on 5xx from Vercel (up to 2 retries with exponential backoff)
   const maxRetries = 2;
   let lastError = null;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
-      const response = await fetch(upstreamRequest);
+      // Re-create the upstream request for each attempt — body streams
+      // can only be consumed once, so we MUST rebuild the request.
+      let upstreamRequest;
+      if (savedBody !== null) {
+        upstreamRequest = new Request(upstreamUrl, {
+          method: request.method,
+          headers: request.headers,
+          body: savedBody,
+        });
+      } else {
+        upstreamRequest = new Request(upstreamUrl, request);
+      }
+
+      const response = await fetch(upstreamRequest, {
+        signal: AbortSignal.timeout(30000),
+      });
       // If it's not a 5xx, return immediately
       if (response.status < 500) {
         const headers = new Headers(response.headers);
@@ -848,7 +871,7 @@ async function proxyToVercel(request, env, url) {
           headers,
         });
       }
-      // 5xx — clone body and retry (body can only be consumed once)
+      // 5xx — retry after backoff
       lastError = new Error(`Vercel returned ${response.status}`);
       if (attempt < maxRetries) {
         await sleep(Math.min(200 * Math.pow(2, attempt), 2000));
