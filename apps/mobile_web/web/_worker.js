@@ -815,7 +815,8 @@ export default {
         };
         localSessions.set(sessionId, sessionData);
         // Also persist to KV so other Worker instances can inject cookies
-        context.waitUntil(saveSessionToKV(sessionId, sessionData, env));
+        // Fire-and-forget KV write (don't block the login response)
+saveSessionToKV(sessionId, sessionData, env).catch(e => console.warn('[kv] bg write failed:', e.message));
 
         return jsonResponse({
           status: 'ok',
@@ -879,7 +880,8 @@ export default {
           studentName: result.studentName,
         };
         localSessions.set(sessionId, sessionData);
-        context.waitUntil(saveSessionToKV(sessionId, sessionData, env));
+        // Fire-and-forget KV write (don't block the login response)
+saveSessionToKV(sessionId, sessionData, env).catch(e => console.warn('[kv] bg write failed:', e.message));
 
         return jsonResponse({
           status: 'ok',
