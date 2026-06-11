@@ -78,7 +78,11 @@ def decrypt_credentials(token: str, key: str, ttl_seconds: int | None = None) ->
     return account, password
 
 
-def _rebuild_school_client(jwxt_cookies: str, validate_cookies: bool = False) -> Any:
+def _rebuild_school_client(
+    jwxt_cookies: str,
+    validate_cookies: bool = False,
+    session_id: str | None = None,
+) -> Any:
     """Rebuild a SchoolSdkClient from stored cookies.
 
     By default does NOT validate cookies against JWXT (validate_cookies=False)
@@ -93,6 +97,8 @@ def _rebuild_school_client(jwxt_cookies: str, validate_cookies: bool = False) ->
     client = SchoolSdkClient(
         settings.jw_base_url,
         timeout_seconds=settings.request_timeout_seconds,
+        session_id=session_id,
+        worker_proxy_origin=settings.jwxt_worker_proxy_origin or None,
     )
     client.login_with_cookies(jwxt_cookies, "", validate=validate_cookies)
     return client
@@ -304,7 +310,7 @@ class SessionStore:
             ehall_client = None
             if row.jwxt_cookies:
                 try:
-                    client = _rebuild_school_client(row.jwxt_cookies)
+                    client = _rebuild_school_client(row.jwxt_cookies, session_id=session_id)
                 except Exception:
                     logger.warning(
                         "Failed to rebuild SchoolSdkClient for session %s, cookies may be stale",

@@ -180,4 +180,12 @@ def create_session_endpoint(
         logger.error("Failed to create session in DB: %s", exc, exc_info=True)
         raise HTTPException(status_code=503, detail=f"会话写入数据库失败: {exc}")
 
+    # Install Worker proxy on the JWXT client so all JWXT API calls
+    # go through the Cloudflare Worker (preserving the Worker's edge IP).
+    if settings.jwxt_worker_proxy_origin and session.id:
+        try:
+            client.set_worker_proxy(session.id, settings.jwxt_worker_proxy_origin)
+        except Exception as exc:
+            logger.warning("Failed to install Worker proxy on session %s: %s", session.id[:8], exc)
+
     return {"sessionId": session.id, "credentialToken": encrypted_credentials}

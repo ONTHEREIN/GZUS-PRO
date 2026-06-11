@@ -96,13 +96,93 @@ class CaptchaRequired(RuntimeError):
 class SchoolSdkClient:
     """Thin adapter over FarmerChillax/new-school-sdk with normalized output."""
 
-    def __init__(self, base_url: str, timeout_seconds: int = 15, httpx_client: Any | None = None) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        timeout_seconds: int = 15,
+        httpx_client: Any | None = None,
+        session_id: str | None = None,
+        worker_proxy_origin: str | None = None,
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
         self._client: Any | None = None
         self._account: str | None = None
         self._student_name: str | None = None
         self._httpx_client: Any | None = httpx_client
+        self._session_id = session_id
+        self._worker_proxy_origin = worker_proxy_origin
+
+    def set_worker_proxy(self, session_id: str, worker_proxy_origin: str) -> None:
+        """Configure the Worker proxy after session creation (when session_id
+        wasn't available at client construction time).
+
+        Called by ``create_session_endpoint`` after ``sessions.create()``
+        generates the session ID.
+        """
+        self._session_id = session_id
+        self._worker_proxy_origin = worker_proxy_origin
+        self._install_worker_proxy()
+
+    def _jwxt_origin(self) -> str:
+        """Return the origin used for JWXT requests.
+
+        When ``worker_proxy_origin`` is set, all JWXT HTTP requests are routed
+        through the Cloudflare Worker (preserving the Worker's edge IP so
+        IP-bounded cookies remain valid).  Otherwise requests go to JWXT directly.
+        """
+        if self._worker_proxy_origin:
+            return self._worker_proxy_origin
+        parsed = urlparse(self.base_url)
+        return f"{parsed.scheme}://{parsed.netloc}"
+
+    def _jwxt_headers(self, extra: dict | None = None) -> dict:
+        """Return headers for JWXT requests, including session ID for Worker proxy."""
+        headers = dict(extra or {})
+        if self._session_id:
+            headers["X-Jwxt-Session-Id"] = self._session_id
+        return headers
+
+    def _install_worker_proxy(self) -> None:
+        """Monkey-patch the SDK client's ``requests.Session`` to route JWXT
+        requests through the Cloudflare Worker.
+
+        JWXT cookies are IP-bounded to the Worker's edge IP.  Vercel (different
+        IP) cannot validate them directly.  By rewriting JWXT URLs to go through
+        the Worker proxy, all JWXT API calls preserve the Worker's IP and cookies
+        remain valid.
+        """
+        if not self._session_id or not self._worker_proxy_origin:
+            return
+        if self._client is None or not hasattr(self._client, "_http"):
+            return
+
+        http_session = self._client._http  # requests.Session
+        if getattr(http_session, "_gz_worker_proxy_installed", False):
+            return  # already patched
+
+        original_request = http_session.request
+        session_id = self._session_id
+        proxy_origin = self._worker_proxy_origin
+
+        def patched_request(method, url, **kwargs):
+            parsed = urlparse(url)
+            if "jwxt.seig.edu.cn" in parsed.netloc:
+                url = f"{proxy_origin}{parsed.path}"
+                if parsed.query:
+                    url += f"?{parsed.query}"
+                headers = kwargs.get("headers") or {}
+                headers["X-Jwxt-Session-Id"] = session_id
+                kwargs["headers"] = headers
+            return original_request(method, url, **kwargs)
+
+        http_session.request = patched_request
+        http_session._gz_worker_proxy_installed = True
+        logger.info(
+            "Installed Worker proxy for session %s → %s",
+            session_id[:8],
+            proxy_origin,
+        )
 
     def login(self, account: str, password: str) -> str | None:
         client_cls = self._load_school_client()
@@ -116,6 +196,7 @@ class SchoolSdkClient:
             if self._looks_like_captcha(exc):
                 raise CaptchaRequired(CaptchaChallenge(token="", image="", client=self)) from exc
             raise AuthenticationError("教务系统登录失败") from exc
+        self._install_worker_proxy()
         name = self._extract_student_name(result)
         if name:
             self._student_name = name
@@ -137,6 +218,7 @@ class SchoolSdkClient:
             # will happen on first actual API call.
             self._client = school_client
             self._apply_cookie_pairs(cookie_pairs)
+            self._install_worker_proxy()
             return None
 
         method = getattr(school_client, "user_login_with_cookies", None)
@@ -152,6 +234,7 @@ class SchoolSdkClient:
         except Exception as exc:  # noqa: BLE001 - third-party SDK exceptions are not stable.
             self._client = None
             raise AuthenticationError("教务系统 cookie 登录验证失败") from exc
+        self._install_worker_proxy()
         name = self._student_name_from_logged_in_client(result)
         if name:
             self._student_name = name
@@ -305,7 +388,7 @@ class SchoolSdkClient:
         # Try httpx_client first
         if self._httpx_client is not None:
             parsed = urlparse(self.base_url)
-            origin = f"{parsed.scheme}://{parsed.netloc}"
+            origin = self._jwxt_origin()
             full_url = origin + INFO_URL
             try:
                 response = self._httpx_client.get(full_url, params=params, timeout=self.timeout_seconds)
@@ -431,7 +514,7 @@ class SchoolSdkClient:
         # encoded_url is a relative path like /jwglxt/photo/photo_cxEncodedXszp.html?...
         if self._httpx_client is not None:
             parsed = urlparse(self.base_url)
-            origin = f"{parsed.scheme}://{parsed.netloc}"
+            origin = self._jwxt_origin()
             full_url = origin + encoded_url
             try:
                 response = self._httpx_client.get(full_url, timeout=self.timeout_seconds)
@@ -472,7 +555,7 @@ class SchoolSdkClient:
 
     def _fetch_photo_via_httpx_client(self, student_id: str) -> Any:
         parsed = urlparse(self.base_url)
-        origin = f"{parsed.scheme}://{parsed.netloc}"
+        origin = self._jwxt_origin()
         full_url = origin + PHOTO_URL
         headers = {
             "Referer": f"{origin}/jwglxt/xtgl/index_initMenu.html",
@@ -502,7 +585,7 @@ class SchoolSdkClient:
         if http is not None:
             try:
                 parsed = urlparse(self.base_url)
-                origin = f"{parsed.scheme}://{parsed.netloc}"
+                origin = self._jwxt_origin()
                 photo_url = origin + PHOTO_URL
                 logger.debug("_fetch_photo_via_http: requesting %s", photo_url)
                 return http.get(photo_url, params={"xh_id": student_id, "zplx": "rxhzp"})
@@ -521,7 +604,7 @@ class SchoolSdkClient:
             import httpx as _httpx
             cookies = {name: value for name, value in cookie_jar.items()}
             parsed = urlparse(self.base_url)
-            origin = f"{parsed.scheme}://{parsed.netloc}"
+            origin = self._jwxt_origin()
             photo_url = origin + PHOTO_URL
             with _httpx.Client(timeout=self.timeout_seconds, follow_redirects=True, cookies=cookies) as client:
                 return client.get(photo_url, params={"xh_id": student_id, "zplx": "rxhzp"})
@@ -976,7 +1059,7 @@ class SchoolSdkClient:
         from urllib.parse import urlparse as _urlparse
 
         parsed = _urlparse(self.base_url)
-        origin = f"{parsed.scheme}://{parsed.netloc}"
+        origin = self._jwxt_origin()
         full_url = origin + (url_or_endpoint if url_or_endpoint.startswith("/") else "/" + url_or_endpoint)
         request_kwargs: dict[str, Any] = {}
         params = kwargs.get("params")
@@ -1113,7 +1196,7 @@ class SchoolSdkClient:
         try:
             if self._httpx_client is not None:
                 parsed = urlparse(self.base_url)
-                origin = f"{parsed.scheme}://{parsed.netloc}"
+                origin = self._jwxt_origin()
                 full_url = origin + INFO_URL
                 response = self._httpx_client.get(
                     full_url,

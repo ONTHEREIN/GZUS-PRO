@@ -647,16 +647,27 @@ function generateSessionId() {
 }
 
 async function saveSessionToKV(sessionId, data, env) {
+  if (!env || !env.SESSIONS_KV) {
+    return { ok: false, reason: 'env.SESSIONS_KV not available' };
+  }
   try {
-    if (env && env.SESSIONS_KV) {
-      await env.SESSIONS_KV.put(
-        `session:${sessionId}`,
-        JSON.stringify(data),
-        { expirationTtl: SESSION_KV_TTL }
-      );
+    const cookiesLen = (data.cookies || '').length;
+    const key = `session:${sessionId}`;
+    await env.SESSIONS_KV.put(
+      key,
+      JSON.stringify(data),
+      { expirationTtl: SESSION_KV_TTL }
+    );
+    // Verify the write succeeded by reading it back
+    const verify = await env.SESSIONS_KV.get(key);
+    if (verify) {
+      console.log(`[kv] Session ${sessionId.slice(0, 8)} saved to KV (${cookiesLen} chars cookies)`);
+      return { ok: true };
     }
+    return { ok: false, reason: 'write appeared to succeed but read-back returned empty' };
   } catch (e) {
     console.warn(`[kv] Failed to save session ${sessionId.slice(0, 8)}:`, e.message);
+    return { ok: false, reason: e.message };
   }
 }
 
@@ -719,6 +730,39 @@ export default {
       return new Response(null, { status: 204, headers: corsHeaders(request) });
     }
 
+    // ─── JWXT proxy for Vercel backend ─────────────────────────
+    // Vercel routes JWXT requests through the Worker to preserve the
+    // Worker's edge IP (JWXT cookies are IP-bounded).
+    const jwxtSessionId = request.headers.get('X-Jwxt-Session-Id');
+    if (jwxtSessionId && (url.pathname.startsWith('/jwglxt/') || url.pathname.startsWith('/xtgl/'))) {
+      const session = await getLocalSession(request, env);
+      if (!session || !session.cookies) {
+        return new Response('JWXT session not found', { status: 502 });
+      }
+      const jwxtUrl = 'https://jwxt.seig.edu.cn' + url.pathname + url.search;
+      try {
+        const jwxtRes = await fetch(jwxtUrl, {
+          method: request.method,
+          headers: {
+            'Cookie': session.cookies,
+            'User-Agent': 'Mozilla/5.0 (Linux; Android 16) GZUS-PRO/1.0',
+            'Referer': 'https://jwxt.seig.edu.cn/jwglxt/xtgl/index_initMenu.html',
+            ...(request.method === 'POST' ? { 'Content-Type': request.headers.get('Content-Type') || 'application/x-www-form-urlencoded' } : {}),
+          },
+          body: request.method === 'POST' ? request.body : undefined,
+          signal: AbortSignal.timeout(20000),
+        });
+        const respHeaders = new Headers(jwxtRes.headers);
+        respHeaders.set('Access-Control-Allow-Origin', '*');
+        return new Response(jwxtRes.body, {
+          status: jwxtRes.status,
+          headers: respHeaders,
+        });
+      } catch (e) {
+        return new Response('JWXT proxy error: ' + e.message, { status: 502 });
+      }
+    }
+
     // API paths: handle in worker or proxy to Vercel
     let path;
     let isApiPath = url.pathname.startsWith('/api/');
@@ -758,6 +802,94 @@ export default {
     // ─── Health check ──────────────────────────────────────────
     if (path === 'health') {
       return jsonResponse({ status: 'ok', edge: true }, 200, request);
+    }
+
+    // ─── JWXT direct proxy test ──────────────────────────────
+    if (path === 'jwxt-test') {
+      const sessionId = request.headers.get('X-Session-Id');
+      if (!sessionId) return errorResponse('Missing X-Session-Id', 400, request);
+      const session = await getLocalSession(request, env);
+      if (!session || !session.cookies) return errorResponse('No session cookies found', 404, request);
+
+      const jwxtUrl = 'https://jwxt.seig.edu.cn/jwglxt/xtgl/index_initMenu.html';
+      try {
+        const start = Date.now();
+        const jwxtRes = await fetch(jwxtUrl, {
+          headers: {
+            'Cookie': session.cookies,
+            'User-Agent': 'Mozilla/5.0 (Linux; Android 16) GZUS-PRO/1.0',
+          },
+          signal: AbortSignal.timeout(15000),
+        });
+        const elapsed = Date.now() - start;
+        const body = await jwxtRes.text();
+        // Check auth status more precisely
+        const hasMenuData = body.includes('initMenu') || body.includes('cdbh');
+        const hasStudentInfo = /col_xm|学生信息|个人信息/.test(body);
+        const isRedirect = body.length < 1000 && (body.includes('login') || body.includes('cas'));
+        const isLoginPage = body.includes('lyuapServer') && body.includes('password');
+        return jsonResponse({
+          jwxtHttpStatus: jwxtRes.status,
+          elapsedMs: elapsed,
+          bodyLen: body.length,
+          hasMenuData,
+          hasStudentInfo,
+          isRedirect,
+          isLoginPage,
+          snippet: body.slice(0, 300).replace(/\s+/g, ' '),
+        }, 200, request);
+      } catch (e) {
+        return jsonResponse({ error: e.message }, 502, request);
+      }
+    }
+
+    // ─── KV diagnostic ────────────────────────────────────────
+    if (path === 'kv-test') {
+      const hasKV = !!(env && env.SESSIONS_KV);
+      let kvWrite = 'not attempted';
+      let kvRead = 'not attempted';
+      let sessionWrite = 'not attempted';
+      let sessionRead = 'not attempted';
+      if (hasKV) {
+        try {
+          await env.SESSIONS_KV.put('diag:test', 'ok', { expirationTtl: 60 });
+          kvWrite = 'success';
+          const val = await env.SESSIONS_KV.get('diag:test');
+          kvRead = val === 'ok' ? 'success' : 'mismatch: ' + JSON.stringify(val);
+        } catch (e) {
+          kvWrite = 'error: ' + e.message;
+        }
+        // Simulate a real session write with larger payload and longer TTL
+        try {
+          const fakeSession = {
+            cookies: 'route=' + 'x'.repeat(200) + '; JSESSIONID=' + 'y'.repeat(100) + '; BIGipServerpool_jwxt=' + 'z'.repeat(150),
+            ehallCookies: 'sid=' + 'e'.repeat(50),
+            studentName: '测试学生',
+          };
+          const fakeKey = 'session:test-' + Date.now();
+          await env.SESSIONS_KV.put(fakeKey, JSON.stringify(fakeSession), { expirationTtl: 7200 });
+          const verifyVal = await env.SESSIONS_KV.get(fakeKey);
+          if (verifyVal) {
+            sessionWrite = 'success (' + JSON.stringify(fakeSession).length + ' bytes)';
+            sessionRead = 'success';
+            // Clean up
+            await env.SESSIONS_KV.delete(fakeKey);
+          } else {
+            sessionWrite = 'success but read-back empty';
+            sessionRead = 'empty';
+          }
+        } catch (e) {
+          sessionWrite = 'error: ' + e.message;
+        }
+      }
+      return jsonResponse({
+        hasKV,
+        kvWrite,
+        kvRead,
+        sessionWrite,
+        sessionRead,
+        localSessionCount: localSessions.size,
+      }, 200, request);
     }
 
     // ─── Auto-login (edge) ─────────────────────────────────────
@@ -814,9 +946,7 @@ export default {
           studentName: result.studentName,
         };
         localSessions.set(sessionId, sessionData);
-        // Also persist to KV so other Worker instances can inject cookies
-        // Fire-and-forget KV write (don't block the login response)
-saveSessionToKV(sessionId, sessionData, env).catch(e => console.warn('[kv] bg write failed:', e.message));
+        const kvResult = await saveSessionToKV(sessionId, sessionData, env);
 
         return jsonResponse({
           status: 'ok',
@@ -826,6 +956,7 @@ saveSessionToKV(sessionId, sessionData, env).catch(e => console.warn('[kv] bg wr
           credentialToken: result.credentialToken,
           ehallCookies: result.ehallCookies,
           ehallAuthToken: null,
+          _kv: kvResult,
         }, 200, request);
       } catch (e) {
         return errorResponse(`登录失败: ${e.message}`, 500, request);
@@ -880,8 +1011,7 @@ saveSessionToKV(sessionId, sessionData, env).catch(e => console.warn('[kv] bg wr
           studentName: result.studentName,
         };
         localSessions.set(sessionId, sessionData);
-        // Fire-and-forget KV write (don't block the login response)
-saveSessionToKV(sessionId, sessionData, env).catch(e => console.warn('[kv] bg write failed:', e.message));
+        const kvResult = await saveSessionToKV(sessionId, sessionData, env);
 
         return jsonResponse({
           status: 'ok',
@@ -891,6 +1021,7 @@ saveSessionToKV(sessionId, sessionData, env).catch(e => console.warn('[kv] bg wr
           credentialToken: result.credentialToken || credentialToken,
           ehallCookies: result.ehallCookies,
           ehallAuthToken: null,
+          _kv: kvResult,
         }, 200, request);
       } catch (e) {
         return errorResponse(`重新登录失败: ${e.message}`, 500, request);
@@ -1058,4 +1189,4 @@ async function proxyToVercel(request, env, url, hadLocalSession = true) {
     },
   });
 }
-// trigger redeploy 2026-06-11T01:21:17+08:00
+// trigger redeploy 2026-06-11T01:45:00+08:00
