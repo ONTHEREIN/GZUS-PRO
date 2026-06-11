@@ -32,6 +32,21 @@ jobs:
           cd apps/mobile_web
           flutter build web --release --base-href "/" --dart-define=API_BASE_URL="$API_BASE_URL" --no-web-resources-cdn
 
+      - name: Clean build output
+        run: |
+          cd apps/mobile_web/build/web
+          # 移除调试符号文件
+          find . -name "*.symbols" -delete
+          # 移除不需要的 CanvasKit 变体
+          rm -rf canvaskit/chromium
+          rm -rf canvaskit/experimental_webparagraph
+          rm -f canvaskit/skwasm*.wasm canvaskit/skwasm*.js
+          rm -f canvaskit/wimp.wasm canvaskit/wimp.js
+          # 移除 NOTICE 文件
+          rm -f assets/NOTICES
+          echo "=== Cleaned build size ==="
+          du -sh .
+
       - name: Deploy to Cloudflare Pages (onegzus-onweb)
         run: npx wrangler@latest pages deploy apps/mobile_web/build/web --project-name=onegzus-onweb --branch=master --commit-dirty=true
         env:
