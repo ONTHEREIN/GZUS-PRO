@@ -633,6 +633,37 @@ function errorResponse(message, status = 401, request = null) {
   return jsonResponse({ detail: message }, status, request);
 }
 
+// ─── Local session store (bypass Vercel session IP-binding issues) ─
+const localSessions = new Map(); // sessionId -> { cookies, ehallCookies, studentName }
+
+function generateSessionId() {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+}
+
+function getLocalSession(request) {
+  const sessionId = request.headers.get('X-Session-Id');
+  if (!sessionId) return null;
+  return localSessions.get(sessionId) || null;
+}
+
+function injectSessionCookies(request, session) {
+  const headers = new Headers(request.headers);
+  if (session.cookies) {
+    headers.set('Cookie', session.cookies);
+  }
+  // Store ehall cookies for ehall-specific routes
+  if (session.ehallCookies) {
+    headers.set('X-Ehall-Cookies', session.ehallCookies);
+  }
+  return new Request(request.url, {
+    method: request.method,
+    headers,
+    body: request.body,
+  });
+}
+
 // ─── Main Worker Handler ───────────────────────────────────────────
 export default {
   async fetch(request, env, context) {
@@ -709,11 +740,18 @@ export default {
           return errorResponse(result.error, 401, request);
         }
 
-        // Create session via Vercel backend
-        const sessionId = await createSessionOnBackend(result, account, env);
+        // Create session (try Vercel first, fall back to local session)
+        let sessionId = await createSessionOnBackend(result, account, env);
 
         if (!sessionId) {
-          return errorResponse('会话创建失败，请重试', 502, request);
+          // Vercel session creation failed (likely IP-bounded cookies).
+          // Fall back to local session managed by this Worker.
+          sessionId = generateSessionId();
+          localSessions.set(sessionId, {
+            cookies: result.cookies,
+            ehallCookies: result.ehallCookies,
+            studentName: result.studentName,
+          });
         }
 
         return jsonResponse({
@@ -759,11 +797,16 @@ export default {
           return errorResponse(result.error, 401, request);
         }
 
-        // Create session via Vercel backend
-        const sessionId = await createSessionOnBackend(result, credentials.account, env);
+        // Create session (try Vercel first, fall back to local session)
+        let sessionId = await createSessionOnBackend(result, credentials.account, env);
 
         if (!sessionId) {
-          return errorResponse('会话创建失败，请重试', 502, request);
+          sessionId = generateSessionId();
+          localSessions.set(sessionId, {
+            cookies: result.cookies,
+            ehallCookies: result.ehallCookies,
+            studentName: result.studentName,
+          });
         }
 
         return jsonResponse({
@@ -781,6 +824,11 @@ export default {
     }
 
     // ─── All other routes: proxy to Vercel ─────────────────────
+    // Inject local session cookies if available (bypass Vercel's IP-bounded cookie issue)
+    const localSession = getLocalSession(request);
+    if (localSession) {
+      request = injectSessionCookies(request, localSession);
+    }
     return proxyToVercel(request, env, url);
   },
 };
