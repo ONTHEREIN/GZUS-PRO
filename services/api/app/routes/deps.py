@@ -13,6 +13,51 @@ logger = logging.getLogger(__name__)
 SESSION_IDLE_STALE_THRESHOLD = timedelta(minutes=25)
 
 
+def _inject_worker_cookies(session: AppSession, request: Request) -> None:
+    """Override session client cookies with fresh ones from the Cloudflare Worker.
+
+    The Worker edge holds the live JWXT cookies (IP-bounded to the Worker's IP).
+    It injects them as Cookie / X-Ehall-Cookies headers on every proxied request.
+    We must apply them to the session's live client objects so that subsequent
+    API calls use the fresh cookies instead of the DB-stored stale ones.
+    """
+    worker_auth = request.headers.get("X-Worker-Auth")
+    if not worker_auth:
+        return
+
+    cookie_header = request.headers.get("Cookie")
+    if cookie_header and session.client is not None:
+        try:
+            from app.school_client import SchoolSdkClient
+            if isinstance(session.client, SchoolSdkClient):
+                session.client.apply_cookie_header(cookie_header)
+        except Exception:
+            logger.warning("Failed to inject Worker JWXT cookies into session client", exc_info=True)
+
+    ehall_cookie_header = request.headers.get("X-Ehall-Cookies")
+    if ehall_cookie_header and session.ehall_client is not None:
+        try:
+            from app.ehall_client import EhallClient
+            if isinstance(session.ehall_client, EhallClient):
+                # Update the internal cookies dict and the live httpx client
+                new_cookies = {}
+                for part in ehall_cookie_header.split(";"):
+                    part = part.strip()
+                    if "=" in part:
+                        key, _, value = part.partition("=")
+                        key = key.strip()
+                        value = value.strip()
+                        if key:
+                            new_cookies[key] = value
+                session.ehall_client._cookies.update(new_cookies)
+                http_client = getattr(session.ehall_client, "_http_client", None)
+                if http_client is not None and not getattr(http_client, "is_closed", True):
+                    for key, value in new_cookies.items():
+                        http_client.cookies.set(key, value)
+        except Exception:
+            logger.warning("Failed to inject Worker ehall cookies into session client", exc_info=True)
+
+
 def require_session(
     request: Request, x_session_id: str | None = Header(default=None, alias="X-Session-Id")
 ) -> AppSession:
@@ -40,6 +85,12 @@ def require_session(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="会话已过期，请重新登录",
         )
+
+    # Inject fresh cookies from the Cloudflare Worker edge.
+    # This must happen AFTER session retrieval but BEFORE the session is
+    # used for any API call, because the DB-stored cookies are IP-bounded
+    # to the Worker's edge and won't work from Vercel's IP.
+    _inject_worker_cookies(session, request)
 
     request.app.state.sessions.touch(session.id)
     return session

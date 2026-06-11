@@ -1184,6 +1184,35 @@ class SchoolSdkClient:
             cookie_jar.set(key, value, domain="jwxt.seig.edu.cn", path="/")
             cookie_jar.set(key, value, domain="jwxt.seig.edu.cn", path="/jwglxt")
 
+    def apply_cookie_header(self, cookie_header: str) -> None:
+        """Apply a Cookie header string (from Cloudflare Worker) to both the
+        SDK client cookie jar and the httpx client cookie jar.
+
+        This is needed because JWXT cookies are IP-bounded to the Worker's
+        edge location.  The DB-stored cookies won't work from Vercel's IP,
+        so the Worker injects fresh cookies on every proxied request.
+        """
+        # Parse "key1=val1; key2=val2" into pairs
+        pairs = []
+        for part in cookie_header.split(";"):
+            part = part.strip()
+            if "=" in part:
+                key, _, value = part.partition("=")
+                key = key.strip()
+                value = value.strip()
+                if key:
+                    pairs.append((key, value))
+
+        # Apply to SDK client (requests-based cookie jar)
+        self._apply_cookie_pairs(pairs)
+
+        # Also apply to httpx_client cookie jar (used by _proxy_via_httpx)
+        if self._httpx_client is not None:
+            import httpx
+            for key, value in pairs:
+                self._httpx_client.cookies.set(key, value, domain="jwxt.seig.edu.cn", path="/")
+                self._httpx_client.cookies.set(key, value, domain="jwxt.seig.edu.cn", path="/jwglxt")
+
 
 def _detect_image_mime(data: bytes) -> str | None:
     if len(data) < 4:
