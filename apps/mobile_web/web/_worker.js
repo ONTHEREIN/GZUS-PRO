@@ -1101,6 +1101,50 @@ export default {
       }
     }
 
+    // ─── Edge academic API: /me ──────────────────────────────
+    // Handle student info directly at the Worker edge so JWXT cookies
+    // (IP-bounded to the Worker's IP) remain valid.
+    if (path === 'me' && request.method === 'GET') {
+      const session = await getLocalSession(request, env);
+      if (session && session.cookies) {
+        try {
+          const jwxtRes = await fetch('https://jwxt.seig.edu.cn/jwglxt/xsxxxggl/xsgrxxwh_cxXsgrxx.html', {
+            headers: {
+              'Cookie': session.cookies,
+              'User-Agent': 'Mozilla/5.0 (Linux; Android 16) GZUS-PRO/1.0',
+              'Referer': 'https://jwxt.seig.edu.cn/jwglxt/xtgl/index_initMenu.html',
+            },
+            signal: AbortSignal.timeout(15000),
+          });
+          if (jwxtRes.ok) {
+            const html = await jwxtRes.text();
+            // Extract student info from JWXT info page HTML
+            const getField = (id) => {
+              // Pattern: id="col_xm">\s*<p ...>\s*VALUE\s*</p>
+              const re = new RegExp(`id="${id}"[^>]*>\\s*(?:<p[^>]*>)?\\s*([^<]+?)\\s*(?:</p>)?`, 'i');
+              const m = html.match(re);
+              return m ? m[1].trim() : null;
+            };
+            const studentInfo = {
+              name: getField('col_xm'),
+              studentId: getField('col_xh'),
+              department: getField('col_xy') || getField('col_xyName'),
+              major: getField('col_zy') || getField('col_zymc'),
+              className: getField('col_bj') || getField('col_bh'),
+              grade: getField('col_nj'),
+            };
+            // Only return if we got at least a name or student ID
+            if (studentInfo.name || studentInfo.studentId) {
+              return jsonResponse(studentInfo, 200, request);
+            }
+          }
+        } catch (e) {
+          console.warn(`[edge-me] JWXT direct fetch failed: ${e.message}`);
+        }
+      }
+      // Fall through to Vercel if edge fetch failed
+    }
+
     // ─── All other routes: proxy to Vercel ─────────────────────
     // Inject local session cookies if available (bypass Vercel's IP-bounded cookie issue).
     // Check memory first, then Cloudflare KV for cross-instance persistence.

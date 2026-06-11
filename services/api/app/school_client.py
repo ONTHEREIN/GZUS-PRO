@@ -144,12 +144,11 @@ class SchoolSdkClient:
         return headers
 
     def _install_worker_proxy(self) -> None:
-        """Route the SDK client's JWXT HTTP requests through the Cloudflare Worker.
+        """Add ``X-Jwxt-Session-Id`` header to the SDK's ``requests.Session``.
 
-        Replaces the SDK's ``requests.Session`` adapter so all JWXT requests
-        are forwarded through the Worker's ``/api/_proxy`` JSON endpoint.
-        The Worker injects IP-bounded JWXT cookies and sends the real request
-        to JWXT from its edge IP.
+        The SDK's host is already set to the Worker origin by ``_build_client``.
+        Adding this header lets the Worker identify which session's cookies to
+        inject when forwarding requests to JWXT.
         """
         if not self._session_id or not self._worker_proxy_origin:
             return
@@ -160,67 +159,12 @@ class SchoolSdkClient:
         if getattr(http_session, "_gz_worker_proxy_installed", False):
             return
 
-        import requests as _requests
-        from requests.adapters import HTTPAdapter
-
-        session_id = self._session_id
-        proxy_api = f"{self._worker_proxy_origin}/api/_proxy"
-
-        # Use a raw session for the proxy calls (avoids recursion).
-        _raw_session = _requests.Session()
-
-        class _WorkerProxyAdapter(HTTPAdapter):
-            def send(self, request, **kwargs):
-                try:
-                    proxy_resp = _raw_session.post(
-                        proxy_api,
-                        json={
-                            "url": request.url,
-                            "method": request.method,
-                            "headers": dict(request.headers),
-                            "session_id": session_id,
-                        },
-                        timeout=30,
-                    )
-                    if proxy_resp.status_code != 200:
-                        raise Exception(f"Worker proxy returned {proxy_resp.status_code}")
-                    # Reconstruct a requests.Response
-                    resp = _requests.Response()
-                    resp.status_code = int(
-                        proxy_resp.headers.get("X-Proxy-Status", 502)
-                    )
-                    for k, v in proxy_resp.headers.items():
-                        if k.lower() in (
-                            "content-encoding", "transfer-encoding",
-                            "content-length", "connection",
-                            "x-proxy-status", "x-proxy-content-type",
-                        ):
-                            continue
-                        resp.headers[k] = v
-                    ct = proxy_resp.headers.get("X-Proxy-Content-Type", "")
-                    if ct:
-                        resp.headers["Content-Type"] = ct
-                    resp._content = proxy_resp.content
-                    resp.encoding = "utf-8"
-                    resp.request = request
-                    resp.url = request.url
-                    return resp
-                except Exception:
-                    logger.warning(
-                        "Worker proxy failed for %s %s, fallback direct",
-                        request.method,
-                        request.url,
-                        exc_info=True,
-                    )
-                    return super().send(request, **kwargs)
-
-        # Mount for ALL HTTPS traffic — the Worker proxy handles JWXT routing
-        http_session.mount("https://", _WorkerProxyAdapter())
+        http_session.headers["X-Jwxt-Session-Id"] = self._session_id
         http_session._gz_worker_proxy_installed = True
         logger.info(
-            "Installed Worker proxy adapter for session %s → %s",
-            session_id[:8],
-            proxy_api,
+            "Worker proxy enabled for session %s → %s",
+            self._session_id[:8],
+            self._worker_proxy_origin,
         )
 
     def login(self, account: str, password: str) -> str | None:
@@ -736,12 +680,33 @@ class SchoolSdkClient:
 
     def _build_client(self, client_cls: Any) -> Any:
         parsed = urlparse(self.base_url)
-        if parsed.scheme and parsed.netloc:
+        # When a Worker proxy is configured, route ALL SDK HTTP requests
+        # through the Cloudflare Worker (preserving the Worker's edge IP).
+        # The Worker detects requests by the X-Jwxt-Session-Id header and
+        # path prefix (/jwglxt/*), injects IP-bounded cookies, and forwards
+        # to the real JWXT server.
+        if self._worker_proxy_origin and parsed.scheme and parsed.netloc:
+            proxy_parsed = urlparse(self._worker_proxy_origin)
+            host = proxy_parsed.hostname or proxy_parsed.netloc
+            ssl = proxy_parsed.scheme == "https"
+            port = proxy_parsed.port or (443 if ssl else 80)
+            prefix = parsed.path.rstrip("/")  # JWXT path prefix
+            endpoints = prefixed_url_endpoints(prefix) if prefix else None
+            logger.debug(
+                "SDK client routed through Worker proxy: %s → %s (prefix=%s)",
+                parsed.netloc,
+                host,
+                prefix,
+            )
+        elif parsed.scheme and parsed.netloc:
             host = parsed.hostname or parsed.netloc
             ssl = parsed.scheme == "https"
             port = parsed.port or (443 if ssl else 80)
             prefix = parsed.path.rstrip("/")
             endpoints = prefixed_url_endpoints(prefix) if prefix else None
+        else:
+            host = None
+        if host:
             return client_cls(
                 host=host,
                 port=port,
