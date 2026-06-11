@@ -1161,6 +1161,71 @@ export default {
       // Fall through to Vercel if edge fetch failed
     }
 
+    // ─── Edge academic API: /exams & /schedule ────────────────
+    // Handle exams and schedule at the Worker edge to avoid Vercel's
+    // 10-second Hobby-plan timeout on the double-proxy chain.
+    const academicPaths = { exams: true, schedule: true };
+    if (academicPaths[path] && request.method === 'GET') {
+      const session = await getLocalSession(request, env);
+      if (session && session.cookies) {
+        try {
+          const urlParams = url.searchParams;
+          const year = urlParams.get('year') || '';
+          const term = urlParams.get('term') || '';
+          const termMap = { '1': '3', '2': '12', '3': '16' };
+          const xqm = termMap[term] || '';
+
+          let jwxtUrl, postData;
+          if (path === 'exams') {
+            jwxtUrl = 'https://jwxt.seig.edu.cn/jwglxt/kwgl/kscx_cxXsksxxIndex.html?doType=query&gnmkdm=N358105';
+            postData = new URLSearchParams({
+              xnm: year, xqm: xqm, ksmcdmb_id: '', kch: '', kc: '', ksrq: '',
+              _search: 'false', nd: String(Date.now()),
+              'queryModel.showCount': '50', 'queryModel.currentPage': '1',
+              'queryModel.sortName': '', 'queryModel.sortOrder': 'asc', time: '1',
+            });
+          } else {
+            jwxtUrl = 'https://jwxt.seig.edu.cn/jwglxt/kbcx/xskbcx_cxXsKb.html?doType=query&gnmkdm=N2151';
+            postData = new URLSearchParams({
+              xnm: year, xqm: xqm, kch: '', kc: '',
+              _search: 'false', nd: String(Date.now()),
+              'queryModel.showCount': '50', 'queryModel.currentPage': '1',
+              'queryModel.sortName': '', 'queryModel.sortOrder': 'asc', time: '1',
+            });
+          }
+
+          const jwxtRes = await fetch(jwxtUrl, {
+            method: 'POST',
+            headers: {
+              'Cookie': session.cookies,
+              'Content-Type': 'application/x-www-form-urlencoded',
+              'User-Agent': 'Mozilla/5.0 (Linux; Android 16) GZUS-PRO/1.0',
+              'Referer': 'https://jwxt.seig.edu.cn/jwglxt/xtgl/index_initMenu.html',
+            },
+            body: postData.toString(),
+            signal: AbortSignal.timeout(15000),
+          });
+
+          if (jwxtRes.ok) {
+            const data = await jwxtRes.json().catch(() => null);
+            if (data && data.items) {
+              return jsonResponse(data.items, 200, request);
+            }
+            // Some JWXT endpoints return data in a different format
+            if (data && Array.isArray(data)) {
+              return jsonResponse(data, 200, request);
+            }
+            console.warn(`[edge-${path}] JWXT returned unexpected format, falling through to Vercel`);
+          } else {
+            console.warn(`[edge-${path}] JWXT returned ${jwxtRes.status}, falling through to Vercel`);
+          }
+        } catch (e) {
+          console.warn(`[edge-${path}] JWXT direct fetch failed: ${e.message}, falling through to Vercel`);
+        }
+      }
+      // Fall through to Vercel if edge fetch failed
+    }
+
     // ─── All other routes: proxy to Vercel ─────────────────────
     // Inject local session cookies if available (bypass Vercel's IP-bounded cookie issue).
     // Check memory first, then Cloudflare KV for cross-instance persistence.
