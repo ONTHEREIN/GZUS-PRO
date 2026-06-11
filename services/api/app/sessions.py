@@ -293,19 +293,34 @@ class SessionStore:
                     )
                     return None
 
-            # Absolute TTL check
+            # Sliding TTL check based on last_active_at.
+            # Active sessions stay alive; idle sessions expire after TTL.
             now_utc = datetime.now(timezone.utc)
-            if row.created_at.tzinfo is None:
-                created_utc = row.created_at.replace(tzinfo=timezone.utc)
-            else:
-                created_utc = row.created_at
-            if now_utc - created_utc > self._ttl:
-                logger.debug("Session %s expired (TTL=%ds)", session_id[:8], int(self._ttl.total_seconds()))
+            last_active = row.last_active_at
+            if last_active.tzinfo is None:
+                last_active = last_active.replace(tzinfo=timezone.utc)
+            if now_utc - last_active > self._ttl:
+                idle_secs = int((now_utc - last_active).total_seconds())
+                logger.debug(
+                    "Session %s expired (sliding TTL=%ds, idle=%ds)",
+                    session_id[:8],
+                    int(self._ttl.total_seconds()),
+                    idle_secs,
+                )
                 db.delete(row)
                 db.commit()
                 return None
 
-            # Rebuild client objects from stored cookies
+            # Compute created_utc for AppSession construction below
+            if row.created_at.tzinfo is None:
+                created_utc = row.created_at.replace(tzinfo=timezone.utc)
+            else:
+                created_utc = row.created_at
+
+            # Rebuild client objects from stored cookies.
+            # If DB rebuild fails (stale cookies), leave client=None so
+            # _inject_worker_cookies() can attempt recovery with fresh
+            # cookies injected by the Cloudflare Worker edge.
             client = None
             ehall_client = None
             if row.jwxt_cookies:
@@ -313,11 +328,13 @@ class SessionStore:
                     client = _rebuild_school_client(row.jwxt_cookies, session_id=session_id)
                 except Exception:
                     logger.warning(
-                        "Failed to rebuild SchoolSdkClient for session %s, cookies may be stale",
+                        "Failed to rebuild SchoolSdkClient from DB cookies for session %s — "
+                        "client will be None, recovery possible if Worker injects fresh cookies",
                         session_id[:8],
                         exc_info=True,
                     )
-                    return None
+                    # DO NOT return None — allow caller to attempt recovery
+                    # via Worker-injected cookies in _inject_worker_cookies().
 
             if row.ehall_cookies or row.ehall_auth_token:
                 try:
@@ -470,7 +487,7 @@ class SessionStore:
         try:
             deleted = (
                 db.query(AppSessionModel)
-                .filter(AppSessionModel.created_at < cutoff)
+                .filter(AppSessionModel.last_active_at < cutoff)
                 .delete(synchronize_session=False)
             )
             db.commit()

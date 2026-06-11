@@ -650,25 +650,41 @@ async function saveSessionToKV(sessionId, data, env) {
   if (!env || !env.SESSIONS_KV) {
     return { ok: false, reason: 'env.SESSIONS_KV not available' };
   }
-  try {
-    const cookiesLen = (data.cookies || '').length;
-    const key = `session:${sessionId}`;
-    await env.SESSIONS_KV.put(
-      key,
-      JSON.stringify(data),
-      { expirationTtl: SESSION_KV_TTL }
-    );
-    // Verify the write succeeded by reading it back
-    const verify = await env.SESSIONS_KV.get(key);
-    if (verify) {
-      console.log(`[kv] Session ${sessionId.slice(0, 8)} saved to KV (${cookiesLen} chars cookies)`);
-      return { ok: true };
+  const key = `session:${sessionId}`;
+  const cookiesLen = (data.cookies || '').length;
+  const maxRetries = 3;
+
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      await env.SESSIONS_KV.put(
+        key,
+        JSON.stringify(data),
+        { expirationTtl: SESSION_KV_TTL }
+      );
+      // Verify the write succeeded by reading it back
+      const verify = await env.SESSIONS_KV.get(key);
+      if (verify) {
+        console.log(`[kv] Session ${sessionId.slice(0, 8)} saved to KV (${cookiesLen} chars cookies)`);
+        return { ok: true };
+      }
+      // Write appeared to succeed but read-back returned empty.
+      // KV can be eventually-consistent; retry after backoff.
+      if (attempt < maxRetries - 1) {
+        console.warn(
+          `[kv] Session ${sessionId.slice(0, 8)} KV read-back empty (attempt ${attempt + 1}/${maxRetries}), retrying...`
+        );
+        await sleep(Math.min(200 * Math.pow(2, attempt), 2000));
+      }
+    } catch (e) {
+      console.warn(
+        `[kv] Failed to save session ${sessionId.slice(0, 8)} (attempt ${attempt + 1}/${maxRetries}):`, e.message
+      );
+      if (attempt < maxRetries - 1) {
+        await sleep(Math.min(200 * Math.pow(2, attempt), 2000));
+      }
     }
-    return { ok: false, reason: 'write appeared to succeed but read-back returned empty' };
-  } catch (e) {
-    console.warn(`[kv] Failed to save session ${sessionId.slice(0, 8)}:`, e.message);
-    return { ok: false, reason: e.message };
   }
+  return { ok: false, reason: `KV write failed after ${maxRetries} attempts` };
 }
 
 async function getLocalSession(request, env) {
@@ -699,9 +715,11 @@ async function getLocalSession(request, env) {
 
 function injectSessionCookies(request, session) {
   const headers = new Headers(request.headers);
+  let injectedSomething = false;
   if (session.cookies) {
     console.log(`[inject] Setting Cookie header (${session.cookies.length} chars) for ${request.url}`);
     headers.set('Cookie', session.cookies);
+    injectedSomething = true;
   } else {
     console.warn(`[inject] No JWXT cookies in localSession for ${request.url}`);
   }
@@ -709,10 +727,14 @@ function injectSessionCookies(request, session) {
   if (session.ehallCookies) {
     console.log(`[inject] Setting X-Ehall-Cookies (${session.ehallCookies.length} chars) for ${request.url}`);
     headers.set('X-Ehall-Cookies', session.ehallCookies);
+    injectedSomething = true;
   }
-  // Tell Vercel that cookies are injected from the Worker edge.
-  // Vercel should skip JWXT cookie validation (IP-bounded cookies).
-  headers.set('X-Worker-Auth', '1');
+  // Only signal Vercel when we actually injected real cookies.
+  // An empty X-Worker-Auth would mislead Vercel into thinking fresh
+  // cookies are available when they're not.
+  if (injectedSomething) {
+    headers.set('X-Worker-Auth', '1');
+  }
   return new Request(request.url, {
     method: request.method,
     headers,

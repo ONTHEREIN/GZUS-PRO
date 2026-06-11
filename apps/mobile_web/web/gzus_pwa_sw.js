@@ -36,6 +36,10 @@ self.addEventListener('install', (event) => {
       );
     })
   );
+  // Immediately activate the new service worker — don't wait for
+  // all tabs to close.  This is critical for Flutter web deployments
+  // where stale cached main.dart.js / canvaskit.wasm will break the app.
+  self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {
@@ -50,6 +54,9 @@ self.addEventListener('activate', (event) => {
       );
     })
   );
+  // Take control of all clients immediately so the new SW handles
+  // requests right away (paired with skipWaiting in install).
+  event.waitUntil(clients.claim());
 });
 
 self.addEventListener('fetch', (event) => {
@@ -74,9 +81,21 @@ self.addEventListener('fetch', (event) => {
       })
     );
   } else {
+    // Network-first with cache fallback for static assets.
+    // This ensures new deployments (main.dart.js, flutter_bootstrap.js,
+    // canvaskit/*) are picked up immediately, while still supporting
+    // offline mode via cached fallback.
     event.respondWith(
-      caches.match(request).then((response) => {
-        return response || fetch(request);
+      fetch(request).then((networkResponse) => {
+        // Update cache with fresh response
+        const cloned = networkResponse.clone();
+        caches.open(CACHE_NAME).then((cache) => {
+          cache.put(request, cloned);
+        });
+        return networkResponse;
+      }).catch(() => {
+        // Offline — serve from cache
+        return caches.match(request);
       })
     );
   }
