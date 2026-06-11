@@ -963,7 +963,7 @@ async function proxyToVercel(request, env, url) {
       }
 
       const response = await fetch(upstreamRequest, {
-        signal: AbortSignal.timeout(30000),
+        signal: AbortSignal.timeout(12000),
       });
       // If it's not a 5xx, return immediately
       if (response.status < 500) {

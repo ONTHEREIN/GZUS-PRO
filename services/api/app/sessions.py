@@ -208,7 +208,7 @@ class SessionStore:
                     exc_info=False,
                 )
                 if attempt < 2:
-                    time.sleep(1.0 * (attempt + 1))
+                    time.sleep(0.3 * (attempt + 1))
         if db is None:
             raise RuntimeError(f"Failed to acquire DB connection after 3 attempts for session {session.id[:8]}")
 
@@ -252,7 +252,7 @@ class SessionStore:
                     exc_info=False,
                 )
                 if attempt < 2:
-                    time.sleep(1.0 * (attempt + 1))
+                    time.sleep(0.3 * (attempt + 1))
         if db is None:
             logger.error(
                 "All DB connection attempts failed for session %s",
@@ -267,7 +267,7 @@ class SessionStore:
                 # after a session is created on a different serverless
                 # instance.  Retry up to 3 times with increasing backoff.
                 for attempt in range(3):
-                    delay = 0.8 * (attempt + 1)
+                    delay = 0.3 * (attempt + 1)
                     logger.debug(
                         "Session %s not found on attempt %d/3, retrying after %.1fs",
                         session_id[:8],

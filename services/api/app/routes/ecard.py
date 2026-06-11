@@ -66,7 +66,7 @@ def _get_rooms_cached() -> list[dict[str, str]]:
 
 def _student_info(session: AppSession) -> tuple[str, str]:
     # 优先从 session 缓存中获取学号，避免每次都请求教务系统
-    student_id = getattr(session.client, "_account", None)
+    student_id = getattr(session.client, "_account", None) if session.client else None
     if student_id:
         student_id = str(student_id)
     name = session.student_name or ""
@@ -80,6 +80,12 @@ def _student_info(session: AppSession) -> tuple[str, str]:
     )
 
     if not student_id:
+        if session.client is None:
+            logger.error("ecard: session.client is None for session %s", session.id[:8])
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="会话已过期，请重新登录",
+            )
         try:
             info = session.client.get_info()
             if isinstance(info, dict):
