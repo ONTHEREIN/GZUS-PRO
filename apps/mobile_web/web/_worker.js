@@ -747,22 +747,22 @@ export default {
         // This is NOT best-effort — if it fails, the frontend will get
         // a sessionId that doesn't exist in the DB, causing immediate
         // 401 "会话已过期" on subsequent API calls.
-        let vercelSid = await createSessionOnBackend(result, account, env);
-        if (!vercelSid) {
+        let vercelResult = await createSessionOnBackend(result, account, env);
+        if (!vercelResult.sessionId) {
           // Retry once after a short delay (Vercel cold-start / Neon wake-up)
           await sleep(2000);
-          vercelSid = await createSessionOnBackend(result, account, env);
+          vercelResult = await createSessionOnBackend(result, account, env);
         }
-        if (!vercelSid) {
-          console.error('createSessionOnBackend failed twice after auto-login');
-          return errorResponse('会话创建失败，请重试', 503, request);
+        if (!vercelResult.sessionId) {
+          console.error(`createSessionOnBackend failed twice after auto-login: ${vercelResult.error}`);
+          return errorResponse(`会话创建失败: ${vercelResult.error || '未知错误'}`, 503, request);
         }
 
         // Store local session mapping so proxied requests can inject cookies.
         // JWXT cookies are IP-bounded to this Worker's edge location, so
         // Vercel (different IP) cannot validate them — we must inject them
         // on every proxied request.
-        const sessionId = vercelSid;
+        const sessionId = vercelResult.sessionId;
         localSessions.set(sessionId, {
           cookies: result.cookies,
           ehallCookies: result.ehallCookies,
@@ -814,17 +814,17 @@ export default {
 
         // Always keep a local session (cookies are IP-bounded to this Worker).
         // Create session on Vercel backend — retry once on failure.
-        let vercelSid = await createSessionOnBackend(result, credentials.account, env);
-        if (!vercelSid) {
+        let vercelResult = await createSessionOnBackend(result, credentials.account, env);
+        if (!vercelResult.sessionId) {
           await sleep(2000);
-          vercelSid = await createSessionOnBackend(result, credentials.account, env);
+          vercelResult = await createSessionOnBackend(result, credentials.account, env);
         }
-        if (!vercelSid) {
-          console.error('createSessionOnBackend failed twice after relogin');
-          return errorResponse('会话创建失败，请重试', 503, request);
+        if (!vercelResult.sessionId) {
+          console.error(`createSessionOnBackend failed twice after relogin: ${vercelResult.error}`);
+          return errorResponse(`会话创建失败: ${vercelResult.error || '未知错误'}`, 503, request);
         }
 
-        const sessionId = vercelSid;
+        const sessionId = vercelResult.sessionId;
         localSessions.set(sessionId, {
           cookies: result.cookies,
           ehallCookies: result.ehallCookies,
@@ -881,6 +881,7 @@ async function decryptPasswordOnVercel(encryptedPassword, env) {
 }
 
 // ─── Create session on Vercel backend ──────────────────────────────
+// Returns { sessionId: string } on success, or { error: string, status: number } on failure.
 async function createSessionOnBackend(loginResult, account, env) {
   const vercelOrigin = (env.API_ORIGIN || 'https://api-one-zeta-dc0jrazxzq.vercel.app').replace(/\/$/, '');
 
@@ -901,15 +902,16 @@ async function createSessionOnBackend(loginResult, account, env) {
     });
     if (res.ok) {
       const data = await res.json();
-      return data.sessionId;
+      return { sessionId: data.sessionId };
     }
     // Log non-OK response for debugging
     const errorText = await res.text().catch(() => '');
     console.error(`createSessionOnBackend failed: status=${res.status} body=${errorText}`);
+    return { error: `后端返回 ${res.status}: ${errorText.slice(0, 200)}`, status: res.status };
   } catch (e) {
     console.error(`createSessionOnBackend error: ${e.message}`);
+    return { error: `网络错误: ${e.message}`, status: 0 };
   }
-  return null;
 }
 
 // ─── Proxy to Vercel ───────────────────────────────────────────────
