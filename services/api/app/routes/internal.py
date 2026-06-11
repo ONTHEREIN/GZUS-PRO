@@ -120,10 +120,15 @@ def create_session_endpoint(
         except Exception as exc:
             logger.warning("Failed to create ehall client: %s", exc)
 
-    session = sessions.create(
-        client,
-        student_name=student_name or payload.student_name,
-        ehall_client=ehall_client,
-    )
+    session = None
+    try:
+        session = sessions.create(
+            client,
+            student_name=student_name or payload.student_name,
+            ehall_client=ehall_client,
+        )
+    except Exception as exc:
+        logger.error("Failed to create session in DB: %s", exc, exc_info=True)
+        raise HTTPException(status_code=503, detail=f"会话写入数据库失败: {exc}")
 
     return {"sessionId": session.id}

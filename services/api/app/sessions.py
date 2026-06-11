@@ -183,7 +183,24 @@ class SessionStore:
             encrypted_credentials=encrypted_credentials,
         )
 
-        db = self._get_db()
+        # Retry DB connection (Neon cold-start may fail transiently)
+        db = None
+        for attempt in range(3):
+            try:
+                db = self._get_db()
+                break
+            except Exception:
+                logger.warning(
+                    "DB connection attempt %d/3 for create session %s failed",
+                    attempt + 1,
+                    session.id[:8],
+                    exc_info=False,
+                )
+                if attempt < 2:
+                    time.sleep(1.0 * (attempt + 1))
+        if db is None:
+            raise RuntimeError(f"Failed to acquire DB connection after 3 attempts for session {session.id[:8]}")
+
         try:
             row = AppSessionModel(
                 id=session.id,
