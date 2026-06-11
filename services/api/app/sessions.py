@@ -140,6 +140,13 @@ class SessionStore:
             from app.database import get_sync_session_factory
 
             self._db_factory = get_sync_session_factory()
+        # _db_factory is always a sessionmaker instance.
+        # It may have been set via lazy init above (sessionmaker) or via
+        # the db_factory constructor param (a callable returning sessionmaker).
+        # Normalize: if it's callable but lacks .query, it's a factory function
+        # that returns a sessionmaker — resolve it once.
+        if callable(self._db_factory) and not hasattr(self._db_factory, 'query'):
+            self._db_factory = self._db_factory()
         return self._db_factory()
 
     # ------------------------------------------------------------------
