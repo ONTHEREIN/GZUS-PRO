@@ -83,6 +83,10 @@ class MainActivity : FlutterActivity() {
                 "checkNotificationPermission" -> {
                     result.success(checkNotificationPermission())
                 }
+                "requestNotificationPermission" -> {
+                    requestNotificationPermission()
+                    result.success(true)
+                }
                 "checkExactAlarmPermission" -> {
                     result.success(checkExactAlarmPermission())
                 }
@@ -404,6 +408,16 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    private fun requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(android.Manifest.permission.POST_NOTIFICATIONS),
+                NOTIFICATION_PERMISSION_REQUEST_CODE
+            )
+        }
+    }
+
     private fun checkExactAlarmPermission(): Boolean {
         return try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -459,6 +473,7 @@ class MainActivity : FlutterActivity() {
 
     companion object {
         private const val LOCATION_PERMISSION_REQUEST_CODE = 1001
+        private const val NOTIFICATION_PERMISSION_REQUEST_CODE = 1002
     }
 
     private fun openAutoStartSettings(): Boolean {

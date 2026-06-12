@@ -1251,30 +1251,31 @@ export default {
     // ─── Helper: parse notice items from JWXT news page HTML ────
     function parseNoticeItems(html) {
       const items = [];
-      // JWXT news page uses a table-based layout with category headers
-      // and <a> links pointing to notice detail pages.
-      // Pattern: <a href="..." target="_blank" title="...">TITLE</a>
-      // Date is often in a nearby <td> or <span>
+      // JWXT news page lists notices with <a> links
       const linkRe = /<a\s[^>]*href="([^"]*)"[^>]*(?:title="([^"]*)")?[^>]*>([^<]*)<\/a>/gi;
       let match;
       while ((match = linkRe.exec(html)) !== null) {
         let href = match[1];
         const title = (match[2] || match[3] || '').trim();
         if (!title || title.length < 2) continue;
-        // Skip non-notice links (javascript, mailto, etc.)
+        // Skip non-notice links
         if (href.startsWith('javascript:') || href.startsWith('mailto:')) continue;
         // Resolve relative URLs
         if (href.startsWith('/') || href.startsWith('.')) {
           href = 'https://jwxt.seig.edu.cn' + (href.startsWith('/') ? '' : '/') + href.replace(/^\.\//, '');
         }
-        // Look for date near the link (within ~200 chars after)
+        // Look for date near the link (within ~300 chars after)
         const linkEnd = match.index + match[0].length;
         const nearby = html.substring(linkEnd, linkEnd + 300);
         const dateMatch = nearby.match(/(\d{4}[-/]\d{1,2}[-/]\d{1,2})/);
-        // Determine category from preceding header
-        const before = html.substring(Math.max(0, match.index - 500), match.index);
-        const catMatch = before.match(/<span[^>]*>\s*([^<]{2,8})\s*<\/span>/);
-        const category = catMatch ? catMatch[1].trim() : '通知';
+        // Derive category from title keywords (reliable, avoids fragile HTML parsing)
+        let category = '通知公告';
+        if (/考试/.test(title) && !/考试安排/.test(title)) category = '考试通知';
+        else if (/选课/.test(title) || /撤课/.test(title) || /增班/.test(title)) category = '选课通知';
+        else if (/成绩/.test(title)) category = '成绩通知';
+        else if (/考勤/.test(title) || /缺勤/.test(title)) category = '考勤通知';
+        else if (/学籍/.test(title)) category = '学籍通知';
+        else if (/评教/.test(title)) category = '评教通知';
         items.push({
           category,
           title,
@@ -1301,6 +1302,9 @@ export default {
       // Alternative: look for background-image style with data URL
       const bgMatch = html.match(/background-image\s*:\s*url\(["']?(data:image\/[^"')]+)["']?\)/i);
       if (bgMatch) return bgMatch[1];
+      // JWXT photo endpoint pattern: photo_cxEncodedXszp?...zplx=rxhzp
+      const urlMatch = html.match(/(?:src|href)=["']([^"']*photo_cxEncodedXszp[^"']*zplx=rxhzp[^"']*)["']/i);
+      if (urlMatch) return urlMatch[1];
       return null;
     }
 
@@ -1552,6 +1556,106 @@ export default {
         }
       }
       // Fall through to Vercel if edge fetch failed
+    }
+
+    // ─── Edge ecard API ───────────────────────────────────────
+    // ecard (一卡通) API at ecarduser.gzus.edu.cn is only reachable
+    // from within China.  Vercel (US) cannot connect to it, causing
+    // 502 timeouts.  We handle ecard requests at the Worker edge,
+    // proxying directly to the ecard API server.
+    const ECARD_BASE = 'https://ecarduser.gzus.edu.cn';
+    if (path && path.startsWith('ecard/') && (request.method === 'GET' || request.method === 'POST')) {
+      const ecardOpenid = env && env.ECARD_OPENID;
+      const ecardSecret = env && env.ECARD_SECRET;
+      if (!ecardOpenid || !ecardSecret) {
+        console.warn('[edge-ecard] ECARD_OPENID or ECARD_SECRET not configured in Worker env, falling through to Vercel');
+      } else {
+        try {
+          const ecardSubPath = path.replace(/^ecard\/?/, '');
+          const requestBody = request.method === 'POST' ? await request.json().catch(() => ({})) : {};
+          const urlParams = url.searchParams;
+
+          // Helper: MD5 for sign calculation
+          function md5Hex(str) {
+            const bytes = new TextEncoder().encode(str);
+            return crypto.subtle.digest('MD5', bytes).then(buf =>
+              Array.from(new Uint8Array(buf), b => b.toString(16).padStart(2, '0')).join('')
+            );
+          }
+
+          // Step 1: Login to ecard API to get token
+          const loginParams = { from: 'wxminiprogram', isWxEnterpriseXcx: 'false', wxRequest: 'wxRequest', openid: ecardOpenid };
+          if (env.ECARD_UNIONID) loginParams.unionid = env.ECARD_UNIONID;
+          const loginKeys = Object.keys(loginParams).filter(k => k !== 'token' && k !== 'sign').sort();
+          const loginRaw = loginKeys.map(k => `${k}=${loginParams[k]}`).join('&') + '&' + ecardSecret;
+          loginParams.sign = (await md5Hex(loginRaw)).toUpperCase();
+
+          const loginRes = await fetch(`${ECARD_BASE}/user/routine/routine-login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': 'MicroMessenger' },
+            body: new URLSearchParams(loginParams).toString(),
+            signal: AbortSignal.timeout(15000),
+          });
+          const loginData = await loginRes.json();
+          const token = loginData.token || (loginData.obj && loginData.obj.token);
+          if (!token && loginData.code !== 200) {
+            console.warn(`[edge-ecard] Login failed: ${JSON.stringify(loginData).substring(0, 200)}`);
+            return jsonResponse({ detail: '一卡通服务登录失败' }, 502, request);
+          }
+          const ecardToken = token || '';
+
+          // Step 2: Forward the ecard API request
+          const ecardParams = { ...Object.fromEntries(urlParams.entries()), ...requestBody, token: ecardToken, from: 'wxminiprogram' };
+          if (env.ECARD_UNIONID) ecardParams.unionid = env.ECARD_UNIONID;
+          ecardParams.openid = ecardOpenid;
+          const paramKeys = Object.keys(ecardParams).filter(k => k !== 'token' && k !== 'sign').sort();
+          const paramRaw = paramKeys.map(k => `${k}=${ecardParams[k]}`).join('&') + '&' + ecardSecret;
+          ecardParams.sign = (await md5Hex(paramRaw)).toUpperCase();
+
+          const apiPath = ecardSubPath || 'rooms';
+          const ecardRes = await fetch(`${ECARD_BASE}/${apiPath}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': 'MicroMessenger' },
+            body: new URLSearchParams(ecardParams).toString(),
+            signal: AbortSignal.timeout(20000),
+          });
+          const ecardData = await ecardRes.json();
+
+          if (ecardRes.ok) {
+            // Transform response for rooms endpoint
+            if (ecardSubPath === 'rooms' || apiPath.includes('rooms')) {
+              const obj = ecardData.obj || [];
+              const rooms = (Array.isArray(obj) ? obj : [obj]).map(r => ({
+                id: `${r.implType || 'CGCOMMON1111'}|${r.schoolAreaNo || ''}|${r.buildingNo || ''}|${r.roomNum || ''}`,
+                schoolArea: r.schoolArea || '',
+                building: r.building || '',
+                room: (r.room || '').replace('#', '-') || r.roomNum || '',
+                displayName: [r.schoolArea, r.building, (r.room || r.roomNum || '').replace('#', '-')].filter(Boolean).join(' '),
+              }));
+              // Filter by search query
+              const q = urlParams.get('q') || '';
+              const limit = parseInt(urlParams.get('limit') || '100');
+              let filtered = rooms;
+              if (q) {
+                const kw = q.toLowerCase();
+                filtered = rooms.filter(r =>
+                  r.displayName.toLowerCase().includes(kw) ||
+                  r.building.toLowerCase().includes(kw) ||
+                  r.room.toLowerCase().includes(kw) ||
+                  r.schoolArea.toLowerCase().includes(kw)
+                );
+              }
+              return jsonResponse(filtered.slice(0, limit), 200, request);
+            }
+            return jsonResponse(ecardData, 200, request);
+          }
+          console.warn(`[edge-ecard] API error: ${ecardRes.status} ${JSON.stringify(ecardData).substring(0, 200)}`);
+          return jsonResponse({ detail: '一卡通服务请求失败' }, 502, request);
+        } catch (e) {
+          console.error(`[edge-ecard] Error: ${e.message}`);
+        }
+      }
+      // Fall through to Vercel if edge handling failed
     }
 
     // ─── All other routes: proxy to Vercel ─────────────────────

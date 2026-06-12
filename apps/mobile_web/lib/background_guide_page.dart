@@ -32,9 +32,6 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
   /// 防止 _checkPermissions() 重入
   bool _busy = false;
 
-  /// 首次检查是否已完成，用于决定是否显示加载指示器
-  bool _initialCheckDone = false;
-
   /// 防抖：上次 resume 时间戳，跳过 1 秒内的重复回调
   int _lastResumeMs = 0;
 
@@ -62,19 +59,15 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
     }
   }
 
-  /// 首次加载时的完整权限检查（显示加载指示器）
+  /// 首次加载时的完整权限检查（不阻塞 UI，卡片自行显示加载态）
   Future<void> _checkPermissions() async {
     if (!mounted || _busy) return;
     _busy = true;
-    if (!_initialCheckDone) {
-      setState(() => _checking = true);
-    }
     try {
       await _doCheckPermissions();
     } finally {
-      if (mounted && !_initialCheckDone) {
+      if (mounted) {
         setState(() => _checking = false);
-        _initialCheckDone = true;
       }
       _busy = false;
     }
@@ -194,7 +187,7 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
         return;
       }
     } else {
-      await PermissionService.checkNotificationPermission();
+      await PermissionService.requestNotificationPermission();
     }
     // 权限未授予（或非 Web 平台），静默刷新状态
     _refreshPermissions();
@@ -265,11 +258,9 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
         automaticallyImplyLeading: false,
       ),
       body: SafeArea(
-        child: _checking
-            ? const Center(child: CircularProgressIndicator())
-            : SingleChildScrollView(
-                padding: const EdgeInsets.all(16),
-                child: Column(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(16),
+          child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Container(
@@ -306,6 +297,7 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
                         title: '自启动权限',
                         description: '允许应用在开机时自动启动',
                         isGranted: _autoStartGranted,
+                        checking: _checking,
                         onAction: _openAutoStart,
                         actionLabel: '打开设置',
                       ),
@@ -315,6 +307,7 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
                         title: '电池优化',
                         description: '关闭电池优化以保持后台运行',
                         isGranted: _batteryOptimizationDisabled,
+                        checking: _checking,
                         onAction: _openBatteryOptimization,
                         actionLabel: '关闭优化',
                       ),
@@ -325,6 +318,7 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
                           title: '精确闹钟',
                           description: '允许按课程时间准点触发上下课提醒',
                           isGranted: _exactAlarmGranted,
+                          checking: _checking,
                           onAction: _openExactAlarm,
                           actionLabel: '去授权',
                         ),
@@ -336,6 +330,7 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
                       title: '通知权限',
                       description: kIsWeb ? '允许浏览器发送通知提醒' : '允许发送通知提醒',
                       isGranted: _notificationGranted,
+                      checking: _checking,
                       onAction: _requestNotification,
                       actionLabel: '授予权限',
                     ),
@@ -379,6 +374,7 @@ class _PermissionCard extends StatelessWidget {
   final String title;
   final String description;
   final bool isGranted;
+  final bool checking;
   final VoidCallback onAction;
   final String actionLabel;
 
@@ -387,6 +383,7 @@ class _PermissionCard extends StatelessWidget {
     required this.title,
     required this.description,
     required this.isGranted,
+    this.checking = false,
     required this.onAction,
     required this.actionLabel,
   });
@@ -412,10 +409,15 @@ class _PermissionCard extends StatelessWidget {
                   : colorScheme.primaryContainer,
               borderRadius: BorderRadius.circular(18),
             ),
-            child: Icon(
-              isGranted ? Icons.check_circle : icon,
-              color: stateColor,
-            ),
+            child: checking
+                ? const Padding(
+                    padding: EdgeInsets.all(12),
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : Icon(
+                    isGranted ? Icons.check_circle : icon,
+                    color: stateColor,
+                  ),
           ),
           const SizedBox(width: 16),
           Expanded(
@@ -439,10 +441,17 @@ class _PermissionCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  isGranted ? '已开启' : '未开启',
+                  checking
+                      ? '检查中…'
+                      : isGranted
+                          ? '已开启'
+                          : '未开启',
                   style: TextStyle(
-                    color:
-                        isGranted ? colorScheme.secondary : colorScheme.error,
+                    color: checking
+                        ? colorScheme.onSurfaceVariant
+                        : isGranted
+                            ? colorScheme.secondary
+                            : colorScheme.error,
                     fontSize: 13,
                     fontWeight: FontWeight.w600,
                   ),
@@ -452,7 +461,7 @@ class _PermissionCard extends StatelessWidget {
           ),
           const SizedBox(width: 12),
           OutlinedButton(
-            onPressed: isGranted ? null : onAction,
+            onPressed: (isGranted || checking) ? null : onAction,
             child: Text(actionLabel),
           ),
         ],

@@ -1516,9 +1516,13 @@ def normalize_exam_item(value: Any) -> dict:
     time_val = pick(data, "time", "kssj", "examTime")
     date_val = pick(data, "date", "examDate")
     if not date_val and time_val and isinstance(time_val, str):
+        # Handle both "2026-07-10 09:30-11:00" (space) and
+        # "2026-07-10(09:30-11:00)" (parenthesis) JWXT formats
+        paren_idx = time_val.find("(")
         space_idx = time_val.find(" ")
-        if space_idx > 0:
-            date_val = time_val[:space_idx]
+        sep_idx = paren_idx if paren_idx > 0 else (space_idx if space_idx > 0 else -1)
+        if sep_idx > 0:
+            date_val = time_val[:sep_idx]
     weekday_val = pick(data, "weekday", "weekDay", "xqj")
     if not weekday_val and date_val and isinstance(date_val, str):
         try:

@@ -33,6 +33,16 @@ class PermissionService {
     }
   }
 
+  static Future<bool> requestNotificationPermission() async {
+    try {
+      final result =
+          await _channel.invokeMethod<bool>('requestNotificationPermission');
+      return result ?? false;
+    } on PlatformException {
+      return false;
+    }
+  }
+
   static Future<bool> checkExactAlarmPermission() async {
     try {
       final result =
