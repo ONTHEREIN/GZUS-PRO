@@ -1348,12 +1348,14 @@ export default {
     function normalizeExamItem(item) {
       const time = item.kssj || item.time || item.examTime || '';
       let date = item.date || item.examDate || '';
-      if (!date && time) {
-        // JWXT format: "2026-07-10(09:30-11:00)" or "2026-07-10 09:30-11:00"
+      // Force extract date from time if date is missing/empty
+      // JWXT sends time in "YYYY-MM-DD(HH:MM-HH:MM)" or "YYYY-MM-DD HH:MM-HH:MM"
+      if ((!date || date.length < 8) && time) {
         const parenIdx = time.indexOf('(');
         const spaceIdx = time.indexOf(' ');
         const sepIdx = parenIdx > 0 ? parenIdx : (spaceIdx > 0 ? spaceIdx : -1);
         if (sepIdx > 0) date = time.substring(0, sepIdx);
+        else if (time.length >= 10 && time[4] === '-') date = time.substring(0, 10);
       }
       let weekday = item.weekday || item.weekDay || item.xqj || '';
       if (!weekday && date) {
