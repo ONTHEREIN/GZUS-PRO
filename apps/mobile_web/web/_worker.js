@@ -1175,8 +1175,11 @@ export default {
       const time = item.kssj || item.time || item.examTime || '';
       let date = item.date || item.examDate || '';
       if (!date && time) {
+        // JWXT format: "2026-07-10(09:30-11:00)" or "2026-07-10 09:30-11:00"
+        const parenIdx = time.indexOf('(');
         const spaceIdx = time.indexOf(' ');
-        if (spaceIdx > 0) date = time.substring(0, spaceIdx);
+        const sepIdx = parenIdx > 0 ? parenIdx : (spaceIdx > 0 ? spaceIdx : -1);
+        if (sepIdx > 0) date = time.substring(0, sepIdx);
       }
       let weekday = item.weekday || item.weekDay || item.xqj || '';
       if (!weekday && date) {
@@ -1191,7 +1194,7 @@ export default {
         name: item.kcmc || item.courseName || item.name || '',
         date: date,
         weekday: weekday,
-        time: time,
+        time: time.replace('(', ' ').replace(')', ''), // normalize "2026-07-10(09:30-11:00)" → "2026-07-10 09:30-11:00"
         location: item.cdmc || item.location || item.examPlace || null,
         seat: (item.zwh != null ? String(item.zwh) : null) || item.seat || item.seatNo || null,
         type: item.ksmc || item.ksfs || item.type || item.kslx || null,
