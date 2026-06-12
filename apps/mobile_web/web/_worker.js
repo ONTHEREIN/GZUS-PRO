@@ -801,7 +801,7 @@ export default {
     
     if (isApiPath) {
       path = url.pathname.slice(5); // Remove /api/
-    } else if (url.pathname.startsWith('/auth/') || 
+    } else if (url.pathname.startsWith('/auth/') ||
                url.pathname.startsWith('/health') ||
                url.pathname.startsWith('/academic/') ||
                url.pathname.startsWith('/ehall/') ||
@@ -812,7 +812,14 @@ export default {
                url.pathname.startsWith('/staff/') ||
                url.pathname.startsWith('/leave/') ||
                url.pathname === '/weather' ||
-               url.pathname.startsWith('/ws')) {
+               url.pathname.startsWith('/ws') ||
+               url.pathname.startsWith('/exams') ||
+               url.pathname.startsWith('/schedule') ||
+               url.pathname.startsWith('/grades') ||
+               url.pathname.startsWith('/credits') ||
+               url.pathname.startsWith('/attendance') ||
+               url.pathname.startsWith('/notices') ||
+               url.pathname.startsWith('/_proxy')) {
       // Handle non-/api/ prefixed paths for backward compatibility
       path = url.pathname.slice(1); // Remove leading /
       isApiPath = true;
