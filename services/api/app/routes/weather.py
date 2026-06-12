@@ -4,6 +4,7 @@
 
 import asyncio
 import time
+from datetime import datetime
 from typing import Any
 
 import httpx
@@ -134,8 +135,10 @@ def _transform_wttr(data: dict[str, Any]) -> dict[str, Any]:
             mid_point = hourly[len(hourly) // 2]
             if isinstance(mid_point, dict):
                 fc_code = str(mid_point.get("weatherCode", "116"))
+                date_str = day.get("date", "")
                 forecast.append({
-                    "date": day.get("date", ""),
+                    "date": date_str,
+                    "week": _weekday_cn(date_str),
                     "temp_max": _safe_float(day.get("maxtempC"), 0),
                     "temp_min": _safe_float(day.get("mintempC"), 0),
                     "weather_day": _WEATHER_CODE_CN.get(fc_code, "多云"),
@@ -155,6 +158,17 @@ def _transform_wttr(data: dict[str, Any]) -> dict[str, Any]:
         "temp_min": temp_min,
         "forecast": forecast,
     }
+
+
+_WEEKDAY_CN = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+
+
+def _weekday_cn(date_str: str) -> str:
+    try:
+        dt = datetime.strptime(date_str, "%Y-%m-%d")
+        return _WEEKDAY_CN[dt.weekday()]
+    except (ValueError, IndexError):
+        return ""
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:

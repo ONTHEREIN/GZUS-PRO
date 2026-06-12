@@ -3106,6 +3106,7 @@ class _HomePageState extends State<HomePage> {
 
   Map<String, dynamic> _weatherToJson(WeatherData w) {
     return {
+      'province': w.province,
       'city': w.city,
       'district': w.district,
       'weather': w.weather,

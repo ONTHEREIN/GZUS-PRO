@@ -376,7 +376,7 @@ class SchoolSdkClient:
             try:
                 response = self._httpx_client.get(full_url, params=params, timeout=self.timeout_seconds)
                 response.raise_for_status()
-                html = response.text
+                html = self._response_text(response)
                 if "col_xh" in html:
                     return html
                 logger.debug("_fetch_info_page_html: httpx_client returned page without col_xh")
@@ -1003,24 +1003,78 @@ class SchoolSdkClient:
 
     @staticmethod
     def _response_text(response: Any) -> str:
-        text = getattr(response, "text", None)
-        if isinstance(text, str):
-            logger.debug("response_text: %d chars from .text", len(text))
-            return text
+        """Decode response body, preferring bytes-based decoding to avoid
+        httpx auto-decoding GBK content as UTF-8 (which produces mojibake).
+
+        Strategy:
+        1. Always try to get raw bytes (.content) first
+        2. Decode as UTF-8; if the result looks like mojibake (GBK decoded
+           as UTF-8), fall back to GBK/GB18030
+        3. Only use .text as last resort (when .content is unavailable)
+        """
         content = getattr(response, "content", None)
-        if isinstance(content, bytes):
-            for encoding in ("utf-8", "gbk", "gb18030"):
+        if isinstance(content, bytes) and content:
+            # Try UTF-8 first (covers JSON APIs and most modern pages)
+            try:
+                utf8_text = content.decode("utf-8")
+                if SchoolSdkClient._looks_garbled(utf8_text):
+                    logger.debug("response_text: UTF-8 text looks garbled, trying GBK")
+                    raise UnicodeDecodeError("utf-8", content, 0, 1, "mojibake detected")
+                logger.debug("response_text: %d chars from .content (utf-8)", len(utf8_text))
+                return utf8_text
+            except UnicodeDecodeError:
+                pass
+            # Try GBK encodings
+            for encoding in ("gb18030", "gbk"):
                 try:
                     decoded = content.decode(encoding)
                     logger.debug("response_text: %d chars from .content (%s)", len(decoded), encoding)
                     return decoded
                 except UnicodeDecodeError:
                     continue
-            result = content.decode("utf-8", errors="ignore")
-            logger.debug("response_text: %d chars from .content (fallback utf-8 ignore)", len(result))
+            # Last resort: UTF-8 with error replacement
+            result = content.decode("utf-8", errors="replace")
+            logger.debug("response_text: %d chars from .content (fallback utf-8 replace)", len(result))
             return result
+
+        # Fallback: use httpx's .text if no .content available
+        text = getattr(response, "text", None)
+        if isinstance(text, str) and text:
+            logger.debug("response_text: %d chars from .text (fallback)", len(text))
+            return text
+
         logger.warning("response_text: no .text or .content on response object")
         return str(content or "")
+
+    @staticmethod
+    def _looks_garbled(text: str) -> bool:
+        """Heuristic: detect GBK content that was incorrectly decoded as UTF-8.
+
+        When GBK bytes are decoded as UTF-8, many byte sequences produce
+        characters in the Latin-1 Supplement / C1 range (U+0080–U+00FF).
+        Legitimate Chinese UTF-8 text has very few of these.
+        """
+        if not text:
+            return False
+        # Quick check: if the text contains common Chinese characters, it's
+        # probably fine (UTF-8 multi-byte sequences for CJK don't overlap
+        # with GBK mojibake patterns in a reversible way).
+        suspicious = 0
+        total = min(len(text), 200)  # sample first 200 chars
+        for ch in text[:total]:
+            cp = ord(ch)
+            # U+0080–U+00FF: C1 controls + Latin-1 Supplement
+            # These appear frequently when GBK double-byte sequences
+            # are misinterpreted as UTF-8.
+            if 0x0080 <= cp <= 0x00FF:
+                suspicious += 1
+        # If >15% of sampled characters are in the suspicious range,
+        # it's almost certainly garbled GBK→UTF-8 text.
+        ratio = suspicious / max(total, 1)
+        if ratio > 0.15:
+            logger.debug("_looks_garbled: %.1f%% suspicious chars (threshold 15%%)", ratio * 100)
+            return True
+        return False
 
     def _proxy_json(self, method: str, url_or_endpoint: str, **kwargs: Any) -> Any:
         response = self._proxy_response(method, url_or_endpoint, **kwargs)
@@ -1207,7 +1261,7 @@ class SchoolSdkClient:
                     params={"gnmkdm": INFO_GNMKDM, "su": self._account or ""},
                     timeout=min(self.timeout_seconds, 8),
                 )
-                html = response.text
+                html = self._response_text(response)
             else:
                 response = self._proxy_response(
                     "GET", INFO_URL,
