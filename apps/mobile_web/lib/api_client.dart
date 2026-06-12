@@ -2019,16 +2019,22 @@ class ApiClient {
     final path = query != null && query.trim().isNotEmpty
         ? '/ecard/rooms?q=${Uri.encodeQueryComponent(query.trim())}&limit=$limit'
         : '/ecard/rooms?limit=$limit';
-    final result = await _cacheFirstList<EcardRoomItem>(
-      cacheKey: query != null && query.trim().isNotEmpty
-          ? 'ecard_rooms_q_${query.trim().toLowerCase()}'
-          : 'ecard_rooms',
-      fetch: () => _getList(path),
-      fromJson: (json) => EcardRoomItem.fromJson(json),
-      forceRefresh: forceRefresh,
-      memoryTtl: const Duration(minutes: 30),
-    );
-    return result.data;
+    try {
+      final result = await _cacheFirstList<EcardRoomItem>(
+        cacheKey: query != null && query.trim().isNotEmpty
+            ? 'ecard_rooms_q_${query.trim().toLowerCase()}'
+            : 'ecard_rooms',
+        fetch: () => _getList(path),
+        fromJson: (json) => EcardRoomItem.fromJson(json),
+        forceRefresh: forceRefresh,
+        memoryTtl: const Duration(minutes: 30),
+      );
+      return result.data;
+    } catch (_) {
+      // Server unreachable (Vercel IP blocked by ecard) — fall back to direct
+      final direct = EcardDirectClient();
+      return direct.getRooms(query: query, limit: limit);
+    }
   }
 
   Future<DataResult<EcardSummary>> ecardSummary({bool forceRefresh = false}) =>
@@ -2565,4 +2571,232 @@ String generateExamIcs({
     );
   }
   return ('${dateStr}T090000', '${dateStr}T110000');
+}
+
+// ============================================================
+// Direct ecard API client — bypasses Vercel/Worker entirely.
+// Calls ecarduser.gzus.edu.cn from the user's device.
+// Vercel & Cloudflare Worker IPs are blocked by ecard server.
+// ============================================================
+class EcardDirectClient {
+  static const _base = 'https://ecarduser.gzus.edu.cn';
+  static const _secret = 'greatge';
+  static const _openid = 'o6gXt5YdtSc-15PgJg0KqAXZytRc';
+  static const _ua = 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) '
+      'AppleWebKit/605.1.15 (KHTML, like Gecko) '
+      'Mobile/15E148 MicroMessenger/8.0.38 NetType/WIFI Language/zh_CN';
+
+  String? _token;
+  String? _unionid;
+
+  static String _md5(String s) {
+    // Pure Dart MD5
+    return _md5String(s).toLowerCase();
+  }
+
+  static String _sign(Map<String, String> params) {
+    final filtered = Map.of(params)..remove('token')..remove('sign');
+    final keys = filtered.keys.toList()..sort();
+    final raw = keys.map((k) => '$k=${filtered[k]}').join('&') + '&$_secret';
+    return _md5(raw).toUpperCase();
+  }
+
+  Future<Map<String, dynamic>> _post(String path, Map<String, String> params) async {
+    params['from'] ??= 'wxminiprogram';
+    params['isWxEnterpriseXcx'] ??= 'false';
+    params['wxRequest'] ??= 'wxRequest';
+    params['openid'] = _openid;
+    if (_unionid != null && _unionid!.isNotEmpty) params['unionid'] = _unionid!;
+    if (_token != null && _token!.isNotEmpty) params['token'] = _token!;
+    params['sign'] = _sign(params);
+
+    final uri = Uri.parse('$_base/$path');
+    final response = await _http.post(uri,
+      headers: {'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': _ua},
+      body: params,
+    ).timeout(const Duration(seconds: 15));
+    return _decodeObject(response);
+  }
+
+  Future<bool> login() async {
+    final r = await _post('user/routine/routine-login', {'from': 'wxminiprogram'});
+    if (r['code'] == 200 && r['token'] != null) {
+      _token = r['token'].toString();
+      if (r['unionid'] != null) _unionid = r['unionid'].toString();
+      return true;
+    }
+    return false;
+  }
+
+  Future<List<EcardRoomItem>> getRooms({String? query, int limit = 100}) async {
+    if (_token == null && !await login()) return [];
+
+    final items = <EcardRoomItem>[];
+    final seen = <String>{};
+    for (final impl in ['CGCOMMON1111', 'CGCOMMON2222', 'CGCOMMON3333']) {
+      final r = await _post('powerfee/getRoomInfo', {'implType': impl});
+      final obj = r['obj'];
+      if (obj is! List) continue;
+      for (final room in obj) {
+        if (room is! Map) continue;
+        final id = '${room['implType'] ?? impl}|${room['schoolAreaNo'] ?? ''}|${room['buildingNo'] ?? ''}|${room['roomNum'] ?? ''}';
+        if (seen.contains(id) || id.contains('||')) continue;
+        seen.add(id);
+        items.add(EcardRoomItem.fromJson({
+          'id': id,
+          'schoolArea': room['schoolArea'] ?? '',
+          'building': room['building'] ?? '',
+          'room': (room['room'] ?? '').replaceAll('#', '-'),
+          'displayName': '${room['schoolArea'] ?? ''} ${room['building'] ?? ''} ${(room['room'] ?? room['roomNum'] ?? '').toString().replaceAll('#', '-')}'.trim(),
+        }));
+      }
+    }
+    items.sort((a, b) => a.displayName.compareTo(b.displayName));
+    if (query != null && query.trim().isNotEmpty) {
+      final q = query.trim().toLowerCase();
+      return items.where((r) =>
+        r.displayName.toLowerCase().contains(q) ||
+        r.building.toLowerCase().contains(q) ||
+        r.room.toLowerCase().contains(q) ||
+        r.schoolArea.toLowerCase().contains(q)
+      ).take(limit).toList();
+    }
+    return items.take(limit).toList();
+  }
+
+  Future<Map<String, dynamic>?> getBalance(String roomId) async {
+    if (_token == null && !await login()) return null;
+    final parts = roomId.split('|');
+    if (parts.length != 4) return null;
+    final r = await _post('powerfee/getBalance', {
+      'implType': parts[0],
+      'schoolAreaNo': parts[1],
+      'buildingNo': parts[2],
+      'roomNum': parts[3],
+    });
+    if (r['ret'] != true && r['code'] != 200 && r['code'] != 0) return null;
+    return r['obj'] as Map<String, dynamic>?;
+  }
+}
+
+// Dart MD5 implementation
+String _md5String(String input) {
+  final data = _createBuffer(input);
+  int a = 0x67452301, b = 0xEFCDAB89, c = 0x98BADCFE, d = 0x10325476;
+
+  for (int i = 0; i < data.length; i += 16) {
+    final aa = a, bb = b, cc = c, dd = d;
+    a = _ff(a, b, c, d, data[i + 0], 7, 0xD76AA478);
+    d = _ff(d, a, b, c, data[i + 1], 12, 0xE8C7B756);
+    c = _ff(c, d, a, b, data[i + 2], 17, 0x242070DB);
+    b = _ff(b, c, d, a, data[i + 3], 22, 0xC1BDCEEE);
+    a = _ff(a, b, c, d, data[i + 4], 7, 0xF57C0FAF);
+    d = _ff(d, a, b, c, data[i + 5], 12, 0x4787C62A);
+    c = _ff(c, d, a, b, data[i + 6], 17, 0xA8304613);
+    b = _ff(b, c, d, a, data[i + 7], 22, 0xFD469501);
+    a = _ff(a, b, c, d, data[i + 8], 7, 0x698098D8);
+    d = _ff(d, a, b, c, data[i + 9], 12, 0x8B44F7AF);
+    c = _ff(c, d, a, b, data[i + 10], 17, 0xFFFF5BB1);
+    b = _ff(b, c, d, a, data[i + 11], 22, 0x895CD7BE);
+    a = _ff(a, b, c, d, data[i + 12], 7, 0x6B901122);
+    d = _ff(d, a, b, c, data[i + 13], 12, 0xFD987193);
+    c = _ff(c, d, a, b, data[i + 14], 17, 0xA679438E);
+    b = _ff(b, c, d, a, data[i + 15], 22, 0x49B40821);
+    a = _gg(a, b, c, d, data[i + 1], 5, 0xF61E2562);
+    d = _gg(d, a, b, c, data[i + 6], 9, 0xC040B340);
+    c = _gg(c, d, a, b, data[i + 11], 14, 0x265E5A51);
+    b = _gg(b, c, d, a, data[i + 0], 20, 0xE9B6C7AA);
+    a = _gg(a, b, c, d, data[i + 5], 5, 0xD62F105D);
+    d = _gg(d, a, b, c, data[i + 10], 9, 0x02441453);
+    c = _gg(c, d, a, b, data[i + 15], 14, 0xD8A1E681);
+    b = _gg(b, c, d, a, data[i + 4], 20, 0xE7D3FBC8);
+    a = _gg(a, b, c, d, data[i + 9], 5, 0x21E1CDE6);
+    d = _gg(d, a, b, c, data[i + 14], 9, 0xC33707D6);
+    c = _gg(c, d, a, b, data[i + 3], 14, 0xF4D50D87);
+    b = _gg(b, c, d, a, data[i + 8], 20, 0x455A14ED);
+    a = _gg(a, b, c, d, data[i + 13], 5, 0xA9E3E905);
+    d = _gg(d, a, b, c, data[i + 2], 9, 0xFCEFA3F8);
+    c = _gg(c, d, a, b, data[i + 7], 14, 0x676F02D9);
+    b = _gg(b, c, d, a, data[i + 12], 20, 0x8D2A4C8A);
+    a = _hh(a, b, c, d, data[i + 5], 4, 0xFFFA3942);
+    d = _hh(d, a, b, c, data[i + 8], 11, 0x8771F681);
+    c = _hh(c, d, a, b, data[i + 11], 16, 0x6D9D6122);
+    b = _hh(b, c, d, a, data[i + 14], 23, 0xFDE5380C);
+    a = _hh(a, b, c, d, data[i + 1], 4, 0xA4BEEA44);
+    d = _hh(d, a, b, c, data[i + 4], 11, 0x4BDECFA9);
+    c = _hh(c, d, a, b, data[i + 7], 16, 0xF6BB4B60);
+    b = _hh(b, c, d, a, data[i + 10], 23, 0xBEBFBC70);
+    a = _hh(a, b, c, d, data[i + 13], 4, 0x289B7EC6);
+    d = _hh(d, a, b, c, data[i + 0], 11, 0xEAA127FA);
+    c = _hh(c, d, a, b, data[i + 3], 16, 0xD4EF3085);
+    b = _hh(b, c, d, a, data[i + 6], 23, 0x04881D05);
+    a = _hh(a, b, c, d, data[i + 9], 4, 0xD9D4D039);
+    d = _hh(d, a, b, c, data[i + 12], 11, 0xE6DB99E5);
+    c = _hh(c, d, a, b, data[i + 15], 16, 0x1FA27CF8);
+    b = _hh(b, c, d, a, data[i + 2], 23, 0xC4AC5665);
+    a = _ii(a, b, c, d, data[i + 0], 6, 0xF4292244);
+    d = _ii(d, a, b, c, data[i + 7], 10, 0x432AFF97);
+    c = _ii(c, d, a, b, data[i + 14], 15, 0xAB9423A7);
+    b = _ii(b, c, d, a, data[i + 5], 21, 0xFC93A039);
+    a = _ii(a, b, c, d, data[i + 12], 6, 0x655B59C3);
+    d = _ii(d, a, b, c, data[i + 3], 10, 0x8F0CCC92);
+    c = _ii(c, d, a, b, data[i + 10], 15, 0xFFEFF47D);
+    b = _ii(b, c, d, a, data[i + 1], 21, 0x85845DD1);
+    a = _ii(a, b, c, d, data[i + 8], 6, 0x6FA87E4F);
+    d = _ii(d, a, b, c, data[i + 15], 10, 0xFE2CE6E0);
+    c = _ii(c, d, a, b, data[i + 6], 15, 0xA3014314);
+    b = _ii(b, c, d, a, data[i + 13], 21, 0x4E0811A1);
+    a = _ii(a, b, c, d, data[i + 4], 6, 0xF7537E82);
+    d = _ii(d, a, b, c, data[i + 11], 10, 0xBD3AF235);
+    c = _ii(c, d, a, b, data[i + 2], 15, 0x2AD7D2BB);
+    b = _ii(b, c, d, a, data[i + 9], 21, 0xEB86D391);
+    a = _add32(a, aa); b = _add32(b, bb); c = _add32(c, cc); d = _add32(d, dd);
+  }
+  return _hex(a) + _hex(b) + _hex(c) + _hex(d);
+}
+
+int _add32(int x, int y) => (x + y) & 0xFFFFFFFF;
+int _cmn(int q, int a, int b, int x, int s, int t) =>
+    _add32(_bitRol(_add32(_add32(a, q), _add32(x, t)), s), b);
+int _ff(int a, int b, int c, int d, int x, int s, int t) =>
+    _cmn((b & c) | ((~b) & d), a, b, x, s, t);
+int _gg(int a, int b, int c, int d, int x, int s, int t) =>
+    _cmn((b & d) | (c & (~d)), a, b, x, s, t);
+int _hh(int a, int b, int c, int d, int x, int s, int t) =>
+    _cmn(b ^ c ^ d, a, b, x, s, t);
+int _ii(int a, int b, int c, int d, int x, int s, int t) =>
+    _cmn(c ^ (b | (~d)), a, b, x, s, t);
+int _bitRol(int num, int cnt) => (num << cnt) | (num >>> (32 - cnt));
+String _hex(int n) {
+  final h = '0123456789abcdef';
+  return h[(n >> 4) & 15] + h[n & 15] +
+         h[(n >> 12) & 15] + h[(n >> 8) & 15] +
+         h[(n >> 20) & 15] + h[(n >> 16) & 15] +
+         h[(n >> 28) & 15] + h[(n >> 24) & 15];
+}
+List<int> _createBuffer(String input) {
+  final bytes = <int>[];
+  for (int i = 0; i < input.length; i++) {
+    final c = input.codeUnitAt(i);
+    if (c < 128) {
+      bytes.add(c);
+    } else if (c < 2048) {
+      bytes.add((c >> 6) | 192);
+      bytes.add((c & 63) | 128);
+    } else {
+      bytes.add((c >> 12) | 224);
+      bytes.add(((c >> 6) & 63) | 128);
+      bytes.add((c & 63) | 128);
+    }
+  }
+  final msgLen = bytes.length;
+  bytes.add(128);
+  while ((bytes.length % 64) != 56) bytes.add(0);
+  final bitLen = msgLen * 8;
+  for (int i = 0; i < 8; i++) bytes.add((bitLen >> (i * 8)) & 255);
+  final data = <int>[];
+  for (int i = 0; i < bytes.length; i += 4) {
+    data.add(bytes[i] | (bytes[i + 1] << 8) | (bytes[i + 2] << 16) | (bytes[i + 3] << 24));
+  }
+  return data;
 }
