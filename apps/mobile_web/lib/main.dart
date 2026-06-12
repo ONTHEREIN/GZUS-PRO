@@ -329,7 +329,7 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
     }
     // 添加 5 秒超时保护，防止 API 响应慢导致 LoadingPage 永远卡住
     try {
-      await _restoreSession().timeout(const Duration(seconds: 8));
+      await _restoreSession().timeout(const Duration(seconds: 12));
     } on TimeoutException {
       debugPrint('Session restore timed out after 5 seconds, showing login page');
       if (mounted) {
@@ -395,9 +395,9 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
     try {
       await persistent_cache
           .loadLibrary()
-          .timeout(const Duration(seconds: 3));
+          .timeout(const Duration(seconds: 2));
       final pcache = persistent_cache.PersistentCache(namespace: api.namespace);
-      await pcache.init().timeout(const Duration(seconds: 2));
+      await pcache.init().timeout(const Duration(seconds: 1));
       final cachedMe = pcache.getRaw('me');
       if (cachedMe != null && cachedMe is Map<String, dynamic>) {
         final guideCompleted =
