@@ -1037,6 +1037,7 @@ export default {
         // on every proxied request.
         const sessionId = vercelResult.sessionId;
         const sessionData = {
+          account: account,
           cookies: result.cookies,
           ehallCookies: result.ehallCookies,
           studentName: result.studentName,
@@ -1102,6 +1103,7 @@ export default {
 
         const sessionId = vercelResult.sessionId;
         const sessionData = {
+          account: credentials.account,
           cookies: result.cookies,
           ehallCookies: result.ehallCookies,
           studentName: result.studentName,
@@ -1197,8 +1199,16 @@ export default {
             jwxtUrl = 'https://jwxt.seig.edu.cn/jwglxt/cjcx/cjcx_cxXsgrcj.html?doType=query&gnmkdm=N305005';
             postData = new URLSearchParams({ ...baseParams, kch: '', kc: '' });
           } else if (path === 'credits') {
-            jwxtUrl = 'https://jwxt.seig.edu.cn/jwglxt/xsxy/xsxyqk_cxXsxyqkIndex.html?doType=query&gnmkdm=N105515';
-            postData = new URLSearchParams(baseParams);
+            // Credits requires the student ID (xh). If we don't have it
+            // (session created before the account field was added), fall through.
+            if (!session.account) {
+              jwxtUrl = null; // fall through to Vercel
+            } else {
+              jwxtUrl = 'https://jwxt.seig.edu.cn/jwglxt/design/funcData_cxFuncDataList.html?func_widget_guid=37234863CD24BB76E063860810AC3761&gnmkdm=N255022';
+              postData = new URLSearchParams({ gnmkdm: 'N255022', xh: session.account,
+                'queryModel.showCount': '15', 'queryModel.currentPage': '1',
+                'queryModel.sortName': ' ', 'queryModel.sortOrder': 'asc' });
+            }
           } else {
             // attendance — fall through for now
             jwxtUrl = null;
