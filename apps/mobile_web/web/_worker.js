@@ -1187,11 +1187,24 @@ export default {
           });
           if (jwxtRes && jwxtRes.ok && html) {
             // Extract student info from JWXT info page HTML
-            // Pattern: id="col_*">\s*<p ...>\s*VALUE\s*</p>
+            // JWXT HTML structure has changed over time — elements may contain
+            // nested <span>, <label>, or other tags.  We capture the full raw
+            // inner HTML and strip all tags, rather than using a lazy [^<]+
+            // which truncates at the first nested element.
             const getField = (id) => {
-              const re = new RegExp(`id="${id}"[^>]*>\\s*(?:<p[^>]*>)?\\s*([^<]+?)\\s*(?:</p>)?`, 'i');
+              // Match from id="col_*" through opening tag > to next </tag>
+              const re = new RegExp(`id="${id}"[^>]*>([\\s\\S]*?)<\\/`, 'i');
               const m = html.match(re);
-              return m ? m[1].trim() : null;
+              if (!m) return null;
+              // Strip all HTML tags, decode common entities, collapse whitespace
+              return m[1]
+                .replace(/<[^>]+>/g, '')
+                .replace(/&nbsp;/g, ' ')
+                .replace(/&lt;/g, '<')
+                .replace(/&gt;/g, '>')
+                .replace(/&amp;/g, '&')
+                .replace(/\s+/g, ' ')
+                .trim();
             };
             // Try multiple possible HTML element IDs for each field
             const getFieldMulti = (ids) => {
