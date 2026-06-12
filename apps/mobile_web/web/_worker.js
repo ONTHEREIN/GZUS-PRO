@@ -1390,12 +1390,40 @@ export default {
       };
     }
 
+    function normalizeCreditItem(item) {
+      const reqExp = parseFloat(item.yqxf_01 || item.requiredExpected || 0);
+      const eleExp = parseFloat(item.yqxf_02 || item.electiveExpected || 0);
+      const othExp = parseFloat(item.yqxf_03 || item.otherExpected || 0);
+      const reqEar = parseFloat(item.sxxf_01 || item.requiredEarned || 0);
+      const eleEar = parseFloat(item.sxxf_02 || item.electiveEarned || 0);
+      const othEar = parseFloat(item.sxxf_03 || item.otherEarned || 0);
+      return {
+        studentId: String(item.xh || item.studentId || ''),
+        name: item.xm || item.name || null,
+        college: item.jgmc || item.college || null,
+        major: item.zymc || item.major || null,
+        grade: String(item.nj || item.grade || ''),
+        totalCredit: String(item.zdxf || item.totalCredit || ''),
+        requiredCredit: String(item.bxxf || item.requiredCredit || ''),
+        selectedCredit: String(item.xkxf || item.selectedCredit || ''),
+        requiredExpected: reqExp,
+        electiveExpected: eleExp,
+        otherExpected: othExp,
+        requiredEarned: reqEar,
+        electiveEarned: eleEar,
+        otherEarned: othEar,
+        totalExpected: reqExp + eleExp + othExp,
+        totalEarned: reqEar + eleEar + othEar,
+      };
+    }
+
     function normalizeResultList(items, path) {
       if (!Array.isArray(items)) return items;
       if (path === 'exams') return items.map(normalizeExamItem);
       if (path === 'grades') return items.map(normalizeGradeItem);
       if (path === 'schedule') return items.map(normalizeScheduleCourse);
       if (path === 'attendance') return items.map(normalizeAttendanceItem);
+      if (path === 'credits') return items.map(normalizeCreditItem);
       return items;
     }
 
