@@ -789,6 +789,19 @@ export default {
       return new Response(null, { status: 204, headers: corsHeaders(request) });
     }
 
+    // ─── CanvasKit chromium compat ─────────────────────────────
+    // The chromium CanvasKit variant tries to import main.dart.js
+    // from the canvaskit directory, but that file doesn't exist.
+    // Cloudflare Pages SPA fallback returns index.html instead,
+    // causing a JavaScript parse error and silent Flutter init failure.
+    // Return an empty JS response so CanvasKit init can continue.
+    if (url.pathname === '/canvaskit/chromium/main.dart.js') {
+      return new Response('// CanvasKit chromium compat stub', {
+        status: 200,
+        headers: { 'Content-Type': 'application/javascript', ...corsHeaders(request) },
+      });
+    }
+
     // ─── JWXT proxy for Vercel backend ─────────────────────────
     // Vercel routes JWXT requests through the Worker to preserve the
     // Worker's edge IP (JWXT cookies are IP-bounded).
