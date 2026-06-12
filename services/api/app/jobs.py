@@ -295,10 +295,7 @@ def _next_reminder_at(now: datetime, reminder_times: list[str] | None = None) ->
 
 async def run_ecard_reminder_once(app) -> None:
     try:
-        settings = get_settings()
-        client = EcardClient(
-            worker_proxy_origin=settings.frontend_base_url or "https://onegzus-onweb.pages.dev",
-        )
+        client = EcardClient()
     except EcardConfigurationError:
         logger.info("ECARD_OPENID not configured, skipping ecard reminders")
         return

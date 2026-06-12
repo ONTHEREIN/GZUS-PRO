@@ -116,12 +116,7 @@ def _student_info(session: AppSession) -> tuple[str, str]:
 
 def _client() -> EcardClient:
     try:
-        # Route ecard requests through the Cloudflare Worker proxy.
-        # Vercel (US) cannot reach ecarduser.gzus.edu.cn directly,
-        # but the Worker (near China) can.
-        settings = get_settings()
-        proxy_origin = settings.frontend_base_url or "https://onegzus-onweb.pages.dev"
-        return EcardClient(worker_proxy_origin=proxy_origin)
+        return EcardClient()
     except EcardConfigurationError as exc:
         logger.error("ecard: configuration error: %s", exc)
         raise HTTPException(status_code=503, detail=str(exc)) from exc
