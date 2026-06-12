@@ -329,7 +329,7 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
     }
     // 添加 5 秒超时保护，防止 API 响应慢导致 LoadingPage 永远卡住
     try {
-      await _restoreSession().timeout(const Duration(seconds: 12));
+      await _restoreSession().timeout(const Duration(seconds: 8));
     } on TimeoutException {
       debugPrint('Session restore timed out after 5 seconds, showing login page');
       if (mounted) {
@@ -387,39 +387,6 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
     if (savedEhallAuthToken != null && savedEhallAuthToken.isNotEmpty) {
       api.setEhallAuthToken(savedEhallAuthToken);
     }
-
-    // Try persistent cache first for fast offline restore.
-    // If the deferred library load hangs (e.g. slow network),
-    // fall through to the live API call instead of timing out.
-    bool cacheRestored = false;
-    try {
-      await persistent_cache
-          .loadLibrary()
-          .timeout(const Duration(seconds: 2));
-      final pcache = persistent_cache.PersistentCache(namespace: api.namespace);
-      await pcache.init().timeout(const Duration(seconds: 1));
-      final cachedMe = pcache.getRaw('me');
-      if (cachedMe != null && cachedMe is Map<String, dynamic>) {
-        final guideCompleted =
-            prefs.getBool('background_guide_completed') ?? false;
-        if (!mounted) return;
-        setState(() {
-          initializing = false;
-          loggedIn = true;
-          studentName =
-              prefs.getString('auth.studentName') ?? cachedMe['name'] as String?;
-          _backgroundGuideCompleted = guideCompleted;
-          _globalDataSource =
-              const DataSourceInfo(fromLocalCache: true, isOffline: true);
-          loginMethod = prefs.getString('auth.loginMethod');
-        });
-        _tryBackgroundRefresh(prefs);
-        cacheRestored = true;
-      }
-    } catch (_) {
-      // persistent_cache unavailable — fall through to live API
-    }
-    if (cacheRestored) return;
 
     try {
       final result = await api.me();
