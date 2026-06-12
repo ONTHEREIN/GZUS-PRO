@@ -269,8 +269,14 @@ class SchoolSdkClient:
             "enrollDate", "nativePlace", "studentStatus", "educationLevel",
             "phone", "email", "address",
         )
-        _has_incomplete = not info.get("name") or not info.get("className") or not info.get("gender")
-        if _has_incomplete:
+        _has_incomplete = (
+            not info.get("name") or not info.get("className") or not info.get("gender")
+        )
+        # Also trigger fallback when SDK returned garbled data (GBK decoded as UTF-8)
+        _looks_garbled_info = (
+            info.get("name") and SchoolSdkClient._looks_garbled(str(info["name"]))
+        )
+        if _has_incomplete or _looks_garbled_info:
             html_info = self._query_info_via_html()
             if html_info:
                 for key in _info_keys:
