@@ -9,6 +9,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
+from app.config import get_settings
 from app.database import EcardBinding, get_sync_session_factory
 from app.ecard_client import EcardApiError, EcardClient, EcardConfigurationError, EcardRoomRef
 from app.routes.deps import require_session
@@ -115,7 +116,12 @@ def _student_info(session: AppSession) -> tuple[str, str]:
 
 def _client() -> EcardClient:
     try:
-        return EcardClient()
+        # Route ecard requests through the Cloudflare Worker proxy.
+        # Vercel (US) cannot reach ecarduser.gzus.edu.cn directly,
+        # but the Worker (near China) can.
+        settings = get_settings()
+        proxy_origin = settings.frontend_base_url or "https://onegzus-onweb.pages.dev"
+        return EcardClient(worker_proxy_origin=proxy_origin)
     except EcardConfigurationError as exc:
         logger.error("ecard: configuration error: %s", exc)
         raise HTTPException(status_code=503, detail=str(exc)) from exc

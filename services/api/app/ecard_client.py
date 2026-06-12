@@ -107,7 +107,7 @@ def public_room(room: dict[str, Any]) -> dict[str, str]:
 
 
 class EcardClient:
-    def __init__(self) -> None:
+    def __init__(self, worker_proxy_origin: str | None = None) -> None:
         self.settings = get_settings()
         if not self.settings.ecard_openid:
             raise EcardConfigurationError("未配置 ECARD_OPENID")
@@ -115,6 +115,7 @@ class EcardClient:
         self._openid = self.settings.ecard_openid
         self._unionid = self.settings.ecard_unionid
         self._http_client: httpx.Client | None = None
+        self._worker_proxy_origin = worker_proxy_origin
 
     def _get_http_client(self) -> httpx.Client:
         if self._http_client is None or self._http_client.is_closed:
@@ -152,6 +153,12 @@ class EcardClient:
             "User-Agent": WX_UA,
         }
         url = f"{self.settings.ecard_base_url.rstrip('/')}/{path.lstrip('/')}"
+
+        # If Worker proxy is configured, route through it to reach
+        # the ecard API (only accessible from within China).
+        if self._worker_proxy_origin:
+            return self._post_via_proxy(url, payload, headers)
+
         try:
             client = self._get_http_client()
             response = client.post(url, data=payload, headers=headers)
@@ -165,6 +172,49 @@ class EcardClient:
             raise EcardApiError("一卡通服务请求失败") from exc
         except Exception as exc:
             logger.error("ecard_client: request failed for %s: %s", path, exc, exc_info=True)
+            raise EcardApiError("一卡通服务请求失败") from exc
+        if not isinstance(data, dict):
+            raise EcardApiError("一卡通服务响应异常")
+        return data
+
+    def _post_via_proxy(
+        self, url: str, payload: dict[str, Any], headers: dict[str, str],
+    ) -> dict[str, Any]:
+        """Send ecard API request through the Cloudflare Worker proxy.
+
+        Vercel (US) cannot reach ecarduser.gzus.edu.cn directly.
+        The Worker edge (near China) forwards the request and returns
+        the response.
+        """
+        import urllib.parse
+        proxy_url = f"{self._worker_proxy_origin.rstrip('/')}/_proxy"
+        body_str = urllib.parse.urlencode(payload)
+        proxy_body = {
+            "url": url,
+            "method": "POST",
+            "headers": dict(headers),
+            "body": body_str,
+        }
+        try:
+            client = self._get_http_client()
+            response = client.post(
+                proxy_url,
+                json=proxy_body,
+                headers={"Content-Type": "application/json"},
+                timeout=self.settings.request_timeout_seconds + 15,
+            )
+            response.raise_for_status()
+            proxy_status = int(response.headers.get("X-Proxy-Status", "502"))
+            if proxy_status >= 400:
+                raise EcardApiError(f"一卡通服务返回 HTTP {proxy_status}")
+            data = response.json()
+        except httpx.TimeoutException as exc:
+            logger.error("ecard_client: proxy timeout for %s: %s", url, exc)
+            raise EcardApiError("一卡通服务请求超时") from exc
+        except EcardApiError:
+            raise
+        except Exception as exc:
+            logger.error("ecard_client: proxy request failed for %s: %s", url, exc, exc_info=True)
             raise EcardApiError("一卡通服务请求失败") from exc
         if not isinstance(data, dict):
             raise EcardApiError("一卡通服务响应异常")
