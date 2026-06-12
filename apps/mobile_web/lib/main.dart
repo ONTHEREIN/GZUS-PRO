@@ -2049,6 +2049,13 @@ class _DashboardShellState extends State<DashboardShell> {
             term: term,
             onSessionExpired: widget.onLogout);
       case 'leave':
+        if (kIsWeb) {
+          return const _WebUnsupportedPage(
+            title: '自动请假',
+            icon: Icons.fact_check,
+            message: '自动请假功能需要在手机 App 中使用，Web 端暂不支持自动填写表单。',
+          );
+        }
         return AutoLeavePage(
             api: widget.api,
             year: year,
@@ -4126,6 +4133,53 @@ class _HomeCard extends StatelessWidget {
   }
 }
 
+class _WebUnsupportedPage extends StatelessWidget {
+  const _WebUnsupportedPage({
+    required this.title,
+    required this.icon,
+    required this.message,
+  });
+
+  final String title;
+  final IconData icon;
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return PagePanel(
+      title: title,
+      icon: icon,
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.phone_android, size: 64, color: cs.onSurfaceVariant),
+              const SizedBox(height: 16),
+              Text(
+                '请使用手机 App',
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+              const SizedBox(height: 8),
+              Text(
+                message,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: cs.onSurfaceVariant,
+                  fontSize: 14,
+                  height: 1.5,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _TimedCourse {
   const _TimedCourse({
     required this.course,
@@ -4296,30 +4350,19 @@ class _TodayTimelineHomeCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final display = courses.length > 6 ? courses.sublist(0, 6) : courses;
-    final hasMore = courses.length > 6;
     return _HomeCard(
       title: '今日时间线',
       icon: Icons.view_timeline,
       badge: '${courses.length} 节',
       child: courses.isEmpty
           ? const EmptyState(message: '今日无课')
-          : Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                for (final item in display) _TimelineMiniRow(course: item),
-                if (hasMore)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 6),
-                    child: Text(
-                      '还有 ${courses.length - 6} 节课',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ),
-              ],
+          : SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (final item in courses) _TimelineMiniRow(course: item),
+                ],
+              ),
             ),
     );
   }
@@ -4402,44 +4445,46 @@ class _WeekGridHomeCard extends StatelessWidget {
       title: '周课表',
       icon: Icons.grid_view,
       badge: '紧凑',
-      child: Column(
-        children: [
-          Row(
-            children: [
-              const SizedBox(width: 36),
-              for (final day in days)
-                Expanded(
-                  child: Text('周$day',
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(fontSize: 12)),
-                ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          for (final slot in slots)
+      child: SingleChildScrollView(
+        child: Column(
+          children: [
             Row(
               children: [
-                SizedBox(
-                  width: 36,
-                  child: Text('$slot-${slot + 1}',
-                      style: TextStyle(
-                          color: Theme.of(context).colorScheme.onSurfaceVariant,
-                          fontSize: 11)),
-                ),
-                for (var day = 1; day <= 5; day++)
+                const SizedBox(width: 36),
+                for (final day in days)
                   Expanded(
-                    child: _WeekGridCell(
-                      course: _firstOrNull(courses.where((item) {
-                        final start = item.startSection ?? 0;
-                        return item.weekday == day &&
-                            start >= slot &&
-                            start <= slot + 1;
-                      })),
-                    ),
+                    child: Text('周$day',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(fontSize: 12)),
                   ),
               ],
             ),
-        ],
+            const SizedBox(height: 6),
+            for (final slot in slots)
+              Row(
+                children: [
+                  SizedBox(
+                    width: 36,
+                    child: Text('$slot-${slot + 1}',
+                        style: TextStyle(
+                            color: Theme.of(context).colorScheme.onSurfaceVariant,
+                            fontSize: 11)),
+                  ),
+                  for (var day = 1; day <= 5; day++)
+                    Expanded(
+                      child: _WeekGridCell(
+                        course: _firstOrNull(courses.where((item) {
+                          final start = item.startSection ?? 0;
+                          return item.weekday == day &&
+                              start >= slot &&
+                              start <= slot + 1;
+                        })),
+                      ),
+                    ),
+                ],
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -4495,11 +4540,13 @@ class _DailyCoursesHomeCard extends StatelessWidget {
       badge: '列表',
       child: courses.isEmpty
           ? const EmptyState(message: '今日无课')
-          : Column(
-              children: [
-                for (final item in courses.take(5))
-                  _CompactCourseRow(course: item),
-              ],
+          : SingleChildScrollView(
+              child: Column(
+                children: [
+                  for (final item in courses)
+                    _CompactCourseRow(course: item),
+                ],
+              ),
             ),
     );
   }

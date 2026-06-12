@@ -1233,9 +1233,39 @@ export default {
               phone: getField('col_sjhm') || null,
               email: getField('col_dzyx') || null,
               address: getField('col_jtdz') || null,
-              // Extract photo URL if present (base64 data URL in the HTML)
-              photoDataUrl: extractPhotoUrl(html),
+              // Extract photo URL if present
+              photoDataUrl: null, // populated below after async fetch
             };
+            // Extract photo URL from HTML, then fetch actual photo as base64
+            const photoUrl = extractPhotoUrl(html);
+            if (photoUrl && session.cookies) {
+              try {
+                const photoFullUrl = photoUrl.startsWith('http') ? photoUrl :
+                  'https://jwxt.seig.edu.cn' + (photoUrl.startsWith('/') ? '' : '/') + photoUrl;
+                const photoRes = await fetch(photoFullUrl, {
+                  headers: {
+                    'Cookie': session.cookies,
+                    'User-Agent': 'Mozilla/5.0 (Linux; Android 16) GZUS-PRO/1.0',
+                    'Referer': 'https://jwxt.seig.edu.cn/jwglxt/xtgl/index_initMenu.html',
+                  },
+                  signal: AbortSignal.timeout(10000),
+                });
+                if (photoRes && photoRes.ok) {
+                  const photoBuf = await photoRes.arrayBuffer();
+                  const photoBytes = new Uint8Array(photoBuf);
+                  // Build base64 data URL
+                  let b64 = '';
+                  for (let i = 0; i < photoBytes.length; i++) {
+                    b64 += String.fromCharCode(photoBytes[i]);
+                  }
+                  b64 = btoa(b64);
+                  const contentType = photoRes.headers.get('Content-Type') || 'image/jpeg';
+                  studentInfo.photoDataUrl = `data:${contentType};base64,${b64}`;
+                }
+              } catch (e) {
+                console.warn(`[edge-me] Photo fetch failed: ${e.message}`);
+              }
+            }
             // Only return if we got at least a name or student ID
             if (studentInfo.name || studentInfo.studentId) {
               return jsonResponse(studentInfo, 200, request);
