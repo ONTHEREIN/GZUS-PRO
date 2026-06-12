@@ -589,6 +589,32 @@ async function fetchWithCookies(url, options = {}, jar) {
   throw new Error('Too many redirects');
 }
 
+// ─── GBK/GB2312 decoder for JWXT responses ─────────────────────
+// JWXT returns GBK-encoded HTML and JSON payloads, but Cloudflare
+// Workers always decode fetch responses as UTF-8.  This produces
+// garbled text (mojibake).  We decode the raw bytes manually.
+const gbkDecoder = new TextDecoder('gbk');
+function decodeGbkResponse(response) {
+  return response.arrayBuffer().then(buf => gbkDecoder.decode(buf));
+}
+async function fetchGbkJson(url, options) {
+  const res = await fetch(url, options);
+  if (!res.ok) return [res, null];
+  const text = await decodeGbkResponse(res);
+  try {
+    return [res, JSON.parse(text)];
+  } catch (e) {
+    console.warn(`[gbk] JSON parse failed: ${e.message}`);
+    return [res, null];
+  }
+}
+async function fetchGbkText(url, options) {
+  const res = await fetch(url, options);
+  if (!res.ok) return [res, null];
+  const text = await decodeGbkResponse(res);
+  return [res, text];
+}
+
 // ─── Utility functions ─────────────────────────────────────────────
 function base64ToUint8Array(b64) {
   const binary = atob(b64);
@@ -1138,7 +1164,7 @@ export default {
       const session = await getLocalSession(request, env);
       if (session && session.cookies) {
         try {
-          const jwxtRes = await fetch('https://jwxt.seig.edu.cn/jwglxt/xsxxxggl/xsgrxxwh_cxXsgrxx.html', {
+          const [jwxtRes, html] = await fetchGbkText('https://jwxt.seig.edu.cn/jwglxt/xsxxxggl/xsgrxxwh_cxXsgrxx.html', {
             headers: {
               'Cookie': session.cookies,
               'User-Agent': 'Mozilla/5.0 (Linux; Android 16) GZUS-PRO/1.0',
@@ -1146,8 +1172,7 @@ export default {
             },
             signal: AbortSignal.timeout(15000),
           });
-          if (jwxtRes.ok) {
-            const html = await jwxtRes.text();
+          if (jwxtRes && jwxtRes.ok && html) {
             // Extract student info from JWXT info page HTML
             // Pattern: id="col_*">\s*<p ...>\s*VALUE\s*</p>
             const getField = (id) => {
@@ -1402,7 +1427,7 @@ export default {
           }
 
           if (jwxtUrl) {
-            const jwxtRes = await fetch(jwxtUrl, {
+            const [jwxtRes, data] = await fetchGbkJson(jwxtUrl, {
               method: 'POST',
               headers: {
                 'Cookie': session.cookies,
@@ -1414,8 +1439,7 @@ export default {
               signal: AbortSignal.timeout(15000),
             });
 
-            if (jwxtRes.ok) {
-              const data = await jwxtRes.json().catch(() => null);
+            if (jwxtRes && jwxtRes.ok && data) {
               // attendance returns { status: 'ok', items: [...] }
               if (path === 'attendance' && data && data.items) {
                 return jsonResponse({
@@ -1433,7 +1457,7 @@ export default {
               }
               console.warn(`[edge-${path}] JWXT returned unexpected format, falling through to Vercel`);
             } else {
-              console.warn(`[edge-${path}] JWXT returned ${jwxtRes.status}, falling through to Vercel`);
+              console.warn(`[edge-${path}] JWXT returned ${jwxtRes ? jwxtRes.status : 'null'}, falling through to Vercel`);
             }
           }
         } catch (e) {
@@ -1450,7 +1474,7 @@ export default {
       if (session && session.cookies) {
         try {
           const newsUrl = 'https://jwxt.seig.edu.cn/jwglxt/xtgl/index_cxNews.html?localeKey=zh_CN';
-          const newsRes = await fetch(newsUrl, {
+          const [newsRes, html] = await fetchGbkText(newsUrl, {
             headers: {
               'Cookie': session.cookies,
               'User-Agent': 'Mozilla/5.0 (Linux; Android 16) GZUS-PRO/1.0',
@@ -1458,8 +1482,7 @@ export default {
             },
             signal: AbortSignal.timeout(15000),
           });
-          if (newsRes.ok) {
-            const html = await newsRes.text();
+          if (newsRes && newsRes.ok && html) {
             // Check if we got a login page instead
             if (html.includes('login_slogin') || /password['"]\s*type/i.test(html)) {
               console.warn('[edge-notices] JWXT returned login page, session may be expired');
