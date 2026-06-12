@@ -589,18 +589,31 @@ async function fetchWithCookies(url, options = {}, jar) {
   throw new Error('Too many redirects');
 }
 
-// ─── GBK/GB2312 decoder for JWXT responses ─────────────────────
-// JWXT returns GBK-encoded HTML and JSON payloads, but Cloudflare
-// Workers always decode fetch responses as UTF-8.  This produces
-// garbled text (mojibake).  We decode the raw bytes manually.
+// ─── Encoding-smart decoder for JWXT responses ─────────────────
+// JWXT has historically used GBK encoding.  Cloudflare Workers always
+// decode fetch responses as UTF-8, which produces garbled text for GBK
+// content.  We decode raw bytes manually, trying UTF-8 first (JWXT may
+// have switched to UTF-8), falling back to GBK if UTF-8 is invalid.
 const gbkDecoder = new TextDecoder('gbk');
+function decodeResponse(response) {
+  return response.arrayBuffer().then(buf => {
+    // Try UTF-8 first — JWXT has been observed using UTF-8 since mid-2026
+    try {
+      return new TextDecoder('utf-8', { fatal: true }).decode(buf);
+    } catch (_) {
+      // Invalid UTF-8 → fall back to legacy GBK
+      return gbkDecoder.decode(buf);
+    }
+  });
+}
 function decodeGbkResponse(response) {
-  return response.arrayBuffer().then(buf => gbkDecoder.decode(buf));
+  // Legacy alias — kept for backward compatibility, delegates to smart decoder
+  return decodeResponse(response);
 }
 async function fetchGbkJson(url, options) {
   const res = await fetch(url, options);
   if (!res.ok) return [res, null];
-  const text = await decodeGbkResponse(res);
+  const text = await decodeResponse(res);
   try {
     return [res, JSON.parse(text)];
   } catch (e) {
@@ -611,7 +624,7 @@ async function fetchGbkJson(url, options) {
 async function fetchGbkText(url, options) {
   const res = await fetch(url, options);
   if (!res.ok) return [res, null];
-  const text = await decodeGbkResponse(res);
+  const text = await decodeResponse(res);
   return [res, text];
 }
 
