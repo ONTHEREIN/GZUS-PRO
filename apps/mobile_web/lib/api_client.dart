@@ -41,8 +41,8 @@ String _defaultApiBaseUrl() {
   // 默认指向 Cloudflare Pages Worker（亚太节点，大陆用户延迟较低）
   // 可通过 `flutter build --dart-define=API_BASE_URL=...` 覆盖
   // onegzus.cc.cd 是主 App 域名（带 Worker），pages.dev 作为回退
-  const customDomain = 'https://onegzus.cc.cd';
-  const cloudflareWorker = 'https://onegzus-onweb.pages.dev';
+  const customDomain = 'https://onegzus.cc.cd/api';
+  const cloudflareWorker = 'https://onegzus-onweb.pages.dev/api';
 
   return '$customDomain,$cloudflareWorker';
 }

@@ -14,16 +14,16 @@ const STATIC_ASSETS = [
   './icons/icon-512x512.png',
 ];
 const API_WHITELIST = [
-  '/me',
-  '/schedule',
-  '/exams',
-  '/grades',
-  '/attendance',
-  '/credits',
-  '/notices',
-  '/ehall/progress',
-  '/ecard/summary',
-  '/ecard/consumption',
+  '/api/me',
+  '/api/schedule',
+  '/api/exams',
+  '/api/grades',
+  '/api/attendance',
+  '/api/credits',
+  '/api/notices',
+  '/api/ehall/progress',
+  '/api/ecard/summary',
+  '/api/ecard/consumption',
 ];
 
 self.addEventListener('install', (event) => {
