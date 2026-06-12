@@ -1170,6 +1170,42 @@ export default {
       // Fall through to Vercel if edge fetch failed
     }
 
+    // ─── Normalize JWXT raw fields → Flutter-expected format ─────
+    function normalizeExamItem(item) {
+      const time = item.kssj || item.time || item.examTime || '';
+      let date = item.date || item.examDate || '';
+      if (!date && time) {
+        const spaceIdx = time.indexOf(' ');
+        if (spaceIdx > 0) date = time.substring(0, spaceIdx);
+      }
+      let weekday = item.weekday || item.weekDay || item.xqj || '';
+      if (!weekday && date) {
+        try {
+          const dt = new Date(date);
+          const names = ['周日','周一','周二','周三','周四','周五','周六'];
+          weekday = names[dt.getDay()] || '';
+        } catch (e) {}
+      }
+      return {
+        courseName: item.kcmc || item.courseName || item.name || '',
+        name: item.kcmc || item.courseName || item.name || '',
+        date: date,
+        weekday: weekday,
+        time: time,
+        location: item.cdmc || item.location || item.examPlace || null,
+        seat: (item.zwh != null ? String(item.zwh) : null) || item.seat || item.seatNo || null,
+        type: item.ksmc || item.ksfs || item.type || item.kslx || null,
+        credit: (item.xf != null ? String(item.xf) : '') || item.credit || '',
+        campus: item.cdxqmc || item.campus || null,
+        remark: item.ksbz || item.remark || null,
+      };
+    }
+
+    function normalizeResultList(items, path) {
+      if (path === 'exams') return items.map(normalizeExamItem);
+      return items; // grades/schedule/credits pass through for now
+    }
+
     // ─── Edge academic API: /exams & /schedule ────────────────
     // Handle exams and schedule at the Worker edge to avoid Vercel's
     // 10-second Hobby-plan timeout on the double-proxy chain.
@@ -1229,10 +1265,10 @@ export default {
 
             if (jwxtRes.ok) {
               const data = await jwxtRes.json().catch(() => null);
-              // Common JWXT response formats
-              if (data && data.items) return jsonResponse(data.items, 200, request);
-              if (data && data.kbList) return jsonResponse(data.kbList, 200, request); // schedule
-              if (data && Array.isArray(data)) return jsonResponse(data, 200, request);
+              // Common JWXT response formats — normalize field names for Flutter
+              if (data && data.items) return jsonResponse(normalizeResultList(data.items, path), 200, request);
+              if (data && data.kbList) return jsonResponse(normalizeResultList(data.kbList, path), 200, request);
+              if (data && Array.isArray(data)) return jsonResponse(normalizeResultList(data, path), 200, request);
               // Single object (credits totals, etc.)
               if (data && typeof data === 'object' && !Array.isArray(data)) {
                 return jsonResponse(data, 200, request);
