@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     ecard_openid: str = ""
     ecard_unionid: str = ""
     ecard_secret: str = ""
-    ecard_verify_tls: bool = True
+    ecard_verify_tls: bool = False
     ecard_daily_reminder_hour: int = 8
     ecard_daily_reminder_minute: int = 0
     ehall_csrf_key: str = ""
