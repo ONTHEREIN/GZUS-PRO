@@ -1171,6 +1171,42 @@ export default {
     }
 
     // ─── Normalize JWXT raw fields → Flutter-expected format ─────
+    function parseSectionRange(val) {
+      if (val == null) return [null, null];
+      const s = String(val);
+      const dash = s.indexOf('-');
+      if (dash > 0) {
+        return [parseInt(s.substring(0, dash)) || null, parseInt(s.substring(dash + 1)) || null];
+      }
+      const n = parseInt(s);
+      return [n || null, n || null];
+    }
+
+    function normalizeGradeItem(item) {
+      return {
+        courseName: item.kcmc || item.courseName || item.name || '',
+        score: (item.cj != null ? String(item.cj) : null) || item.score || null,
+        credit: (item.xf != null ? String(item.xf) : null) || item.credit || null,
+        gradePoint: (item.jd != null ? String(item.jd) : null) || item.gradePoint || null,
+        term: item.xqmc || item.xq || item.term || null,
+      };
+    }
+
+    function normalizeScheduleCourse(item) {
+      const [startSec, endSec] = parseSectionRange(item.ksjc || item.jcs || item.jc || item.startSection);
+      return {
+        name: item.kcmc || item.name || item.courseName || '',
+        teacher: item.jsxx || item.jsxm || item.xm || item.teacher || null,
+        classroom: item.cdmc || item.classroom || item.location || null,
+        weekday: item.xqj || item.weekday || item.weekDay || null,
+        startSection: startSec || item.startSection || null,
+        endSection: endSec || item.endSection || null,
+        weeks: item.zcd || item.weeks || item.week || null,
+        kcbmc: item.kcbmc || null,
+        raw: item,
+      };
+    }
+
     function normalizeExamItem(item) {
       const time = item.kssj || item.time || item.examTime || '';
       let date = item.date || item.examDate || '';
@@ -1205,8 +1241,11 @@ export default {
     }
 
     function normalizeResultList(items, path) {
+      if (!Array.isArray(items)) return items;
       if (path === 'exams') return items.map(normalizeExamItem);
-      return items; // grades/schedule/credits pass through for now
+      if (path === 'grades') return items.map(normalizeGradeItem);
+      if (path === 'schedule') return items.map(normalizeScheduleCourse);
+      return items;
     }
 
     // ─── Edge academic API: /exams & /schedule ────────────────
