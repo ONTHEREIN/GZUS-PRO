@@ -82,6 +82,7 @@ def _rebuild_school_client(
     jwxt_cookies: str,
     validate_cookies: bool = False,
     session_id: str | None = None,
+    account: str | None = None,
 ) -> Any:
     """Rebuild a SchoolSdkClient from stored cookies.
 
@@ -100,7 +101,7 @@ def _rebuild_school_client(
         session_id=session_id,
         worker_proxy_origin=settings.jwxt_worker_proxy_origin or None,
     )
-    client.login_with_cookies(jwxt_cookies, "", validate=validate_cookies)
+    client.login_with_cookies(jwxt_cookies, account or "", validate=validate_cookies)
     return client
 
 
@@ -174,11 +175,18 @@ class SessionStore:
 
         # Extract cookies from live client objects
         jwxt_cookies = ""
+        student_account = None
         if client is not None:
             try:
                 jwxt_cookies = client.get_jwxt_cookies_string()
             except Exception:
                 logger.warning("Failed to extract JWXT cookies from client", exc_info=True)
+            try:
+                student_account = getattr(client, "_account", None) or None
+                if student_account == "":
+                    student_account = None
+            except Exception:
+                pass
 
         ehall_cookies = ""
         ehall_auth_token = ""
@@ -222,6 +230,7 @@ class SessionStore:
             row = AppSessionModel(
                 id=session.id,
                 student_name=student_name,
+                student_account=student_account,
                 created_at=session.created_at.replace(tzinfo=timezone.utc) if session.created_at.tzinfo is None else session.created_at,
                 last_active_at=session.last_active_at.replace(tzinfo=timezone.utc) if session.last_active_at.tzinfo is None else session.last_active_at,
                 jwxt_cookies=jwxt_cookies or None,
@@ -325,7 +334,11 @@ class SessionStore:
             ehall_client = None
             if row.jwxt_cookies:
                 try:
-                    client = _rebuild_school_client(row.jwxt_cookies, session_id=session_id)
+                    client = _rebuild_school_client(
+                        row.jwxt_cookies,
+                        session_id=session_id,
+                        account=getattr(row, "student_account", None) or None,
+                    )
                 except Exception:
                     logger.warning(
                         "Failed to rebuild SchoolSdkClient from DB cookies for session %s — "

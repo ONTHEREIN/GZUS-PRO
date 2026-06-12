@@ -30,6 +30,7 @@ def _inject_worker_cookies(session: AppSession, request: Request) -> bool:
     injected = False
 
     cookie_header = request.headers.get("Cookie")
+    student_account = request.headers.get("X-Student-Account")
     if cookie_header:
         if session.client is not None:
             try:
@@ -43,6 +44,14 @@ def _inject_worker_cookies(session: AppSession, request: Request) -> bool:
                         cookie_header.count("="),
                     )
                     session.client.apply_cookie_header(cookie_header)
+                    # Also restore account on existing client if available
+                    if student_account and not getattr(session.client, "_account", None):
+                        session.client._account = student_account
+                        logger.info(
+                            "Session %s: restored account %s from Worker header",
+                            session.id[:8],
+                            student_account,
+                        )
                     injected = True
                 else:
                     logger.warning(
@@ -73,12 +82,13 @@ def _inject_worker_cookies(session: AppSession, request: Request) -> bool:
                     session_id=session.id,
                     worker_proxy_origin=settings.jwxt_worker_proxy_origin or None,
                 )
-                new_client.login_with_cookies(cookie_header, "", validate=False)
+                new_client.login_with_cookies(cookie_header, student_account or "", validate=False)
                 session.client = new_client
                 injected = True
                 logger.info(
-                    "Session %s: RECOVERED — built new client from Worker cookies",
+                    "Session %s: RECOVERED — built new client from Worker cookies (account=%s)",
                     session.id[:8],
+                    student_account or "(none)",
                 )
             except Exception:
                 logger.warning(

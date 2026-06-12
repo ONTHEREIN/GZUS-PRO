@@ -108,6 +108,7 @@ class AppSessionModel(Base):
 
     id = Column(String(64), primary_key=True)
     student_name = Column(String(100), nullable=True)
+    student_account = Column(String(100), nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
     last_active_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
     push_registration_id = Column(String(300), nullable=True)
@@ -270,10 +271,42 @@ def init_db():
     engine = get_sync_engine()
     Base.metadata.create_all(engine)
 
+    # Lightweight migration: add columns that exist in the model but might not
+    # exist in the database yet (e.g., added after initial deployment).
+    _ensure_columns(engine, "app_sessions", {
+        "student_account": "VARCHAR(100)",
+    })
+
     if _is_sqlite(engine):
         _apply_sqlite_pragmas(engine)
 
     _db_initialized = True
+
+
+def _ensure_columns(engine, table: str, columns: dict[str, str]) -> None:
+    """Add columns to an existing table if they don't already exist.
+
+    This is a lightweight, idempotent migration helper for serverless
+    deployments where a full migration framework is overkill.  Each
+    call is safe to run on every cold start.
+    """
+    import logging
+    _logger = logging.getLogger(__name__)
+    try:
+        with engine.connect() as conn:
+            for col_name, col_type in columns.items():
+                try:
+                    conn.exec_driver_sql(
+                        f"ALTER TABLE {table} ADD COLUMN {col_name} {col_type}"
+                    )
+                    conn.commit()
+                    _logger.info("Migrated: added column %s to %s", col_name, table)
+                except Exception:
+                    # Column likely already exists — safe to ignore
+                    conn.rollback()
+    except Exception:
+        # Table might not exist yet (fresh DB created by create_all above)
+        pass
 
 
 def reset_engine():

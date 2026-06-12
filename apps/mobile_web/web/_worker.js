@@ -726,6 +726,10 @@ function injectSessionCookies(request, session) {
     console.log(`[inject] Setting X-Ehall-Cookies (${session.ehallCookies.length} chars) for ${request.url}`);
     headers.set('X-Ehall-Cookies', session.ehallCookies);
   }
+  // Pass the student account so Vercel can store it for ecard/credits use
+  if (session.account) {
+    headers.set('X-Student-Account', session.account);
+  }
   // Tell Vercel that cookies are injected from the Worker edge.
   // Vercel should skip JWXT cookie validation (IP-bounded cookies).
   headers.set('X-Worker-Auth', '1');
@@ -1128,7 +1132,8 @@ export default {
 
     // ─── Edge academic API: /me ──────────────────────────────
     // Handle student info directly at the Worker edge so JWXT cookies
-    // (IP-bounded to the Worker's IP) remain valid.
+    // (IP-bounded to the Worker's IP) remain valid.  Extracts ALL fields
+    // that the Flutter StudentInfo model expects (17+ fields).
     if (path === 'me' && request.method === 'GET') {
       const session = await getLocalSession(request, env);
       if (session && session.cookies) {
@@ -1144,19 +1149,41 @@ export default {
           if (jwxtRes.ok) {
             const html = await jwxtRes.text();
             // Extract student info from JWXT info page HTML
+            // Pattern: id="col_*">\s*<p ...>\s*VALUE\s*</p>
             const getField = (id) => {
-              // Pattern: id="col_xm">\s*<p ...>\s*VALUE\s*</p>
               const re = new RegExp(`id="${id}"[^>]*>\\s*(?:<p[^>]*>)?\\s*([^<]+?)\\s*(?:</p>)?`, 'i');
               const m = html.match(re);
               return m ? m[1].trim() : null;
             };
+            // Try multiple possible HTML element IDs for each field
+            const getFieldMulti = (ids) => {
+              for (const id of ids) {
+                const v = getField(id);
+                if (v) return v;
+              }
+              return null;
+            };
             const studentInfo = {
-              name: getField('col_xm'),
-              studentId: getField('col_xh'),
-              department: getField('col_xy') || getField('col_xyName'),
-              major: getField('col_zy') || getField('col_zymc'),
-              className: getField('col_bj') || getField('col_bh'),
-              grade: getField('col_nj'),
+              studentId: getField('col_xh') || '',
+              name: getField('col_xm') || '',
+              college: getFieldMulti(['col_jg_id', 'col_jg', 'col_xy', 'col_xyName']) || null,
+              major: getFieldMulti(['col_zyh_id', 'col_zyfx_id', 'col_zy', 'col_zymc']) || null,
+              className: getFieldMulti(['col_bh_id', 'col_bh', 'col_bj']) || null,
+              grade: getFieldMulti(['col_njdm_id', 'col_nj']) || null,
+              gender: getField('col_xbm') || null,
+              idNumber: getField('col_zjhm') || null,
+              birthDate: getField('col_csrq') || null,
+              ethnicity: getField('col_mzm') || null,
+              politicalStatus: getField('col_zzmmm') || null,
+              enrollDate: getField('col_rxrq') || null,
+              nativePlace: getField('col_jg') || null,
+              studentStatus: getField('col_xjztdm') || null,
+              educationLevel: getField('col_pyccdm') || null,
+              phone: getField('col_sjhm') || null,
+              email: getField('col_dzyx') || null,
+              address: getField('col_jtdz') || null,
+              // Extract photo URL if present (base64 data URL in the HTML)
+              photoDataUrl: extractPhotoUrl(html),
             };
             // Only return if we got at least a name or student ID
             if (studentInfo.name || studentInfo.studentId) {
@@ -1168,6 +1195,62 @@ export default {
         }
       }
       // Fall through to Vercel if edge fetch failed
+    }
+
+    // ─── Helper: parse notice items from JWXT news page HTML ────
+    function parseNoticeItems(html) {
+      const items = [];
+      // JWXT news page uses a table-based layout with category headers
+      // and <a> links pointing to notice detail pages.
+      // Pattern: <a href="..." target="_blank" title="...">TITLE</a>
+      // Date is often in a nearby <td> or <span>
+      const linkRe = /<a\s[^>]*href="([^"]*)"[^>]*(?:title="([^"]*)")?[^>]*>([^<]*)<\/a>/gi;
+      let match;
+      while ((match = linkRe.exec(html)) !== null) {
+        let href = match[1];
+        const title = (match[2] || match[3] || '').trim();
+        if (!title || title.length < 2) continue;
+        // Skip non-notice links (javascript, mailto, etc.)
+        if (href.startsWith('javascript:') || href.startsWith('mailto:')) continue;
+        // Resolve relative URLs
+        if (href.startsWith('/') || href.startsWith('.')) {
+          href = 'https://jwxt.seig.edu.cn' + (href.startsWith('/') ? '' : '/') + href.replace(/^\.\//, '');
+        }
+        // Look for date near the link (within ~200 chars after)
+        const linkEnd = match.index + match[0].length;
+        const nearby = html.substring(linkEnd, linkEnd + 300);
+        const dateMatch = nearby.match(/(\d{4}[-/]\d{1,2}[-/]\d{1,2})/);
+        // Determine category from preceding header
+        const before = html.substring(Math.max(0, match.index - 500), match.index);
+        const catMatch = before.match(/<span[^>]*>\s*([^<]{2,8})\s*<\/span>/);
+        const category = catMatch ? catMatch[1].trim() : '通知';
+        items.push({
+          category,
+          title,
+          date: dateMatch ? dateMatch[1] : null,
+          url: href,
+          summary: null,
+        });
+      }
+      // Deduplicate by title+url
+      const seen = new Set();
+      return items.filter(item => {
+        const key = `${item.title}|${item.url}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    }
+
+    // ─── Helper: extract base64 student photo from info page HTML ─
+    function extractPhotoUrl(html) {
+      // Look for img tags with base64 photo data
+      const imgMatch = html.match(/<img[^>]+src="(data:image\/[^"]+)"[^>]*>/i);
+      if (imgMatch) return imgMatch[1];
+      // Alternative: look for background-image style with data URL
+      const bgMatch = html.match(/background-image\s*:\s*url\(["']?(data:image\/[^"')]+)["']?\)/i);
+      if (bgMatch) return bgMatch[1];
+      return null;
     }
 
     // ─── Normalize JWXT raw fields → Flutter-expected format ─────
@@ -1240,17 +1323,34 @@ export default {
       };
     }
 
+    function normalizeAttendanceItem(item) {
+      return {
+        courseName: item.kcmc || item.courseName || item.name || '',
+        courseCode: item.kch || item.courseCode || null,
+        academicYear: item.xnmc || item.xn || item.academicYear || null,
+        term: String(item.xqmc || item.xq || item.term || ''),
+        normal: parseInt(item.cs_01 || item.normal || 0) || 0,
+        late: parseInt(item.cs_02 || item.late || 0) || 0,
+        leaveEarly: parseInt(item.cs_03 || item.leaveEarly || 0) || 0,
+        absent: parseInt(item.cs_04 || item.absent || 0) || 0,
+        leave: parseInt(item.cs_05 || item.leave || 0) || 0,
+        total: parseInt(item.totalresult || item.total || 0) || 0,
+        records: [],
+      };
+    }
+
     function normalizeResultList(items, path) {
       if (!Array.isArray(items)) return items;
       if (path === 'exams') return items.map(normalizeExamItem);
       if (path === 'grades') return items.map(normalizeGradeItem);
       if (path === 'schedule') return items.map(normalizeScheduleCourse);
+      if (path === 'attendance') return items.map(normalizeAttendanceItem);
       return items;
     }
 
-    // ─── Edge academic API: /exams & /schedule ────────────────
-    // Handle exams and schedule at the Worker edge to avoid Vercel's
-    // 10-second Hobby-plan timeout on the double-proxy chain.
+    // ─── Edge academic API: /exams /schedule /grades /credits /attendance ─
+    // Handle these at the Worker edge to avoid Vercel's 10-second
+    // Hobby-plan timeout on the double-proxy chain.
     const academicPaths = { exams: true, schedule: true, grades: true, credits: true, attendance: true };
     if (academicPaths[path] && request.method === 'GET') {
       const session = await getLocalSession(request, env);
@@ -1277,8 +1377,6 @@ export default {
             jwxtUrl = 'https://jwxt.seig.edu.cn/jwglxt/cjcx/cjcx_cxXsgrcj.html?doType=query&gnmkdm=N305005';
             postData = new URLSearchParams({ ...baseParams, kch: '', kc: '' });
           } else if (path === 'credits') {
-            // Credits requires the student ID (xh). If we don't have it
-            // (session created before the account field was added), fall through.
             if (!session.account) {
               jwxtUrl = null; // fall through to Vercel
             } else {
@@ -1287,9 +1385,20 @@ export default {
                 'queryModel.showCount': '15', 'queryModel.currentPage': '1',
                 'queryModel.sortName': ' ', 'queryModel.sortOrder': 'asc' });
             }
-          } else {
-            // attendance — fall through for now
-            jwxtUrl = null;
+          } else if (path === 'attendance') {
+            // Attendance: POST to jxdmqkcx query endpoint
+            if (!session.account) {
+              jwxtUrl = null; // fall through to Vercel
+            } else {
+              jwxtUrl = 'https://jwxt.seig.edu.cn/jwglxt/jxdmgl/jxdmqkcx_cxJxdmqkcxIndex.html?doType=query&gnmkdm=N254315';
+              postData = new URLSearchParams({
+                xh: session.account, xm: '', xh_id: '',
+                xnm: year, xqm: xqm, kch: '', kch_id: '',
+                gnmkdm: 'N254315',
+                'queryModel.showCount': '100', 'queryModel.currentPage': '1',
+                'queryModel.sortName': '', 'queryModel.sortOrder': 'asc',
+              });
+            }
           }
 
           if (jwxtUrl) {
@@ -1307,6 +1416,13 @@ export default {
 
             if (jwxtRes.ok) {
               const data = await jwxtRes.json().catch(() => null);
+              // attendance returns { status: 'ok', items: [...] }
+              if (path === 'attendance' && data && data.items) {
+                return jsonResponse({
+                  status: 'ok',
+                  items: normalizeResultList(data.items, path),
+                }, 200, request);
+              }
               // Common JWXT response formats — normalize field names for Flutter
               if (data && data.items) return jsonResponse(normalizeResultList(data.items, path), 200, request);
               if (data && data.kbList) return jsonResponse(normalizeResultList(data.kbList, path), 200, request);
@@ -1322,6 +1438,40 @@ export default {
           }
         } catch (e) {
           console.warn(`[edge-${path}] JWXT direct fetch failed: ${e.message}, falling through to Vercel`);
+        }
+      }
+      // Fall through to Vercel if edge fetch failed
+    }
+
+    // ─── Edge notices API ─────────────────────────────────────
+    // Handle notices at the Worker edge to avoid Vercel timeout.
+    if (path === 'notices' && request.method === 'GET') {
+      const session = await getLocalSession(request, env);
+      if (session && session.cookies) {
+        try {
+          const newsUrl = 'https://jwxt.seig.edu.cn/jwglxt/xtgl/index_cxNews.html?localeKey=zh_CN';
+          const newsRes = await fetch(newsUrl, {
+            headers: {
+              'Cookie': session.cookies,
+              'User-Agent': 'Mozilla/5.0 (Linux; Android 16) GZUS-PRO/1.0',
+              'Referer': 'https://jwxt.seig.edu.cn/jwglxt/xtgl/index_initMenu.html',
+            },
+            signal: AbortSignal.timeout(15000),
+          });
+          if (newsRes.ok) {
+            const html = await newsRes.text();
+            // Check if we got a login page instead
+            if (html.includes('login_slogin') || /password['"]\s*type/i.test(html)) {
+              console.warn('[edge-notices] JWXT returned login page, session may be expired');
+            } else {
+              const items = parseNoticeItems(html);
+              if (items.length > 0) {
+                return jsonResponse(items, 200, request);
+              }
+            }
+          }
+        } catch (e) {
+          console.warn(`[edge-notices] JWXT direct fetch failed: ${e.message}, falling through to Vercel`);
         }
       }
       // Fall through to Vercel if edge fetch failed
