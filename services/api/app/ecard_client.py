@@ -180,45 +180,78 @@ class EcardClient:
     def _post_via_proxy(
         self, url: str, payload: dict[str, Any], headers: dict[str, str],
     ) -> dict[str, Any]:
-        """Send ecard API request through the Cloudflare Worker proxy.
+        """Send ecard API request through the EdgeOne Pages proxy.
 
         Vercel (US) cannot reach ecarduser.gzus.edu.cn directly.
-        The Worker edge (near China) forwards the request and returns
-        the response.
+        The EdgeOne proxy (China IP) handles auth and forwards requests.
+
+        For EdgeOne, we call the ecard-proxy endpoints with GET + query params.
+        The proxy handles its own ecard login and signing.
         """
         import urllib.parse
-        proxy_url = f"{self._worker_proxy_origin.rstrip('/')}/_proxy"
-        body_str = urllib.parse.urlencode(payload)
-        proxy_body = {
-            "url": url,
-            "method": "POST",
-            "headers": dict(headers),
-            "body": body_str,
-        }
+        proxy_origin = self._worker_proxy_origin.rstrip("/")
+        path = urllib.parse.urlparse(url).path.lstrip("/")
+
+        # Map ecard API paths to EdgeOne proxy endpoints
+        if "getRoomInfo" in path:
+            impl_type = payload.get("implType", "")
+            # getRoomInfo is called 3 times (one per implType).
+            # The proxy's /rooms endpoint handles all 3 internally
+            proxy_path = f"{proxy_origin}/ecard-proxy/rooms"
+            params = {"limit": "1"}  # we only need product existence check
+        elif "getBalance" in path:
+            room_id = "|".join([
+                payload.get("implType", ""),
+                payload.get("schoolAreaNo", ""),
+                payload.get("buildingNo", ""),
+                payload.get("roomNum", ""),
+            ])
+            proxy_path = f"{proxy_origin}/ecard-proxy/balance"
+            params = {"roomId": room_id}
+        else:
+            # Generic fallback: use the old _proxy mechanism
+            proxy_path = f"{proxy_origin}/_proxy"
+            body_str = urllib.parse.urlencode(payload)
+            proxy_body = {
+                "url": url, "method": "POST",
+                "headers": dict(headers), "body": body_str,
+            }
+            try:
+                client = self._get_http_client()
+                response = client.post(
+                    proxy_path, json=proxy_body,
+                    headers={"Content-Type": "application/json"},
+                    timeout=self.settings.request_timeout_seconds + 15,
+                )
+                response.raise_for_status()
+                proxy_status = int(response.headers.get("X-Proxy-Status", "502"))
+                if proxy_status >= 400:
+                    raise EcardApiError(f"ecard API returned HTTP {proxy_status}")
+                return response.json()
+            except httpx.TimeoutException as exc:
+                logger.error("ecard_client: proxy timeout for %s: %s", url, exc)
+                raise EcardApiError("一卡通服务请求超时") from exc
+            except EcardApiError:
+                raise
+            except Exception as exc:
+                logger.error("ecard_client: proxy request failed for %s: %s", url, exc, exc_info=True)
+                raise EcardApiError("一卡通服务请求失败") from exc
+
+        # GET request to EdgeOne proxy
         try:
             client = self._get_http_client()
-            response = client.post(
-                proxy_url,
-                json=proxy_body,
-                headers={"Content-Type": "application/json"},
-                timeout=self.settings.request_timeout_seconds + 15,
-            )
+            response = client.get(proxy_path, params=params, timeout=self.settings.request_timeout_seconds + 15)
             response.raise_for_status()
-            proxy_status = int(response.headers.get("X-Proxy-Status", "502"))
-            if proxy_status >= 400:
-                raise EcardApiError(f"一卡通服务返回 HTTP {proxy_status}")
             data = response.json()
         except httpx.TimeoutException as exc:
-            logger.error("ecard_client: proxy timeout for %s: %s", url, exc)
+            logger.error("ecard_client: EdgeOne proxy timeout for %s: %s", proxy_path, exc)
             raise EcardApiError("一卡通服务请求超时") from exc
-        except EcardApiError:
-            raise
         except Exception as exc:
-            logger.error("ecard_client: proxy request failed for %s: %s", url, exc, exc_info=True)
+            logger.error("ecard_client: EdgeOne proxy request failed: %s", exc, exc_info=True)
             raise EcardApiError("一卡通服务请求失败") from exc
-        if not isinstance(data, dict):
+        if not isinstance(data, dict) and not isinstance(data, list):
             raise EcardApiError("一卡通服务响应异常")
-        return data
+        return data if isinstance(data, dict) else {"obj": data}
 
     def login(self) -> str:
         if self._token:
