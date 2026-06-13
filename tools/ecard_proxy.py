@@ -95,7 +95,7 @@ class Handler(BaseHTTPRequestHandler):
                 d = post("powerfee/getRoomInfo", {"implType": impl})
                 obj = d.get("obj", [])
                 for room in (obj if isinstance(obj, list) else [obj] if isinstance(obj, dict) else []):
-                    rid = f"{room.get('implType','')}|{room.get('schoolAreaNo','')}|{room.get('buildingNo','')}|{room.get('roomNum','')}"
+                    rid = f"{room.get('implType') or impl}|{room.get('schoolAreaNo','')}|{room.get('buildingNo','')}|{room.get('roomNum','')}"
                     if rid in seen or "||" in rid:
                         continue
                     seen.add(rid)
