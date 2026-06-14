@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import concurrent.futures
 import hashlib
 import logging
@@ -109,13 +108,17 @@ def public_room(room: dict[str, Any]) -> dict[str, str]:
 class EcardClient:
     def __init__(self, worker_proxy_origin: str | None = None) -> None:
         self.settings = get_settings()
-        if not self.settings.ecard_openid:
+        self._worker_proxy_origin = (
+            worker_proxy_origin
+            if worker_proxy_origin is not None
+            else self.settings.ecard_worker_proxy_origin
+        )
+        if not self.settings.ecard_openid and not self._worker_proxy_origin:
             raise EcardConfigurationError("未配置 ECARD_OPENID")
         self._token: str | None = None
         self._openid = self.settings.ecard_openid
         self._unionid = self.settings.ecard_unionid
         self._http_client: httpx.Client | None = None
-        self._worker_proxy_origin = worker_proxy_origin
 
     def _get_http_client(self) -> httpx.Client:
         if self._http_client is None or self._http_client.is_closed:
@@ -143,7 +146,11 @@ class EcardClient:
         payload.setdefault("isWxEnterpriseXcx", "false")
         payload.setdefault("wxRequest", "wxRequest")
         payload["openid"] = self._openid
-        if self._unionid:
+        # unionid 仅在已认证请求（带 token）中发送。登录请求若带上
+        # unionid，学校服务端会判定为"已登录态"并返回 code=203 未登录，
+        # 拒绝签发新 token。与 EdgeOne 代理 (index.js) 行为保持一致：
+        # 登录响应成功后才记录 unionid，再用于后续业务请求。
+        if self._unionid and token:
             payload["unionid"] = self._unionid
         if token:
             payload["token"] = token
@@ -194,10 +201,9 @@ class EcardClient:
 
         # EdgeOne token auth params (for edgeone.cool domain)
         eo_token = self.settings.ecard_worker_proxy_token or ""
-        eo_time = self.settings.ecard_worker_proxy_token_time or ""
         token_params = {}
         if eo_token:
-            token_params = {"eo_token": eo_token, "eo_time": eo_time}
+            token_params = {"eo_token": eo_token}
 
         # Map ecard API paths to EdgeOne proxy endpoints
         if "getRoomInfo" in path:
@@ -212,6 +218,21 @@ class EcardClient:
             ])
             proxy_path = f"{proxy_origin}/ecard-proxy/balance"
             params = {**token_params, "roomId": room_id}
+            if payload.get("studentId"):
+                params["studentId"] = payload["studentId"]
+        elif "getDailyDetails" in path:
+            room_id = "|".join([
+                payload.get("implType", ""),
+                payload.get("schoolAreaNo", ""),
+                payload.get("buildingNo", ""),
+                payload.get("roomNum", ""),
+            ])
+            proxy_path = f"{proxy_origin}/ecard-proxy/consumption"
+            params = {
+                **token_params,
+                "roomId": room_id,
+                "month": payload.get("lastDate", ""),
+            }
         else:
             # EdgeOne proxy handles auth internally.
             # Return mock success for login/currentUser — EdgeOne does
@@ -234,6 +255,8 @@ class EcardClient:
             raise EcardApiError("一卡通服务请求失败") from exc
         if not isinstance(data, dict) and not isinstance(data, list):
             raise EcardApiError("一卡通服务响应异常")
+        if "getDailyDetails" in path and isinstance(data, dict):
+            return data
         return {"ret": True, "code": 200, "obj": data if isinstance(data, list) else data}
 
     def login(self) -> str:
@@ -299,6 +322,7 @@ class EcardClient:
                 "schoolAreaNo": room_ref.school_area_no,
                 "buildingNo": room_ref.building_no,
                 "roomNum": room_ref.room_num,
+                "studentId": student_id,
             },
             token=token,
         )
@@ -306,27 +330,29 @@ class EcardClient:
             logger.error("ecard_client: getBalance failed, code=%s msg=%s", power_data.get("code") or power_data.get("resCode"), power_data.get("msg"))
             raise EcardApiError(str(power_data.get("msg") or "获取水电费失败"))
         obj = power_data.get("obj") or {}
-        hot_balance = None
+        hot_balance = obj.get("hotWaterBalance")
         try:
-            hot_data = self.post_api(
-                "/waterfee/memberInfo",
-                {"sno": student_id, "implType": "MINGHANBLUETOOTH"},
-                token=token,
-            )
-            if is_ok(hot_data):
-                hot_balance = (hot_data.get("obj") or {}).get("balance")
+            if hot_balance is None:
+                hot_data = self.post_api(
+                    "/waterfee/memberInfo",
+                    {"sno": student_id, "implType": "MINGHANBLUETOOTH"},
+                    token=token,
+                )
+                if is_ok(hot_data):
+                    hot_balance = (hot_data.get("obj") or {}).get("balance")
         except EcardApiError:
             hot_balance = None
+        cold_balance = obj.get("coldWaterBalance", obj.get("waterBalance"))
         return {
             "powerBalance": obj.get("powerBalance"),
             "powerUnit": obj.get("du", "度"),
             "powerText": obj.get("formatPowerBalanceStr") or _format_value(obj.get("powerBalance"), obj.get("du", "度")),
-            "coldWaterBalance": obj.get("waterBalance"),
+            "coldWaterBalance": cold_balance,
             "coldWaterUnit": obj.get("dun", "吨"),
-            "coldWaterText": obj.get("formatWaterBalanceStr") or _format_value(obj.get("waterBalance"), obj.get("dun", "吨")),
+            "coldWaterText": obj.get("coldWaterText") or obj.get("formatWaterBalanceStr") or _format_value(cold_balance, obj.get("dun", "吨")),
             "hotWaterBalance": hot_balance,
             "hotWaterUnit": "元",
-            "hotWaterText": _format_value(hot_balance, "元"),
+            "hotWaterText": obj.get("hotWaterText") or _format_value(hot_balance, "元"),
         }
 
     def consumption(self, room_ref: EcardRoomRef, month: str) -> dict[str, Any]:
@@ -343,6 +369,8 @@ class EcardClient:
             },
             token=self.login(),
         )
+        if data.get("status") == "ok" and isinstance(data.get("items"), list):
+            return data
         if is_ok(data):
             obj = data.get("obj") or {}
             items = obj.get("dailyDetailsInfos") if isinstance(obj, dict) else None
