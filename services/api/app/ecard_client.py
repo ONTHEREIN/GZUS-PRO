@@ -192,13 +192,17 @@ class EcardClient:
         proxy_origin = self._worker_proxy_origin.rstrip("/")
         path = urllib.parse.urlparse(url).path.lstrip("/")
 
+        # EdgeOne token auth params (for edgeone.cool domain)
+        eo_token = self.settings.ecard_worker_proxy_token or ""
+        eo_time = self.settings.ecard_worker_proxy_token_time or ""
+        token_params = {}
+        if eo_token:
+            token_params = {"eo_token": eo_token, "eo_time": eo_time}
+
         # Map ecard API paths to EdgeOne proxy endpoints
         if "getRoomInfo" in path:
-            impl_type = payload.get("implType", "")
-            # getRoomInfo is called 3 times (one per implType).
-            # The proxy's /rooms endpoint handles all 3 internally
             proxy_path = f"{proxy_origin}/ecard-proxy/rooms"
-            params = {"limit": "1"}  # we only need product existence check
+            params = {**token_params, "limit": "1"}
         elif "getBalance" in path:
             room_id = "|".join([
                 payload.get("implType", ""),
@@ -207,7 +211,7 @@ class EcardClient:
                 payload.get("roomNum", ""),
             ])
             proxy_path = f"{proxy_origin}/ecard-proxy/balance"
-            params = {"roomId": room_id}
+            params = {**token_params, "roomId": room_id}
         else:
             # Generic fallback: use the old _proxy mechanism
             proxy_path = f"{proxy_origin}/_proxy"

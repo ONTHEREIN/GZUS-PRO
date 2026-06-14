@@ -40,7 +40,9 @@ class Settings(BaseSettings):
     db_pool_recycle: int = 300
     ehall_session_ttl_hours: int = 24
     ecard_base_url: str = "https://ecarduser.gzus.edu.cn"
-    ecard_worker_proxy_origin: str = ""
+    ecard_worker_proxy_origin: str = "https://onegzus-woizrv9a.edgeone.cool"
+    ecard_worker_proxy_token: str = "c7bdec58d584052bd43c306b895c3cda"
+    ecard_worker_proxy_token_time: str = "1781441751"
     ecard_openid: str = ""
     ecard_unionid: str = ""
     ecard_secret: str = ""
