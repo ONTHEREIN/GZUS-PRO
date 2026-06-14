@@ -38,7 +38,10 @@
     "DB_MAX_OVERFLOW": "5",
     "DB_POOL_TIMEOUT": "10",
     "DB_POOL_RECYCLE": "300",
-    "JWXT_WORKER_PROXY_ORIGIN": "https://onegzus.cc.cd"
+    "JWXT_WORKER_PROXY_ORIGIN": "https://onegzus.cc.cd",
+    "ECARD_WORKER_PROXY_ORIGIN": "https://onegzus-woizrv9a.edgeone.cool",
+    "ECARD_WORKER_PROXY_TOKEN": "c7bdec58d584052bd43c306b895c3cda",
+    "ECARD_WORKER_PROXY_TOKEN_TIME": "1781441751"
   }
 }
 
