@@ -234,7 +234,7 @@ class EcardClient:
             raise EcardApiError("一卡通服务请求失败") from exc
         if not isinstance(data, dict) and not isinstance(data, list):
             raise EcardApiError("一卡通服务响应异常")
-        return data if isinstance(data, dict) else {"obj": data}
+        return {"ret": True, "code": 200, "obj": data if isinstance(data, list) else data}
 
     def login(self) -> str:
         if self._token:
