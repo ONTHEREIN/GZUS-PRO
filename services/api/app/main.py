@@ -55,7 +55,7 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     settings = get_settings()
-    app = FastAPI(title="OneGZUS API", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="软帮手 API", version="0.1.0", lifespan=lifespan)
     app.state.sessions = SessionStore(settings.session_ttl_seconds, db_factory=get_sync_session_factory)
     app.state.pending_captcha = {}
     app.state.ly_sso_states = {}

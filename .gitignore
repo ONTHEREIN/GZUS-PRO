@@ -85,3 +85,9 @@ local.properties
 # OS
 Thumbs.db
 Desktop.ini
+
+# Tencent Cloud EdgeOne
+.env
+.edgeone/*
+.tef_dist/*
+  

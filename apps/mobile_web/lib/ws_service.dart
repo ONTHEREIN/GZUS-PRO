@@ -124,7 +124,7 @@ class WsService {
 
   static Future<void> handleNotificationMessage(
       Map<String, dynamic> msg) async {
-    final title = msg['title'] as String? ?? 'OneGZUS';
+    final title = msg['title'] as String? ?? '软帮手';
     final body = msg['body'] as String? ?? '';
     debugPrint(
         '[WsService] Showing notification: type=${msg['type'] ?? 'unknown'}, bodyLength=${body.length}');

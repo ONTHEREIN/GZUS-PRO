@@ -395,7 +395,7 @@ class BackgroundService : Service() {
     }
 
     private fun showPushNotification(message: JSONObject) {
-        val title = message.optString("title", "OneGZUS 通知")
+        val title = message.optString("title", "软帮手通知")
         val body = message.optString("body", "")
         val extras = message.optJSONObject("extras") ?: JSONObject().apply {
             put("type", message.optString("type", ""))
@@ -532,12 +532,12 @@ class BackgroundService : Service() {
                 "后台服务",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "OneGZUS 后台收消息服务"
+                description = "软帮手后台收消息服务"
                 setShowBadge(false)
             }
             val push = NotificationChannel(
                 NOTIFICATION_CHANNEL_ID,
-                "OneGZUS 通知",
+                "软帮手通知",
                 NotificationManager.IMPORTANCE_HIGH
             ).apply {
                 description = "教务系统通知推送"
@@ -559,7 +559,7 @@ class BackgroundService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("OneGZUS 正在后台收消息")
+            .setContentTitle("软帮手正在后台收消息")
             .setContentText("用于接收教务通知和生活缴费提醒")
             .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setContentIntent(pendingIntent)

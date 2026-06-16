@@ -162,7 +162,7 @@ async def test_push(
         body = await request.json()
     except Exception:
         body = {}
-    title = body.get("title", "OneGZUS 通知")
+    title = body.get("title", "软帮手通知")
     alert = body.get("body", "这是一条测试推送消息")
     url = body.get("url", "")
     msg_type = body.get("type", "new_notice")

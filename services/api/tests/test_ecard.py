@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 
 from app.config import get_settings
+from app.database import EcardBinding, get_sync_session_factory
 from app.ecard_client import EcardClient, EcardConfigurationError, EcardRoomRef, calc_sign
 from app.jobs import ecard_reminder_message
 from app.main import app
@@ -131,6 +132,24 @@ def test_rooms_do_not_expose_balances(monkeypatch):
     assert "waterBalance" not in rooms[0]
 
 
+def test_rooms_raise_when_all_fetches_fail(monkeypatch):
+    client = object.__new__(EcardClient)
+    client._token = "token"
+
+    def fake_post_api(path, params=None, *, token=None):
+        raise RuntimeError("proxy failed")
+
+    monkeypatch.setattr(client, "post_api", fake_post_api)
+
+    try:
+        client.rooms()
+    except Exception as exc:
+        assert type(exc).__name__ == "EcardApiError"
+        assert str(exc) == "获取宿舍列表失败"
+    else:
+        raise AssertionError("rooms() should not return an empty list when every fetch fails")
+
+
 def test_power_consumption_uses_daily_details():
     client = object.__new__(EcardClient)
     client._token = "token"
@@ -185,25 +204,30 @@ def test_power_consumption_uses_daily_details():
     }
 
 
-def test_proxy_mode_does_not_require_ecard_openid(monkeypatch):
+def test_cloudflare_proxy_mode_requires_ecard_openid(monkeypatch):
     monkeypatch.setenv("ECARD_OPENID", "")
-    monkeypatch.setenv("ECARD_WORKER_PROXY_ORIGIN", "https://edge.example")
+    monkeypatch.setenv("ECARD_WORKER_PROXY_ORIGIN", "https://cloudflare.example")
     get_settings.cache_clear()
 
-    client = EcardClient()
-
-    assert client._openid == ""
-    assert client._worker_proxy_origin == "https://edge.example"
+    try:
+        EcardClient()
+    except EcardConfigurationError as exc:
+        assert str(exc) == "未配置 ECARD_OPENID"
+    else:
+        raise AssertionError("Cloudflare transparent proxy still requires ECARD_OPENID")
 
 
 def test_proxy_maps_rooms_balance_and_consumption(monkeypatch):
-    monkeypatch.setenv("ECARD_WORKER_PROXY_TOKEN", "proxy-token")
+    monkeypatch.setenv("ECARD_OPENID", "openid-abc")
+    monkeypatch.setenv("ECARD_SECRET", "secret-abc")
     get_settings.cache_clear()
     calls = []
 
     class FakeResponse:
         def __init__(self, data):
             self._data = data
+            self.headers = {"X-Proxy-Status": "200"}
+            self.status_code = 200
 
         def raise_for_status(self):
             return None
@@ -212,17 +236,19 @@ def test_proxy_maps_rooms_balance_and_consumption(monkeypatch):
             return self._data
 
     class FakeHttpClient:
-        def get(self, url, params=None, timeout=None):
-            calls.append((url, params, timeout))
-            if url.endswith("/rooms"):
-                return FakeResponse([{"id": "room-1"}])
-            if url.endswith("/balance"):
-                return FakeResponse({"powerBalance": 12, "coldWaterBalance": 3})
-            if url.endswith("/consumption"):
+        def post(self, url, json=None, timeout=None):
+            calls.append((url, json, timeout))
+            if json["url"].endswith("/powerfee/getRoomInfo"):
+                return FakeResponse({"ret": True, "code": 200, "obj": [{"id": "room-1"}]})
+            if json["url"].endswith("/powerfee/getBalance"):
+                return FakeResponse(
+                    {"ret": True, "code": 200, "obj": {"powerBalance": 12, "coldWaterBalance": 3}}
+                )
+            if json["url"].endswith("/powerfee/getDailyDetails"):
                 return FakeResponse({"status": "ok", "items": [{"title": "剩余 1 度"}]})
-            return FakeResponse({})
+            return FakeResponse({"ret": True, "code": 200})
 
-    client = EcardClient(worker_proxy_origin="https://edge.example")
+    client = EcardClient(worker_proxy_origin="https://cloudflare.example")
     monkeypatch.setattr(client, "_get_http_client", lambda: FakeHttpClient())
 
     rooms = client._post_via_proxy(
@@ -260,20 +286,16 @@ def test_proxy_maps_rooms_balance_and_consumption(monkeypatch):
         "obj": {"powerBalance": 12, "coldWaterBalance": 3},
     }
     assert consumption == {"status": "ok", "items": [{"title": "剩余 1 度"}]}
-    assert calls[0][0] == "https://edge.example/ecard-proxy/rooms"
-    assert calls[0][1] == {"eo_token": "proxy-token"}
-    assert calls[1][0] == "https://edge.example/ecard-proxy/balance"
-    assert calls[1][1] == {
-        "eo_token": "proxy-token",
-        "roomId": "CGCOMMON1111|1|A2|932",
-        "studentId": "20240001",
-    }
-    assert calls[2][0] == "https://edge.example/ecard-proxy/consumption"
-    assert calls[2][1] == {
-        "eo_token": "proxy-token",
-        "roomId": "CGCOMMON1111|1|A2|932",
-        "month": "2026-06",
-    }
+    assert calls[0][0] == "https://cloudflare.example/_proxy"
+    assert calls[0][1]["method"] == "POST"
+    assert calls[0][1]["url"] == "https://ecarduser.gzus.edu.cn/powerfee/getRoomInfo"
+    assert "implType=CGCOMMON1111" in calls[0][1]["body"]
+    assert calls[1][0] == "https://cloudflare.example/_proxy"
+    assert calls[1][1]["url"] == "https://ecarduser.gzus.edu.cn/powerfee/getBalance"
+    assert "studentId=20240001" in calls[1][1]["body"]
+    assert calls[2][0] == "https://cloudflare.example/_proxy"
+    assert calls[2][1]["url"] == "https://ecarduser.gzus.edu.cn/powerfee/getDailyDetails"
+    assert "lastDate=2026-06" in calls[2][1]["body"]
 
 
 def test_summary_not_bound_returns_status(monkeypatch):
@@ -298,7 +320,111 @@ def test_missing_ecard_openid_returns_503(monkeypatch):
     assert response.status_code == 503
 
 
+def test_update_summary_cache_requires_session():
+    with TestClient(app) as client:
+        response = client.patch("/ecard/summary-cache", json={"powerBalance": 9})
+    assert response.status_code == 401
+
+
+def test_update_summary_cache_requires_binding(monkeypatch):
+    session = AppSession(id="cache-no-binding", client=FakeSchoolClient(), student_name="测试用户")
+    monkeypatch.setattr(app.state.sessions, "get", lambda session_id, touch=True: session)
+    monkeypatch.setattr(app.state.sessions, "touch", lambda session_id: None)
+
+    with TestClient(app) as client:
+        response = client.patch(
+            "/ecard/summary-cache",
+            headers={"X-Session-Id": session.id},
+            json={"powerBalance": 9},
+        )
+    assert response.status_code == 404
+
+
+def test_update_summary_cache_only_updates_balance_snapshot(monkeypatch):
+    session = AppSession(id="cache-bound", client=FakeSchoolClient(), student_name="测试用户")
+    monkeypatch.setattr(app.state.sessions, "get", lambda session_id, touch=True: session)
+    monkeypatch.setattr(app.state.sessions, "touch", lambda session_id: None)
+
+    factory = get_sync_session_factory()
+    with factory() as db:
+        db.add(
+            EcardBinding(
+                student_id="20240001",
+                room_id="CGCOMMON1111|1|A2|932",
+                room_display="校本部 A2 A2-932",
+                reminder_enabled=False,
+                low_power_threshold=15,
+                last_summary_json=(
+                    '{"roomId": "CGCOMMON2222|9|B1|101", "powerBalance": 3, "powerText": "3 度"}'
+                ),
+            )
+        )
+        db.commit()
+
+    with TestClient(app) as client:
+        response = client.patch(
+            "/ecard/summary-cache",
+            headers={"X-Session-Id": session.id},
+            json={
+                "powerBalance": 9,
+                "powerText": "9 度",
+                "coldWaterBalance": 2,
+                "coldWaterText": "2 吨",
+                "updatedAt": "2026-06-16T12:00:00",
+            },
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["roomId"] == "CGCOMMON1111|1|A2|932"
+    assert data["roomDisplay"] == "校本部 A2 A2-932"
+    assert data["powerBalance"] == 9
+    assert data["powerText"] == "9 度"
+    assert data["coldWaterBalance"] == 2
+    assert data["reminderEnabled"] is False
+    assert data["lowPowerThreshold"] == 15
+
+
+def test_update_summary_cache_rejects_binding_fields(monkeypatch):
+    session = AppSession(id="cache-invalid", client=FakeSchoolClient(), student_name="测试用户")
+    monkeypatch.setattr(app.state.sessions, "get", lambda session_id, touch=True: session)
+    monkeypatch.setattr(app.state.sessions, "touch", lambda session_id: None)
+
+    factory = get_sync_session_factory()
+    with factory() as db:
+        db.add(
+            EcardBinding(
+                student_id="20240001",
+                room_id="CGCOMMON1111|1|A2|932",
+                room_display="校本部 A2 A2-932",
+            )
+        )
+        db.commit()
+
+    with TestClient(app) as client:
+        response = client.patch(
+            "/ecard/summary-cache",
+            headers={"X-Session-Id": session.id},
+            json={"roomId": "CGCOMMON2222|9|B1|101", "powerBalance": 9},
+        )
+
+    assert response.status_code == 422
+
+
 def test_ecard_reminder_message_levels():
-    assert ecard_reminder_message({"powerBalance": 9, "powerText": "9 度"}, 30, 5, 10, ["power"])[0][1] == "电量极低"
-    assert ecard_reminder_message({"powerBalance": 20, "powerText": "20 度"}, 30, 5, 10, ["power"])[0][1] == "电量偏低"
-    assert ecard_reminder_message({"powerBalance": 50, "powerText": "50 度"}, 30, 5, 10, ["power"])[0][1] == "今日水电费"
+    assert (
+        ecard_reminder_message({"powerBalance": 9, "powerText": "9 度"}, 30, 5, 10, ["power"])[0][1]
+        == "电量极低"
+    )
+    assert (
+        ecard_reminder_message({"powerBalance": 20, "powerText": "20 度"}, 30, 5, 10, ["power"])[0][
+            1
+        ]
+        == "电量偏低"
+    )
+    assert (
+        ecard_reminder_message({"powerBalance": 50, "powerText": "50 度"}, 30, 5, 10, ["power"])[0][
+            1
+        ]
+        == "今日水电费"
+    )

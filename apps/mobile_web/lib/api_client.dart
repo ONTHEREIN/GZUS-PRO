@@ -129,6 +129,8 @@ class ApiException implements Exception {
   final String message;
   final int? statusCode;
 
+  bool get isSingleDeviceConflict => message.contains('其他设备登录');
+
   @override
   String toString() => message;
 }
@@ -1176,6 +1178,15 @@ http.Client _createDefaultClient() {
   return IOClient(ioClient);
 }
 
+bool get _isNativeMobile =>
+    !kIsWeb &&
+    !debugDisableEcardDirectForTests &&
+    (defaultTargetPlatform == TargetPlatform.android ||
+        defaultTargetPlatform == TargetPlatform.iOS);
+
+@visibleForTesting
+bool debugDisableEcardDirectForTests = false;
+
 class ApiClient {
   ApiClient({http.Client? httpClient, String? baseUrl, RequestCache? cache})
       : _http = httpClient ?? _createDefaultClient(),
@@ -1722,9 +1733,10 @@ class ApiClient {
   Future<void> fetchPublicKey() async {
     try {
       final url = _resolveBaseUrl();
-      final response = await _http
-          .get(Uri.parse('$url/auth/public-key'), headers: {'Content-Type': 'application/json'})
-          .timeout(const Duration(seconds: 10));
+      final response = await _http.get(Uri.parse('$url/auth/public-key'),
+          headers: {
+            'Content-Type': 'application/json'
+          }).timeout(const Duration(seconds: 3));
       final data = _decodeObject(response);
       final pem = data['publicKey'] as String? ?? '';
       final keyId = data['keyId'] as String? ?? '';
@@ -1884,7 +1896,6 @@ class ApiClient {
     return 'weather';
   }
 
-
   Future<DataResult<List<NoticeItem>>> notices(
       {bool forceRefresh = false}) async {
     final result = await _cacheFirstList<NoticeItem>(
@@ -2016,6 +2027,17 @@ class ApiClient {
     int limit = 100,
     bool forceRefresh = false,
   }) async {
+    if (_isNativeMobile) {
+      try {
+        final direct = await EcardDirectClient().getRooms(
+          query: query,
+          limit: limit,
+        );
+        if (direct.isNotEmpty) return direct;
+      } catch (_) {
+        // Fall back to the backend cache below.
+      }
+    }
     final path = query != null && query.trim().isNotEmpty
         ? '/ecard/rooms?q=${Uri.encodeQueryComponent(query.trim())}&limit=$limit'
         : '/ecard/rooms?limit=$limit';
@@ -2031,7 +2053,7 @@ class ApiClient {
       );
       return result.data;
     } catch (_) {
-      // Server unreachable (Vercel IP blocked by ecard) — fall back to direct
+      if (!_isNativeMobile) rethrow;
       final direct = EcardDirectClient();
       return direct.getRooms(query: query, limit: limit);
     }
@@ -2054,15 +2076,126 @@ class ApiClient {
     _cache.set('ecard_summary', data);
     final pcache = await _getPersistentCache();
     await pcache.set('ecard_summary', data);
-    return EcardSummary.fromJson(data);
+    return _enrichEcardSummaryDirect(EcardSummary.fromJson(data));
   }
 
   Future<EcardSummary> refreshEcard() async {
-    final data = await _post('/ecard/refresh', {});
-    _cache.set('ecard_summary', data);
     final pcache = await _getPersistentCache();
-    await pcache.set('ecard_summary', data);
-    return EcardSummary.fromJson(data);
+    if (_isNativeMobile) {
+      final cached = _cachedObject(pcache, 'ecard_summary') ??
+          _cache.get<Map<String, dynamic>>('ecard_summary');
+      if (cached != null) {
+        return _enrichEcardSummaryDirect(EcardSummary.fromJson(cached));
+      }
+      final summary =
+          await ecardSummary(forceRefresh: true).then((r) => r.data);
+      return _enrichEcardSummaryDirect(summary);
+    }
+    try {
+      final data = await _post('/ecard/refresh', {});
+      _cache.set('ecard_summary', data);
+      await pcache.set('ecard_summary', data);
+      return _enrichEcardSummaryDirect(EcardSummary.fromJson(data));
+    } catch (_) {
+      final cached = _cachedObject(pcache, 'ecard_summary') ??
+          _cache.get<Map<String, dynamic>>('ecard_summary');
+      if (cached != null) {
+        final direct =
+            await _enrichEcardSummaryDirect(EcardSummary.fromJson(cached));
+        return direct;
+      }
+      rethrow;
+    }
+  }
+
+  Future<EcardSummary> _enrichEcardSummaryDirect(EcardSummary summary) async {
+    if (!_isNativeMobile) return summary;
+    if (!summary.isBound || summary.roomId == null || summary.roomId!.isEmpty) {
+      return summary;
+    }
+    try {
+      final balance = await EcardDirectClient().getBalance(summary.roomId!);
+      if (balance == null) return summary;
+      final data = _ecardSummaryToJson(summary);
+      data.addAll({
+        'powerBalance': balance['powerBalance'],
+        'powerUnit': balance['du'] ?? summary.powerUnit,
+        'powerText': balance['formatPowerBalanceStr'] ??
+            _formatEcardValue(
+                balance['powerBalance'], balance['du'] ?? summary.powerUnit),
+        'coldWaterBalance':
+            balance['coldWaterBalance'] ?? balance['waterBalance'],
+        'coldWaterUnit': balance['dun'] ?? summary.coldWaterUnit,
+        'coldWaterText': balance['coldWaterText'] ??
+            balance['formatWaterBalanceStr'] ??
+            _formatEcardValue(
+              balance['coldWaterBalance'] ?? balance['waterBalance'],
+              balance['dun'] ?? summary.coldWaterUnit,
+            ),
+        'hotWaterBalance': balance['hotWaterBalance'],
+        'hotWaterText':
+            balance['hotWaterText'] ?? balance['formatHotWaterBalanceStr'],
+        'updatedAt': DateTime.now().toIso8601String(),
+      });
+      _cache.set('ecard_summary', data);
+      final pcache = await _getPersistentCache();
+      await pcache.set('ecard_summary', data);
+      await _updateEcardSummaryCache(data);
+      return EcardSummary.fromJson(data);
+    } catch (_) {
+      return summary;
+    }
+  }
+
+  Future<void> _updateEcardSummaryCache(Map<String, dynamic> data) async {
+    try {
+      await _patch('/ecard/summary-cache', {
+        'powerBalance': data['powerBalance'],
+        'powerUnit': data['powerUnit'],
+        'powerText': data['powerText'],
+        'coldWaterBalance': data['coldWaterBalance'],
+        'coldWaterUnit': data['coldWaterUnit'],
+        'coldWaterText': data['coldWaterText'],
+        'hotWaterBalance': data['hotWaterBalance'],
+        'hotWaterUnit': data['hotWaterUnit'],
+        'hotWaterText': data['hotWaterText'],
+        'updatedAt': data['updatedAt'],
+      });
+    } catch (_) {
+      // Local direct ecard data is still useful when backend cache sync fails.
+    }
+  }
+
+  Map<String, dynamic> _ecardSummaryToJson(EcardSummary summary) => {
+        'status': summary.status,
+        'studentId': summary.studentId,
+        'roomId': summary.roomId,
+        'roomDisplay': summary.roomDisplay,
+        'powerBalance': summary.powerBalance,
+        'powerUnit': summary.powerUnit,
+        'powerText': summary.powerText,
+        'coldWaterBalance': summary.coldWaterBalance,
+        'coldWaterUnit': summary.coldWaterUnit,
+        'coldWaterText': summary.coldWaterText,
+        'hotWaterBalance': summary.hotWaterBalance,
+        'hotWaterUnit': summary.hotWaterUnit,
+        'hotWaterText': summary.hotWaterText,
+        'reminderEnabled': summary.reminderEnabled,
+        'lowPowerThreshold': summary.lowPowerThreshold,
+        'lowColdWaterThreshold': summary.lowColdWaterThreshold,
+        'lowHotWaterThreshold': summary.lowHotWaterThreshold,
+        'reminderTimes': summary.reminderTimes,
+        'reminderItems': summary.reminderItems,
+        'updatedAt': summary.updatedAt,
+      };
+
+  String? _formatEcardValue(dynamic value, dynamic unit) {
+    if (value == null ||
+        value.toString().isEmpty ||
+        value.toString() == 'null') {
+      return null;
+    }
+    return '$value ${unit ?? ''}'.trim();
   }
 
   Future<EcardSummary> updateEcardReminder({
@@ -2255,6 +2388,7 @@ class ApiClient {
       for (final result in results) {
         if (result != null) {
           _currentBaseUrl = result;
+          unawaited(fetchPublicKey());
           return;
         }
       }
@@ -2278,6 +2412,12 @@ class ApiClient {
       return await request();
     } on ApiException catch (e) {
       if (e.statusCode == 401) {
+        if (e.isSingleDeviceConflict) {
+          await clearSavedCredentialToken();
+          clearCredentials();
+          onReloginFailed?.call();
+          rethrow;
+        }
         await loadSavedCredentials();
         if (_credentialToken == null) {
           // 无凭证 token 则无法自动 relogin（如密码登录场景），
@@ -2302,9 +2442,17 @@ class ApiClient {
           await relogin();
           reloginSucceeded = true;
           _consecutiveReloginFailures = 0; // reset on success
-        } catch (e) {
+        } on ApiException catch (e) {
           _consecutiveReloginFailures++;
           // relogin 本身失败，清除凭证和触发 onReloginFailed
+          if (e.isSingleDeviceConflict) {
+            await clearSavedCredentialToken();
+          }
+          _credentialToken = null;
+          onReloginFailed?.call();
+          rethrow;
+        } catch (e) {
+          _consecutiveReloginFailures++;
           _credentialToken = null;
           onReloginFailed?.call();
           rethrow;
@@ -2595,13 +2743,16 @@ class EcardDirectClient {
   }
 
   static String _sign(Map<String, String> params) {
-    final filtered = Map.of(params)..remove('token')..remove('sign');
+    final filtered = Map.of(params)
+      ..remove('token')
+      ..remove('sign');
     final keys = filtered.keys.toList()..sort();
     final raw = keys.map((k) => '$k=${filtered[k]}').join('&') + '&$_secret';
     return _md5(raw).toUpperCase();
   }
 
-  Future<Map<String, dynamic>> _post(String path, Map<String, String> params) async {
+  Future<Map<String, dynamic>> _post(
+      String path, Map<String, String> params) async {
     params['from'] ??= 'wxminiprogram';
     params['isWxEnterpriseXcx'] ??= 'false';
     params['wxRequest'] ??= 'wxRequest';
@@ -2611,15 +2762,34 @@ class EcardDirectClient {
     params['sign'] = _sign(params);
 
     final uri = Uri.parse('$_base/$path');
-    final response = await _http.post(uri,
-      headers: {'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': _ua},
-      body: params,
-    ).timeout(const Duration(seconds: 15));
+    final response = await http
+        .post(
+          uri,
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'User-Agent': _ua
+          },
+          body: params,
+        )
+        .timeout(const Duration(seconds: 15));
     return _decodeObject(response);
   }
 
+  Map<String, dynamic> _decodeObject(http.Response response) {
+    final body = utf8.decode(response.bodyBytes);
+    final decoded = jsonDecode(body);
+    if (response.statusCode >= 400) {
+      throw ApiException('一卡通服务请求失败', statusCode: response.statusCode);
+    }
+    if (decoded is! Map<String, dynamic>) {
+      throw ApiException('一卡通服务响应异常');
+    }
+    return decoded;
+  }
+
   Future<bool> login() async {
-    final r = await _post('user/routine/routine-login', {'from': 'wxminiprogram'});
+    final r =
+        await _post('user/routine/routine-login', {'from': 'wxminiprogram'});
     if (r['code'] == 200 && r['token'] != null) {
       _token = r['token'].toString();
       if (r['unionid'] != null) _unionid = r['unionid'].toString();
@@ -2639,7 +2809,8 @@ class EcardDirectClient {
       if (obj is! List) continue;
       for (final room in obj) {
         if (room is! Map) continue;
-        final id = '${room['implType'] ?? impl}|${room['schoolAreaNo'] ?? ''}|${room['buildingNo'] ?? ''}|${room['roomNum'] ?? ''}';
+        final id =
+            '${room['implType'] ?? impl}|${room['schoolAreaNo'] ?? ''}|${room['buildingNo'] ?? ''}|${room['roomNum'] ?? ''}';
         if (seen.contains(id) || id.contains('||')) continue;
         seen.add(id);
         items.add(EcardRoomItem.fromJson({
@@ -2647,19 +2818,23 @@ class EcardDirectClient {
           'schoolArea': room['schoolArea'] ?? '',
           'building': room['building'] ?? '',
           'room': (room['room'] ?? '').replaceAll('#', '-'),
-          'displayName': '${room['schoolArea'] ?? ''} ${room['building'] ?? ''} ${(room['room'] ?? room['roomNum'] ?? '').toString().replaceAll('#', '-')}'.trim(),
+          'displayName':
+              '${room['schoolArea'] ?? ''} ${room['building'] ?? ''} ${(room['room'] ?? room['roomNum'] ?? '').toString().replaceAll('#', '-')}'
+                  .trim(),
         }));
       }
     }
     items.sort((a, b) => a.displayName.compareTo(b.displayName));
     if (query != null && query.trim().isNotEmpty) {
       final q = query.trim().toLowerCase();
-      return items.where((r) =>
-        r.displayName.toLowerCase().contains(q) ||
-        r.building.toLowerCase().contains(q) ||
-        r.room.toLowerCase().contains(q) ||
-        r.schoolArea.toLowerCase().contains(q)
-      ).take(limit).toList();
+      return items
+          .where((r) =>
+              r.displayName.toLowerCase().contains(q) ||
+              r.building.toLowerCase().contains(q) ||
+              r.room.toLowerCase().contains(q) ||
+              r.schoolArea.toLowerCase().contains(q))
+          .take(limit)
+          .toList();
     }
     return items.take(limit).toList();
   }
@@ -2750,7 +2925,10 @@ String _md5String(String input) {
     d = _ii(d, a, b, c, data[i + 11], 10, 0xBD3AF235);
     c = _ii(c, d, a, b, data[i + 2], 15, 0x2AD7D2BB);
     b = _ii(b, c, d, a, data[i + 9], 21, 0xEB86D391);
-    a = _add32(a, aa); b = _add32(b, bb); c = _add32(c, cc); d = _add32(d, dd);
+    a = _add32(a, aa);
+    b = _add32(b, bb);
+    c = _add32(c, cc);
+    d = _add32(d, dd);
   }
   return _hex(a) + _hex(b) + _hex(c) + _hex(d);
 }
@@ -2769,11 +2947,16 @@ int _ii(int a, int b, int c, int d, int x, int s, int t) =>
 int _bitRol(int num, int cnt) => (num << cnt) | (num >>> (32 - cnt));
 String _hex(int n) {
   final h = '0123456789abcdef';
-  return h[(n >> 4) & 15] + h[n & 15] +
-         h[(n >> 12) & 15] + h[(n >> 8) & 15] +
-         h[(n >> 20) & 15] + h[(n >> 16) & 15] +
-         h[(n >> 28) & 15] + h[(n >> 24) & 15];
+  return h[(n >> 4) & 15] +
+      h[n & 15] +
+      h[(n >> 12) & 15] +
+      h[(n >> 8) & 15] +
+      h[(n >> 20) & 15] +
+      h[(n >> 16) & 15] +
+      h[(n >> 28) & 15] +
+      h[(n >> 24) & 15];
 }
+
 List<int> _createBuffer(String input) {
   final bytes = <int>[];
   for (int i = 0; i < input.length; i++) {
@@ -2796,7 +2979,10 @@ List<int> _createBuffer(String input) {
   for (int i = 0; i < 8; i++) bytes.add((bitLen >> (i * 8)) & 255);
   final data = <int>[];
   for (int i = 0; i < bytes.length; i += 4) {
-    data.add(bytes[i] | (bytes[i + 1] << 8) | (bytes[i + 2] << 16) | (bytes[i + 3] << 24));
+    data.add(bytes[i] |
+        (bytes[i + 1] << 8) |
+        (bytes[i + 2] << 16) |
+        (bytes[i + 3] << 24));
   }
   return data;
 }

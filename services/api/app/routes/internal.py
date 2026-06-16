@@ -9,7 +9,7 @@ from __future__ import annotations
 import base64
 import logging
 
-from fastapi import APIRouter, Header, HTTPException, Request, status
+from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel
 
 from app.captcha_ocr import captcha_ocr
@@ -175,6 +175,7 @@ def create_session_endpoint(
             student_name=student_name or payload.student_name,
             ehall_client=ehall_client,
             encrypted_credentials=encrypted_credentials,
+            student_account=payload.account,
         )
     except Exception as exc:
         logger.error("Failed to create session in DB: %s", exc, exc_info=True)

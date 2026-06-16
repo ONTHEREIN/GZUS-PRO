@@ -26,13 +26,8 @@ class FtpUploadClient {
     fun listDirectory(args: Map<*, *>): List<Map<String, Any>> {
         val path = normalizeDirectory(args["path"]?.toString() ?: "/")
         return withClient(args) { ftp ->
-            // 参考 FTPclient-android：优先使用 MLSD 命令（结构化数据，解析更可靠）
-            val supportsMls = ftp.hasFeature(FTPCmd.MLST)
-            val files = if (supportsMls) {
-                ftp.mlistDir(path)
-            } else {
-                ftp.listFiles(path)
-            }
+            changeToVirtualDirectory(ftp, path)
+            val files = listCurrentDirectory(ftp)
             if (files == null || files.isEmpty()) {
                 return@withClient emptyList()
             }
@@ -57,9 +52,10 @@ class FtpUploadClient {
             throw FtpUploadException("FILE_NOT_FOUND", "本地文件不存在")
         }
         return withClient(args) { ftp ->
+            changeToVirtualDirectory(ftp, remoteDirectory)
             val remotePath = childPath(remoteDirectory, localFile.name, null)
             FileInputStream(localFile).use { input ->
-                val uploaded = ftp.storeFile(remotePath, input)
+                val uploaded = ftp.storeFile(localFile.name, input)
                 if (!uploaded) {
                     val code = if (ftp.replyCode == 550) "PERMISSION_DENIED" else "UPLOAD_FAILED"
                     throw FtpUploadException(code, ftp.replyString?.trim().orEmpty().ifEmpty { "上传失败" })
@@ -87,8 +83,11 @@ class FtpUploadClient {
             parentDir.mkdirs()
         }
         return withClient(args) { ftp ->
+            val remoteDirectory = parentVirtualDirectory(remotePath)
+            val remoteName = fileName(remotePath)
+            changeToVirtualDirectory(ftp, remoteDirectory)
             FileOutputStream(localFile).use { output ->
-                val downloaded = ftp.retrieveFile(remotePath, output)
+                val downloaded = ftp.retrieveFile(remoteName, output)
                 if (!downloaded) {
                     localFile.delete()
                     val code = if (ftp.replyCode == 550) "FILE_NOT_FOUND" else "DOWNLOAD_FAILED"
@@ -164,10 +163,53 @@ class FtpUploadClient {
         }
     }
 
+    private fun listCurrentDirectory(ftp: FTPClient): Array<FTPFile>? {
+        // 成熟 FTP 客户端通常先 CWD 到目标目录，再读取当前目录；
+        // 部分校园/Windows FTP 对 MLSD/LIST 的绝对路径参数兼容性很差。
+        val supportsMls = ftp.hasFeature(FTPCmd.MLST)
+        val mlsFiles = if (supportsMls) {
+            runCatching { ftp.mlistDir() }.getOrNull()
+        } else {
+            null
+        }
+        if (!mlsFiles.isNullOrEmpty()) {
+            return mlsFiles
+        }
+        return ftp.listFiles()
+    }
+
+    private fun changeToVirtualDirectory(ftp: FTPClient, virtualPath: String) {
+        val serverPath = toServerPath(virtualPath) ?: return
+        if (!ftp.changeWorkingDirectory(serverPath)) {
+            val message = ftp.replyString?.trim().orEmpty().ifEmpty { "无法打开目录：$virtualPath" }
+            throw FtpUploadException("DIRECTORY_NOT_FOUND", message)
+        }
+    }
+
+    private fun toServerPath(virtualPath: String): String? {
+        val normalized = normalizeDirectory(virtualPath)
+        if (normalized == "/") return null
+        return normalized.trim('/').ifEmpty { null }
+    }
+
+    private fun parentVirtualDirectory(remotePath: String): String {
+        val normalized = normalizeDirectory(remotePath)
+        val index = normalized.lastIndexOf('/')
+        return if (index <= 0) "/" else normalized.substring(0, index)
+    }
+
+    private fun fileName(remotePath: String): String {
+        val normalized = normalizeDirectory(remotePath)
+        return normalized.substringAfterLast('/').ifEmpty {
+            throw FtpUploadException("INVALID_ARGUMENT", "远程文件名不能为空")
+        }
+    }
+
     private fun normalizeDirectory(path: String): String {
         val trimmed = path.trim()
         if (trimmed.isEmpty() || trimmed == "/") return "/"
-        return if (trimmed.startsWith("/")) trimmed else "/$trimmed"
+        val normalized = if (trimmed.startsWith("/")) trimmed else "/$trimmed"
+        return normalized.replace(Regex("/{2,}"), "/").trimEnd('/').ifEmpty { "/" }
     }
 
     /**

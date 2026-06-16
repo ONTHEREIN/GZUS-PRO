@@ -1,8 +1,8 @@
-# AGENTS.md — OneGZUS (GZUS-PRO)
+# AGENTS.md — 软帮手 / OneGZUS (GZUS-PRO)
 
 ## Project overview
 
-University teaching-affairs assistant (课表/成绩/考勤/水电费/请假/考试提醒). Flutter frontend + FastAPI backend. Chinese-language UI throughout.
+软帮手（OneGZUS）— University teaching-affairs assistant (课表/成绩/考勤/水电费/请假/考试提醒). Flutter frontend + FastAPI backend. Chinese-language UI throughout.
 
 ## Architecture
 

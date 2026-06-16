@@ -11,7 +11,8 @@ class LocalNotificationService {
 
   static Future<void> init({OnNotificationTap? onTap}) async {
     _onTap = onTap;
-    const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
+    const androidSettings =
+        AndroidInitializationSettings('@mipmap/ic_launcher');
     const iosSettings = DarwinInitializationSettings(
       requestAlertPermission: true,
       requestBadgePermission: true,
@@ -26,7 +27,8 @@ class LocalNotificationService {
       onDidReceiveNotificationResponse: _onNotificationResponse,
     );
     if (Platform.isAndroid) {
-      final androidPlugin = _plugin.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
+      final androidPlugin = _plugin.resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin>();
       await androidPlugin?.requestNotificationsPermission();
     }
   }
@@ -51,13 +53,14 @@ class LocalNotificationService {
   }) async {
     const androidDetails = AndroidNotificationDetails(
       'gzus_pro_notifications',
-      'OneGZUS 通知',
+      '软帮手通知',
       channelDescription: '教务系统通知推送',
       importance: Importance.high,
       priority: Priority.high,
     );
     const iosDetails = DarwinNotificationDetails();
-    const details = NotificationDetails(android: androidDetails, iOS: iosDetails);
+    const details =
+        NotificationDetails(android: androidDetails, iOS: iosDetails);
     final payload = extras != null ? jsonEncode(extras) : null;
     await _plugin.show(id, title, body, details, payload: payload);
   }

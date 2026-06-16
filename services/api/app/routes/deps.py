@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from fastapi import Header, HTTPException, Request, status
 
@@ -179,7 +179,19 @@ def require_session(
             detail="会话已过期",
         )
 
-    idle_time = datetime.now() - session.last_active_at
+    if session.revoked_at is not None:
+        logger.info(
+            "require_session: session %s revoked for %s (reason=%s)",
+            x_session_id[:8],
+            request.url.path,
+            session.revoked_reason,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="账号已在其他设备登录，请重新登录",
+        )
+
+    idle_time = datetime.now(timezone.utc).replace(tzinfo=None) - session.last_active_at
     logger.info(
         "Session %s resolved for %s (client=%s, ehall=%s, idle=%ds)",
         session.id[:8],

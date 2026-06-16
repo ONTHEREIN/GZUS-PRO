@@ -691,7 +691,7 @@ async function saveSessionToKV(sessionId, data, env) {
   }
   const key = `session:${sessionId}`;
   const cookiesLen = (data.cookies || '').length;
-  const maxRetries = 3;
+  const maxRetries = 2;
 
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
@@ -700,26 +700,14 @@ async function saveSessionToKV(sessionId, data, env) {
         JSON.stringify(data),
         { expirationTtl: SESSION_KV_TTL }
       );
-      // Verify the write succeeded by reading it back
-      const verify = await env.SESSIONS_KV.get(key);
-      if (verify) {
-        console.log(`[kv] Session ${sessionId.slice(0, 8)} saved to KV (${cookiesLen} chars cookies)`);
-        return { ok: true };
-      }
-      // Write appeared to succeed but read-back returned empty.
-      // KV can be eventually-consistent; retry after backoff.
-      if (attempt < maxRetries - 1) {
-        console.warn(
-          `[kv] Session ${sessionId.slice(0, 8)} KV read-back empty (attempt ${attempt + 1}/${maxRetries}), retrying...`
-        );
-        await sleep(Math.min(200 * Math.pow(2, attempt), 2000));
-      }
+      console.log(`[kv] Session ${sessionId.slice(0, 8)} saved to KV (${cookiesLen} chars cookies)`);
+      return { ok: true };
     } catch (e) {
       console.warn(
         `[kv] Failed to save session ${sessionId.slice(0, 8)} (attempt ${attempt + 1}/${maxRetries}):`, e.message
       );
       if (attempt < maxRetries - 1) {
-        await sleep(Math.min(200 * Math.pow(2, attempt), 2000));
+        await sleep(200);
       }
     }
   }
@@ -899,9 +887,9 @@ export default {
       return jsonResponse({ status: 'ok', edge: true }, 200, request);
     }
 
-    // ─── Worker HTTP proxy (for Vercel → JWXT) ────────────────
-    // Vercel sends HTTP requests through this endpoint so JWXT
-    // cookies (IP-bounded to the Worker's edge IP) remain valid.
+    // ─── Worker HTTP proxy (for Vercel → JWXT/ecard) ─────────
+    // Vercel sends selected school-system requests through Cloudflare so
+    // remote services see the Worker's edge IP instead of Vercel's region.
     if (path === '_proxy' && request.method === 'POST') {
       try {
         const body = await request.json();
@@ -912,6 +900,7 @@ export default {
         // 1. With session_id: JWXT proxy (injects cookies for IP-bounded JWXT access)
         // 2. Without session_id: ecard proxy (transparent forward to ecard API)
         let cookies = null;
+        const parsedTarget = new URL(targetUrl);
         if (session_id) {
           const localData = localSessions.get(session_id);
           if (localData && localData.cookies) {
@@ -929,6 +918,11 @@ export default {
           if (!cookies) {
             return new Response('JWXT session cookies not found', { status: 502 });
           }
+        } else if (
+          parsedTarget.protocol !== 'https:' ||
+          parsedTarget.hostname !== 'ecarduser.gzus.edu.cn'
+        ) {
+          return errorResponse('Unsupported proxy target', 403, request);
         }
 
         // Forward the request

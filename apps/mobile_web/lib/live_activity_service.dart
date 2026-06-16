@@ -31,7 +31,7 @@ class LiveActivityEvent {
     return LiveActivityEvent(
       id: (value('id') ?? _fallbackId(message)).toString(),
       type: type,
-      title: value('title')?.toString() ?? 'OneGZUS',
+      title: value('title')?.toString() ?? '软帮手',
       body: value('body')?.toString() ?? '',
       style: style,
       endTime: _dateTimeFromEpochMillis(value('endTime')),
@@ -127,7 +127,8 @@ class LiveActivityEvent {
     return null;
   }
 
-  static double? _progressValue(Object? progress, Object? max, Object? current) {
+  static double? _progressValue(
+      Object? progress, Object? max, Object? current) {
     final direct = _doubleValue(progress);
     if (direct != null) return direct;
     final maxValue = _intValue(max);

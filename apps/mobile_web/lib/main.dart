@@ -38,6 +38,11 @@ import 'web_pwa_cache.dart' deferred as web_pwa_cache;
 import 'push_service.dart' deferred as push_service;
 import 'web_push_service.dart' deferred as web_push_service;
 
+@visibleForTesting
+bool debugHideEcardForTests = false;
+
+bool get _hideEcardOnCurrentPlatform => kIsWeb || debugHideEcardForTests;
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
@@ -60,8 +65,10 @@ Future<void> _initDeferredServices() async {
   } catch (_) {}
 }
 
-ThemeData _appTheme(Brightness brightness, {Color seedColor = GzusColors.blue}) {
-  return gzusTheme(brightness, navBarHeight: _mobileNavBarHeight, seedColor: seedColor);
+ThemeData _appTheme(Brightness brightness,
+    {Color seedColor = GzusColors.blue}) {
+  return gzusTheme(brightness,
+      navBarHeight: _mobileNavBarHeight, seedColor: seedColor);
 }
 
 class OneGzusApp extends StatefulWidget {
@@ -108,8 +115,7 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
       final now = DateTime.now();
       if (_lastLoginAt != null &&
           now.difference(_lastLoginAt!) < const Duration(seconds: 5)) {
-        debugPrint(
-            'Ignoring relogin failure within 5s of login (transient)');
+        debugPrint('Ignoring relogin failure within 5s of login (transient)');
         return;
       }
       _logout();
@@ -239,7 +245,8 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
   }
 
   static String _colorToHex(Color color) {
-    return '${(color.r * 255.0).round().clamp(0, 255).toRadixString(16).padLeft(2, '0')}${(color.g * 255.0).round().clamp(0, 255).toRadixString(16).padLeft(2, '0')}${(color.b * 255.0).round().clamp(0, 255).toRadixString(16).padLeft(2, '0')}'.toUpperCase();
+    return '${(color.r * 255.0).round().clamp(0, 255).toRadixString(16).padLeft(2, '0')}${(color.g * 255.0).round().clamp(0, 255).toRadixString(16).padLeft(2, '0')}${(color.b * 255.0).round().clamp(0, 255).toRadixString(16).padLeft(2, '0')}'
+        .toUpperCase();
   }
 
   /// 根据当前主题模式更新系统状态栏/导航栏图标颜色
@@ -260,7 +267,7 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     return MaterialApp(
       navigatorKey: _navigatorKey,
-      title: 'OneGZUS',
+      title: '软帮手',
       debugShowCheckedModeBanner: false,
       themeMode: themeMode,
       theme: _appTheme(Brightness.light, seedColor: seedColor),
@@ -289,8 +296,8 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
         '/dashboard': (context) {
           if (!loggedIn) {
             WidgetsBinding.instance.addPostFrameCallback((_) {
-              _navigatorKey.currentState?.pushNamedAndRemoveUntil(
-                  '/', (route) => false);
+              _navigatorKey.currentState
+                  ?.pushNamedAndRemoveUntil('/', (route) => false);
             });
             return const LoadingPage();
           }
@@ -299,8 +306,8 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
         '/background-guide': (context) {
           if (!loggedIn) {
             WidgetsBinding.instance.addPostFrameCallback((_) {
-              _navigatorKey.currentState?.pushNamedAndRemoveUntil(
-                  '/', (route) => false);
+              _navigatorKey.currentState
+                  ?.pushNamedAndRemoveUntil('/', (route) => false);
             });
             return const LoadingPage();
           }
@@ -327,11 +334,12 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
       await _completeSsoLogin(ssoCode, uri);
       return;
     }
-    // 添加 5 秒超时保护，防止 API 响应慢导致 LoadingPage 永远卡住
+    // 添加超时保护，防止 API 响应慢导致 LoadingPage 永远卡住
     try {
       await _restoreSession().timeout(const Duration(seconds: 8));
     } on TimeoutException {
-      debugPrint('Session restore timed out after 5 seconds, showing login page');
+      debugPrint(
+          'Session restore timed out after 8 seconds, showing login page');
       if (mounted) {
         setState(() => initializing = false);
       }
@@ -388,43 +396,20 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
       api.setEhallAuthToken(savedEhallAuthToken);
     }
 
-    try {
-      final result = await api.me();
-      final info = result.data;
-      final guideCompleted =
-          prefs.getBool('background_guide_completed') ?? false;
-      if (!mounted) return;
-      setState(() {
-        initializing = false;
-        loggedIn = true;
-        studentName = prefs.getString('auth.studentName') ?? info.name;
-        _backgroundGuideCompleted = guideCompleted;
-        _globalDataSource = result.source;
-        loginMethod = prefs.getString('auth.loginMethod');
-      });
+    final guideCompleted = prefs.getBool('background_guide_completed') ?? false;
+    if (!mounted) return;
+    setState(() {
+      initializing = false;
+      loggedIn = true;
+      studentName = prefs.getString('auth.studentName') ?? '软帮手';
+      _backgroundGuideCompleted = guideCompleted;
+      _globalDataSource = const DataSourceInfo(fromLocalCache: true);
+      loginMethod = prefs.getString('auth.loginMethod');
+    });
 
-      final studentId = prefs.getString('auth.studentId') ?? info.studentId;
-      if (studentId.isNotEmpty) {
-        api.setStudentId(studentId);
-      }
-
-      _initPushServices();
-      _checkForUpdate();
-    } on ApiException {
-      await _clearSavedSession();
-      if (!mounted) return;
-      setState(() {
-        initializing = false;
-        loggedIn = false;
-      });
-    } catch (_) {
-      await _clearSavedSession();
-      if (!mounted) return;
-      setState(() {
-        initializing = false;
-        loggedIn = false;
-      });
-    }
+    unawaited(_tryBackgroundRefresh(prefs));
+    _initPushServices();
+    _checkForUpdate();
   }
 
   Future<void> _tryBackgroundRefresh(SharedPreferences prefs) async {
@@ -621,7 +606,8 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
         await api.unregisterPush();
       } catch (_) {}
       if (kIsWeb && (api.sessionId?.isNotEmpty ?? false)) {
-        await LoginRequiredServices.unsubscribeWebPush(api.baseUrl, api.sessionId!);
+        await LoginRequiredServices.unsubscribeWebPush(
+            api.baseUrl, api.sessionId!);
       }
       try {
         await api.logout();
@@ -859,10 +845,22 @@ class _LoginPageState extends State<LoginPage>
                                     ),
                                     SizedBox(height: compact ? 18 : 22),
                                     Text(
-                                      'OneGZUS',
+                                      '软帮手',
                                       style: Theme.of(context)
                                           .textTheme
                                           .headlineMedium,
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      'OneGZUS',
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .bodyMedium
+                                          ?.copyWith(
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .onSurfaceVariant,
+                                          ),
                                     ),
                                     const SizedBox(height: 6),
                                     Text(
@@ -906,7 +904,9 @@ class _LoginPageState extends State<LoginPage>
                                           const SizedBox(width: 8),
                                           Expanded(
                                             child: Text(
-                                              '登录后自动同步课表、考勤、成绩、通知与生活缴费',
+                                              _hideEcardOnCurrentPlatform
+                                                  ? '登录后自动同步课表、考勤、成绩与通知'
+                                                  : '登录后自动同步课表、考勤、成绩、通知与生活缴费',
                                               style: Theme.of(context)
                                                   .textTheme
                                                   .bodySmall,
@@ -1257,12 +1257,12 @@ class _AgreementContent extends StatelessWidget {
   final ScrollController scrollController;
 
   static const _termsOfServiceText = '''
-OneGZUS 用户服务协议（摘要）
+软帮手 用户服务协议（摘要）
 
 重要提示：请在使用本应用前仔细阅读。使用即视为同意本协议。
 
 一、服务说明
-OneGZUS（软帮手）是一个学生自发开发的开源工具，仅供学习交流使用，聚合展示学校教务系统中的课表、成绩、考勤、水电费、通知、考试安排等数据。本应用非学校官方产品，所有数据以学校系统为准。
+软帮手（OneGZUS）是一个学生自发开发的开源工具，仅供学习交流使用，聚合展示学校教务系统中的课表、成绩、考勤、水电费、通知、考试安排等数据。本应用非学校官方产品，所有数据以学校系统为准。
 
 二、用户账号
 请使用学校统一身份认证学号和密码登录，妥善保管登录凭证，不得出借账号。
@@ -1283,7 +1283,7 @@ OneGZUS（软帮手）是一个学生自发开发的开源工具，仅供学习�
 ''';
 
   static const _privacyPolicyText = '''
-OneGZUS 隐私政策（摘要）
+软帮手 隐私政策（摘要）
 
 我们重视您的隐私。本政策说明我们如何收集、使用和保护您的信息。
 
@@ -1614,10 +1614,7 @@ class _DashboardShellState extends State<DashboardShell> {
   late DateTime firstWeekStart;
   late int currentWeek;
   bool autoWeek = true;
-  List<NavTabConfig> _navBarTabs = [
-    ...NavTabConfig.all,
-    NavTabConfig.moreTab,
-  ];
+  List<NavTabConfig> _navBarTabs = NavTabConfig.defaultTabs;
   String? _highlightCourse;
   String? _overrideTabId;
   DateTime? _lastBackTime;
@@ -1756,7 +1753,7 @@ class _DashboardShellState extends State<DashboardShell> {
                                             CrossAxisAlignment.center,
                                         children: [
                                           Text(
-                                            widget.studentName ?? 'OneGZUS',
+                                            widget.studentName ?? '软帮手',
                                             maxLines: 1,
                                             overflow: TextOverflow.ellipsis,
                                             style: Theme.of(context)
@@ -1768,7 +1765,7 @@ class _DashboardShellState extends State<DashboardShell> {
                                                 ),
                                           ),
                                           Text(
-                                            '软帮手',
+                                            'OneGZUS',
                                             maxLines: 1,
                                             overflow: TextOverflow.ellipsis,
                                             style: Theme.of(context)
@@ -1822,7 +1819,16 @@ class _DashboardShellState extends State<DashboardShell> {
                             top: false,
                             bottom: false,
                             child: Padding(
-                              padding: EdgeInsets.fromLTRB(10, 8, 10, _autoHideNavBar ? 10 : _mobileNavBarHeight + MediaQuery.paddingOf(context).bottom + 16 + 10),
+                              padding: EdgeInsets.fromLTRB(
+                                  10,
+                                  8,
+                                  10,
+                                  _autoHideNavBar
+                                      ? 10
+                                      : _mobileNavBarHeight +
+                                          MediaQuery.paddingOf(context).bottom +
+                                          16 +
+                                          10),
                               child: _CenteredPage(
                                 maxWidth: 720,
                                 child: AnimatedSwitcher(
@@ -1987,7 +1993,7 @@ class _DashboardShellState extends State<DashboardShell> {
       if (id == 'more') {
         tabs.add(NavTabConfig.moreTab);
       } else {
-        final found = NavTabConfig.all.where((t) => t.tabId == id);
+        final found = NavTabConfig.available.where((t) => t.tabId == id);
         if (found.isNotEmpty) tabs.add(found.first);
       }
     }
@@ -2002,9 +2008,11 @@ class _DashboardShellState extends State<DashboardShell> {
 
   /// 账密登录时过滤掉依赖办事大厅的功能标签
   List<NavTabConfig> _filterRestrictedTabs(List<NavTabConfig> tabs) {
-    if (!widget.isPasswordLogin) return tabs;
     return tabs
-        .where((t) => !DashboardShell.passwordRestrictedTabs.contains(t.tabId))
+        .where((t) => !_hideEcardOnCurrentPlatform || t.tabId != 'ecard')
+        .where((t) =>
+            !widget.isPasswordLogin ||
+            !DashboardShell.passwordRestrictedTabs.contains(t.tabId))
         .toList();
   }
 
@@ -2049,7 +2057,7 @@ class _DashboardShellState extends State<DashboardShell> {
             term: term,
             onSessionExpired: widget.onLogout);
       case 'leave':
-        if (kIsWeb) {
+        if (_hideEcardOnCurrentPlatform) {
           return const _WebUnsupportedPage(
             title: '自动请假',
             icon: Icons.fact_check,
@@ -2085,6 +2093,13 @@ class _DashboardShellState extends State<DashboardShell> {
       case 'credits':
         return CreditsPage(api: widget.api, onSessionExpired: widget.onLogout);
       case 'ecard':
+        if (kIsWeb) {
+          return const _WebUnsupportedPage(
+            title: '生活缴费',
+            icon: Icons.water_drop,
+            message: '生活缴费需要在手机 App 中使用，Web 端暂不支持查询水电余额。',
+          );
+        }
         return EcardPage(api: widget.api, onSessionExpired: widget.onLogout);
       case 'ftpUpload':
         return const FtpUploadPage();
@@ -2120,6 +2135,7 @@ class _DashboardShellState extends State<DashboardShell> {
   }
 
   void _navigateToTab(String tabId) {
+    if (_hideEcardOnCurrentPlatform && tabId == 'ecard') return;
     // 账密登录时阻止导航到受限功能
     if (widget.isPasswordLogin &&
         DashboardShell.passwordRestrictedTabs.contains(tabId)) {
@@ -2134,7 +2150,7 @@ class _DashboardShellState extends State<DashboardShell> {
       });
       return;
     }
-    final tabConfig = NavTabConfig.all.where((t) => t.tabId == tabId);
+    final tabConfig = NavTabConfig.available.where((t) => t.tabId == tabId);
     if (tabConfig.isEmpty) return;
     _navBarVisible.value = true;
     setState(() {
@@ -2347,7 +2363,8 @@ class AppSidebar extends StatelessWidget {
                         color: _accentFill(context),
                         borderRadius: BorderRadius.circular(14),
                       ),
-                      child: const Center(child: Text('🎓', style: TextStyle(fontSize: 22))),
+                      child: const Center(
+                          child: Text('🎓', style: TextStyle(fontSize: 22))),
                     ),
                   )
                 else
@@ -2360,9 +2377,9 @@ class AppSidebar extends StatelessWidget {
                         key: const ValueKey('expanded-logo'),
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text('OneGZUS', style: theme.textTheme.titleLarge),
+                          Text('软帮手', style: theme.textTheme.titleLarge),
                           const SizedBox(height: 4),
-                          Text('软帮手', style: theme.textTheme.bodySmall),
+                          Text('OneGZUS', style: theme.textTheme.bodySmall),
                         ],
                       ),
                     ),
@@ -2653,6 +2670,10 @@ class NavTabConfig {
         shortLabel: '上传'),
   ];
 
+  static List<NavTabConfig> get available => _hideEcardOnCurrentPlatform
+      ? all.where((tab) => tab.tabId != 'ecard').toList()
+      : all;
+
   static const moreTab = NavTabConfig(
       tabId: 'more',
       icon: Icons.more_horiz,
@@ -2660,19 +2681,28 @@ class NavTabConfig {
       shortLabel: '更多',
       isFixed: true);
 
-  static const defaultNavBar = [
-    'home',
-    'info',
-    'applications',
-    'schedule',
-    'leave',
-    'attendance',
-    'exams',
-    'grades',
-    'credits',
-    'ecard',
-    'more',
-  ];
+  static List<String> get defaultNavBar {
+    final ids = [
+      'home',
+      'info',
+      'applications',
+      'schedule',
+      'leave',
+      'attendance',
+      'exams',
+      'grades',
+      'credits',
+      if (!_hideEcardOnCurrentPlatform) 'ecard',
+      'more',
+    ];
+    return ids;
+  }
+
+  static List<NavTabConfig> get defaultTabs => defaultNavBar
+      .map((id) => id == 'more'
+          ? moreTab
+          : available.firstWhere((tab) => tab.tabId == id))
+      .toList();
 
   Map<String, dynamic> toJson() => {
         'tabId': tabId,
@@ -2809,9 +2839,7 @@ class HomePreferences {
     HomeModuleConfig('todayTimeline', '今日时间线', Icons.view_timeline),
     HomeModuleConfig('weekGrid', '周课表', Icons.grid_view),
     HomeModuleConfig('dailyCourses', '今日课程', Icons.format_list_bulleted),
-    HomeModuleConfig('weather', '今日天气', Icons.wb_sunny),
     HomeModuleConfig('grades', '本学期成绩', Icons.school),
-    HomeModuleConfig('examCountdown', '考试倒计时', Icons.timer),
     HomeModuleConfig('utilities', '水电余额', Icons.water_drop),
     HomeModuleConfig('progress', '业务进度', Icons.route),
     HomeModuleConfig('notifications', '通知摘要', Icons.notifications_active),
@@ -2820,6 +2848,14 @@ class HomePreferences {
     HomeModuleConfig('profile', '个人资料', Icons.badge),
     HomeModuleConfig('apps', '常用服务', Icons.apps),
   ];
+
+  static List<HomeModuleConfig> get availableModules =>
+      _hideEcardOnCurrentPlatform
+          ? defaultModules.where((item) => item.id != 'utilities').toList()
+          : defaultModules;
+
+  static List<String> get defaultModuleIds =>
+      availableModules.map((item) => item.id).toList();
 
   static Future<List<String>> loadOrder() async {
     final prefs = await SharedPreferences.getInstance();
@@ -2848,19 +2884,19 @@ class HomePreferences {
   }
 
   static List<String> _normalizeOrder(List<String> value) {
-    final validIds = defaultModules.map((item) => item.id).toSet();
+    final validIds = availableModules.map((item) => item.id).toSet();
     final result = <String>[];
     for (final id in value) {
       if (validIds.contains(id) && !result.contains(id)) result.add(id);
     }
-    for (final config in defaultModules) {
+    for (final config in availableModules) {
       if (!result.contains(config.id)) result.add(config.id);
     }
     return result;
   }
 
   static HomeModuleConfig configFor(String id) =>
-      defaultModules.firstWhere((item) => item.id == id);
+      availableModules.firstWhere((item) => item.id == id);
 }
 
 class _HomeDashboardData {
@@ -2942,8 +2978,7 @@ class _HomePageState extends State<HomePage> {
   late Future<List<GradeItem>> _gradesFuture;
   late Future<List<ExamItem>> _examsFuture;
 
-  List<String> _moduleOrder =
-      HomePreferences.defaultModules.map((item) => item.id).toList();
+  List<String> _moduleOrder = HomePreferences.defaultModuleIds;
   Set<String> _hiddenModules = {};
 
   @override
@@ -2954,9 +2989,17 @@ class _HomePageState extends State<HomePage> {
   }
 
   void _initFutures({bool forceRefresh = false}) {
+    final isWidgetTest =
+        WidgetsBinding.instance.runtimeType.toString().contains('Test');
+    final lowPriorityDelay = forceRefresh || isWidgetTest
+        ? Duration.zero
+        : const Duration(milliseconds: 700);
+    final weatherDelay = forceRefresh || isWidgetTest
+        ? Duration.zero
+        : const Duration(milliseconds: 1200);
     _infoFuture = _safeLoad(
       widget.api.me(forceRefresh: forceRefresh).then((r) => r.data),
-      StudentInfo(studentId: '', name: 'OneGZUS'),
+      StudentInfo(studentId: '', name: '软帮手'),
     );
     _scheduleFuture = _safeLoad(
       widget.api
@@ -2977,37 +3020,73 @@ class _HomePageState extends State<HomePage> {
       AttendanceResponse.fromJson({'status': 'empty', 'items': []}),
     );
     _creditsFuture = _safeLoad(
-      widget.api.credits(forceRefresh: forceRefresh).then((r) => r.data),
+      Future.delayed(
+        lowPriorityDelay,
+        () =>
+            widget.api.credits(forceRefresh: forceRefresh).then((r) => r.data),
+      ),
       const <CreditItem>[],
     );
-    _ecardFuture = _safeLoad(
-      widget.api.ecardSummary(forceRefresh: forceRefresh).then((r) => r.data),
-      EcardSummary.fromJson({'status': 'not_bound'}),
+    _ecardFuture = widget.isPasswordLogin || _hideEcardOnCurrentPlatform
+        ? Future.value(EcardSummary.fromJson({'status': 'not_bound'}))
+        : _safeLoad(
+            Future.delayed(
+              lowPriorityDelay,
+              () => widget.api
+                  .ecardSummary(forceRefresh: forceRefresh)
+                  .then((r) => r.data),
+            ),
+            EcardSummary.fromJson({'status': 'not_bound'}),
+          );
+    _appsFuture = widget.isPasswordLogin
+        ? Future.value(const <EhallApplicationItem>[])
+        : _safeLoad(
+            Future.delayed(
+              lowPriorityDelay,
+              () => widget.api.ehallApplications(forceRefresh: forceRefresh),
+            ),
+            const <EhallApplicationItem>[],
+          );
+    _progressFuture = widget.isPasswordLogin
+        ? Future.value(
+            EhallProgressOverview.fromItems(const <EhallProgressItem>[]))
+        : _safeLoad(
+            Future.delayed(
+              lowPriorityDelay,
+              () =>
+                  widget.api.ehallProgressOverview(forceRefresh: forceRefresh),
+            ),
+            EhallProgressOverview.fromItems(const <EhallProgressItem>[]),
+          );
+    _weatherFuture = Future.delayed(
+      weatherDelay,
+      () => _loadWeather(forceRefresh: forceRefresh),
     );
-    _appsFuture = _safeLoad(
-      widget.api.ehallApplications(forceRefresh: forceRefresh),
-      const <EhallApplicationItem>[],
-    );
-    _progressFuture = _safeLoad(
-      widget.api.ehallProgressOverview(forceRefresh: forceRefresh),
-      EhallProgressOverview.fromItems(const <EhallProgressItem>[]),
-    );
-    _weatherFuture = _loadWeather(forceRefresh: forceRefresh);
     _gradesFuture = _safeLoad(
-      widget.api
-          .grades(
-              year: widget.year, term: widget.term, forceRefresh: forceRefresh)
-          .then((r) => r.data),
+      Future.delayed(
+        lowPriorityDelay,
+        () => widget.api
+            .grades(
+                year: widget.year,
+                term: widget.term,
+                forceRefresh: forceRefresh)
+            .then((r) => r.data),
+      ),
       const <GradeItem>[],
     ).then((grades) async {
       if (grades.isNotEmpty) return grades;
       return _loadLocalGrades();
     });
     _examsFuture = _safeLoad(
-      widget.api
-          .exams(
-              year: widget.year, term: widget.term, forceRefresh: forceRefresh)
-          .then((r) => r.data),
+      Future.delayed(
+        lowPriorityDelay,
+        () => widget.api
+            .exams(
+                year: widget.year,
+                term: widget.term,
+                forceRefresh: forceRefresh)
+            .then((r) => r.data),
+      ),
       const <ExamItem>[],
     ).then((exams) async {
       if (exams.isNotEmpty) return exams;
@@ -3034,7 +3113,8 @@ class _HomePageState extends State<HomePage> {
     if (oldWidget.year != widget.year ||
         oldWidget.term != widget.term ||
         oldWidget.currentWeek != widget.currentWeek ||
-        oldWidget.firstWeekStart != widget.firstWeekStart) {
+        oldWidget.firstWeekStart != widget.firstWeekStart ||
+        oldWidget.loginMethod != widget.loginMethod) {
       _initFutures();
     }
   }
@@ -3310,7 +3390,8 @@ class _HomePageState extends State<HomePage> {
   Future<({double lat, double lon})?> _getLocationWithPermission() async {
     try {
       await permission_service.loadLibrary();
-      final hasPermission = await permission_service.PermissionService.checkLocationPermission();
+      final hasPermission =
+          await permission_service.PermissionService.checkLocationPermission();
       if (!hasPermission) {
         await permission_service.PermissionService.requestLocationPermission();
         await Future.delayed(const Duration(milliseconds: 500));
@@ -3433,7 +3514,7 @@ class _HomePageState extends State<HomePage> {
       ]).catchError((_) => List.filled(11, null));
       final data = _HomeDashboardData(
         info: results[0] as StudentInfo? ??
-            StudentInfo(studentId: '', name: 'OneGZUS'),
+            StudentInfo(studentId: '', name: '软帮手'),
         courses: (results[1] as ScheduleResult?)?.items ?? const [],
         notices: results[2] as List<NoticeItem>? ?? const [],
         attendance: results[3] as AttendanceResponse? ??
@@ -3519,6 +3600,7 @@ class _HomePageState extends State<HomePage> {
           },
         );
       case 'utilities':
+        if (_hideEcardOnCurrentPlatform) return const SizedBox.shrink();
         return _AsyncModuleCard<EcardSummary>(
           future: _ecardFuture,
           title: '水电余额',
@@ -3638,9 +3720,7 @@ class _HomePageState extends State<HomePage> {
                       TextButton(
                         onPressed: () async {
                           await HomePreferences.reset();
-                          order = HomePreferences.defaultModules
-                              .map((item) => item.id)
-                              .toList();
+                          order = HomePreferences.defaultModuleIds;
                           hidden = {};
                           await persist();
                           localSetState(() {});
@@ -4467,7 +4547,8 @@ class _WeekGridHomeCard extends StatelessWidget {
                     width: 36,
                     child: Text('$slot-${slot + 1}',
                         style: TextStyle(
-                            color: Theme.of(context).colorScheme.onSurfaceVariant,
+                            color:
+                                Theme.of(context).colorScheme.onSurfaceVariant,
                             fontSize: 11)),
                   ),
                   for (var day = 1; day <= 5; day++)
@@ -4543,8 +4624,7 @@ class _DailyCoursesHomeCard extends StatelessWidget {
           : SingleChildScrollView(
               child: Column(
                 children: [
-                  for (final item in courses)
-                    _CompactCourseRow(course: item),
+                  for (final item in courses) _CompactCourseRow(course: item),
                 ],
               ),
             ),
@@ -5550,7 +5630,8 @@ class _ExamCountdownHomeCard extends StatelessWidget {
                                 style: const TextStyle(
                                     fontSize: 14, fontWeight: FontWeight.w700)),
                             const SizedBox(height: 2),
-                            Text('${exam.weekday ?? ''}${(exam.weekday ?? '').isNotEmpty && exam.timeDisplay.isNotEmpty ? ' · ' : ''}${exam.timeDisplay}',
+                            Text(
+                                '${exam.weekday ?? ''}${(exam.weekday ?? '').isNotEmpty && exam.timeDisplay.isNotEmpty ? ' · ' : ''}${exam.timeDisplay}',
                                 style: TextStyle(
                                     fontSize: 12,
                                     color: Theme.of(context)
@@ -6533,7 +6614,11 @@ class _FtpUploadPageState extends State<FtpUploadPage> {
       icon: Icons.upload_file,
       expandChild: true,
       child: RefreshIndicator(
-        onRefresh: _connected ? _listCurrentDirectory : _testConnection,
+        onRefresh: _connected
+            ? () async {
+                await _listCurrentDirectory();
+              }
+            : _testConnection,
         child: ListView(
           physics: const AlwaysScrollableScrollPhysics(),
           padding: const EdgeInsets.only(bottom: 24),
@@ -6757,7 +6842,7 @@ class _FtpUploadPageState extends State<FtpUploadPage> {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  '密码仅保存在系统安全区，不发送到 OneGZUS 后端。',
+                  '密码仅保存在系统安全区，不发送到软帮手后端。',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
               ],
@@ -7115,9 +7200,9 @@ class _FtpUploadPageState extends State<FtpUploadPage> {
     }
   }
 
-  Future<void> _listCurrentDirectory() async {
+  Future<bool> _listCurrentDirectory() async {
     final config = _readConfig();
-    if (config == null) return;
+    if (config == null) return false;
     setState(() {
       _listing = true;
       _error = null;
@@ -7126,21 +7211,28 @@ class _FtpUploadPageState extends State<FtpUploadPage> {
       final entries =
           await FtpUploadService.listDirectory(config, _currentDirectory);
       await _saveSettings(config);
-      if (!mounted) return;
+      if (!mounted) return false;
       setState(() {
         _connected = true;
         _entries = entries;
       });
+      return true;
     } catch (exc) {
       _handleFtpError(exc);
+      return false;
     } finally {
       if (mounted) setState(() => _listing = false);
     }
   }
 
   Future<void> _openDirectory(String path) async {
-    setState(() => _currentDirectory = path.isEmpty ? '/' : path);
-    await _listCurrentDirectory();
+    final previousDirectory = _currentDirectory;
+    final nextDirectory = path.isEmpty ? '/' : path;
+    setState(() => _currentDirectory = nextDirectory);
+    final opened = await _listCurrentDirectory();
+    if (!opened && mounted) {
+      setState(() => _currentDirectory = previousDirectory);
+    }
   }
 
   void _openParentDirectory() {
@@ -9133,7 +9225,8 @@ class _SchedulePageState extends State<SchedulePage> {
                                               '课表_${widget.year}_${widget.term}.ics';
                                           if (kIsWeb) {
                                             await ics_download.loadLibrary();
-                                            await ics_download.downloadIcs(ics, filename);
+                                            await ics_download.downloadIcs(
+                                                ics, filename);
                                           } else {
                                             await Share.shareXFiles(
                                               [
@@ -9179,7 +9272,8 @@ class _SchedulePageState extends State<SchedulePage> {
                                               '课表_${widget.year}_${widget.term}.ics';
                                           if (kIsWeb) {
                                             await ics_download.loadLibrary();
-                                            await ics_download.downloadIcs(ics, filename);
+                                            await ics_download.downloadIcs(
+                                                ics, filename);
                                           } else {
                                             await Share.shareXFiles(
                                               [
@@ -12935,6 +13029,8 @@ class _EcardPageState extends State<EcardPage> {
   Future<List<EcardRoomItem>>? _roomsFuture;
   final _searchController = TextEditingController();
   bool _refreshing = false;
+  bool _bindingRoom = false;
+  String? _bindingRoomId;
   int _refreshVersion = 0;
   String? _error;
   Timer? _periodicRefreshTimer;
@@ -13003,7 +13099,8 @@ class _EcardPageState extends State<EcardPage> {
           widget.api.ecardSummary(forceRefresh: true).then((r) => r.data);
       if (_roomsFuture != null) {
         _roomsFuture = widget.api.ecardRooms(
-          query: _lastSearchQuery, forceRefresh: true,
+          query: _lastSearchQuery,
+          forceRefresh: true,
         );
       }
     });
@@ -13011,6 +13108,12 @@ class _EcardPageState extends State<EcardPage> {
   }
 
   Future<void> _bindRoom(EcardRoomItem room) async {
+    if (_bindingRoom) return;
+    setState(() {
+      _bindingRoom = true;
+      _bindingRoomId = room.id;
+      _error = null;
+    });
     try {
       final summary = await widget.api.bindEcardRoom(room);
       if (!mounted) return;
@@ -13019,8 +13122,26 @@ class _EcardPageState extends State<EcardPage> {
         _roomsFuture = null;
         _error = null;
       });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+            content: Text('已绑定 ${summary.roomDisplay ?? room.displayName}')),
+      );
     } catch (exc) {
       _handleError(exc);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(exc is ApiException ? exc.message : '宿舍绑定失败'),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _bindingRoom = false;
+          _bindingRoomId = null;
+        });
+      }
     }
   }
 
@@ -13049,7 +13170,9 @@ class _EcardPageState extends State<EcardPage> {
 
   void _handleError(Object exc) {
     if (!mounted) return;
-    if (exc is ApiException && exc.statusCode == 401 && widget.onSessionExpired != null) {
+    if (exc is ApiException &&
+        exc.statusCode == 401 &&
+        widget.onSessionExpired != null) {
       widget.onSessionExpired!();
       return;
     }
@@ -13079,7 +13202,8 @@ class _EcardPageState extends State<EcardPage> {
         }
         if (snapshot.hasError) {
           final error = snapshot.error;
-          final isSessionError = error is ApiException && error.statusCode == 401;
+          final isSessionError =
+              error is ApiException && error.statusCode == 401;
           if (isSessionError && widget.onSessionExpired != null) {
             return _SessionExpiredPrompt(onRelogin: widget.onSessionExpired!);
           }
@@ -13106,6 +13230,8 @@ class _EcardPageState extends State<EcardPage> {
                   searchController: _searchController,
                   onSearchChanged: _onRoomSearch,
                   onRoomSelected: _bindRoom,
+                  bindingRoomId: _bindingRoomId,
+                  isBinding: _bindingRoom,
                 )
               else ...[
                 _EcardSummaryPanel(
@@ -13123,6 +13249,8 @@ class _EcardPageState extends State<EcardPage> {
                     searchController: _searchController,
                     onSearchChanged: _onRoomSearch,
                     onRoomSelected: _bindRoom,
+                    bindingRoomId: _bindingRoomId,
+                    isBinding: _bindingRoom,
                   ),
                 const SizedBox(height: 12),
                 _EcardReminderPanel(
@@ -13419,12 +13547,16 @@ class _RoomBindingPanel extends StatefulWidget {
     required this.searchController,
     required this.onSearchChanged,
     required this.onRoomSelected,
+    required this.bindingRoomId,
+    required this.isBinding,
   });
 
   final Future<List<EcardRoomItem>>? roomsFuture;
   final TextEditingController searchController;
   final ValueChanged<String> onSearchChanged;
-  final ValueChanged<EcardRoomItem> onRoomSelected;
+  final Future<void> Function(EcardRoomItem room) onRoomSelected;
+  final String? bindingRoomId;
+  final bool isBinding;
 
   @override
   State<_RoomBindingPanel> createState() => _RoomBindingPanelState();
@@ -13470,13 +13602,24 @@ class _RoomBindingPanelState extends State<_RoomBindingPanel> {
                     separatorBuilder: (_, __) => const Divider(height: 1),
                     itemBuilder: (context, index) {
                       final room = rooms[index];
+                      final isSelected = widget.bindingRoomId == room.id;
                       return ListTile(
+                        enabled: !widget.isBinding,
                         leading: const Icon(Icons.meeting_room),
                         title: Text(room.displayName,
                             overflow: TextOverflow.ellipsis),
                         subtitle: Text('${room.schoolArea} ${room.building}'),
-                        trailing: const Icon(Icons.chevron_right),
-                        onTap: () => widget.onRoomSelected(room),
+                        trailing: isSelected
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child:
+                                    CircularProgressIndicator(strokeWidth: 2),
+                              )
+                            : const Icon(Icons.chevron_right),
+                        onTap: widget.isBinding
+                            ? null
+                            : () => widget.onRoomSelected(room),
                       );
                     },
                   ),
@@ -14436,7 +14579,7 @@ class _MorePageState extends State<MorePage> {
   void _updateTabs() {
     final barIds = widget.navBarTabs.map((t) => t.tabId).toSet();
     _barTabs = [...widget.navBarTabs.where((t) => t.tabId != 'more')];
-    _moreTabs = NavTabConfig.all
+    _moreTabs = NavTabConfig.available
         .where((t) => !barIds.contains(t.tabId))
         .where((t) =>
             !widget.isPasswordLogin ||
@@ -14831,26 +14974,27 @@ class HomeWidgetGuidePage extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
-    const items = [
-      _WidgetGuideItem(
+    final items = [
+      const _WidgetGuideItem(
         icon: Icons.schedule,
         title: '下一节课',
         example: '移动应用开发 · 09:00-10:20 · A2-301',
         detail: '适合放在首页第一屏，快速看下一节课、教室和老师。',
       ),
-      _WidgetGuideItem(
+      const _WidgetGuideItem(
         icon: Icons.today,
         title: '今日课表',
         example: '今日 4 节课，按时间列出前几节',
         detail: '适合需要完整确认当天课程顺序时使用。',
       ),
-      _WidgetGuideItem(
-        icon: Icons.water_drop,
-        title: '生活缴费',
-        example: '电 9 度 · 冷水 12.3 吨 · 热水 4.6 吨',
-        detail: '绑定宿舍后显示水电余额，点击进入生活缴费页。',
-      ),
-      _WidgetGuideItem(
+      if (!_hideEcardOnCurrentPlatform)
+        _WidgetGuideItem(
+          icon: Icons.water_drop,
+          title: '生活缴费',
+          example: '电 9 度 · 冷水 12.3 吨 · 热水 4.6 吨',
+          detail: '绑定宿舍后显示水电余额，点击进入生活缴费页。',
+        ),
+      const _WidgetGuideItem(
         icon: Icons.assignment_turned_in,
         title: '业务进度',
         example: '请假审批 · 辅导员审核 · 70%',
@@ -14874,7 +15018,7 @@ class HomeWidgetGuidePage extends StatelessWidget {
             ),
             const _GuideStep(
               index: 2,
-              text: '找到 OneGZUS，选择需要的组件拖到桌面。',
+              text: '找到软帮手，选择需要的组件拖到桌面。',
             ),
             const _GuideStep(
               index: 3,
@@ -15139,12 +15283,12 @@ class _AboutPageState extends State<AboutPage> {
                     ),
                     const SizedBox(height: 16),
                     Text(
-                      'OneGZUS',
+                      '软帮手',
                       style: theme.textTheme.headlineSmall
                           ?.copyWith(fontWeight: FontWeight.w700),
                     ),
                     const SizedBox(height: 4),
-                    Text('软帮手',
+                    Text('OneGZUS',
                         style: theme.textTheme.bodyMedium
                             ?.copyWith(color: colorScheme.onSurfaceVariant)),
                   ],
@@ -15240,7 +15384,7 @@ class _AboutPageState extends State<AboutPage> {
                 alignment: Alignment.bottomCenter,
                 child: Padding(
                   padding: EdgeInsets.only(bottom: 32),
-                  child: Text('© 2026 OneGZUS',
+                  child: Text('© 2026 软帮手 / OneGZUS',
                       style: TextStyle(fontSize: 12, color: Colors.grey)),
                 ),
               ),
@@ -15338,7 +15482,7 @@ class OpenSourceAcknowledgementsPage extends StatelessWidget {
                     ),
                     SizedBox(height: 12),
                     Text(
-                      'OneGZUS 的开发受益于 Flutter、Dart、Python、Android、iOS 生态及各开源项目维护者的持续贡献。感谢上述第三方库、开源组件和相关工具链为本程序提供稳定的基础能力。',
+                      '软帮手（OneGZUS）的开发受益于 Flutter、Dart、Python、Android、iOS 生态及各开源项目维护者的持续贡献。感谢上述第三方库、开源组件和相关工具链为本程序提供稳定的基础能力。',
                     ),
                   ],
                 ),

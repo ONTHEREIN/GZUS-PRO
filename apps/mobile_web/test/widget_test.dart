@@ -398,7 +398,7 @@ void main() {
     await tester.pumpWidget(const OneGzusApp());
     await tester.pumpAndSettle();
 
-    expect(find.text('OneGZUS'), findsOneWidget);
+    expect(find.text('软帮手'), findsOneWidget);
     expect(find.text('推荐使用办事大厅统一登录'), findsOneWidget);
     expect(find.text('办事大厅统一登录'), findsOneWidget);
     expect(find.text('教务系统登录'), findsWidgets);
@@ -426,7 +426,7 @@ void main() {
     await tester.pumpWidget(const OneGzusApp());
     await tester.pumpAndSettle();
 
-    expect(find.text('OneGZUS'), findsOneWidget);
+    expect(find.text('软帮手'), findsOneWidget);
     expect(find.text('办事大厅统一登录'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
@@ -511,7 +511,7 @@ void main() {
   });
 
   testWidgets('home widget guide explains setup and examples', (tester) async {
-    await _pumpDashboard(tester, const Size(1180, 820));
+    await _pumpDashboard(tester, const Size(1180, 820), hideEcard: true);
 
     await tester.tap(find.text('更多').last);
     await tester.pumpAndSettle();
@@ -524,7 +524,7 @@ void main() {
     expect(find.text('添加方法'), findsOneWidget);
     expect(find.text('组件示例'), findsOneWidget);
     expect(find.text('下一节课'), findsWidgets);
-    expect(find.text('生活缴费'), findsWidgets);
+    expect(find.text('生活缴费'), findsNothing);
     expect(find.textContaining('Android 桌面长按空白处'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
@@ -655,6 +655,9 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('宿舍绑定'), findsOneWidget);
+    await tester.enterText(find.byType(TextField).last, 'A2');
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('校本部 A2 A2-932'));
     await tester.pumpAndSettle();
 
@@ -666,42 +669,59 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('ecard page shows limited consumption state', (tester) async {
-    await _pumpDashboard(tester, const Size(1180, 820));
+  testWidgets('web dashboard hides ecard entries', (tester) async {
+    await _pumpDashboard(tester, const Size(1180, 820), hideEcard: true);
 
-    await tester.tap(find.text('生活缴费').last);
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('校本部 A2 A2-932'));
-    await tester.pumpAndSettle();
-
-    await tester.scrollUntilVisible(
-      find.text('电费消费记录'),
-      300,
-      scrollable: find.byType(Scrollable).last,
-    );
-    await tester.pumpAndSettle();
-
-    expect(find.text('电费消费记录'), findsOneWidget);
-    expect(find.text('一卡通流水接口受限'), findsOneWidget);
+    expect(find.text('生活缴费'), findsNothing);
+    expect(find.text('水电余额'), findsNothing);
+    expect(tester.takeException(), isNull);
   });
 
-  testWidgets('ecard page fits mobile width', (tester) async {
-    await _pumpDashboard(tester, const Size(390, 844));
+  testWidgets('web more page does not offer ecard', (tester) async {
+    await _pumpDashboard(tester, const Size(1180, 820), hideEcard: true);
 
     await tester.tap(find.text('更多').last);
     await tester.pumpAndSettle();
-    await tester.tap(find.text('缴费').last);
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('校本部 A2 A2-932'));
+
+    expect(find.text('生活缴费'), findsNothing);
+    expect(find.text('缴费'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('web ecard live activity target stays on current page',
+      (tester) async {
+    final controller = LiveActivityController.instance;
+    await _pumpDashboard(tester, const Size(390, 844), hideEcard: true);
+
+    controller.show(LiveActivityEvent(
+      id: 'ecard-web',
+      type: 'ecard_reminder',
+      title: '电量偏低',
+      body: '9 度',
+      style: 'metric',
+      targetTab: 'ecard',
+    ));
+    await tester.pump();
+    controller.openCurrent();
     await tester.pumpAndSettle();
 
-    expect(find.text('每日提醒'), findsOneWidget);
+    expect(find.text('首页'), findsWidgets);
+    expect(find.text('生活缴费'), findsNothing);
     expect(tester.takeException(), isNull);
+    controller.resetForTest();
   });
 }
 
-Future<void> _pumpDashboard(WidgetTester tester, Size size) async {
+Future<void> _pumpDashboard(
+  WidgetTester tester,
+  Size size, {
+  bool hideEcard = false,
+}) async {
   LiveActivityController.instance.resetForTest();
+  debugHideEcardForTests = hideEcard;
+  debugDisableEcardDirectForTests = true;
+  addTearDown(() => debugHideEcardForTests = false);
+  addTearDown(() => debugDisableEcardDirectForTests = false);
   addTearDown(LiveActivityController.instance.resetForTest);
   SharedPreferences.setMockInitialValues({});
   tester.view.physicalSize = size;
@@ -724,6 +744,7 @@ Future<void> _pumpDashboard(WidgetTester tester, Size size) async {
 
 ApiClient _mockApi() {
   final api = ApiClient(
+    baseUrl: 'https://api.example.test',
     httpClient: MockClient((request) async {
       final path = request.url.path;
       Object body;
@@ -858,6 +879,7 @@ ApiClient _mockApi() {
           };
           break;
         case '/ecard/reminder':
+        case '/ecard/summary-cache':
           body = {
             'status': 'ok',
             'roomId': 'CGCOMMON1111|1|A2|932',

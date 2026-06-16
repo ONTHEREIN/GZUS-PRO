@@ -1,4 +1,4 @@
-# OneGZUS 登录页协议集成方案
+# 软帮手 登录页协议集成方案
 
 > **状态**: ✅ 已实现（2026-06-09）  
 > **目标**: 在登录页面展示《用户服务协议》和《隐私政策》，要求用户勾选同意后才能进行登录操作。  
@@ -324,12 +324,12 @@ class _AgreementContentView extends StatelessWidget {
 
 // 用户服务协议摘要（完整版请见 docs/terms-of-service.md）
 const _termsOfServiceText = '''
-OneGZUS 用户服务协议（摘要）
+软帮手 用户服务协议（摘要）
 
 重要提示：请在使用本应用前仔细阅读。使用即视为同意本协议。
 
 一、服务说明
-OneGZUS（软帮手）是一个学生自发开发的开源工具……(完整内容请参阅文档)
+软帮手（OneGZUS）是一个学生自发开发的开源工具……(完整内容请参阅文档)
 
 二、用户账号
 请使用学校统一身份认证学号和密码登录，妥善保管登录凭证。
@@ -345,7 +345,7 @@ OneGZUS（软帮手）是一个学生自发开发的开源工具……(完整内
 
 // 隐私政策摘要（完整版请见 docs/privacy-policy.md）
 const _privacyPolicyText = '''
-OneGZUS 隐私政策（摘要）
+软帮手 隐私政策（摘要）
 
 我们重视您的隐私。本政策说明我们如何收集、使用和保护您的信息。
 
@@ -453,5 +453,5 @@ Future<String> _loadAgreementContent(String filename) async {
 ---
 
 <p align="center">
-  <sub>OneGZUS — 合规先行，信任为本</sub>
+  <sub>软帮手（OneGZUS）— 合规先行，信任为本</sub>
 </p>

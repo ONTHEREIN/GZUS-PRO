@@ -1,11 +1,11 @@
-# OneGZUS
+# 软帮手
 
 <p align="center">
-  <img src="website/assets/widget_final_today_schedule.png" alt="OneGZUS" width="260">
+  <img src="website/assets/widget_final_today_schedule.png" alt="软帮手" width="260">
 </p>
 
 <p align="center">
-  <b>软帮手</b>
+  <b>OneGZUS</b>
 </p>
 
 <p align="center">
@@ -22,7 +22,7 @@
 
 ## 这个 App 能帮你做什么？
 
-每天打开四五个系统查信息，真的累了。OneGZUS 把你在学校需要的教务功能全部放在一起：
+每天打开四五个系统查信息，真的累了。软帮手把你在学校需要的教务功能全部放在一起：
 
 - **早上醒来** — 看一眼今日课表，知道今天在哪上课
 - **考完试** — 成绩推送直接通知你，不用每隔一小时刷新教务系统
@@ -85,7 +85,7 @@ Android 版支持 4 类桌面组件：
 - **生活缴费**：显示电费、冷水、热水余额
 - **业务进度**：显示请假/办事大厅审批状态
 
-添加方法：在 Android 桌面长按空白处，进入"小组件/Widget"，找到 OneGZUS 后拖到桌面。打开 App 并刷新首页后，组件会同步最新数据。
+添加方法：在 Android 桌面长按空白处，进入"小组件/Widget"，找到软帮手后拖到桌面。打开 App 并刷新首页后，组件会同步最新数据。
 
 ### iOS
 
@@ -122,7 +122,7 @@ A: 欢迎通过 GitHub Issues 提交反馈，或直接联系开发者。
 ## 项目结构
 
 ```
-OneGZUS/
+GZUS-PRO/
 ├── apps/mobile_web/          # Flutter 前端
 ├── services/api/             # FastAPI 后端
 ├── docs/                     # 文档与隐私政策

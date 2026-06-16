@@ -1,7 +1,7 @@
 from typing import Literal
 from datetime import date
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class LoginRequest(BaseModel):
@@ -14,6 +14,7 @@ class LoginRequest(BaseModel):
         """Return the plaintext password, decrypting encrypted_password if needed."""
         if self.encrypted_password is not None:
             from app.rsa_keys import rsa_key_manager
+
             try:
                 return rsa_key_manager.decrypt(self.encrypted_password)
             except Exception:
@@ -45,10 +46,27 @@ class EcardBindingRequest(BaseModel):
 class EcardReminderRequest(BaseModel):
     enabled: bool | None = None
     low_power_threshold: float | None = Field(default=None, alias="lowPowerThreshold", ge=0)
-    low_cold_water_threshold: float | None = Field(default=None, alias="lowColdWaterThreshold", ge=0)
+    low_cold_water_threshold: float | None = Field(
+        default=None, alias="lowColdWaterThreshold", ge=0
+    )
     low_hot_water_threshold: float | None = Field(default=None, alias="lowHotWaterThreshold", ge=0)
     reminder_times: list[str] | None = Field(default=None, alias="reminderTimes", max_length=2)
     reminder_items: list[str] | None = Field(default=None, alias="reminderItems")
+
+
+class EcardSummaryCacheRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    power_balance: float | str | None = Field(default=None, alias="powerBalance")
+    power_unit: str | None = Field(default=None, alias="powerUnit")
+    power_text: str | None = Field(default=None, alias="powerText")
+    cold_water_balance: float | str | None = Field(default=None, alias="coldWaterBalance")
+    cold_water_unit: str | None = Field(default=None, alias="coldWaterUnit")
+    cold_water_text: str | None = Field(default=None, alias="coldWaterText")
+    hot_water_balance: float | str | None = Field(default=None, alias="hotWaterBalance")
+    hot_water_unit: str | None = Field(default=None, alias="hotWaterUnit")
+    hot_water_text: str | None = Field(default=None, alias="hotWaterText")
+    updated_at: str | None = Field(default=None, alias="updatedAt")
 
 
 class EcardRoomItem(BaseModel):
@@ -78,7 +96,9 @@ class EcardSummary(BaseModel):
     low_cold_water_threshold: float = Field(default=5.0, alias="lowColdWaterThreshold")
     low_hot_water_threshold: float = Field(default=10.0, alias="lowHotWaterThreshold")
     reminder_times: list[str] = Field(default=["08:00"], alias="reminderTimes")
-    reminder_items: list[str] = Field(default=["power", "cold_water", "hot_water"], alias="reminderItems")
+    reminder_items: list[str] = Field(
+        default=["power", "cold_water", "hot_water"], alias="reminderItems"
+    )
     updated_at: str | None = Field(default=None, alias="updatedAt")
 
 
@@ -284,9 +304,7 @@ class LeaveFillRequest(LeavePreviewRequest):
     reason: str = Field(min_length=1)
     attachment_name: str = Field(alias="attachmentName", min_length=1)
     attachment_content_base64: str = Field(alias="attachmentContentBase64", min_length=1)
-    teacher_handlers: list[TeacherHandlerSelection] = Field(
-        default=[], alias="teacherHandlers"
-    )
+    teacher_handlers: list[TeacherHandlerSelection] = Field(default=[], alias="teacherHandlers")
 
 
 class LeaveAttachmentUploadRequest(BaseModel):
@@ -367,6 +385,7 @@ class AutoLoginRequest(BaseModel):
         """Return the plaintext password, decrypting encrypted_password if needed."""
         if self.encrypted_password is not None:
             from app.rsa_keys import rsa_key_manager
+
             try:
                 return rsa_key_manager.decrypt(self.encrypted_password)
             except Exception:

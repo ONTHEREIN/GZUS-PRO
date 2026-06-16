@@ -30,6 +30,7 @@ class CourseReminderSlot {
 
   final int id;
   final DateTime remindAt;
+  DateTime get when => remindAt;
   final String title;
   final String body;
   final String courseName;

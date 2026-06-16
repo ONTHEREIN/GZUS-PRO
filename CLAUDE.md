@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project overview
 
-OneGZUS (GZUS-PRO) — 广州软件学院教务助手。Flutter 前端 + FastAPI 后端，覆盖课表/成绩/考勤/水电费/请假/考试提醒。用户界面、commit message 和代码注释均为简体中文。
+软帮手（OneGZUS，GZUS-PRO）— 广州软件学院教务助手。Flutter 前端 + FastAPI 后端，覆盖课表/成绩/考勤/水电费/请假/考试提醒。用户界面、commit message 和代码注释均为简体中文。
 
 ## Build / test / lint commands
 

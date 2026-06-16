@@ -1,9 +1,5 @@
 name: Deploy to EdgeOne Pages
 on:
-  push:
-    branches: [master]
-    paths:
-      - 'apps/mobile_web/web/edge-functions/**'
   workflow_dispatch:
 
 jobs:
@@ -13,8 +9,4 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Deploy to EdgeOne Pages
-        uses: TencentEdgeOne/edgeone-pages-action@v1
-        with:
-          token: ${{ secrets.EDGEONE_API_TOKEN }}
-          project-name: "onegzus"
-          directory: "apps/mobile_web/web"
+        run: npx edgeone makers deploy apps/mobile_web/web -n onegzus-overseas -t "${{ secrets.EDGEONE_API_TOKEN }}" -e production -a overseas

@@ -5,6 +5,7 @@ import hashlib
 import logging
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlencode
 
 import httpx
 
@@ -113,7 +114,7 @@ class EcardClient:
             if worker_proxy_origin is not None
             else self.settings.ecard_worker_proxy_origin
         )
-        if not self.settings.ecard_openid and not self._worker_proxy_origin:
+        if not self.settings.ecard_openid:
             raise EcardConfigurationError("未配置 ECARD_OPENID")
         self._token: str | None = None
         self._openid = self.settings.ecard_openid
@@ -148,7 +149,7 @@ class EcardClient:
         payload["openid"] = self._openid
         # unionid 仅在已认证请求（带 token）中发送。登录请求若带上
         # unionid，学校服务端会判定为"已登录态"并返回 code=203 未登录，
-        # 拒绝签发新 token。与 EdgeOne 代理 (index.js) 行为保持一致：
+        # 拒绝签发新 token。与 Cloudflare 透明代理路径保持一致：
         # 登录响应成功后才记录 unionid，再用于后续业务请求。
         if self._unionid and token:
             payload["unionid"] = self._unionid
@@ -161,8 +162,8 @@ class EcardClient:
         }
         url = f"{self.settings.ecard_base_url.rstrip('/')}/{path.lstrip('/')}"
 
-        # If Worker proxy is configured, route through it to reach
-        # the ecard API (only accessible from within China).
+        # If Worker proxy is configured, route through Cloudflare to reach
+        # the ecard API from serverless regions where direct access is flaky.
         if self._worker_proxy_origin:
             return self._post_via_proxy(url, payload, headers)
 
@@ -187,77 +188,38 @@ class EcardClient:
     def _post_via_proxy(
         self, url: str, payload: dict[str, Any], headers: dict[str, str],
     ) -> dict[str, Any]:
-        """Send ecard API request through the EdgeOne Pages proxy.
-
-        Vercel (US) cannot reach ecarduser.gzus.edu.cn directly.
-        The EdgeOne proxy (China IP) handles auth and forwards requests.
-
-        For EdgeOne, we call the ecard-proxy endpoints with GET + query params.
-        The proxy handles its own ecard login and signing.
-        """
-        import urllib.parse
+        """Send the already-signed ecard request through Cloudflare Worker."""
         proxy_origin = self._worker_proxy_origin.rstrip("/")
-        path = urllib.parse.urlparse(url).path.lstrip("/")
-
-        # EdgeOne token auth params (for edgeone.cool domain)
-        eo_token = self.settings.ecard_worker_proxy_token or ""
-        token_params = {}
-        if eo_token:
-            token_params = {"eo_token": eo_token}
-
-        # Map ecard API paths to EdgeOne proxy endpoints
-        if "getRoomInfo" in path:
-            proxy_path = f"{proxy_origin}/ecard-proxy/rooms"
-            params = {**token_params}  # return all rooms, Vercel dedups
-        elif "getBalance" in path:
-            room_id = "|".join([
-                payload.get("implType", ""),
-                payload.get("schoolAreaNo", ""),
-                payload.get("buildingNo", ""),
-                payload.get("roomNum", ""),
-            ])
-            proxy_path = f"{proxy_origin}/ecard-proxy/balance"
-            params = {**token_params, "roomId": room_id}
-            if payload.get("studentId"):
-                params["studentId"] = payload["studentId"]
-        elif "getDailyDetails" in path:
-            room_id = "|".join([
-                payload.get("implType", ""),
-                payload.get("schoolAreaNo", ""),
-                payload.get("buildingNo", ""),
-                payload.get("roomNum", ""),
-            ])
-            proxy_path = f"{proxy_origin}/ecard-proxy/consumption"
-            params = {
-                **token_params,
-                "roomId": room_id,
-                "month": payload.get("lastDate", ""),
-            }
-        else:
-            # EdgeOne proxy handles auth internally.
-            # Return mock success for login/currentUser — EdgeOne does
-            # the real auth when rooms/balance are called.
-            if "routine-login" in path or "getCurrentUser" in path:
-                return {"code": 200, "token": "edgeone-proxy"}
-            return {"ret": True, "code": 200, "obj": []}
-
-        # GET request to EdgeOne proxy
+        proxy_url = f"{proxy_origin}/_proxy"
+        proxy_body = {
+            "url": url,
+            "method": "POST",
+            "headers": headers,
+            "body": urlencode(payload),
+        }
         try:
             client = self._get_http_client()
-            response = client.get(proxy_path, params=params, timeout=self.settings.request_timeout_seconds + 15)
+            response = client.post(
+                proxy_url,
+                json=proxy_body,
+                timeout=self.settings.request_timeout_seconds + 15,
+            )
             response.raise_for_status()
+            upstream_status = int(response.headers.get("X-Proxy-Status", response.status_code))
+            if upstream_status >= 400:
+                raise EcardApiError(f"一卡通服务请求失败: HTTP {upstream_status}")
             data = response.json()
         except httpx.TimeoutException as exc:
-            logger.error("ecard_client: EdgeOne proxy timeout for %s: %s", proxy_path, exc)
+            logger.error("ecard_client: Cloudflare proxy timeout for %s: %s", proxy_url, exc)
             raise EcardApiError("一卡通服务请求超时") from exc
+        except EcardApiError:
+            raise
         except Exception as exc:
-            logger.error("ecard_client: EdgeOne proxy request failed: %s", exc, exc_info=True)
+            logger.error("ecard_client: Cloudflare proxy request failed: %s", exc, exc_info=True)
             raise EcardApiError("一卡通服务请求失败") from exc
-        if not isinstance(data, dict) and not isinstance(data, list):
+        if not isinstance(data, dict):
             raise EcardApiError("一卡通服务响应异常")
-        if "getDailyDetails" in path and isinstance(data, dict):
-            return data
-        return {"ret": True, "code": 200, "obj": data if isinstance(data, list) else data}
+        return data
 
     def login(self) -> str:
         if self._token:
@@ -292,13 +254,14 @@ class EcardClient:
             obj = data.get("obj") or []
             return obj if isinstance(obj, list) else [obj]
 
+        errors: list[BaseException] = []
         with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
             futures = [pool.submit(_fetch_one, t) for t in ROOM_IMPL_TYPES]
             for future in concurrent.futures.as_completed(futures):
                 try:
                     all_rooms.extend(future.result())
-                except Exception:
-                    pass
+                except Exception as exc:
+                    errors.append(exc)
 
         seen: set[str] = set()
         result: list[dict[str, str]] = []
@@ -310,6 +273,8 @@ class EcardClient:
                 continue
             seen.add(item["id"])
             result.append(item)
+        if not result and errors:
+            raise EcardApiError("获取宿舍列表失败") from errors[0]
         result.sort(key=lambda item: (item["displayName"], item["id"]))
         return result
 

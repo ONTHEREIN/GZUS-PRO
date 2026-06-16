@@ -73,7 +73,7 @@ def login(payload: LoginRequest, request: Request) -> dict:
         student_name = client.login(payload.account, password)
     except CaptchaRequired as exc:
         token = exc.challenge.token or "captcha"
-        pending_captcha[token] = client
+        pending_captcha[token] = (client, payload.account)
         return {
             "status": "captcha_required",
             "captchaToken": token,
@@ -82,7 +82,11 @@ def login(payload: LoginRequest, request: Request) -> dict:
     except AuthenticationError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc))
 
-    session = sessions.create(client, student_name or payload.account)
+    session = sessions.create(
+        client,
+        student_name or payload.account,
+        student_account=payload.account,
+    )
     return {"status": "ok", "sessionId": session.id, "studentName": student_name, "studentId": None}
 
 
@@ -102,7 +106,11 @@ def submit_captcha(payload: CaptchaRequest, request: Request) -> dict:
     sessions = request.app.state.sessions
     pending_captcha = request.app.state.pending_captcha
 
-    client = pending_captcha.pop(payload.captcha_token, None)
+    pending = pending_captcha.pop(payload.captcha_token, None)
+    if isinstance(pending, tuple):
+        client, account = pending
+    else:
+        client, account = pending, None
     if client is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="验证码会话已过期")
 
@@ -111,7 +119,7 @@ def submit_captcha(payload: CaptchaRequest, request: Request) -> dict:
     except AuthenticationError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc))
 
-    session = sessions.create(client, student_name)
+    session = sessions.create(client, student_name, student_account=account)
     return {"status": "ok", "sessionId": session.id, "studentName": student_name, "studentId": None}
 
 
@@ -215,6 +223,14 @@ def relogin(payload: ReloginRequest, request: Request) -> dict:
 
     settings = get_settings()
     sessions = request.app.state.sessions
+    old_session_id = request.headers.get("X-Session-Id")
+    if old_session_id:
+        old_session = sessions.get(old_session_id, touch=False)
+        if old_session is not None and old_session.revoked_at is not None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="账号已在其他设备登录，请重新登录",
+            )
 
     try:
         account, password = decrypt_credentials(
@@ -267,6 +283,7 @@ def relogin(payload: ReloginRequest, request: Request) -> dict:
         client, student_name=student_name,
         ehall_client=ehall_client,
         encrypted_credentials=fernet_token,
+        student_account=account,
     )
 
     return {
@@ -345,6 +362,7 @@ def auto_login(payload: AutoLoginRequest, request: Request) -> dict:
         client, student_name,
         ehall_client=ehall_client,
         encrypted_credentials=cred_token,
+        student_account=payload.account,
     )
 
     logger.info("[TIMING] auto_login endpoint total: %.2fs", time.time() - t_total)

@@ -117,6 +117,8 @@ class AppSessionModel(Base):
     ehall_cookies = Column(Text, nullable=True)
     ehall_auth_token = Column(Text, nullable=True)
     encrypted_credentials = Column(Text, nullable=True)
+    revoked_at = Column(DateTime, nullable=True, index=True)
+    revoked_reason = Column(String(100), nullable=True)
 
 
 _engine = None
@@ -275,6 +277,8 @@ def init_db():
     # exist in the database yet (e.g., added after initial deployment).
     _ensure_columns(engine, "app_sessions", {
         "student_account": "VARCHAR(100)",
+        "revoked_at": "TIMESTAMP",
+        "revoked_reason": "VARCHAR(100)",
     })
 
     if _is_sqlite(engine):

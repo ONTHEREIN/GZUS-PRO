@@ -19,6 +19,7 @@ from app.schemas import (
     EcardReminderRequest,
     EcardRoomItem,
     EcardSummary,
+    EcardSummaryCacheRequest,
 )
 from app.school_client import AuthenticationError
 from app.sessions import AppSession
@@ -36,6 +37,18 @@ _rooms_cache_lock = threading.Lock()
 _rooms_cache: list[dict[str, str]] = []
 _rooms_cache_at: float = 0.0
 _ROOMS_CACHE_TTL = 3600  # seconds
+_SUMMARY_CACHE_FIELDS = {
+    "powerBalance",
+    "powerUnit",
+    "powerText",
+    "coldWaterBalance",
+    "coldWaterUnit",
+    "coldWaterText",
+    "hotWaterBalance",
+    "hotWaterUnit",
+    "hotWaterText",
+    "updatedAt",
+}
 
 
 def _get_rooms_cached() -> list[dict[str, str]]:
@@ -90,7 +103,9 @@ def _student_info(session: AppSession) -> tuple[str, str]:
         try:
             info = session.client.get_info()
             if isinstance(info, dict):
-                student_id = str(info.get("studentId") or info.get("student_id") or info.get("sno") or "")
+                student_id = str(
+                    info.get("studentId") or info.get("student_id") or info.get("sno") or ""
+                )
                 name = str(info.get("name") or info.get("xm") or name)
                 logger.info("ecard: get_info returned student_id=%s name=%s", student_id, name)
         except AuthenticationError as exc:
@@ -101,7 +116,12 @@ def _student_info(session: AppSession) -> tuple[str, str]:
             # call almost certainly failed because of invalid auth.
             # Return 401 so the frontend triggers a relogin rather
             # than cascading into 502 retry storms.
-            logger.warning("ecard: get_info failed for session %s: %s: %s — treating as expired session", session.id[:8], type(exc).__name__, exc)
+            logger.warning(
+                "ecard: get_info failed for session %s: %s: %s — treating as expired session",
+                session.id[:8],
+                type(exc).__name__,
+                exc,
+            )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="会话已过期，请重新登录",
@@ -116,8 +136,7 @@ def _student_info(session: AppSession) -> tuple[str, str]:
 
 def _client() -> EcardClient:
     try:
-        # Route ecard through EdgeOne Pages proxy (China IP) or
-        # Cloudflare Worker proxy (US users). EdgeOne preferred.
+        # Route ecard through the Cloudflare Worker proxy when configured.
         settings = get_settings()
         proxy_origin = (
             settings.ecard_worker_proxy_origin
@@ -136,11 +155,15 @@ def _binding_for(student_id: str) -> EcardBinding | None:
         return db.query(EcardBinding).filter(EcardBinding.student_id == student_id).first()
 
 
+def _clean_summary_cache(data: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in data.items() if key in _SUMMARY_CACHE_FIELDS}
+
+
 def _summary_from_binding(binding: EcardBinding, student_id: str | None = None) -> dict[str, Any]:
     data: dict[str, Any] = {}
     if binding.last_summary_json:
         try:
-            data = json.loads(binding.last_summary_json)
+            data = _clean_summary_cache(json.loads(binding.last_summary_json))
         except json.JSONDecodeError:
             data = {}
     return {
@@ -152,14 +175,20 @@ def _summary_from_binding(binding: EcardBinding, student_id: str | None = None) 
         "lowPowerThreshold": binding.low_power_threshold,
         "lowColdWaterThreshold": binding.low_cold_water_threshold,
         "lowHotWaterThreshold": binding.low_hot_water_threshold,
-        "reminderTimes": json.loads(binding.reminder_times) if binding.reminder_times else ["08:00"],
-        "reminderItems": json.loads(binding.reminder_items) if binding.reminder_items else ["power", "cold_water", "hot_water"],
+        "reminderTimes": json.loads(binding.reminder_times)
+        if binding.reminder_times
+        else ["08:00"],
+        "reminderItems": json.loads(binding.reminder_items)
+        if binding.reminder_items
+        else ["power", "cold_water", "hot_water"],
         "updatedAt": binding.last_checked_at.isoformat() if binding.last_checked_at else None,
         **data,
     }
 
 
-def refresh_binding(binding: EcardBinding, student_id: str, client: EcardClient | None = None) -> dict[str, Any]:
+def refresh_binding(
+    binding: EcardBinding, student_id: str, client: EcardClient | None = None
+) -> dict[str, Any]:
     room_ref = EcardRoomRef.from_id(binding.room_id)
     logger.info("ecard: refreshing balance for student=%s room=%s", student_id, binding.room_id)
     try:
@@ -167,7 +196,9 @@ def refresh_binding(binding: EcardBinding, student_id: str, client: EcardClient 
     except (EcardConfigurationError, EcardApiError):
         raise
     except Exception as exc:
-        logger.error("ecard: balance refresh failed for student=%s: %s", student_id, exc, exc_info=True)
+        logger.error(
+            "ecard: balance refresh failed for student=%s: %s", student_id, exc, exc_info=True
+        )
         raise
     binding.last_summary_json = json.dumps(summary, ensure_ascii=False)
     binding.last_checked_at = datetime.now(timezone.utc)
@@ -192,7 +223,8 @@ def rooms(
     if q:
         keyword = q.strip().lower()
         filtered = [
-            r for r in all_rooms
+            r
+            for r in all_rooms
             if keyword in r.get("displayName", "").lower()
             or keyword in r.get("building", "").lower()
             or keyword in r.get("room", "").lower()
@@ -218,18 +250,28 @@ def bind_room(
     with factory() as db:
         binding = db.query(EcardBinding).filter(EcardBinding.student_id == student_id).first()
         if binding is None:
-            binding = EcardBinding(student_id=student_id, room_id=payload.room_id, room_display=payload.room_display)
+            binding = EcardBinding(
+                student_id=student_id, room_id=payload.room_id, room_display=payload.room_display
+            )
             db.add(binding)
         else:
             binding.room_id = payload.room_id
             binding.room_display = payload.room_display
+        db.flush()
         try:
             refresh_binding(binding, student_id)
         except EcardConfigurationError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         except EcardApiError as exc:
-            logger.error("ecard: bind_room balance error for student=%s: %s", student_id, exc, exc_info=True)
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
+            logger.warning(
+                "ecard: bind_room balance unavailable for student=%s: %s",
+                student_id,
+                exc,
+                exc_info=True,
+            )
+            db.commit()
+            db.refresh(binding)
+            return _summary_from_binding(binding, student_id)
         db.commit()
         db.refresh(binding)
         return _summary_from_binding(binding, student_id)
@@ -260,6 +302,36 @@ def refresh(session: AppSession = Depends(require_session)) -> dict[str, Any]:
         except EcardApiError as exc:
             logger.error("ecard: refresh failed for student=%s: %s", student_id, exc, exc_info=True)
             raise HTTPException(status_code=502, detail=str(exc)) from exc
+        db.commit()
+        db.refresh(binding)
+        return _summary_from_binding(binding, student_id)
+
+
+@router.patch("/summary-cache", response_model=EcardSummary)
+def update_summary_cache(
+    payload: EcardSummaryCacheRequest,
+    session: AppSession = Depends(require_session),
+) -> dict[str, Any]:
+    student_id, _ = _student_info(session)
+    factory = get_sync_session_factory()
+    with factory() as db:
+        binding = db.query(EcardBinding).filter(EcardBinding.student_id == student_id).first()
+        if binding is None:
+            raise HTTPException(status_code=404, detail="请先绑定宿舍")
+
+        existing: dict[str, Any] = {}
+        if binding.last_summary_json:
+            try:
+                existing = json.loads(binding.last_summary_json)
+            except json.JSONDecodeError:
+                existing = {}
+
+        existing = _clean_summary_cache(existing)
+        update = payload.model_dump(by_alias=True, exclude_unset=True)
+        existing.update({key: value for key, value in update.items() if value is not None})
+        binding.last_summary_json = json.dumps(existing, ensure_ascii=False)
+        binding.last_checked_at = datetime.now(timezone.utc)
+        binding.updated_at = datetime.now(timezone.utc)
         db.commit()
         db.refresh(binding)
         return _summary_from_binding(binding, student_id)
@@ -311,5 +383,11 @@ def consumption(
     except EcardConfigurationError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except EcardApiError as exc:
-        logger.error("ecard: consumption failed for student=%s month=%s: %s", student_id, query_month, exc, exc_info=True)
+        logger.error(
+            "ecard: consumption failed for student=%s month=%s: %s",
+            student_id,
+            query_month,
+            exc,
+            exc_info=True,
+        )
         raise HTTPException(status_code=502, detail=str(exc)) from exc

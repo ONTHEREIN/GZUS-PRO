@@ -103,7 +103,7 @@ self.addEventListener('fetch', (event) => {
 
 self.addEventListener('push', (event) => {
   const data = event.data ? event.data.json() : {};
-  const title = data.title || 'OneGZUS 通知';
+  const title = data.title || '软帮手通知';
   const body = data.body || '';
   const extras = data.extras || {};
   

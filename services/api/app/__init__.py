@@ -1,1 +1,1 @@
-"""OneGZUS API package."""
+"""软帮手 API package."""
