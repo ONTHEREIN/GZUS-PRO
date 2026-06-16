@@ -7,11 +7,11 @@ $CloudApiUrl = if ($env:API_BASE_URL) { $env:API_BASE_URL } else { "https://oneg
 
 # ---------- 自动递增构建号 ----------
 $pubspecContent = Get-Content $PubspecPath -Raw
-if ($pubspecContent -match 'version:\s*(\d+\.\d+\.\d+)\+(\d+)') {
+if ($pubspecContent -match 'version:\s*([0-9A-Za-z\.\-]+)\+(\d+)') {
     $versionStr = $Matches[1]
     $buildNum = [int]$Matches[2] + 1
     $newVersionLine = "version: $versionStr+$buildNum"
-    $pubspecContent = $pubspecContent -replace 'version:\s*\d+\.\d+\.\d+\+\d+', $newVersionLine
+    $pubspecContent = $pubspecContent -replace 'version:\s*[0-9A-Za-z\.\-]+\+\d+', $newVersionLine
     Set-Content $PubspecPath $pubspecContent -NoNewline
     Write-Host "Build number: $($Matches[2]) -> $buildNum (version $versionStr)" -ForegroundColor Magenta
 } else {

@@ -267,7 +267,7 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     return MaterialApp(
       navigatorKey: _navigatorKey,
-      title: '软帮手',
+      title: '软帮手 Dev',
       debugShowCheckedModeBanner: false,
       themeMode: themeMode,
       theme: _appTheme(Brightness.light, seedColor: seedColor),
@@ -845,7 +845,7 @@ class _LoginPageState extends State<LoginPage>
                                     ),
                                     SizedBox(height: compact ? 18 : 22),
                                     Text(
-                                      '软帮手',
+                                      '软帮手 Dev',
                                       style: Theme.of(context)
                                           .textTheme
                                           .headlineMedium,
@@ -2377,7 +2377,7 @@ class AppSidebar extends StatelessWidget {
                         key: const ValueKey('expanded-logo'),
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text('软帮手', style: theme.textTheme.titleLarge),
+                          Text('软帮手 Dev', style: theme.textTheme.titleLarge),
                           const SizedBox(height: 4),
                           Text('OneGZUS', style: theme.textTheme.bodySmall),
                         ],
@@ -15283,7 +15283,7 @@ class _AboutPageState extends State<AboutPage> {
                     ),
                     const SizedBox(height: 16),
                     Text(
-                      '软帮手',
+                      '软帮手 Dev',
                       style: theme.textTheme.headlineSmall
                           ?.copyWith(fontWeight: FontWeight.w700),
                     ),

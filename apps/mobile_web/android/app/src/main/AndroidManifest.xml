@@ -18,7 +18,7 @@
 
     <application
         android:name=".GzusApplication"
-        android:label="软帮手"
+        android:label="软帮手 Dev"
         android:usesCleartextTraffic="true"
         android:icon="@mipmap/ic_launcher">
         <activity
