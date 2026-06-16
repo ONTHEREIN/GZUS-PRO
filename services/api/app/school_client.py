@@ -888,9 +888,11 @@ class SchoolSdkClient:
         seen: set[tuple[str, str, str]] = set()
         for section in sections:
             items = section["items"]
-            more_url = section.get("moreUrl") or NOTICE_MORE_URL
-            section["moreUrl"] = more_url
-            if more_url and len(items) < 3:
+            more_url = section.get("moreUrl")
+            if not more_url and any(word in (section.get("category") or "") for word in ("通知", "公告", "新闻")):
+                more_url = NOTICE_MORE_URL
+            if more_url:
+                section["moreUrl"] = more_url
                 try:
                     full_url = urljoin(news_page_url, more_url)
                     endpoint = self._endpoint_from_url(full_url)

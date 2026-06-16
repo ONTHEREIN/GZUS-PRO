@@ -258,6 +258,45 @@ def test_notices_use_index_and_more_page_proxy_request():
     assert user.calls[1][1] == "/jwglxt/xtgl/xwgg_cxXwgg.html"
 
 
+def test_notices_follow_more_page_even_when_index_has_multiple_items():
+    class MultiIndexUser(ProxyOnlyUser):
+        def proxy_request(self, method, url_or_endpoint, **kwargs):
+            self.calls.append((method, url_or_endpoint, kwargs))
+            if "index_cxNews" in url_or_endpoint:
+                return FakeTextResponse(
+                    """
+                    <div id="newsnotice">
+                      <h5 class="index_title"><span>通知公告</span><p class="title-more"
+                        onclick="location.href='/jwglxt/xtgl/xwgg_cxXwgg.html'">更多</p></h5>
+                      <ul>
+                        <li><a href="/jwglxt/notice/1.html">首页通知一</a></li>
+                        <li><a href="/jwglxt/notice/2.html">首页通知二</a></li>
+                        <li><a href="/jwglxt/notice/3.html">首页通知三</a></li>
+                      </ul>
+                    </div>
+                    """
+                )
+            if "xwgg_cxXwgg" in url_or_endpoint:
+                return FakeTextResponse(
+                    """
+                    <table>
+                      <tr><td><a href="/jwglxt/notice/4.html">完整通知一</a></td></tr>
+                      <tr><td><a href="/jwglxt/notice/5.html">完整通知二</a></td></tr>
+                    </table>
+                    """
+                )
+            return FakeResponse({"items": []})
+
+    user = MultiIndexUser()
+    client = SchoolSdkClient("https://jwxt.seig.edu.cn/jwglxt")
+    client._client = user
+
+    notices = client.get_notices()
+
+    assert [item["title"] for item in notices] == ["完整通知一", "完整通知二"]
+    assert user.calls[1][1] == "/jwglxt/xtgl/xwgg_cxXwgg.html"
+
+
 def test_schedule_uses_proxy_kblist_and_xqm_code():
     user = ProxyOnlyUser()
     client = SchoolSdkClient("https://jwxt.seig.edu.cn/jwglxt")

@@ -80,30 +80,40 @@ class EhallClient:
             return {"Authorization": self._auth_token}
         return {}
 
-    def get_notice_items(self, page_size: int = 20) -> list[dict]:
+    def get_notice_items(self, page_size: int = 50, max_pages: int = 10) -> list[dict]:
         items: list[dict] = []
         seen: set[tuple[str, str, str]] = set()
         seen_lock = Lock()
 
         def fetch_category(args: tuple[str, str]) -> list[dict]:
             category, endpoint = args
-            try:
-                payload = self._get_json(endpoint, {"pageNum": 1, "pageSize": page_size})
-            except EhallAuthenticationError:
-                raise
-            except Exception:
-                return []
             result = []
-            for record in extract_records(payload):
-                item = normalize_task_record(record, category, self.base_url)
-                if item is None:
-                    continue
-                key = (item["category"], item["title"], item.get("url") or "")
-                with seen_lock:
-                    if key in seen:
+            for page_num in range(1, max_pages + 1):
+                try:
+                    payload = self._get_json(
+                        endpoint,
+                        {"pageNum": page_num, "pageSize": page_size},
+                    )
+                except EhallAuthenticationError:
+                    raise
+                except Exception:
+                    break
+                records = extract_records(payload)
+                if not records:
+                    break
+                for record in records:
+                    item = normalize_task_record(record, category, self.base_url)
+                    if item is None:
                         continue
-                    seen.add(key)
-                result.append(item)
+                    key = (item["category"], item["title"], item.get("url") or "")
+                    with seen_lock:
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                    result.append(item)
+                total = extract_total(payload)
+                if len(records) < page_size or (total is not None and page_num * page_size >= total):
+                    break
             return result
 
         with ThreadPoolExecutor(max_workers=min(len(TASK_ENDPOINTS), 4)) as executor:

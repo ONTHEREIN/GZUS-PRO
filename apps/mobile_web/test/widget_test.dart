@@ -457,6 +457,30 @@ void main() {
     expect(find.textContaining('移动应用开发'), findsWidgets);
   });
 
+  testWidgets('today timeline fits dense desktop home grid', (tester) async {
+    final scheduleItems = List.generate(8, (index) {
+      final section = index + 1;
+      return {
+        'name': '超长课程名称用于验证今日时间线不会溢出 $section',
+        'teacher': '张老师',
+        'classroom': '教学楼A座超长教室名称-$section',
+        'weekday': DateTime.now().weekday,
+        'startSection': section,
+        'endSection': section,
+        'weeks': '1-30',
+      };
+    });
+
+    await _pumpDashboard(
+      tester,
+      const Size(1180, 820),
+      scheduleItems: scheduleItems,
+    );
+
+    expect(find.text('今日时间线'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('live activity island expands, collapses, and opens target tab',
       (tester) async {
     final controller = LiveActivityController.instance;
@@ -716,6 +740,7 @@ Future<void> _pumpDashboard(
   WidgetTester tester,
   Size size, {
   bool hideEcard = false,
+  List<Map<String, Object?>>? scheduleItems,
 }) async {
   LiveActivityController.instance.resetForTest();
   debugHideEcardForTests = hideEcard;
@@ -731,7 +756,7 @@ Future<void> _pumpDashboard(
   await tester.pumpWidget(
     MaterialApp(
       home: DashboardShell(
-        api: _mockApi(),
+        api: _mockApi(scheduleItems: scheduleItems),
         studentName: '测试学生',
         themeMode: ThemeMode.light,
         onThemeChanged: (_) {},
@@ -742,7 +767,7 @@ Future<void> _pumpDashboard(
   await tester.pumpAndSettle();
 }
 
-ApiClient _mockApi() {
+ApiClient _mockApi({List<Map<String, Object?>>? scheduleItems}) {
   final api = ApiClient(
     baseUrl: 'https://api.example.test',
     httpClient: MockClient((request) async {
@@ -760,17 +785,18 @@ ApiClient _mockApi() {
           };
           break;
         case '/schedule':
-          body = [
-            {
-              'name': '移动应用开发',
-              'teacher': '张老师',
-              'classroom': 'A101',
-              'weekday': DateTime.now().weekday,
-              'startSection': 1,
-              'endSection': 2,
-              'weeks': '1-30',
-            }
-          ];
+          body = scheduleItems ??
+              [
+                {
+                  'name': '移动应用开发',
+                  'teacher': '张老师',
+                  'classroom': 'A101',
+                  'weekday': DateTime.now().weekday,
+                  'startSection': 1,
+                  'endSection': 2,
+                  'weeks': '1-30',
+                }
+              ];
           break;
         case '/attendance':
           body = {

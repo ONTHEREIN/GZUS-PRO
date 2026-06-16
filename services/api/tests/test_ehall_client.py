@@ -101,6 +101,55 @@ def test_ehall_client_adds_csrf_and_normalizes(monkeypatch):
     assert "csrfToken" in requests[0][1]
 
 
+def test_ehall_client_get_notice_items_paginates(monkeypatch):
+    requests = []
+
+    class FakeResponse:
+        headers = {"content-type": "application/json"}
+        text = ""
+
+        def __init__(self, page_num):
+            self.url = "https://ehall.gzus.edu.cn/api/bpm/processes/tasks/apply"
+            self.page_num = page_num
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            if self.page_num == 1:
+                return {
+                    "meta": {"success": True},
+                    "data": {"total": 2, "records": [{"title": "消息一", "taskId": "1"}]},
+                }
+            return {
+                "meta": {"success": True},
+                "data": {"total": 2, "records": [{"title": "消息二", "taskId": "2"}]},
+            }
+
+    class FakeHttpClient:
+        def __init__(self, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def get(self, endpoint, params):
+            requests.append((endpoint, params))
+            return FakeResponse(params["pageNum"])
+
+    monkeypatch.setattr("app.ehall_client.TASK_ENDPOINTS", {"申请": "api/bpm/processes/tasks/apply"})
+    monkeypatch.setattr("app.ehall_client.httpx.Client", FakeHttpClient)
+    client = EhallClient("https://ehall.gzus.edu.cn", "JSESSIONID=abc")
+
+    items = client.get_notice_items(page_size=1, max_pages=5)
+
+    assert [item["title"] for item in items] == ["消息一", "消息二"]
+    assert [request[1]["pageNum"] for request in requests] == [1, 2]
+
+
 def test_ehall_client_get_affairs_paginates(monkeypatch):
     requests = []
 

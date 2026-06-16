@@ -4426,6 +4426,8 @@ class _NextClassHomeCard extends StatelessWidget {
 class _TodayTimelineHomeCard extends StatelessWidget {
   const _TodayTimelineHomeCard({required this.courses});
 
+  static const double _maxTimelineHeight = 270;
+
   final List<_TimedCourse> courses;
 
   @override
@@ -4436,12 +4438,15 @@ class _TodayTimelineHomeCard extends StatelessWidget {
       badge: '${courses.length} 节',
       child: courses.isEmpty
           ? const EmptyState(message: '今日无课')
-          : SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  for (final item in courses) _TimelineMiniRow(course: item),
-                ],
+          : ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: _maxTimelineHeight),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    for (final item in courses) _TimelineMiniRow(course: item),
+                  ],
+                ),
               ),
             ),
     );
@@ -4460,53 +4465,62 @@ class _TimelineMiniRow extends StatelessWidget {
         course.isOngoing ? cs.error : _homeCourseColor(course.course.name);
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            width: 48,
-            child: Text(
-              '${_two(course.start.hour)}:${_two(course.start.minute)}',
-              style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12),
-            ),
-          ),
-          Container(
-            width: 10,
-            height: 10,
-            margin: const EdgeInsets.only(top: 4),
-            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: course.isOngoing
-                    ? cs.primaryContainer
-                    : cs.surfaceContainerHighest.withValues(alpha: 0.6),
-                borderRadius: BorderRadius.circular(12),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final compact = constraints.maxWidth < 260;
+          final timeWidth = compact ? 42.0 : 48.0;
+          final dotSize = compact ? 8.0 : 10.0;
+          final gap = compact ? 8.0 : 10.0;
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SizedBox(
+                width: timeWidth,
+                child: Text(
+                  '${_two(course.start.hour)}:${_two(course.start.minute)}',
+                  style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12),
+                ),
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(course.course.name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontWeight: FontWeight.w800)),
-                  const SizedBox(height: 4),
-                  Text(
-                    [course.course.classroom, course.course.teacher]
-                        .where((item) => item != null && item.isNotEmpty)
-                        .join(' · '),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12),
+              Container(
+                width: dotSize,
+                height: dotSize,
+                margin: const EdgeInsets.only(top: 4),
+                decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+              ),
+              SizedBox(width: gap),
+              Expanded(
+                child: Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: course.isOngoing
+                        ? cs.primaryContainer
+                        : cs.surfaceContainerHighest.withValues(alpha: 0.6),
+                    borderRadius: BorderRadius.circular(12),
                   ),
-                ],
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(course.course.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontWeight: FontWeight.w800)),
+                      const SizedBox(height: 4),
+                      Text(
+                        [course.course.classroom, course.course.teacher]
+                            .where((item) => item != null && item.isNotEmpty)
+                            .join(' · '),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style:
+                            TextStyle(color: cs.onSurfaceVariant, fontSize: 12),
+                      ),
+                    ],
+                  ),
+                ),
               ),
-            ),
-          ),
-        ],
+            ],
+          );
+        },
       ),
     );
   }
@@ -4611,6 +4625,8 @@ class _WeekGridCell extends StatelessWidget {
 class _DailyCoursesHomeCard extends StatelessWidget {
   const _DailyCoursesHomeCard({required this.courses});
 
+  static const double _maxListHeight = 270;
+
   final List<_TimedCourse> courses;
 
   @override
@@ -4621,11 +4637,14 @@ class _DailyCoursesHomeCard extends StatelessWidget {
       badge: '列表',
       child: courses.isEmpty
           ? const EmptyState(message: '今日无课')
-          : SingleChildScrollView(
-              child: Column(
-                children: [
-                  for (final item in courses) _CompactCourseRow(course: item),
-                ],
+          : ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: _maxListHeight),
+              child: SingleChildScrollView(
+                child: Column(
+                  children: [
+                    for (final item in courses) _CompactCourseRow(course: item),
+                  ],
+                ),
               ),
             ),
     );

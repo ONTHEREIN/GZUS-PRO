@@ -1292,42 +1292,109 @@ export default {
     }
 
     // ─── Helper: parse notice items from JWXT news page HTML ────
-    function parseNoticeItems(html) {
+    function decodeHtmlText(value) {
+      return String(value || '')
+        .replace(/&nbsp;/gi, ' ')
+        .replace(/&amp;/gi, '&')
+        .replace(/&lt;/gi, '<')
+        .replace(/&gt;/gi, '>')
+        .replace(/&quot;/gi, '"')
+        .replace(/&#39;/gi, "'")
+        .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(parseInt(code, 10)))
+        .replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCharCode(parseInt(code, 16)));
+    }
+
+    function stripHtml(value) {
+      return decodeHtmlText(String(value || '').replace(/<[^>]+>/g, ' '))
+        .replace(/\s+/g, ' ')
+        .trim();
+    }
+
+    function attrValue(attrs, name) {
+      const re = new RegExp(`${name}\\s*=\\s*("([^"]*)"|'([^']*)'|([^\\s>]+))`, 'i');
+      const match = String(attrs || '').match(re);
+      return match ? (match[2] || match[3] || match[4] || '').trim() : '';
+    }
+
+    function absoluteJwxtUrl(href, pageUrl) {
+      if (!href) return '';
+      const raw = decodeHtmlText(href).trim();
+      const lower = raw.toLowerCase();
+      if (!raw || raw === '#' || lower.startsWith('javascript:') || lower.startsWith('mailto:')) {
+        return '';
+      }
+      try {
+        return new URL(raw, pageUrl || JWXT_BASE + '/').toString();
+      } catch (e) {
+        return '';
+      }
+    }
+
+    function noticeCategory(title, fallback = '通知公告') {
+      if (/考试/.test(title) && !/考试安排/.test(title)) return '考试通知';
+      if (/选课/.test(title) || /撤课/.test(title) || /增班/.test(title)) return '选课通知';
+      if (/成绩/.test(title)) return '成绩通知';
+      if (/考勤/.test(title) || /缺勤/.test(title)) return '考勤通知';
+      if (/学籍/.test(title)) return '学籍通知';
+      if (/评教/.test(title)) return '评教通知';
+      if (/待办|申请|已办|待阅|已阅|草稿/.test(title)) return '办事大厅·消息';
+      return fallback;
+    }
+
+    function parseNoticeItems(html, pageUrl, fallbackCategory = '通知公告') {
       const items = [];
       // JWXT news page lists notices with <a> links
-      const linkRe = /<a\s[^>]*href="([^"]*)"[^>]*(?:title="([^"]*)")?[^>]*>([^<]*)<\/a>/gi;
+      const linkRe = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi;
       let match;
       while ((match = linkRe.exec(html)) !== null) {
-        let href = match[1];
-        const title = (match[2] || match[3] || '').trim();
+        const attrs = match[1] || '';
+        const body = match[2] || '';
+        const href = attrValue(attrs, 'href') || attrValue(attrs, 'data-url') || attrValue(attrs, 'url');
+        const title = stripHtml(attrValue(attrs, 'title') || body);
         if (!title || title.length < 2) continue;
-        // Skip non-notice links
-        if (href.startsWith('javascript:') || href.startsWith('mailto:')) continue;
-        // Resolve relative URLs
-        if (href.startsWith('/') || href.startsWith('.')) {
-          href = 'https://jwxt.seig.edu.cn' + (href.startsWith('/') ? '' : '/') + href.replace(/^\.\//, '');
-        }
+        const absoluteUrl = absoluteJwxtUrl(href, pageUrl);
+        if (!absoluteUrl) continue;
         // Look for date near the link (within ~300 chars after)
         const linkEnd = match.index + match[0].length;
         const nearby = html.substring(linkEnd, linkEnd + 300);
         const dateMatch = nearby.match(/(\d{4}[-/]\d{1,2}[-/]\d{1,2})/);
-        // Derive category from title keywords (reliable, avoids fragile HTML parsing)
-        let category = '通知公告';
-        if (/考试/.test(title) && !/考试安排/.test(title)) category = '考试通知';
-        else if (/选课/.test(title) || /撤课/.test(title) || /增班/.test(title)) category = '选课通知';
-        else if (/成绩/.test(title)) category = '成绩通知';
-        else if (/考勤/.test(title) || /缺勤/.test(title)) category = '考勤通知';
-        else if (/学籍/.test(title)) category = '学籍通知';
-        else if (/评教/.test(title)) category = '评教通知';
         items.push({
-          category,
+          category: noticeCategory(title, fallbackCategory),
           title,
           date: dateMatch ? dateMatch[1] : null,
-          url: href,
+          url: absoluteUrl,
           summary: null,
         });
       }
-      // Deduplicate by title+url
+      return dedupeNoticeItems(items);
+    }
+
+    function extractNoticeMoreUrls(html, pageUrl) {
+      const urls = new Set();
+      const tagRe = /<([a-z][\w:-]*)\b([^>]*)>([\s\S]*?)<\/\1>/gi;
+      let match;
+      while ((match = tagRe.exec(html)) !== null) {
+        const attrs = match[2] || '';
+        const text = stripHtml(match[3] || '');
+        const marker = `${attrValue(attrs, 'class')} ${attrValue(attrs, 'id')}`.toLowerCase();
+        if (!text.includes('更多') && !marker.includes('more') && !marker.includes('title-more')) {
+          continue;
+        }
+        const direct = attrValue(attrs, 'href') || attrValue(attrs, 'data-url') || attrValue(attrs, 'url');
+        const onclick = attrValue(attrs, 'onclick');
+        const scriptUrl = onclick.match(/['"]([^'"]+\.html(?:\?[^'"]*)?)['"]/i)?.[1] || '';
+        const absolute = absoluteJwxtUrl(direct || scriptUrl, pageUrl);
+        if (absolute) urls.add(absolute);
+      }
+      const scriptRe = /(?:location\.href|window\.location(?:\.href)?)\s*=\s*['"]([^'"]+\.html(?:\?[^'"]*)?)['"]/gi;
+      while ((match = scriptRe.exec(html)) !== null) {
+        const absolute = absoluteJwxtUrl(match[1], pageUrl);
+        if (absolute) urls.add(absolute);
+      }
+      return Array.from(urls);
+    }
+
+    function dedupeNoticeItems(items) {
       const seen = new Set();
       return items.filter(item => {
         const key = `${item.title}|${item.url}`;
@@ -1335,6 +1402,10 @@ export default {
         seen.add(key);
         return true;
       });
+    }
+
+    function mergeNoticeItems(...groups) {
+      return dedupeNoticeItems(groups.flat().filter(Boolean));
     }
 
     // ─── Helper: extract base64 student photo from info page HTML ─
@@ -1577,20 +1648,85 @@ export default {
       if (session && session.cookies) {
         try {
           const newsUrl = 'https://jwxt.seig.edu.cn/jwglxt/xtgl/index_cxNews.html?localeKey=zh_CN';
+          const noticeHeaders = {
+            'Cookie': session.cookies,
+            'User-Agent': 'Mozilla/5.0 (Linux; Android 16) GZUS-PRO/1.0',
+            'Referer': 'https://jwxt.seig.edu.cn/jwglxt/xtgl/index_initMenu.html',
+          };
+          const isLoginPage = (value) => value.includes('login_slogin') || /<input[^>]*type\s*=\s*['"]password['"]/i.test(value);
           const [newsRes, html] = await fetchGbkText(newsUrl, {
-            headers: {
-              'Cookie': session.cookies,
-              'User-Agent': 'Mozilla/5.0 (Linux; Android 16) GZUS-PRO/1.0',
-              'Referer': 'https://jwxt.seig.edu.cn/jwglxt/xtgl/index_initMenu.html',
-            },
+            headers: noticeHeaders,
             signal: AbortSignal.timeout(15000),
           });
           if (newsRes && newsRes.ok && html) {
             // Check if we got a login page instead
-            if (html.includes('login_slogin') || /password['"]\s*type/i.test(html)) {
+            if (isLoginPage(html)) {
               console.warn('[edge-notices] JWXT returned login page, session may be expired');
             } else {
-              const items = parseNoticeItems(html);
+              const indexItems = parseNoticeItems(html, newsUrl);
+              const moreUrls = extractNoticeMoreUrls(html, newsUrl);
+              if (moreUrls.length === 0) {
+                moreUrls.push('https://jwxt.seig.edu.cn/jwglxt/xtgl/xwck_cxMoreXwList.html');
+              }
+              const moreItemsPromise = Promise.all(
+                moreUrls.slice(0, 4).map(async (moreUrl) => {
+                  try {
+                    const [moreRes, moreHtml] = await fetchGbkText(moreUrl, {
+                      headers: noticeHeaders,
+                      signal: AbortSignal.timeout(15000),
+                    });
+                    if (moreRes && moreRes.ok && moreHtml && !isLoginPage(moreHtml)) {
+                      return parseNoticeItems(moreHtml, moreUrl);
+                    }
+                  } catch (e) {
+                    console.warn(`[edge-notices] more page fetch failed: ${e.message}`);
+                  }
+                  return [];
+                })
+              ).then(groups => groups.filter(group => group.length > 0));
+              const dbsyItemsPromise = (async () => {
+                try {
+                  const dbsyUrl = 'https://jwxt.seig.edu.cn/jwglxt/xtgl/index_cxDbsy.html?localeKey=zh_CN';
+                  const [dbsyRes, dbsyHtml] = await fetchGbkText(dbsyUrl, {
+                    headers: noticeHeaders,
+                    signal: AbortSignal.timeout(15000),
+                  });
+                  if (dbsyRes && dbsyRes.ok && dbsyHtml && !isLoginPage(dbsyHtml)) {
+                    return parseNoticeItems(dbsyHtml, dbsyUrl, '我的消息');
+                  }
+                } catch (e) {
+                  console.warn(`[edge-notices] DBSY fetch failed: ${e.message}`);
+                }
+                return [];
+              })();
+              const ehallItemsPromise = (async () => {
+                if (!session.ehallCookies) return [];
+                try {
+                  const origin = (env.API_ORIGIN || 'https://api-one-zeta-dc0jrazxzq.vercel.app').replace(/\/$/, '');
+                  const headers = new Headers(request.headers);
+                  headers.set('Cookie', session.cookies);
+                  headers.set('X-Ehall-Cookies', session.ehallCookies);
+                  headers.set('X-Worker-Auth', '1');
+                  if (session.account) headers.set('X-Student-Account', session.account);
+                  const resp = await fetch(new URL('/ehall/tasks', origin), {
+                    method: 'GET',
+                    headers,
+                    signal: AbortSignal.timeout(6000),
+                  });
+                  if (!resp.ok) return [];
+                  const data = await resp.json();
+                  return Array.isArray(data) ? data : [];
+                } catch (e) {
+                  console.warn(`[edge-notices] ehall tasks fetch failed: ${e.message}`);
+                }
+                return [];
+              })();
+              const [moreItemGroups, dbsyItems, ehallItems] = await Promise.all([
+                moreItemsPromise,
+                dbsyItemsPromise,
+                ehallItemsPromise,
+              ]);
+              const items = mergeNoticeItems(...moreItemGroups, indexItems, dbsyItems, ehallItems);
               if (items.length > 0) {
                 return jsonResponse(items, 200, request);
               }
