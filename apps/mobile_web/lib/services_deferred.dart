@@ -63,26 +63,47 @@ class DeferredServices {
 
 class LoginRequiredServices {
   static bool _initialized = false;
+  static Future<void>? _initializing;
+  static String? _apiBaseUrl;
+  static String? _sessionId;
 
   static Future<void> initialize({
     required String apiBaseUrl,
     required String sessionId,
     void Function(Map<String, dynamic>)? onNotificationTap,
   }) async {
-    if (_initialized) return;
+    final sameSession =
+        _initialized && _apiBaseUrl == apiBaseUrl && _sessionId == sessionId;
+    if (sameSession) return;
 
-    await Future.wait([
-      _initWebPushService(onNotificationTap),
-      _initLocalNotificationService(onNotificationTap),
-      _initPushService(onNotificationTap),
-      _initPersistentCache(),
+    final inFlight = _initializing;
+    if (inFlight != null) {
+      await inFlight;
+      final stillSame =
+          _initialized && _apiBaseUrl == apiBaseUrl && _sessionId == sessionId;
+      if (stillSame) return;
+    }
+
+    final future = Future.wait([
+      if (!_initialized) _initWebPushService(onNotificationTap),
+      if (!_initialized) _initLocalNotificationService(onNotificationTap),
+      if (!_initialized) _initPushService(onNotificationTap),
+      if (!_initialized) _initPersistentCache(),
       _initWsService(apiBaseUrl, sessionId),
-      _initReminderService(),
-      _initUpdateService(),
+      if (!_initialized) _initReminderService(),
+      if (!_initialized) _initUpdateService(),
       _initBackgroundService(apiBaseUrl, sessionId),
-    ]);
+    ]).then((_) {});
 
-    _initialized = true;
+    _initializing = future;
+    try {
+      await future;
+      _apiBaseUrl = apiBaseUrl;
+      _sessionId = sessionId;
+      _initialized = true;
+    } finally {
+      if (_initializing == future) _initializing = null;
+    }
   }
 
   static Future<void> _initWebPushService(
@@ -97,7 +118,8 @@ class LoginRequiredServices {
       void Function(Map<String, dynamic>)? onTap) async {
     try {
       await local_notification_service.loadLibrary();
-      await local_notification_service.LocalNotificationService.init(onTap: onTap);
+      await local_notification_service.LocalNotificationService.init(
+          onTap: onTap);
     } catch (_) {}
   }
 
@@ -115,7 +137,8 @@ class LoginRequiredServices {
     } catch (_) {}
   }
 
-  static Future<void> _initWsService(String apiBaseUrl, String sessionId) async {
+  static Future<void> _initWsService(
+      String apiBaseUrl, String sessionId) async {
     try {
       await ws_service.loadLibrary();
       ws_service.WsService.configure(
@@ -153,6 +176,10 @@ class LoginRequiredServices {
     try {
       ws_service.WsService.disconnect();
     } catch (_) {}
+    _initialized = false;
+    _apiBaseUrl = null;
+    _sessionId = null;
+    _initializing = null;
   }
 
   static void cancelCourseReminders() {

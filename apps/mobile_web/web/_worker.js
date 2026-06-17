@@ -678,6 +678,9 @@ function errorResponse(message, status = 401, request = null) {
 // inject JWXT cookies (which are IP-bounded to the Worker edge).
 const SESSION_KV_TTL = 7200; // 2 hours, matches Vercel session TTL
 const localSessions = new Map(); // sessionId -> { cookies, ehallCookies, studentName }
+const ACADEMIC_CACHE_TTL = 1800; // 30 minutes, enough to absorb JWXT bursts
+const localAcademicCache = new Map(); // key -> { data, cachedAt }
+const localAcademicInFlight = new Map(); // key -> Promise<{ jwxtRes, data }>
 
 function generateSessionId() {
   const bytes = new Uint8Array(16);
@@ -738,6 +741,50 @@ async function getLocalSession(request, env) {
   }
 
   return null;
+}
+
+function defaultAcademicPeriod() {
+  const now = new Date();
+  const month = now.getMonth() + 1;
+  const year = month >= 9 ? now.getFullYear() : now.getFullYear() - 1;
+  const term = month >= 9 || month <= 1 ? 1 : 2;
+  return { year: String(year), term: String(term) };
+}
+
+function academicCacheKey(sessionId, path, year, term) {
+  return `academic:${sessionId}:${path}:${year || ''}:${term || ''}`;
+}
+
+async function loadAcademicCache(env, key) {
+  const local = localAcademicCache.get(key);
+  if (local && Date.now() - local.cachedAt < ACADEMIC_CACHE_TTL * 1000) {
+    return local;
+  }
+  try {
+    if (env && env.SESSIONS_KV) {
+      const raw = await env.SESSIONS_KV.get(key);
+      if (raw) {
+        const data = JSON.parse(raw);
+        localAcademicCache.set(key, data);
+        return data;
+      }
+    }
+  } catch (e) {
+    console.warn(`[academic-cache] load failed for ${key}: ${e.message}`);
+  }
+  return null;
+}
+
+async function saveAcademicCache(env, key, data) {
+  const payload = { data, cachedAt: Date.now() };
+  localAcademicCache.set(key, payload);
+  try {
+    if (env && env.SESSIONS_KV) {
+      await env.SESSIONS_KV.put(key, JSON.stringify(payload), { expirationTtl: ACADEMIC_CACHE_TTL });
+    }
+  } catch (e) {
+    console.warn(`[academic-cache] save failed for ${key}: ${e.message}`);
+  }
 }
 
 function injectSessionCookies(request, session) {
@@ -1552,12 +1599,17 @@ export default {
     // Hobby-plan timeout on the double-proxy chain.
     const academicPaths = { exams: true, schedule: true, grades: true, credits: true, attendance: true };
     if (academicPaths[path] && request.method === 'GET') {
+      const sessionId = request.headers.get('X-Session-Id') || '';
       const session = await getLocalSession(request, env);
+      let lastEdgeError = '';
+      let lastEdgeStatus = null;
       if (session && session.cookies) {
         try {
           const urlParams = url.searchParams;
-          const year = urlParams.get('year') || '';
-          const term = urlParams.get('term') || '';
+          const defaults = defaultAcademicPeriod();
+          const year = urlParams.get('year') || defaults.year;
+          const term = urlParams.get('term') || defaults.term;
+          const cacheKey = academicCacheKey(sessionId, path, year, term);
           const termMap = { '1': '3', '2': '12', '3': '16' };
           const xqm = termMap[term] || '';
           const nd = String(Date.now());
@@ -1601,41 +1653,101 @@ export default {
           }
 
           if (jwxtUrl) {
-            const [jwxtRes, data] = await fetchGbkJson(jwxtUrl, {
-              method: 'POST',
-              headers: {
-                'Cookie': session.cookies,
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'User-Agent': 'Mozilla/5.0 (Linux; Android 16) GZUS-PRO/1.0',
-                'Referer': 'https://jwxt.seig.edu.cn/jwglxt/xtgl/index_initMenu.html',
-              },
-              body: postData.toString(),
-              signal: AbortSignal.timeout(15000),
+            const fetchAcademic = async () => {
+              const [jwxtRes, data] = await fetchGbkJson(jwxtUrl, {
+                method: 'POST',
+                headers: {
+                  'Cookie': session.cookies,
+                  'Content-Type': 'application/x-www-form-urlencoded',
+                  'User-Agent': 'Mozilla/5.0 (Linux; Android 16) GZUS-PRO/1.0',
+                  'Referer': 'https://jwxt.seig.edu.cn/jwglxt/xtgl/index_initMenu.html',
+                },
+                body: postData.toString(),
+                signal: AbortSignal.timeout(15000),
+              });
+              return { jwxtRes, data };
+            };
+            let resultPromise = path === 'schedule' ? localAcademicInFlight.get(cacheKey) : null;
+            if (!resultPromise) {
+              resultPromise = fetchAcademic();
+              if (path === 'schedule') {
+                localAcademicInFlight.set(cacheKey, resultPromise);
+              }
+            }
+            const { jwxtRes, data } = await resultPromise.finally(() => {
+              if (path === 'schedule' && localAcademicInFlight.get(cacheKey) === resultPromise) {
+                localAcademicInFlight.delete(cacheKey);
+              }
             });
 
             if (jwxtRes && jwxtRes.ok && data) {
               // attendance returns { status: 'ok', items: [...] }
               if (path === 'attendance' && data && data.items) {
-                return jsonResponse({
+                const normalized = {
                   status: 'ok',
                   items: normalizeResultList(data.items, path),
-                }, 200, request);
+                };
+                await saveAcademicCache(env, cacheKey, normalized);
+                return jsonResponse(normalized, 200, request);
               }
               // Common JWXT response formats — normalize field names for Flutter
-              if (data && data.items) return jsonResponse(normalizeResultList(data.items, path), 200, request);
-              if (data && data.kbList) return jsonResponse(normalizeResultList(data.kbList, path), 200, request);
-              if (data && Array.isArray(data)) return jsonResponse(normalizeResultList(data, path), 200, request);
+              if (data && data.items) {
+                const normalized = normalizeResultList(data.items, path);
+                await saveAcademicCache(env, cacheKey, normalized);
+                return jsonResponse(normalized, 200, request);
+              }
+              if (data && data.kbList) {
+                const normalized = normalizeResultList(data.kbList, path);
+                await saveAcademicCache(env, cacheKey, normalized);
+                return jsonResponse(normalized, 200, request);
+              }
+              if (data && Array.isArray(data)) {
+                const normalized = normalizeResultList(data, path);
+                await saveAcademicCache(env, cacheKey, normalized);
+                return jsonResponse(normalized, 200, request);
+              }
               // Single object (credits totals, etc.)
               if (data && typeof data === 'object' && !Array.isArray(data)) {
-                return jsonResponse(data, 200, request);
+                if (path === 'schedule') {
+                  lastEdgeError = 'JWXT schedule returned object without kbList/items';
+                  console.warn(`[edge-${path}] ${lastEdgeError}`);
+                } else {
+                  await saveAcademicCache(env, cacheKey, data);
+                  return jsonResponse(data, 200, request);
+                }
               }
-              console.warn(`[edge-${path}] JWXT returned unexpected format, falling through to Vercel`);
+              lastEdgeError = 'JWXT returned unexpected data format';
+              console.warn(`[edge-${path}] ${lastEdgeError}`);
             } else {
-              console.warn(`[edge-${path}] JWXT returned ${jwxtRes ? jwxtRes.status : 'null'}, falling through to Vercel`);
+              lastEdgeStatus = jwxtRes ? jwxtRes.status : null;
+              lastEdgeError = `JWXT returned ${lastEdgeStatus || 'null'} or invalid JSON`;
+              console.warn(`[edge-${path}] ${lastEdgeError}`);
             }
           }
         } catch (e) {
-          console.warn(`[edge-${path}] JWXT direct fetch failed: ${e.message}, falling through to Vercel`);
+          lastEdgeError = e && e.message ? e.message : String(e);
+          console.warn(`[edge-${path}] JWXT direct fetch failed: ${lastEdgeError}`);
+        }
+        if (path === 'schedule') {
+          const defaults = defaultAcademicPeriod();
+          const year = url.searchParams.get('year') || defaults.year;
+          const term = url.searchParams.get('term') || defaults.term;
+          const cacheKey = academicCacheKey(sessionId, path, year, term);
+          const cached = await loadAcademicCache(env, cacheKey);
+          if (cached && cached.data) {
+            const resp = jsonResponse(cached.data, 200, request);
+            resp.headers.set('X-Data-Source', 'edge-cache');
+            resp.headers.set('X-Data-Cached-At', new Date(cached.cachedAt).toISOString());
+            return resp;
+          }
+          return jsonResponse({
+            detail: '课表服务暂时不可用，请稍后重试',
+            source: 'edge-jwxt',
+            status: lastEdgeStatus,
+            error: lastEdgeError || 'JWXT request failed',
+            year,
+            term,
+          }, 502, request);
         }
       }
       // Fall through to Vercel if edge fetch failed

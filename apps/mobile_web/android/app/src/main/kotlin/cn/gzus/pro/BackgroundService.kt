@@ -166,6 +166,7 @@ class BackgroundService : Service() {
     private var executor: ScheduledExecutorService? = null
     private var pollIntervalSeconds = 30L
     private var consecutiveFailures = 0
+    private var stoppingByUser = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -177,6 +178,7 @@ class BackgroundService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
+                stoppingByUser = true
                 stopPolling()
                 cancelKeepAlive(this)
                 clearConfig()
@@ -194,6 +196,7 @@ class BackgroundService : Service() {
                         startForeground(NOTIFICATION_ID, notification)
                     }
                 } catch (_: Exception) {
+                    stoppingByUser = true
                     stopPolling()
                     stopSelf()
                     return START_NOT_STICKY
@@ -204,12 +207,16 @@ class BackgroundService : Service() {
                 CourseReminderScheduler(this).scheduleAll()
             }
         }
-        return START_NOT_STICKY
+        return START_STICKY
     }
 
     override fun onDestroy() {
         stopPolling()
-        cancelKeepAlive(this)
+        if (!stoppingByUser) {
+            scheduleKeepAlive(this)
+        } else {
+            cancelKeepAlive(this)
+        }
         super.onDestroy()
     }
 
@@ -229,7 +236,6 @@ class BackgroundService : Service() {
 
         // Immediate restart via Handler
         Handler(Looper.getMainLooper()).postDelayed({
-            if (!canRestartService(this)) return@postDelayed
             val restartIntent = Intent(this, BackgroundService::class.java).apply {
                 action = ACTION_START
                 if (apiBaseUrl != null) putExtra(EXTRA_API_BASE_URL, apiBaseUrl)

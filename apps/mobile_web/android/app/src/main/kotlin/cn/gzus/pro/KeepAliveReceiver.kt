@@ -18,12 +18,6 @@ class KeepAliveReceiver : BroadcastReceiver() {
 
         if (!hasSession || !hasBaseUrl) return
 
-        // Record restart attempt before starting
-        BackgroundService.recordRestartAttempt(context)
-
-        // Check again after recording (double-check pattern)
-        if (!BackgroundService.canRestartService(context)) return
-
         // Check if BackgroundService is already running by checking if the foreground
         // notification is active. We simply try to start the service — if it's already
         // running, onStartCommand will be called again which is harmless.
@@ -36,6 +30,7 @@ class KeepAliveReceiver : BroadcastReceiver() {
             } else {
                 context.startService(serviceIntent)
             }
+            BackgroundService.recordRestartAttempt(context)
         } catch (_: Exception) {
             return
         }

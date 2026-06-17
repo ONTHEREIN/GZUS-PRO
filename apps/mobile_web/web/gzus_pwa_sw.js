@@ -1,5 +1,6 @@
-const CACHE_NAME = 'gzus-pwa-cache-v2';
-const API_CACHE_NAME = 'gzus-api-cache-v1';
+const CACHE_NAME = 'gzus-pwa-cache-v3';
+const API_CACHE_NAME = 'gzus-api-cache-v2';
+const API_CACHE_MAX_AGE_MS = 5 * 60 * 1000;
 const STATIC_ASSETS = [
   './',
   './index.html',
@@ -30,15 +31,10 @@ self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
       return Promise.all(
-        STATIC_ASSETS.map((asset) =>
-          cache.add(asset).catch(() => undefined)
-        )
+        STATIC_ASSETS.map((asset) => cache.add(asset).catch(() => undefined))
       );
     })
   );
-  // Immediately activate the new service worker — don't wait for
-  // all tabs to close.  This is critical for Flutter web deployments
-  // where stale cached main.dart.js / canvaskit.wasm will break the app.
   self.skipWaiting();
 });
 
@@ -50,63 +46,119 @@ self.addEventListener('activate', (event) => {
           if (name !== CACHE_NAME && name !== API_CACHE_NAME) {
             return caches.delete(name);
           }
+          return undefined;
         })
       );
     })
   );
-  // Take control of all clients immediately so the new SW handles
-  // requests right away (paired with skipWaiting in install).
   event.waitUntil(clients.claim());
 });
 
 self.addEventListener('fetch', (event) => {
   const request = event.request;
-  if (request.method !== 'GET') {
-    return;
-  }
+  if (request.method !== 'GET') return;
+
   const url = new URL(request.url);
-  if (url.origin !== self.location.origin) {
+  if (url.origin !== self.location.origin) return;
+
+  if (API_WHITELIST.some((path) => url.pathname.startsWith(path))) {
+    event.respondWith(handleApiRequest(request));
     return;
   }
-  if (API_WHITELIST.some((path) => url.pathname.startsWith(path))) {
-    event.respondWith(
-      caches.open(API_CACHE_NAME).then((cache) => {
-        return cache.match(request).then((cachedResponse) => {
-          const fetchPromise = fetch(request).then((networkResponse) => {
-            cache.put(request, networkResponse.clone());
-            return networkResponse;
-          }).catch(() => cachedResponse);
-          return cachedResponse || fetchPromise;
-        });
-      })
-    );
-  } else {
-    // Network-first with cache fallback for static assets.
-    // This ensures new deployments (main.dart.js, flutter_bootstrap.js,
-    // canvaskit/*) are picked up immediately, while still supporting
-    // offline mode via cached fallback.
-    event.respondWith(
-      fetch(request).then((networkResponse) => {
-        // Update cache with fresh response
-        const cloned = networkResponse.clone();
-        caches.open(CACHE_NAME).then((cache) => {
-          cache.put(request, cloned);
-        });
-        return networkResponse;
-      }).catch(() => {
-        // Offline — serve from cache
-        return caches.match(request);
-      })
-    );
-  }
+
+  event.respondWith(handleStaticRequest(request));
 });
+
+async function handleApiRequest(request) {
+  const cache = await caches.open(API_CACHE_NAME);
+  const cacheKey = await apiCacheKey(request);
+  const cachedResponse = await cache.match(cacheKey);
+
+  if (cachedResponse && isFresh(cachedResponse)) {
+    revalidateApiRequest(request, cache, cacheKey);
+    return cachedResponse;
+  }
+
+  try {
+    const networkResponse = await fetch(request, { cache: 'no-store' });
+    await putApiResponse(cache, cacheKey, networkResponse);
+    return networkResponse;
+  } catch (error) {
+    if (cachedResponse) return cachedResponse;
+    throw error;
+  }
+}
+
+async function revalidateApiRequest(request, cache, cacheKey) {
+  try {
+    const networkResponse = await fetch(request, { cache: 'no-store' });
+    await putApiResponse(cache, cacheKey, networkResponse);
+  } catch (_) {}
+}
+
+async function putApiResponse(cache, cacheKey, response) {
+  if (!response || !response.ok) return;
+  const headers = new Headers(response.headers);
+  headers.set('X-GZUS-Cached-At', Date.now().toString());
+  const body = await response.clone().blob();
+  const stamped = new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+  await cache.put(cacheKey, stamped);
+}
+
+function isFresh(response) {
+  const cachedAt = Number(response.headers.get('X-GZUS-Cached-At') || 0);
+  return cachedAt > 0 && Date.now() - cachedAt < API_CACHE_MAX_AGE_MS;
+}
+
+async function apiCacheKey(request) {
+  const url = new URL(request.url);
+  const sessionId = request.headers.get('X-Session-Id') || 'anonymous';
+  url.searchParams.set('__gzus_cache_session', await shortHash(sessionId));
+  return new Request(url.toString(), { method: 'GET' });
+}
+
+async function shortHash(value) {
+  try {
+    const encoded = new TextEncoder().encode(value);
+    const digest = await crypto.subtle.digest('SHA-256', encoded);
+    return Array.from(new Uint8Array(digest))
+      .slice(0, 8)
+      .map((byte) => byte.toString(16).padStart(2, '0'))
+      .join('');
+  } catch (_) {
+    return String(value.length);
+  }
+}
+
+async function handleStaticRequest(request) {
+  try {
+    const networkResponse = await fetch(request);
+    if (networkResponse && networkResponse.ok) {
+      const cloned = networkResponse.clone();
+      caches.open(CACHE_NAME).then((cache) => cache.put(request, cloned));
+    }
+    return networkResponse;
+  } catch (_) {
+    const cached = await caches.match(request);
+    if (cached) return cached;
+    if (request.mode === 'navigate') {
+      const shell = await caches.match('./index.html');
+      if (shell) return shell;
+    }
+    return Response.error();
+  }
+}
 
 self.addEventListener('push', (event) => {
   const data = event.data ? event.data.json() : {};
   const title = data.title || '软帮手通知';
   const body = data.body || '';
   const extras = data.extras || {};
-  
+
   const options = {
     body: body,
     icon: './icons/icon-192x192.png',
@@ -114,14 +166,14 @@ self.addEventListener('push', (event) => {
     data: { extras: extras },
     tag: extras.id || Date.now().toString(),
   };
-  
+
   event.waitUntil(self.registration.showNotification(title, options));
 });
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   const extras = event.notification.data?.extras || {};
-  
+
   event.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
       for (const client of clientList) {
@@ -144,9 +196,7 @@ self.addEventListener('message', (event) => {
   if (event.data && event.data.type === 'GZUS_CLEAR_CACHE') {
     event.waitUntil(
       caches.keys().then((cacheNames) => {
-        return Promise.all(
-          cacheNames.map((name) => caches.delete(name))
-        );
+        return Promise.all(cacheNames.map((name) => caches.delete(name)));
       })
     );
   }

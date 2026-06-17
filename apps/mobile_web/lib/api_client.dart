@@ -1230,6 +1230,7 @@ class ApiClient {
   String? _ehallAuthToken;
   String? _rsaPublicKeyPem;
   String? _rsaKeyId;
+  Future<void>? _publicKeyFuture;
 
   /// 当前使用的 baseUrl（可能因连接失败自动切换）
   String _currentBaseUrl = '';
@@ -1731,6 +1732,21 @@ class ApiClient {
   }
 
   Future<void> fetchPublicKey() async {
+    if (_rsaPublicKeyPem != null && _rsaKeyId != null) return;
+    final current = _publicKeyFuture;
+    if (current != null) return current;
+    final future = _fetchPublicKeyOnce();
+    _publicKeyFuture = future;
+    try {
+      await future;
+    } finally {
+      if (_publicKeyFuture == future) {
+        _publicKeyFuture = null;
+      }
+    }
+  }
+
+  Future<void> _fetchPublicKeyOnce() async {
     try {
       final url = _resolveBaseUrl();
       final response = await _http.get(Uri.parse('$url/auth/public-key'),
