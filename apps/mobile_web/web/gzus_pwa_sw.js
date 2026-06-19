@@ -1,4 +1,4 @@
-const CACHE_NAME = 'gzus-pwa-cache-v4';
+const CACHE_NAME = 'gzus-pwa-cache-v5';
 const API_CACHE_NAME = 'gzus-api-cache-v2';
 const API_CACHE_MAX_AGE_MS = 5 * 60 * 1000;
 const STATIC_ASSETS = [
@@ -46,19 +46,27 @@ self.addEventListener('activate', (event) => {
     caches.keys().then((cacheNames) => {
       return Promise.all(
         cacheNames.map((name) => {
+          // Delete ALL old caches (including Flutter's) to force fresh load
           if (name !== CACHE_NAME && name !== API_CACHE_NAME) {
             return caches.delete(name);
           }
           return undefined;
         })
       );
+    }).then(() => {
+      return Promise.all([
+        self.registration.navigationPreload?.disable?.().catch(() => undefined),
+        clients.claim(),
+      ]);
     })
   );
+  // Notify all clients to reload immediately after SW activation
   event.waitUntil(
-    Promise.all([
-      self.registration.navigationPreload?.disable?.().catch(() => undefined),
-      clients.claim(),
-    ])
+    clients.matchAll({ includeUncontrolled: true }).then((clientList) => {
+      clientList.forEach((client) => {
+        client.postMessage({ type: 'GZUS_SW_UPDATED' });
+      });
+    })
   );
 });
 
@@ -169,26 +177,47 @@ async function shortHash(value) {
 
 async function handleNavigationRequest(request) {
   const cache = await caches.open(CACHE_NAME);
-  const cached = await cache.match(APP_SHELL_URL) || await cache.match(request);
 
+  // Network-first for navigation: always try network first to get latest HTML.
+  // This prevents stale HTML from serving old main.dart.js references.
+  try {
+    const networkResponse = await fetch(request, { cache: 'no-store' });
+    if (networkResponse && networkResponse.ok) {
+      await putStaticResponse(cache, APP_SHELL_URL, networkResponse);
+      return networkResponse;
+    }
+  } catch (_) {}
+
+  // Fallback to cache if network fails
+  const cached = await cache.match(APP_SHELL_URL) || await cache.match(request);
   if (cached) {
-    revalidateStaticRequest(request, cache, APP_SHELL_URL);
     return cached;
   }
 
-  try {
-    const networkResponse = await fetch(request, { cache: 'no-store' });
-    await putStaticResponse(cache, APP_SHELL_URL, networkResponse);
-    return networkResponse;
-  } catch (_) {
-    return Response.error();
-  }
+  return Response.error();
 }
 
 async function handleStaticRequest(request) {
   const cache = await caches.open(CACHE_NAME);
-  const cached = await cache.match(request);
+  const url = new URL(request.url);
 
+  // Network-first for critical JS/WASM files to avoid stale code
+  const isCriticalAsset = url.pathname.endsWith('.js') ||
+                          url.pathname.endsWith('.wasm') ||
+                          url.pathname.endsWith('.json');
+
+  if (isCriticalAsset) {
+    try {
+      const networkResponse = await fetch(request, { cache: 'no-store' });
+      if (networkResponse && networkResponse.ok) {
+        await putStaticResponse(cache, request, networkResponse);
+        return networkResponse;
+      }
+    } catch (_) {}
+  }
+
+  // Cache-first for other assets (icons, fonts, etc.)
+  const cached = await cache.match(request);
   if (cached) {
     revalidateStaticRequest(request, cache, request);
     return cached;
