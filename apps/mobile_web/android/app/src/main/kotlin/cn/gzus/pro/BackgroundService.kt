@@ -44,6 +44,8 @@ class BackgroundService : Service() {
         const val KEY_PENDING_OPEN = "pendingOpen"
         const val KEY_LAST_RESTART_TIME = "lastRestartTime"
         const val KEY_RESTART_COUNT = "restartCount"
+        private const val FLUTTER_PREFS_NAME = "FlutterSharedPreferences"
+        private const val SINGLE_DEVICE_CONFLICT_MESSAGE = "账号已在其他设备登录，请重新登录"
         const val RESTART_COOLDOWN_MS = 60_000L // 1分钟内不重复重启
         const val RESTART_COUNT_WINDOW_MS = 300_000L // 5分钟内
         const val MAX_RESTART_COUNT = 3 // 5分钟内最多重启3次
@@ -103,6 +105,12 @@ class BackgroundService : Service() {
                 .putLong(KEY_LAST_RESTART_TIME, now)
                 .putInt(KEY_RESTART_COUNT, newCount)
                 .apply()
+        }
+
+        fun hasStoredAuthSession(context: Context): Boolean {
+            val flutterPrefs = context.getSharedPreferences(FLUTTER_PREFS_NAME, Context.MODE_PRIVATE)
+            return !flutterPrefs.getString("flutter.auth.sessionId", "").isNullOrBlank() ||
+                !flutterPrefs.getString("auth.sessionId", "").isNullOrBlank()
         }
 
         private fun jsonObjectToMap(json: JSONObject): Map<String, Any?> {
@@ -167,6 +175,12 @@ class BackgroundService : Service() {
     private var pollIntervalSeconds = 30L
     private var consecutiveFailures = 0
     private var stoppingByUser = false
+
+    private sealed class PollResult {
+        data class Success(val messages: JSONArray) : PollResult()
+        object Unauthorized : PollResult()
+        object Failure : PollResult()
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -360,27 +374,34 @@ class BackgroundService : Service() {
         val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val apiBaseUrl = prefs.getString(KEY_API_BASE_URL, null)?.trimEnd('/') ?: return
         val sessionId = prefs.getString(KEY_SESSION_ID, null)?.takeIf { it.isNotBlank() } ?: return
-        val messages = fetchMessages(apiBaseUrl, sessionId)
-        if (messages != null) {
-            consecutiveFailures = 0
-            pollIntervalSeconds = 30L
-            val appForeground = prefs.getBoolean(KEY_APP_FOREGROUND, false)
-            for (index in 0 until messages.length()) {
-                val message = messages.optJSONObject(index) ?: continue
-                val isLiveUpdate = message.optBoolean("liveUpdate", false) ||
-                    (message.optJSONObject("extras")?.optBoolean("liveUpdate", false) ?: false)
-                if (isLiveUpdate || !appForeground) {
-                    showPushNotification(message)
+        when (val result = fetchMessages(apiBaseUrl, sessionId)) {
+            is PollResult.Success -> {
+                consecutiveFailures = 0
+                pollIntervalSeconds = 30L
+                val appForeground = prefs.getBoolean(KEY_APP_FOREGROUND, false)
+                val messages = result.messages
+                for (index in 0 until messages.length()) {
+                    val message = messages.optJSONObject(index) ?: continue
+                    val isLiveUpdate = message.optBoolean("liveUpdate", false) ||
+                        (message.optJSONObject("extras")?.optBoolean("liveUpdate", false) ?: false)
+                    if (isLiveUpdate || !appForeground) {
+                        showPushNotification(message)
+                    }
                 }
             }
-        } else {
-            consecutiveFailures++
-            pollIntervalSeconds = minOf(300L, pollIntervalSeconds * 2)
+            PollResult.Unauthorized -> {
+                handleRevokedSession()
+                return
+            }
+            PollResult.Failure -> {
+                consecutiveFailures++
+                pollIntervalSeconds = minOf(300L, pollIntervalSeconds * 2)
+            }
         }
         executor?.schedule({ pollOnce() }, pollIntervalSeconds, TimeUnit.SECONDS)
     }
 
-    private fun fetchMessages(apiBaseUrl: String, sessionId: String): JSONArray? {
+    private fun fetchMessages(apiBaseUrl: String, sessionId: String): PollResult {
         val connection = (URL("$apiBaseUrl/push/poll").openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = 10000
@@ -389,15 +410,61 @@ class BackgroundService : Service() {
         }
         return try {
             val status = connection.responseCode
-            if (status !in 200..299) return null
+            if (status == HttpURLConnection.HTTP_UNAUTHORIZED) return PollResult.Unauthorized
+            if (status !in 200..299) {
+                val errorBody = connection.errorStream?.let { stream ->
+                    BufferedReader(InputStreamReader(stream, Charsets.UTF_8)).use { it.readText() }
+                }.orEmpty()
+                return if (errorBody.contains(SINGLE_DEVICE_CONFLICT_MESSAGE)) {
+                    PollResult.Unauthorized
+                } else {
+                    PollResult.Failure
+                }
+            }
             val reader = BufferedReader(InputStreamReader(connection.inputStream, Charsets.UTF_8))
             val body = reader.use { it.readText() }
-            JSONObject(body).optJSONArray("messages")
+            if (body.contains(SINGLE_DEVICE_CONFLICT_MESSAGE)) {
+                PollResult.Unauthorized
+            } else {
+                PollResult.Success(JSONObject(body).optJSONArray("messages") ?: JSONArray())
+            }
         } catch (_: Exception) {
-            null
+            PollResult.Failure
         } finally {
             connection.disconnect()
         }
+    }
+
+    private fun handleRevokedSession() {
+        stoppingByUser = true
+        stopPolling()
+        cancelKeepAlive(this)
+        clearConfig()
+        clearFlutterAuthState()
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(NOTIFICATION_ID)
+        stopSelf()
+    }
+
+    private fun clearFlutterAuthState() {
+        val keys = listOf(
+            "auth.sessionId",
+            "auth.studentName",
+            "auth.studentId",
+            "auth.ehallCookies",
+            "auth.ehallAuthToken",
+            "auth.loginMethod",
+            "auth.credentialToken",
+            "auth.account",
+            "auth.password",
+            "auth.rememberPassword"
+        )
+        val editor = getSharedPreferences(FLUTTER_PREFS_NAME, Context.MODE_PRIVATE).edit()
+        keys.forEach { key ->
+            editor.remove(key)
+            editor.remove("flutter.$key")
+        }
+        editor.apply()
     }
 
     private fun showPushNotification(message: JSONObject) {

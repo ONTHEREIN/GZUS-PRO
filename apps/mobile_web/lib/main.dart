@@ -36,7 +36,6 @@ import 'live_update_service.dart' deferred as live_update_service;
 import 'update_service.dart' deferred as update_service;
 import 'web_pwa_cache.dart' deferred as web_pwa_cache;
 import 'push_service.dart' deferred as push_service;
-import 'web_push_service.dart' deferred as web_push_service;
 
 @visibleForTesting
 bool debugHideEcardForTests = false;
@@ -479,6 +478,7 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
   Future<void> _openAuthenticatedUrl(String url) async {
     try {
       await mobile_sso.loadLibrary();
+      if (!mounted) return;
       await mobile_sso.openAuthenticatedEhallUrl(context, url);
     } catch (_) {}
   }
@@ -1107,7 +1107,7 @@ class _LoginPageState extends State<LoginPage>
                                             color: Theme.of(context)
                                                 .colorScheme
                                                 .onSurfaceVariant
-                                                .withOpacity(0.45),
+                                                .withValues(alpha: 0.45),
                                           ),
                                     ),
                                   ),
@@ -1365,13 +1365,13 @@ class _LoadingPageState extends State<LoadingPage>
       body: Center(
         child: FadeTransition(
           opacity: _fadeIn,
-          child: Column(
+          child: const Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               // Icons.school 被 tree-shaking 移除，替换为 emoji 避免白屏
-              const Text('🎓', style: TextStyle(fontSize: 36)),
-              const SizedBox(height: 14),
-              const CircularProgressIndicator(),
+              Text('🎓', style: TextStyle(fontSize: 36)),
+              SizedBox(height: 14),
+              CircularProgressIndicator(),
             ],
           ),
         ),
@@ -8087,6 +8087,7 @@ class _LeaveResultBanner extends StatelessWidget {
             TextButton(
               onPressed: () async {
                 await mobile_sso.loadLibrary();
+                if (!context.mounted) return;
                 await mobile_sso.openAuthenticatedEhallUrl(
                   context,
                   result.formUrl!,
@@ -8193,6 +8194,7 @@ class _BusinessItemTile extends StatelessWidget {
 Future<void> _openInAppBrowser(BuildContext context, String? url) async {
   if (url == null || url.isEmpty) return;
   await mobile_sso.loadLibrary();
+  if (!context.mounted) return;
   final opened = await mobile_sso.openAuthenticatedEhallUrl(context, url);
   if (!opened && context.mounted) {
     ScaffoldMessenger.of(context).showSnackBar(
@@ -8216,6 +8218,7 @@ class _ApplicationsPageState extends State<ApplicationsPage> {
   String _department = '全部';
   String _type = '全部';
   String _tag = '全部';
+  String? _loadError;
   bool _filtersExpanded = false;
   late Future<List<EhallApplicationItem>> _applicationsFuture;
 
@@ -8235,8 +8238,18 @@ class _ApplicationsPageState extends State<ApplicationsPage> {
 
   Future<List<EhallApplicationItem>> _loadApplications({
     bool forceRefresh = false,
-  }) =>
-      widget.api.ehallApplications(forceRefresh: forceRefresh);
+  }) async {
+    try {
+      final items = await widget.api
+          .ehallApplications(forceRefresh: forceRefresh)
+          .timeout(const Duration(seconds: 12));
+      _loadError = null;
+      return items;
+    } catch (_) {
+      _loadError = '办事大厅暂时不可用，下拉可重试';
+      return const [];
+    }
+  }
 
   Future<void> _refreshApplications() async {
     setState(() => _applicationsFuture = _loadApplications(forceRefresh: true));
@@ -8245,15 +8258,16 @@ class _ApplicationsPageState extends State<ApplicationsPage> {
 
   @override
   Widget build(BuildContext context) {
-    return AsyncPanel<List<EhallApplicationItem>>(
+    return FutureBuilder<List<EhallApplicationItem>>(
       future: _applicationsFuture,
-      emptyMessage: '暂无应用',
-      onSessionExpired: widget.onSessionExpired,
-      builder: (items) {
+      builder: (context, snapshot) {
+        final loading = snapshot.connectionState != ConnectionState.done;
+        final items = snapshot.data ?? const <EhallApplicationItem>[];
         final departments = _values(items.map((item) => item.department));
         final types = _values(items.map((item) => item.type));
         final tags = _values(items.expand((item) => item.tags));
         final filtered = items.where(_matches).toList();
+        final emptyMessage = _loadError ?? '没有匹配的应用';
         return PagePanel(
           title: '应用',
           icon: Icons.dashboard_customize,
@@ -8335,36 +8349,40 @@ class _ApplicationsPageState extends State<ApplicationsPage> {
               Expanded(
                 child: PageRefresh(
                   onRefresh: _refreshApplications,
-                  child: filtered.isEmpty
-                      ? ListView(
-                          physics: const AlwaysScrollableScrollPhysics(),
-                          children: const [
-                            SizedBox(height: 120),
-                            EmptyState(message: '没有匹配的应用'),
-                          ],
-                        )
-                      : LayoutBuilder(
-                          builder: (context, constraints) {
-                            final columns = _contentGridColumns(
-                              constraints.maxWidth,
-                              minTileWidth: 170,
-                              maxColumns: 4,
-                            );
-                            return GridView.builder(
+                  child: loading
+                      ? const Center(child: CircularProgressIndicator())
+                      : filtered.isEmpty
+                          ? ListView(
                               physics: const AlwaysScrollableScrollPhysics(),
-                              gridDelegate:
-                                  SliverGridDelegateWithFixedCrossAxisCount(
-                                crossAxisCount: columns,
-                                crossAxisSpacing: 10,
-                                mainAxisSpacing: 10,
-                                childAspectRatio: columns == 1 ? 3.4 : 1.35,
-                              ),
-                              itemCount: filtered.length,
-                              itemBuilder: (context, index) =>
-                                  _ApplicationItemTile(item: filtered[index]),
-                            );
-                          },
-                        ),
+                              children: [
+                                const SizedBox(height: 120),
+                                EmptyState(message: emptyMessage),
+                              ],
+                            )
+                          : LayoutBuilder(
+                              builder: (context, constraints) {
+                                final columns = _contentGridColumns(
+                                  constraints.maxWidth,
+                                  minTileWidth: 170,
+                                  maxColumns: 4,
+                                );
+                                return GridView.builder(
+                                  physics:
+                                      const AlwaysScrollableScrollPhysics(),
+                                  gridDelegate:
+                                      SliverGridDelegateWithFixedCrossAxisCount(
+                                    crossAxisCount: columns,
+                                    crossAxisSpacing: 10,
+                                    mainAxisSpacing: 10,
+                                    childAspectRatio: columns == 1 ? 3.4 : 1.35,
+                                  ),
+                                  itemCount: filtered.length,
+                                  itemBuilder: (context, index) =>
+                                      _ApplicationItemTile(
+                                          item: filtered[index]),
+                                );
+                              },
+                            ),
                 ),
               ),
             ],
@@ -15007,7 +15025,7 @@ class HomeWidgetGuidePage extends StatelessWidget {
         detail: '适合需要完整确认当天课程顺序时使用。',
       ),
       if (!_hideEcardOnCurrentPlatform)
-        _WidgetGuideItem(
+        const _WidgetGuideItem(
           icon: Icons.water_drop,
           title: '生活缴费',
           example: '电 9 度 · 冷水 12.3 吨 · 热水 4.6 吨',

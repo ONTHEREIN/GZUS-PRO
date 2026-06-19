@@ -1,0 +1,10 @@
+{
+  "app": {
+    "bundleName": "cn.gzus.pro.ohos",
+    "vendor": "gzus",
+    "versionCode": 1000004,
+    "versionName": "0.1.1",
+    "icon": "$media:app_icon",
+    "label": "$string:app_name"
+  }
+}

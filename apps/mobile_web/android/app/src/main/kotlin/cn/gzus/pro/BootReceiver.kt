@@ -15,7 +15,7 @@ class BootReceiver : BroadcastReceiver() {
         val prefs = context.getSharedPreferences(BackgroundService.PREFS_NAME, Context.MODE_PRIVATE)
         val hasSession = !prefs.getString(BackgroundService.KEY_SESSION_ID, "").isNullOrBlank()
         val hasBaseUrl = !prefs.getString(BackgroundService.KEY_API_BASE_URL, "").isNullOrBlank()
-        if (!hasSession || !hasBaseUrl) return
+        if (!hasSession || !hasBaseUrl || !BackgroundService.hasStoredAuthSession(context)) return
 
         val serviceIntent = Intent(context, BackgroundService::class.java).apply {
             action = BackgroundService.ACTION_START

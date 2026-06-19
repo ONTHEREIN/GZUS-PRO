@@ -1,7 +1,5 @@
 import 'dart:async';
 
-import 'api_client.dart' deferred as api_client;
-
 import 'web_push_service.dart' deferred as web_push_service;
 import 'local_notification_service.dart' deferred as local_notification_service;
 import 'push_service.dart' deferred as push_service;
@@ -11,12 +9,23 @@ import 'reminder_service.dart' deferred as reminder_service;
 import 'update_service.dart' deferred as update_service;
 import 'background_service.dart' deferred as background_service;
 
+// Preload-only deferred imports: these libraries are warmed up in
+// _loadOptionalServices() so their isolated chunks are downloaded before the
+// user first navigates to them. They are referenced solely via loadLibrary(),
+// which the analyzer flags as unused — hence the per-line ignore.
+// ignore: unused_import
 import 'ftp_upload_service.dart' deferred as ftp_upload_service;
+// ignore: unused_import
 import 'live_activity_service.dart' deferred as live_activity_service;
+// ignore: unused_import
 import 'live_update_service.dart' deferred as live_update_service;
+// ignore: unused_import
 import 'location_service.dart' deferred as location_service;
+// ignore: unused_import
 import 'avatar_open.dart' deferred as avatar_open;
+// ignore: unused_import
 import 'ics_download.dart' deferred as ics_download;
+// ignore: unused_import
 import 'leave_attachment.dart' deferred as leave_attachment;
 import 'mobile_sso.dart' deferred as mobile_sso;
 import 'web_pwa_cache.dart' deferred as web_pwa_cache;

@@ -37,6 +37,8 @@ DEFAULT_ENDPOINTS = [
     ("push_poll", "GET", "/push/poll", 1),
 ]
 
+PUBLIC_PATHS = {"/health"}
+
 PROFILE_ENDPOINTS = {
     "mixed": DEFAULT_ENDPOINTS,
     "schedule": [
@@ -205,7 +207,13 @@ async def validate_session(
     client: httpx.AsyncClient,
     base_url: str,
     session_id: str | None,
+    endpoints: list[Endpoint],
 ) -> None:
+    if not session_id and any(endpoint.path not in PUBLIC_PATHS for endpoint in endpoints):
+        raise RuntimeError(
+            "未提供 session，受保护接口无法预检。请传入 --session-id，或使用 "
+            "--credential-token/GZUS_CREDENTIAL_TOKEN 自动续登。"
+        )
     if not session_id:
         return
     sample = await single_request(
@@ -276,6 +284,8 @@ async def worker(
     ]
     while time.perf_counter() < deadline:
         async with counter_lock:
+            if max_401 is not None and unauthorized_counter[0] >= max_401:
+                return
             if max_requests is not None and request_counter[0] >= max_requests:
                 return
             request_counter[0] += 1
@@ -336,6 +346,12 @@ def render_report(stats: RunStats) -> None:
         f"max={max(latencies) if latencies else 0:.1f}"
     )
     print(f"状态码: {dict(statuses)}")
+    html_errors = sum(
+        1
+        for sample in stats.samples
+        if sample.error and "<!doctype html" in sample.error.lower()
+    )
+    print(f"HTML错误回包: {html_errors}")
 
     print("\n--- 按接口统计 ---")
     for endpoint, samples in sorted(by_endpoint.items()):
@@ -416,7 +432,7 @@ async def run(args: argparse.Namespace) -> int:
         if not session_id and any(endpoint.path != "/health" for endpoint in endpoints):
             print("未提供 session，除 /health 外的接口可能返回 401。")
         if args.preflight:
-            await validate_session(client, base_url, session_id)
+            await validate_session(client, base_url, session_id, endpoints)
 
         if args.warmup > 0:
             print(f"预热 {args.warmup} 秒...")

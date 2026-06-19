@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import concurrent.futures
 import hashlib
+import json
 import logging
+import threading
+import time
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlencode
@@ -12,6 +15,11 @@ import httpx
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
+
+# ─── Global token cache (all users share one ECARD_OPENID/SECRET) ───
+_TOKEN_CACHE_LOCK = threading.Lock()
+_GLOBAL_TOKEN: dict[str, Any] = {"token": None, "unionid": None, "cached_at": 0.0}
+_TOKEN_TTL = 3000  # 50 minutes (conservative; EdgeOne uses 60min)
 
 
 class EcardConfigurationError(RuntimeError):
@@ -106,6 +114,58 @@ def public_room(room: dict[str, Any]) -> dict[str, str]:
     }
 
 
+def _load_token_from_db() -> None:
+    """Load global ecard token from DataCache on cold start."""
+    try:
+        from app.database import DataCache, get_sync_session_factory
+        factory = get_sync_session_factory()
+        with factory() as db:
+            row = db.query(DataCache).filter(
+                DataCache.cache_key == "ecard_global_token"
+            ).first()
+            if row and row.response_json:
+                data = json.loads(row.response_json)
+                ts = row.cached_at.timestamp() if row.cached_at else 0.0
+                _GLOBAL_TOKEN.update(token=data.get("token"), unionid=data.get("unionid"), cached_at=ts)
+    except Exception as exc:
+        logger.warning("ecard_client: load token from DB failed: %s", exc)
+
+
+def _save_token_to_db(token: str, unionid: str | None) -> None:
+    """Persist global ecard token to DataCache for cold-start recovery."""
+    try:
+        from app.database import DataCache, get_sync_session_factory
+        factory = get_sync_session_factory()
+        with factory() as db:
+            row = db.query(DataCache).filter(
+                DataCache.cache_key == "ecard_global_token"
+            ).first()
+            payload = json.dumps({"token": token, "unionid": unionid or ""})
+            if row is None:
+                db.add(DataCache(
+                    cache_key="ecard_global_token", student_id="",
+                    resource="ecard", response_json=payload,
+                ))
+            else:
+                row.response_json = payload
+                row.cached_at = None  # trigger default
+            db.commit()
+    except Exception as exc:
+        logger.warning("ecard_client: save token to DB failed: %s", exc)
+
+
+def _delete_token_from_db() -> None:
+    """Delete global ecard token from DataCache (on invalidation)."""
+    try:
+        from app.database import DataCache, get_sync_session_factory
+        factory = get_sync_session_factory()
+        with factory() as db:
+            db.query(DataCache).filter(DataCache.cache_key == "ecard_global_token").delete()
+            db.commit()
+    except Exception:
+        pass
+
+
 class EcardClient:
     def __init__(self, worker_proxy_origin: str | None = None) -> None:
         self.settings = get_settings()
@@ -123,8 +183,13 @@ class EcardClient:
 
     def _get_http_client(self) -> httpx.Client:
         if self._http_client is None or self._http_client.is_closed:
+            # Use 8s timeout for direct mode (fits within Vercel's 10s limit
+            # while allowing for US→China network latency).
+            timeout = self.settings.request_timeout_seconds
+            if not self._worker_proxy_origin:
+                timeout = max(timeout, 8)
             self._http_client = httpx.Client(
-                timeout=self.settings.request_timeout_seconds,
+                timeout=timeout,
                 verify=self.settings.ecard_verify_tls,
                 limits=httpx.Limits(max_connections=4, max_keepalive_connections=2),
             )
@@ -224,19 +289,60 @@ class EcardClient:
     def login(self) -> str:
         if self._token:
             return self._token
+        # 1. Check module-level cache (hot path, no DB I/O)
+        with _TOKEN_CACHE_LOCK:
+            if _GLOBAL_TOKEN["token"] and (time.time() - _GLOBAL_TOKEN["cached_at"] < _TOKEN_TTL):
+                self._token = _GLOBAL_TOKEN["token"]
+                self._unionid = _GLOBAL_TOKEN["unionid"] or self._unionid
+                return self._token
+        # 2. Cold start: load from DB
+        if not _GLOBAL_TOKEN["token"]:
+            _load_token_from_db()
+            with _TOKEN_CACHE_LOCK:
+                if _GLOBAL_TOKEN["token"] and (time.time() - _GLOBAL_TOKEN["cached_at"] < _TOKEN_TTL):
+                    self._token = _GLOBAL_TOKEN["token"]
+                    self._unionid = _GLOBAL_TOKEN["unionid"] or self._unionid
+                    return self._token
+        # 3. Cache miss: do actual login
         data = self.post_api("/user/routine/routine-login", {"from": "wxminiprogram"})
         token = data.get("token")
         if data.get("code") == 200 and token:
             self._token = str(token)
             if data.get("unionid"):
                 self._unionid = str(data["unionid"])
-            logger.info("ecard_client: login success")
+            # Update global cache + persist to DB
+            with _TOKEN_CACHE_LOCK:
+                _GLOBAL_TOKEN.update(
+                    token=self._token, unionid=self._unionid, cached_at=time.time(),
+                )
+            _save_token_to_db(self._token, self._unionid)
+            logger.info("ecard_client: login success, token cached globally")
             return self._token
         logger.error("ecard_client: login failed, code=%s msg=%s", data.get("code"), data.get("msg"))
         raise EcardApiError(str(data.get("msg") or "一卡通登录失败"))
 
+    def _invalidate_token(self) -> None:
+        """Clear cached token (module-level + DB) on auth failure."""
+        with _TOKEN_CACHE_LOCK:
+            _GLOBAL_TOKEN.update(token=None, unionid=None, cached_at=0.0)
+        self._token = None
+        _delete_token_from_db()
+        logger.info("ecard_client: token invalidated due to auth failure")
+
+    def _post_with_token_retry(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Post API call with automatic token refresh on auth failure (code=203)."""
+        token = self.login()
+        data = self.post_api(path, params, token=token)
+        # Detect auth failure: code=203 or "未登录" in message
+        if data.get("code") == 203 or "未登录" in str(data.get("msg", "")):
+            logger.info("ecard_client: token expired (code=%s), refreshing...", data.get("code"))
+            self._invalidate_token()
+            token = self.login()
+            data = self.post_api(path, params, token=token)
+        return data
+
     def current_user(self) -> dict[str, Any]:
-        data = self.post_api("/user/routine/getCurrentUser", token=self.login())
+        data = self._post_with_token_retry("/user/routine/getCurrentUser")
         if not is_ok(data):
             raise EcardApiError(str(data.get("msg") or "获取一卡通用户失败"))
         return data.get("obj") or {}
@@ -250,7 +356,13 @@ class EcardClient:
         def _fetch_one(impl_type: str) -> list[dict[str, Any]]:
             data = self.post_api("/powerfee/getRoomInfo", {"implType": impl_type}, token=token)
             if not is_ok(data):
-                return []
+                # Retry on auth failure
+                if data.get("code") == 203 or "未登录" in str(data.get("msg", "")):
+                    self._invalidate_token()
+                    token_fresh = self.login()
+                    data = self.post_api("/powerfee/getRoomInfo", {"implType": impl_type}, token=token_fresh)
+                if not is_ok(data):
+                    return []
             obj = data.get("obj") or []
             return obj if isinstance(obj, list) else [obj]
 
@@ -291,6 +403,21 @@ class EcardClient:
             },
             token=token,
         )
+        # Retry on auth failure
+        if power_data.get("code") == 203 or "未登录" in str(power_data.get("msg", "")):
+            self._invalidate_token()
+            token = self.login()
+            power_data = self.post_api(
+                "/powerfee/getBalance",
+                {
+                    "implType": room_ref.impl_type,
+                    "schoolAreaNo": room_ref.school_area_no,
+                    "buildingNo": room_ref.building_no,
+                    "roomNum": room_ref.room_num,
+                    "studentId": student_id,
+                },
+                token=token,
+            )
         if not is_ok(power_data):
             logger.error("ecard_client: getBalance failed, code=%s msg=%s", power_data.get("code") or power_data.get("resCode"), power_data.get("msg"))
             raise EcardApiError(str(power_data.get("msg") or "获取水电费失败"))
@@ -321,7 +448,7 @@ class EcardClient:
         }
 
     def consumption(self, room_ref: EcardRoomRef, month: str) -> dict[str, Any]:
-        data = self.post_api(
+        data = self._post_with_token_retry(
             "/powerfee/getDailyDetails",
             {
                 "roomNum": room_ref.room_num,
@@ -332,7 +459,6 @@ class EcardClient:
                 "pageNum": "1",
                 "pageSize": "31",
             },
-            token=self.login(),
         )
         if data.get("status") == "ok" and isinstance(data.get("items"), list):
             return data

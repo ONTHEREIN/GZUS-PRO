@@ -3,6 +3,7 @@ import 'dart:async';
 import 'dart:io' show HttpClient, SocketException;
 
 import 'package:flutter/foundation.dart';
+import 'package:gbk_codec/gbk_codec.dart';
 import 'package:http/io_client.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -145,6 +146,7 @@ class LoginResult {
     this.captchaImage,
     this.loginMethod,
     this.credentialToken,
+    this.jwxtCookies,
     this.ehallCookies,
     this.ehallAuthToken,
   });
@@ -158,6 +160,8 @@ class LoginResult {
         captchaImage: json['captchaImage'] as String?,
         loginMethod: json['loginMethod'] as String?,
         credentialToken: json['credentialToken'] as String?,
+        jwxtCookies:
+            json['jwxtCookies'] as String? ?? json['cookies'] as String?,
         ehallCookies: json['ehallCookies'] as String?,
         ehallAuthToken: json['ehallAuthToken'] as String?,
       );
@@ -174,6 +178,9 @@ class LoginResult {
 
   /// 用于自动重新登录的凭证令牌
   final String? credentialToken;
+
+  /// 教务系统 cookies，仅原生移动端前台直连学校接口时使用。
+  final String? jwxtCookies;
 
   /// 办事大厅 WebView 登录态。
   final String? ehallCookies;
@@ -1184,8 +1191,24 @@ bool get _isNativeMobile =>
     (defaultTargetPlatform == TargetPlatform.android ||
         defaultTargetPlatform == TargetPlatform.iOS);
 
+bool get _isSchoolDirectEnabled =>
+    !kIsWeb &&
+    !debugDisableSchoolDirectForTests &&
+    (debugEnableSchoolDirectForTests ||
+        defaultTargetPlatform == TargetPlatform.android ||
+        defaultTargetPlatform == TargetPlatform.iOS);
+
 @visibleForTesting
 bool debugDisableEcardDirectForTests = false;
+
+@visibleForTesting
+bool debugDisableSchoolDirectForTests = false;
+
+@visibleForTesting
+bool debugEnableSchoolDirectForTests = false;
+
+@visibleForTesting
+http.Client? debugSchoolDirectHttpClientForTests;
 
 class ApiClient {
   ApiClient({http.Client? httpClient, String? baseUrl, RequestCache? cache})
@@ -1223,9 +1246,11 @@ class ApiClient {
   final Map<String, DateTime> _backgroundRefreshAt = {};
   String? sessionId;
   String? _studentId;
+  String? _account;
   PersistentCache? _persistentCache;
   Future<PersistentCache>? _persistentCacheFuture;
   String? _credentialToken;
+  String? _jwxtCookies;
   String? _ehallCookies;
   String? _ehallAuthToken;
   String? _rsaPublicKeyPem;
@@ -1253,8 +1278,13 @@ class ApiClient {
 
   String get namespace => _studentId ?? sessionId ?? 'default';
   String? get studentId => _studentId;
+  String? get jwxtCookies => _jwxtCookies;
   String? get ehallCookies => _ehallCookies;
   String? get ehallAuthToken => _ehallAuthToken;
+
+  void setJwxtCookies(String? value) {
+    _jwxtCookies = value;
+  }
 
   void setEhallCookies(String? value) {
     _ehallCookies = value;
@@ -1526,6 +1556,7 @@ class ApiClient {
   }
 
   Future<LoginResult> login(String account, String password) async {
+    _account = account;
     await fetchPublicKey();
     Map<String, dynamic> body = {'account': account};
     if (_rsaPublicKeyPem != null && _rsaKeyId != null) {
@@ -1544,6 +1575,7 @@ class ApiClient {
     sessionId = result.sessionId;
     _captureTransientEhallAuth(result);
     _cache.clear();
+    await _saveEhallAuth(result);
     return result;
   }
 
@@ -1556,6 +1588,7 @@ class ApiClient {
     sessionId = result.sessionId;
     _captureTransientEhallAuth(result);
     _cache.clear();
+    await _saveEhallAuth(result);
     return result;
   }
 
@@ -1565,10 +1598,12 @@ class ApiClient {
     sessionId = result.sessionId;
     _captureTransientEhallAuth(result);
     _cache.clear();
+    await _saveEhallAuth(result);
     return result;
   }
 
   Future<LoginResult> autoLogin(String account, String password) async {
+    _account = account;
     await fetchPublicKey();
     Map<String, dynamic> body = {'account': account};
     if (_rsaPublicKeyPem != null && _rsaKeyId != null) {
@@ -1590,6 +1625,7 @@ class ApiClient {
     if (result.credentialToken != null) {
       _credentialToken = result.credentialToken;
     }
+    await _saveEhallAuth(result);
     return result;
   }
 
@@ -1637,10 +1673,27 @@ class ApiClient {
 
   /// 立即清除凭证，防止后续请求触发 relogin 重试
   void clearCredentials() {
+    sessionId = null;
     _credentialToken = null;
+    _jwxtCookies = null;
     _ehallCookies = null;
     _ehallAuthToken = null;
     _cache.clear();
+  }
+
+  Future<void> clearSavedAuthState() async {
+    clearCredentials();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('auth.sessionId');
+    await prefs.remove('auth.studentName');
+    await prefs.remove('auth.studentId');
+    await prefs.remove('auth.ehallCookies');
+    await prefs.remove('auth.ehallAuthToken');
+    await prefs.remove('auth.loginMethod');
+    await prefs.remove('auth.credentialToken');
+    await prefs.remove('auth.account');
+    await prefs.remove('auth.password');
+    await prefs.remove('auth.rememberPassword');
   }
 
   Future<LoginResult> relogin() async {
@@ -1696,6 +1749,7 @@ class ApiClient {
     String password, {
     required bool remember,
   }) async {
+    _account = account;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('auth.rememberPassword', remember);
     await prefs.remove('auth.password');
@@ -1725,6 +1779,7 @@ class ApiClient {
 
   Future<void> loadSavedCredentials() async {
     final prefs = await SharedPreferences.getInstance();
+    _account = prefs.getString('auth.account');
     _credentialToken = prefs.getString('auth.credentialToken');
     _ehallCookies = prefs.getString('auth.ehallCookies');
     _ehallAuthToken = prefs.getString('auth.ehallAuthToken');
@@ -1787,6 +1842,11 @@ class ApiClient {
   }
 
   void _captureTransientEhallAuth(LoginResult result) {
+    if (_isSchoolDirectEnabled &&
+        result.jwxtCookies != null &&
+        result.jwxtCookies!.isNotEmpty) {
+      _jwxtCookies = result.jwxtCookies;
+    }
     _ehallCookies = result.ehallCookies;
     _ehallAuthToken = result.ehallAuthToken;
   }
@@ -1831,12 +1891,59 @@ class ApiClient {
     }
   }
 
+  SchoolDirectClient? _schoolDirectClient() {
+    final cookies = _jwxtCookies;
+    if (!_isSchoolDirectEnabled || cookies == null || cookies.isEmpty) {
+      return null;
+    }
+    return SchoolDirectClient(
+      cookies: cookies,
+      account: _account ?? _studentId,
+      httpClient: debugSchoolDirectHttpClientForTests ?? _http,
+    );
+  }
+
+  Future<List<Map<String, dynamic>>> _schoolDirectListOrApi({
+    required String path,
+    required Future<List<Map<String, dynamic>>> Function(SchoolDirectClient)
+        direct,
+  }) async {
+    final client = _schoolDirectClient();
+    if (client != null) {
+      try {
+        final data = await direct(client);
+        if (data.isNotEmpty || path != '/credits') return data;
+      } catch (_) {
+        // Direct school access is best-effort; keep existing API fallback.
+      }
+    }
+    return _getList(path);
+  }
+
+  Future<Map<String, dynamic>> _schoolDirectObjectOrApi({
+    required String path,
+    required Future<Map<String, dynamic>> Function(SchoolDirectClient) direct,
+  }) async {
+    final client = _schoolDirectClient();
+    if (client != null) {
+      try {
+        return await direct(client);
+      } catch (_) {
+        // Direct school access is best-effort; keep existing API fallback.
+      }
+    }
+    return _get(path);
+  }
+
   Future<DataResult<ScheduleResult>> schedule(
       {required int year, required int term, bool forceRefresh = false}) async {
     final cacheKey = 'schedule_${year}_$term';
     return _cacheFirstList<ScheduleCourse>(
       cacheKey: cacheKey,
-      fetch: () => _getList('/schedule?year=$year&term=$term'),
+      fetch: () => _schoolDirectListOrApi(
+        path: '/schedule?year=$year&term=$term',
+        direct: (client) => client.schedule(year: year, term: term),
+      ),
       fromJson: (json) => ScheduleCourse.fromJson(json),
       forceRefresh: forceRefresh,
     ).then(
@@ -1854,7 +1961,10 @@ class ApiClient {
           {required int year, required int term, bool forceRefresh = false}) =>
       _cacheFirstList<ExamItem>(
         cacheKey: 'exams_${year}_$term',
-        fetch: () => _getList('/exams?year=$year&term=$term'),
+        fetch: () => _schoolDirectListOrApi(
+          path: '/exams?year=$year&term=$term',
+          direct: (client) => client.exams(year: year, term: term),
+        ),
         fromJson: (json) => ExamItem.fromJson(json),
         forceRefresh: forceRefresh,
       );
@@ -1863,7 +1973,10 @@ class ApiClient {
           {required int year, required int term, bool forceRefresh = false}) =>
       _cacheFirstList<GradeItem>(
         cacheKey: 'grades_${year}_$term',
-        fetch: () => _getList('/grades?year=$year&term=$term'),
+        fetch: () => _schoolDirectListOrApi(
+          path: '/grades?year=$year&term=$term',
+          direct: (client) => client.grades(year: year, term: term),
+        ),
         fromJson: (json) => GradeItem.fromJson(json),
         forceRefresh: forceRefresh,
       );
@@ -1872,7 +1985,10 @@ class ApiClient {
           {required int year, required int term, bool forceRefresh = false}) =>
       _cacheFirstObject<AttendanceResponse>(
         cacheKey: 'attendance_${year}_$term',
-        fetch: () => _get('/attendance?year=$year&term=$term'),
+        fetch: () => _schoolDirectObjectOrApi(
+          path: '/attendance?year=$year&term=$term',
+          direct: (client) => client.attendance(year: year, term: term),
+        ),
         fromJson: (json) => AttendanceResponse.fromJson(json),
         forceRefresh: forceRefresh,
       );
@@ -1880,7 +1996,10 @@ class ApiClient {
   Future<DataResult<List<CreditItem>>> credits({bool forceRefresh = false}) =>
       _cacheFirstList<CreditItem>(
         cacheKey: 'credits',
-        fetch: () => _getList('/credits'),
+        fetch: () => _schoolDirectListOrApi(
+          path: '/credits',
+          direct: (client) => client.credits(),
+        ),
         fromJson: (json) => CreditItem.fromJson(json),
         forceRefresh: forceRefresh,
       );
@@ -2429,8 +2548,7 @@ class ApiClient {
     } on ApiException catch (e) {
       if (e.statusCode == 401) {
         if (e.isSingleDeviceConflict) {
-          await clearSavedCredentialToken();
-          clearCredentials();
+          await clearSavedAuthState();
           onReloginFailed?.call();
           rethrow;
         }
@@ -2438,6 +2556,7 @@ class ApiClient {
         if (_credentialToken == null) {
           // 无凭证 token 则无法自动 relogin（如密码登录场景），
           // 抛出友好提示引导用户手动重新登录
+          await clearSavedAuthState();
           throw ApiException('登录已过期，请重新登录', statusCode: 401);
         }
         // --- Relogin with backoff ---
@@ -2461,10 +2580,11 @@ class ApiClient {
         } on ApiException catch (e) {
           _consecutiveReloginFailures++;
           // relogin 本身失败，清除凭证和触发 onReloginFailed
-          if (e.isSingleDeviceConflict) {
-            await clearSavedCredentialToken();
+          if (e.statusCode == 401) {
+            await clearSavedAuthState();
+          } else {
+            _credentialToken = null;
           }
-          _credentialToken = null;
           onReloginFailed?.call();
           rethrow;
         } catch (e) {
@@ -2477,7 +2597,15 @@ class ApiClient {
         if (reloginSucceeded) {
           // 重试请求，如果仍然 401 说明该 API 需要特殊权限（如 ehall），
           // 不是 session 过期问题，直接抛出异常
-          return await request();
+          try {
+            return await request();
+          } on ApiException catch (e) {
+            if (e.statusCode == 401) {
+              await clearSavedAuthState();
+              onReloginFailed?.call();
+            }
+            rethrow;
+          }
         }
       }
       // 5xx errors: retry once on same host before switching
@@ -2536,6 +2664,7 @@ class ApiClient {
   Map<String, String> _headers() => {
         'Content-Type': 'application/json',
         'User-Agent': 'Mozilla/5.0 (Linux; Android 16) GZUS-PRO/1.0',
+        'X-Client-Platform': kIsWeb ? 'web' : defaultTargetPlatform.name,
         if (sessionId != null) 'X-Session-Id': sessionId!,
       };
 
@@ -2737,6 +2866,342 @@ String generateExamIcs({
   return ('${dateStr}T090000', '${dateStr}T110000');
 }
 
+// Direct JWXT API client for native mobile foreground reads.
+class SchoolDirectClient {
+  SchoolDirectClient({
+    required this.cookies,
+    required this.account,
+    required http.Client httpClient,
+  }) : _http = httpClient;
+
+  static const _base = 'https://jwxt.seig.edu.cn/jwglxt';
+  final String cookies;
+  final String? account;
+  final http.Client _http;
+
+  Future<List<Map<String, dynamic>>> schedule({
+    required int year,
+    required int term,
+  }) async {
+    final data = await _postJson(
+      '$_base/kbcx/xskbcx_cxXsKb.html',
+      _academicParams(year: year, term: term)..['kzlx'] = 'ck',
+    );
+    return _normalizeList(
+        _extractList(data, preferredKey: 'kbList'), 'schedule');
+  }
+
+  Future<List<Map<String, dynamic>>> exams({
+    required int year,
+    required int term,
+  }) async {
+    final data = await _postJson(
+      '$_base/kwgl/kscx_cxXsksxxIndex.html?doType=query&gnmkdm=N358105',
+      _academicParams(year: year, term: term)
+        ..addAll({
+          'ksmcdmb_id': '',
+          'kch': '',
+          'kc': '',
+          'ksrq': '',
+        }),
+    );
+    return _normalizeList(_extractList(data), 'exams');
+  }
+
+  Future<List<Map<String, dynamic>>> grades({
+    required int year,
+    required int term,
+  }) async {
+    final data = await _postJson(
+      '$_base/cjcx/cjcx_cxXsgrcj.html?doType=query&gnmkdm=N305005',
+      _academicParams(year: year, term: term)
+        ..addAll({
+          'kch': '',
+          'kc': '',
+        }),
+    );
+    return _normalizeList(_extractList(data), 'grades');
+  }
+
+  Future<Map<String, dynamic>> attendance({
+    required int year,
+    required int term,
+  }) async {
+    final studentId = account;
+    if (studentId == null || studentId.isEmpty) {
+      throw ApiException('缺少学号，无法直连考勤');
+    }
+    final data = await _postJson(
+      '$_base/jxdmgl/jxdmqkcx_cxJxdmqkcxIndex.html?doType=query&gnmkdm=N254315',
+      {
+        'xh': studentId,
+        'xm': '',
+        'xh_id': '',
+        'xnm': '$year',
+        'xqm': _termCode(term),
+        'kch': '',
+        'kch_id': '',
+        'gnmkdm': 'N254315',
+        'queryModel.showCount': '100',
+        'queryModel.currentPage': '1',
+        'queryModel.sortName': '',
+        'queryModel.sortOrder': 'asc',
+      },
+    );
+    return {
+      'status': 'ok',
+      'items': _normalizeList(_extractList(data), 'attendance'),
+    };
+  }
+
+  Future<List<Map<String, dynamic>>> credits() async {
+    final studentId = account;
+    if (studentId == null || studentId.isEmpty) {
+      throw ApiException('缺少学号，无法直连学分');
+    }
+    final data = await _postJson(
+      '$_base/design/funcData_cxFuncDataList.html?func_widget_guid=37234863CD24BB76E063860810AC3761&gnmkdm=N255022',
+      {
+        'gnmkdm': 'N255022',
+        'xh': studentId,
+        'queryModel.showCount': '15',
+        'queryModel.currentPage': '1',
+        'queryModel.sortName': ' ',
+        'queryModel.sortOrder': 'asc',
+      },
+    );
+    final list = _extractList(data);
+    if (list.isNotEmpty) return _normalizeList(list, 'credits');
+    if (data.isNotEmpty) return [_normalizeCreditItem(data)];
+    return const [];
+  }
+
+  Map<String, String> _academicParams({
+    required int year,
+    required int term,
+  }) =>
+      {
+        'xnm': '$year',
+        'xqm': _termCode(term),
+        '_search': 'false',
+        'nd': '${DateTime.now().millisecondsSinceEpoch}',
+        'queryModel.showCount': '100',
+        'queryModel.currentPage': '1',
+        'queryModel.sortName': '',
+        'queryModel.sortOrder': 'asc',
+        'time': '1',
+      };
+
+  static String _termCode(int term) {
+    const termMap = {1: '3', 2: '12', 3: '16'};
+    return termMap[term] ?? '';
+  }
+
+  Future<Map<String, dynamic>> _postJson(
+    String url,
+    Map<String, String> body,
+  ) async {
+    final response = await _http
+        .post(
+          Uri.parse(url),
+          headers: {
+            'Cookie': cookies,
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'User-Agent': 'Mozilla/5.0 (Linux; Android 16) GZUS-PRO/1.0',
+            'Referer': '$_base/xtgl/index_initMenu.html',
+          },
+          body: body,
+        )
+        .timeout(const Duration(seconds: 15));
+    if (response.statusCode >= 400) {
+      throw ApiException('教务系统直连失败', statusCode: response.statusCode);
+    }
+    final text = _decodeAcademicBody(response.bodyBytes);
+    if (_looksLikeLoginPage(text)) {
+      throw ApiException('教务系统会话已失效', statusCode: 401);
+    }
+    final decoded = jsonDecode(text);
+    if (decoded is! Map<String, dynamic>) {
+      throw ApiException('教务系统返回了意外的数据格式');
+    }
+    return decoded;
+  }
+
+  String _decodeAcademicBody(List<int> bytes) {
+    try {
+      return utf8.decode(bytes);
+    } on FormatException {
+      return gbk.decode(bytes);
+    }
+  }
+
+  bool _looksLikeLoginPage(String value) =>
+      value.contains('login_slogin') ||
+      RegExp("<input[^>]*type\\s*=\\s*[\"']password[\"']", caseSensitive: false)
+          .hasMatch(value);
+
+  List<Map<String, dynamic>> _extractList(
+    Map<String, dynamic> data, {
+    String? preferredKey,
+  }) {
+    final keys = [
+      if (preferredKey != null) preferredKey,
+      'items',
+      'rows',
+      'list',
+      'data',
+    ];
+    for (final key in keys) {
+      final value = data[key];
+      if (value is List<dynamic>) {
+        return value.whereType<Map<String, dynamic>>().toList();
+      }
+      if (value is Map<String, dynamic>) {
+        final nested = _extractList(value);
+        if (nested.isNotEmpty) return nested;
+      }
+    }
+    return const [];
+  }
+
+  List<Map<String, dynamic>> _normalizeList(
+    List<Map<String, dynamic>> items,
+    String path,
+  ) =>
+      [
+        for (final item in items)
+          switch (path) {
+            'schedule' => _normalizeScheduleCourse(item),
+            'exams' => _normalizeExamItem(item),
+            'grades' => _normalizeGradeItem(item),
+            'attendance' => _normalizeAttendanceItem(item),
+            'credits' => _normalizeCreditItem(item),
+            _ => item,
+          }
+      ];
+
+  Map<String, dynamic> _normalizeGradeItem(Map<String, dynamic> item) => {
+        'courseName': item['kcmc'] ?? item['courseName'] ?? item['name'] ?? '',
+        'score': _stringOrNull(item['cj']) ?? item['score'],
+        'credit': _stringOrNull(item['xf']) ?? item['credit'],
+        'gradePoint': _stringOrNull(item['jd']) ?? item['gradePoint'],
+        'term': item['xqmc'] ?? item['xq'] ?? item['term'],
+      };
+
+  Map<String, dynamic> _normalizeScheduleCourse(Map<String, dynamic> item) {
+    final range = _parseSectionRange(
+      item['ksjc'] ?? item['jcs'] ?? item['jc'] ?? item['startSection'],
+    );
+    return {
+      'name': item['kcmc'] ?? item['name'] ?? item['courseName'] ?? '',
+      'teacher': item['jsxx'] ?? item['jsxm'] ?? item['xm'] ?? item['teacher'],
+      'classroom': item['cdmc'] ?? item['classroom'] ?? item['location'],
+      'weekday': item['xqj'] ?? item['weekday'] ?? item['weekDay'],
+      'startSection': range.$1 ?? item['startSection'],
+      'endSection': range.$2 ?? item['endSection'],
+      'weeks': item['zcd'] ?? item['weeks'] ?? item['week'],
+      'kcbmc': item['kcbmc'],
+      'raw': item,
+    };
+  }
+
+  Map<String, dynamic> _normalizeExamItem(Map<String, dynamic> item) {
+    final rawTime =
+        (item['kssj'] ?? item['time'] ?? item['examTime'] ?? '').toString();
+    var date = (item['date'] ?? item['examDate'] ?? '').toString();
+    if (date.length < 8 && rawTime.isNotEmpty) {
+      final parenIdx = rawTime.indexOf('(');
+      final spaceIdx = rawTime.indexOf(' ');
+      final sepIdx = parenIdx > 0 ? parenIdx : (spaceIdx > 0 ? spaceIdx : -1);
+      if (sepIdx > 0) {
+        date = rawTime.substring(0, sepIdx);
+      } else if (rawTime.length >= 10 && rawTime[4] == '-') {
+        date = rawTime.substring(0, 10);
+      }
+    }
+    var weekday =
+        (item['weekday'] ?? item['weekDay'] ?? item['xqj'] ?? '').toString();
+    if (weekday.isEmpty && date.isNotEmpty) {
+      final parsed = DateTime.tryParse(date);
+      const names = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+      if (parsed != null) weekday = names[parsed.weekday - 1];
+    }
+    final name = item['kcmc'] ?? item['courseName'] ?? item['name'] ?? '';
+    return {
+      'courseName': name,
+      'name': name,
+      'date': date,
+      'weekday': weekday,
+      'time': rawTime.replaceAll('(', ' ').replaceAll(')', ''),
+      'location': item['cdmc'] ?? item['location'] ?? item['examPlace'],
+      'seat': _stringOrNull(item['zwh']) ?? item['seat'] ?? item['seatNo'],
+      'type': item['ksmc'] ?? item['ksfs'] ?? item['type'] ?? item['kslx'],
+      'credit': _stringOrNull(item['xf']) ?? item['credit'] ?? '',
+      'campus': item['cdxqmc'] ?? item['campus'],
+      'remark': item['ksbz'] ?? item['remark'],
+    };
+  }
+
+  Map<String, dynamic> _normalizeAttendanceItem(Map<String, dynamic> item) => {
+        'courseName': item['kcmc'] ?? item['courseName'] ?? item['name'] ?? '',
+        'courseCode': item['kch'] ?? item['courseCode'],
+        'academicYear': item['xnmc'] ?? item['xn'] ?? item['academicYear'],
+        'term': '${item['xqmc'] ?? item['xq'] ?? item['term'] ?? ''}',
+        'normal': _intDirect(item['cs_01'] ?? item['normal']),
+        'late': _intDirect(item['cs_02'] ?? item['late']),
+        'leaveEarly': _intDirect(item['cs_03'] ?? item['leaveEarly']),
+        'absent': _intDirect(item['cs_04'] ?? item['absent']),
+        'leave': _intDirect(item['cs_05'] ?? item['leave']),
+        'total': _intDirect(item['totalresult'] ?? item['total']),
+        'records': const [],
+      };
+
+  Map<String, dynamic> _normalizeCreditItem(Map<String, dynamic> item) {
+    final reqExp = _doubleDirect(item['yqxf_01'] ?? item['requiredExpected']);
+    final eleExp = _doubleDirect(item['yqxf_02'] ?? item['electiveExpected']);
+    final othExp = _doubleDirect(item['yqxf_03'] ?? item['otherExpected']);
+    final reqEar = _doubleDirect(item['sxxf_01'] ?? item['requiredEarned']);
+    final eleEar = _doubleDirect(item['sxxf_02'] ?? item['electiveEarned']);
+    final othEar = _doubleDirect(item['sxxf_03'] ?? item['otherEarned']);
+    return {
+      'studentId': '${item['xh'] ?? item['studentId'] ?? ''}',
+      'name': item['xm'] ?? item['name'],
+      'college': item['jgmc'] ?? item['college'],
+      'major': item['zymc'] ?? item['major'],
+      'grade': '${item['nj'] ?? item['grade'] ?? ''}',
+      'totalCredit': '${item['zdxf'] ?? item['totalCredit'] ?? ''}',
+      'requiredCredit': '${item['bxxf'] ?? item['requiredCredit'] ?? ''}',
+      'selectedCredit': '${item['xkxf'] ?? item['selectedCredit'] ?? ''}',
+      'requiredExpected': reqExp,
+      'electiveExpected': eleExp,
+      'otherExpected': othExp,
+      'requiredEarned': reqEar,
+      'electiveEarned': eleEar,
+      'otherEarned': othEar,
+      'totalExpected': reqExp + eleExp + othExp,
+      'totalEarned': reqEar + eleEar + othEar,
+    };
+  }
+
+  (int?, int?) _parseSectionRange(dynamic value) {
+    if (value == null) return (null, null);
+    final text = '$value';
+    final dash = text.indexOf('-');
+    if (dash > 0) {
+      return (
+        int.tryParse(text.substring(0, dash)),
+        int.tryParse(text.substring(dash + 1)),
+      );
+    }
+    final parsed = int.tryParse(text);
+    return (parsed, parsed);
+  }
+
+  String? _stringOrNull(dynamic value) => value == null ? null : '$value';
+  int _intDirect(dynamic value) => int.tryParse('${value ?? 0}') ?? 0;
+  double _doubleDirect(dynamic value) => double.tryParse('${value ?? 0}') ?? 0;
+}
+
 // ============================================================
 // Direct ecard API client — bypasses Vercel/Worker entirely.
 // Calls ecarduser.gzus.edu.cn from the user's device.
@@ -2750,8 +3215,28 @@ class EcardDirectClient {
       'AppleWebKit/605.1.15 (KHTML, like Gecko) '
       'Mobile/15E148 MicroMessenger/8.0.38 NetType/WIFI Language/zh_CN';
 
-  String? _token;
-  String? _unionid;
+  // Static token cache — shared across all EcardDirectClient instances within
+  // the same app session. Avoids re-login on every API call.
+  static String? _cachedToken;
+  static String? _cachedUnionid;
+  static DateTime? _cachedAt;
+  static const _tokenTtl = Duration(minutes: 50);
+
+  String? get _token => (_cachedAt != null &&
+      DateTime.now().difference(_cachedAt!) < _tokenTtl) ? _cachedToken : null;
+  set _token(String? v) {
+    _cachedToken = v;
+    _cachedAt = DateTime.now();
+  }
+
+  String? get _unionid => _cachedUnionid;
+  set _unionid(String? v) => _cachedUnionid = v;
+
+  void _invalidateToken() {
+    _cachedToken = null;
+    _cachedUnionid = null;
+    _cachedAt = null;
+  }
 
   static String _md5(String s) {
     // Pure Dart MD5
@@ -2763,7 +3248,7 @@ class EcardDirectClient {
       ..remove('token')
       ..remove('sign');
     final keys = filtered.keys.toList()..sort();
-    final raw = keys.map((k) => '$k=${filtered[k]}').join('&') + '&$_secret';
+    final raw = '${keys.map((k) => '$k=${filtered[k]}').join('&')}&$_secret';
     return _md5(raw).toUpperCase();
   }
 
@@ -2820,7 +3305,13 @@ class EcardDirectClient {
     final items = <EcardRoomItem>[];
     final seen = <String>{};
     for (final impl in ['CGCOMMON1111', 'CGCOMMON2222', 'CGCOMMON3333']) {
-      final r = await _post('powerfee/getRoomInfo', {'implType': impl});
+      var r = await _post('powerfee/getRoomInfo', {'implType': impl});
+      // Retry on auth failure (code=203 or "未登录")
+      if (r['code'] == 203 || '${r['msg']}'.contains('未登录')) {
+        _invalidateToken();
+        if (!await login()) return [];
+        r = await _post('powerfee/getRoomInfo', {'implType': impl});
+      }
       final obj = r['obj'];
       if (obj is! List) continue;
       for (final room in obj) {
@@ -2859,12 +3350,23 @@ class EcardDirectClient {
     if (_token == null && !await login()) return null;
     final parts = roomId.split('|');
     if (parts.length != 4) return null;
-    final r = await _post('powerfee/getBalance', {
+    var r = await _post('powerfee/getBalance', {
       'implType': parts[0],
       'schoolAreaNo': parts[1],
       'buildingNo': parts[2],
       'roomNum': parts[3],
     });
+    // Retry on auth failure (code=203 or "未登录")
+    if (r['code'] == 203 || '${r['msg']}'.contains('未登录')) {
+      _invalidateToken();
+      if (!await login()) return null;
+      r = await _post('powerfee/getBalance', {
+        'implType': parts[0],
+        'schoolAreaNo': parts[1],
+        'buildingNo': parts[2],
+        'roomNum': parts[3],
+      });
+    }
     if (r['ret'] != true && r['code'] != 200 && r['code'] != 0) return null;
     return r['obj'] as Map<String, dynamic>?;
   }
@@ -2962,7 +3464,7 @@ int _ii(int a, int b, int c, int d, int x, int s, int t) =>
     _cmn(c ^ (b | (~d)), a, b, x, s, t);
 int _bitRol(int num, int cnt) => (num << cnt) | (num >>> (32 - cnt));
 String _hex(int n) {
-  final h = '0123456789abcdef';
+  const h = '0123456789abcdef';
   return h[(n >> 4) & 15] +
       h[n & 15] +
       h[(n >> 12) & 15] +
@@ -2990,9 +3492,13 @@ List<int> _createBuffer(String input) {
   }
   final msgLen = bytes.length;
   bytes.add(128);
-  while ((bytes.length % 64) != 56) bytes.add(0);
+  while ((bytes.length % 64) != 56) {
+    bytes.add(0);
+  }
   final bitLen = msgLen * 8;
-  for (int i = 0; i < 8; i++) bytes.add((bitLen >> (i * 8)) & 255);
+  for (int i = 0; i < 8; i++) {
+    bytes.add((bitLen >> (i * 8)) & 255);
+  }
   final data = <int>[];
   for (int i = 0; i < bytes.length; i += 4) {
     data.add(bytes[i] |

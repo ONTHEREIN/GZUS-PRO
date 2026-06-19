@@ -1,4 +1,4 @@
-const CACHE_NAME = 'gzus-pwa-cache-v3';
+const CACHE_NAME = 'gzus-pwa-cache-v4';
 const API_CACHE_NAME = 'gzus-api-cache-v2';
 const API_CACHE_MAX_AGE_MS = 5 * 60 * 1000;
 const STATIC_ASSETS = [
@@ -21,11 +21,14 @@ const API_WHITELIST = [
   '/api/grades',
   '/api/attendance',
   '/api/credits',
-  '/api/notices',
   '/api/ehall/progress',
   '/api/ecard/summary',
   '/api/ecard/consumption',
 ];
+const NETWORK_FIRST_API_PATHS = [
+  '/api/notices',
+];
+const APP_SHELL_URL = './index.html';
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -51,7 +54,12 @@ self.addEventListener('activate', (event) => {
       );
     })
   );
-  event.waitUntil(clients.claim());
+  event.waitUntil(
+    Promise.all([
+      self.registration.navigationPreload?.disable?.().catch(() => undefined),
+      clients.claim(),
+    ])
+  );
 });
 
 self.addEventListener('fetch', (event) => {
@@ -61,8 +69,18 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
 
+  if (NETWORK_FIRST_API_PATHS.some((path) => url.pathname.startsWith(path))) {
+    event.respondWith(handleApiNetworkFirstRequest(request));
+    return;
+  }
+
   if (API_WHITELIST.some((path) => url.pathname.startsWith(path))) {
     event.respondWith(handleApiRequest(request));
+    return;
+  }
+
+  if (request.mode === 'navigate') {
+    event.respondWith(handleNavigationRequest(request));
     return;
   }
 
@@ -78,6 +96,21 @@ async function handleApiRequest(request) {
     revalidateApiRequest(request, cache, cacheKey);
     return cachedResponse;
   }
+
+  try {
+    const networkResponse = await fetch(request, { cache: 'no-store' });
+    await putApiResponse(cache, cacheKey, networkResponse);
+    return networkResponse;
+  } catch (error) {
+    if (cachedResponse) return cachedResponse;
+    throw error;
+  }
+}
+
+async function handleApiNetworkFirstRequest(request) {
+  const cache = await caches.open(API_CACHE_NAME);
+  const cacheKey = await apiCacheKey(request);
+  const cachedResponse = await cache.match(cacheKey);
 
   try {
     const networkResponse = await fetch(request, { cache: 'no-store' });
@@ -134,23 +167,52 @@ async function shortHash(value) {
   }
 }
 
-async function handleStaticRequest(request) {
+async function handleNavigationRequest(request) {
+  const cache = await caches.open(CACHE_NAME);
+  const cached = await cache.match(APP_SHELL_URL) || await cache.match(request);
+
+  if (cached) {
+    revalidateStaticRequest(request, cache, APP_SHELL_URL);
+    return cached;
+  }
+
   try {
-    const networkResponse = await fetch(request);
-    if (networkResponse && networkResponse.ok) {
-      const cloned = networkResponse.clone();
-      caches.open(CACHE_NAME).then((cache) => cache.put(request, cloned));
-    }
+    const networkResponse = await fetch(request, { cache: 'no-store' });
+    await putStaticResponse(cache, APP_SHELL_URL, networkResponse);
     return networkResponse;
   } catch (_) {
-    const cached = await caches.match(request);
-    if (cached) return cached;
-    if (request.mode === 'navigate') {
-      const shell = await caches.match('./index.html');
-      if (shell) return shell;
-    }
     return Response.error();
   }
+}
+
+async function handleStaticRequest(request) {
+  const cache = await caches.open(CACHE_NAME);
+  const cached = await cache.match(request);
+
+  if (cached) {
+    revalidateStaticRequest(request, cache, request);
+    return cached;
+  }
+
+  try {
+    const networkResponse = await fetch(request, { cache: 'no-store' });
+    await putStaticResponse(cache, request, networkResponse);
+    return networkResponse;
+  } catch (_) {
+    return Response.error();
+  }
+}
+
+async function revalidateStaticRequest(request, cache, cacheKey) {
+  try {
+    const networkResponse = await fetch(request, { cache: 'no-store' });
+    await putStaticResponse(cache, cacheKey, networkResponse);
+  } catch (_) {}
+}
+
+async function putStaticResponse(cache, cacheKey, response) {
+  if (!response || !response.ok) return;
+  await cache.put(cacheKey, response.clone());
 }
 
 self.addEventListener('push', (event) => {

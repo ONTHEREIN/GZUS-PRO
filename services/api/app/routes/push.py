@@ -135,13 +135,14 @@ def unregister_push(
     request: Request = None,
 ) -> dict[str, str]:
     registration_id = session.push_registration_id
+    platform = session.push_platform or "android"
     session.push_registration_id = None
-    session.push_platform = None
+    session.push_platform = platform
     if request is not None:
         request.app.state.sessions.update(
             session.id,
             push_registration_id=None,
-            push_platform=None,
+            push_platform=platform,
         )
     if registration_id:
         factory = get_sync_session_factory()

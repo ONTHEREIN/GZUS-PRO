@@ -29,7 +29,7 @@ class GzusApplication : Application() {
                 appChannel = buglyChannel
                 appVersion = packageManager.getPackageInfo(packageName, 0).versionName
                 isEnableANRCrashMonitor = true
-                isEnableNativeCrashMonitor = true
+                isEnableNativeCrashMonitor = false
             }
 
             CrashReport.initCrashReport(applicationContext, buglyAppId, false, strategy)

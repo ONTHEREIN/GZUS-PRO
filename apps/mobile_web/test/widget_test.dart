@@ -56,6 +56,17 @@ void main() {
     expect(first, second);
   });
 
+  test('websocket url uses explicit default ports', () {
+    expect(
+      WsService.buildWsUrlForTest('https://onegzus.cc.cd/api', 'sid'),
+      'wss://onegzus.cc.cd:443/api/ws/notifications?sessionId=sid',
+    );
+    expect(
+      WsService.buildWsUrlForTest('http://127.0.0.1:8000/api', 'sid'),
+      'ws://127.0.0.1:8000/api/ws/notifications?sessionId=sid',
+    );
+  });
+
   test('live activity maps notification messages to targets', () {
     final exam = LiveActivityEvent.fromMessage({
       'id': 'exam-1',
@@ -372,6 +383,71 @@ void main() {
     expect(prefs.getString('auth.password'), isNull);
   });
 
+  test('api clears persisted auth state on session revocation', () async {
+    SharedPreferences.setMockInitialValues({
+      'auth.sessionId': 'old-session',
+      'auth.studentName': '旧设备',
+      'auth.studentId': '2024000000',
+      'auth.ehallCookies': 'cookie',
+      'auth.ehallAuthToken': 'token',
+      'auth.loginMethod': 'password',
+      'auth.credentialToken': 'credential',
+      'auth.account': '2024000000',
+      'auth.password': 'legacy-password',
+      'auth.rememberPassword': true,
+    });
+    final api = ApiClient(httpClient: MockClient((request) async {
+      return http.Response('not found', 404);
+    }));
+    api.useSession('old-session');
+    await api.loadSavedCredentials();
+
+    await api.clearSavedAuthState();
+    final prefs = await SharedPreferences.getInstance();
+
+    expect(api.sessionId, isNull);
+    expect(prefs.getString('auth.sessionId'), isNull);
+    expect(prefs.getString('auth.credentialToken'), isNull);
+    expect(prefs.getString('auth.account'), isNull);
+    expect(prefs.getBool('auth.rememberPassword'), isNull);
+  });
+
+  test('api clears saved auth and notifies on single-device conflict',
+      () async {
+    SharedPreferences.setMockInitialValues({
+      'auth.sessionId': 'old-session',
+      'auth.credentialToken': 'credential',
+      'auth.account': '2024000000',
+      'auth.rememberPassword': true,
+    });
+    var reloginFailed = false;
+    final api = ApiClient(
+      httpClient: MockClient((request) async {
+        return http.Response.bytes(
+          utf8.encode('账号已在其他设备登录，请重新登录'),
+          401,
+        );
+      }),
+    )
+      ..useSession('old-session')
+      ..onReloginFailed = () {
+        reloginFailed = true;
+      };
+
+    await expectLater(
+      api.me(forceRefresh: true),
+      throwsA(isA<ApiException>()
+          .having((error) => error.isSingleDeviceConflict, 'conflict', true)),
+    );
+    final prefs = await SharedPreferences.getInstance();
+
+    expect(reloginFailed, isTrue);
+    expect(api.sessionId, isNull);
+    expect(prefs.getString('auth.sessionId'), isNull);
+    expect(prefs.getString('auth.credentialToken'), isNull);
+    expect(prefs.getString('auth.account'), isNull);
+  });
+
   test('api stores remembered account without password', () async {
     SharedPreferences.setMockInitialValues({
       'auth.password': 'legacy-password',
@@ -392,13 +468,95 @@ void main() {
     expect(prefs.getString('auth.password'), isNull);
   });
 
+  test('native academic reads prefer direct school endpoint', () async {
+    SharedPreferences.setMockInitialValues({});
+    debugEnableSchoolDirectForTests = true;
+    addTearDown(() {
+      debugEnableSchoolDirectForTests = false;
+      debugSchoolDirectHttpClientForTests = null;
+    });
+    var apiCalled = false;
+    var directCalled = false;
+    debugSchoolDirectHttpClientForTests = MockClient((request) async {
+      directCalled = true;
+      expect(request.url.host, 'jwxt.seig.edu.cn');
+      expect(request.headers['Cookie'], contains('JSESSIONID=direct'));
+      return http.Response.bytes(
+        utf8.encode(jsonEncode({
+          'kbList': [
+            {
+              'kcmc': '直连课程',
+              'jsxx': '张老师',
+              'cdmc': 'A101',
+              'xqj': 2,
+              'ksjc': '3-4',
+              'zcd': '1-16',
+            }
+          ],
+        })),
+        200,
+      );
+    });
+    final api = ApiClient(
+      baseUrl: 'https://api.example.test',
+      httpClient: MockClient((request) async {
+        apiCalled = true;
+        return http.Response('unexpected api call', 500);
+      }),
+    )..setJwxtCookies('JSESSIONID=direct');
+    await api.savePasswordCredentials('2024000000', 'secret', remember: false);
+
+    final result = await api.schedule(year: 2026, term: 2, forceRefresh: true);
+
+    expect(directCalled, isTrue);
+    expect(apiCalled, isFalse);
+    expect(result.data.items.single.name, '直连课程');
+    expect(result.data.items.single.startSection, 3);
+    expect(result.data.items.single.endSection, 4);
+  });
+
+  test('native academic reads fall back to API when direct fails', () async {
+    SharedPreferences.setMockInitialValues({});
+    debugEnableSchoolDirectForTests = true;
+    addTearDown(() {
+      debugEnableSchoolDirectForTests = false;
+      debugSchoolDirectHttpClientForTests = null;
+    });
+    var directCalled = false;
+    var apiCalled = false;
+    debugSchoolDirectHttpClientForTests = MockClient((request) async {
+      directCalled = true;
+      return http.Response('school error', 502);
+    });
+    final api = ApiClient(
+      baseUrl: 'https://api.example.test',
+      httpClient: MockClient((request) async {
+        apiCalled = true;
+        expect(request.url.path, '/grades');
+        return http.Response.bytes(
+          utf8.encode(jsonEncode([
+            {'courseName': 'API课程', 'score': '95'}
+          ])),
+          200,
+        );
+      }),
+    )..setJwxtCookies('JSESSIONID=direct');
+    await api.savePasswordCredentials('2024000000', 'secret', remember: false);
+
+    final result = await api.grades(year: 2026, term: 2, forceRefresh: true);
+
+    expect(directCalled, isTrue);
+    expect(apiCalled, isTrue);
+    expect(result.data.single.courseName, 'API课程');
+  });
+
   testWidgets('renders login page', (tester) async {
     SharedPreferences.setMockInitialValues({});
 
     await tester.pumpWidget(const OneGzusApp());
     await tester.pumpAndSettle();
 
-    expect(find.text('软帮手'), findsOneWidget);
+    expect(find.text('软帮手 Dev'), findsOneWidget);
     expect(find.text('推荐使用办事大厅统一登录'), findsOneWidget);
     expect(find.text('办事大厅统一登录'), findsOneWidget);
     expect(find.text('教务系统登录'), findsWidgets);
@@ -426,7 +584,7 @@ void main() {
     await tester.pumpWidget(const OneGzusApp());
     await tester.pumpAndSettle();
 
-    expect(find.text('软帮手'), findsOneWidget);
+    expect(find.text('软帮手 Dev'), findsOneWidget);
     expect(find.text('办事大厅统一登录'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });

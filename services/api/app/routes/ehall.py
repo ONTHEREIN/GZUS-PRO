@@ -60,9 +60,16 @@ def applications(session: AppSession = Depends(require_session)) -> list[dict]:
     if ehall_client is None:
         return []
     try:
-        return ehall_client.get_applications()
+        return ehall_client.get_applications(
+            page_size=80,
+            max_pages=1,
+            request_timeout_seconds=5,
+        )
     except EhallAuthenticationError as exc:
         logger.warning("ehall applications auth error: %s", exc)
+        return []
+    except Exception as exc:
+        logger.warning("ehall applications unavailable: %s", exc)
         return []
 
 

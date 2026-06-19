@@ -101,8 +101,18 @@ class WsService {
   static String _buildWsUrl(String baseUrl) {
     final uri = Uri.parse(baseUrl);
     final scheme = uri.scheme == 'https' ? 'wss' : 'ws';
-    final wsUri = uri.replace(scheme: scheme);
+    final defaultPort = uri.scheme == 'https' ? 443 : 80;
+    final wsUri = uri.replace(
+      scheme: scheme,
+      port: uri.hasPort ? uri.port : defaultPort,
+    );
     return '${wsUri.replace(path: '${wsUri.path}/ws/notifications')}?sessionId=$_sessionId';
+  }
+
+  @visibleForTesting
+  static String buildWsUrlForTest(String baseUrl, String sessionId) {
+    _sessionId = sessionId;
+    return _buildWsUrl(baseUrl);
   }
 
   static String _redactWsUrl(String url) {

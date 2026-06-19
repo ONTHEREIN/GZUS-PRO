@@ -198,6 +198,33 @@ def test_ehall_client_get_affairs_paginates(monkeypatch):
     assert [request[1]["pageNum"] for request in requests] == [1, 2]
 
 
+def test_ehall_client_get_applications_timeout_returns_empty(monkeypatch):
+    requests = []
+
+    class FakeHttpClient:
+        is_closed = False
+
+        def __init__(self, **kwargs):
+            pass
+
+        def get(self, endpoint, params, timeout=None):
+            requests.append((endpoint, params, timeout))
+            import httpx
+
+            raise httpx.TimeoutException("slow upstream")
+
+    monkeypatch.setattr("app.ehall_client.httpx.Client", FakeHttpClient)
+    client = EhallClient("https://ehall.gzus.edu.cn", "JSESSIONID=abc")
+
+    items = client.get_applications(page_size=80, max_pages=1, request_timeout_seconds=5)
+
+    assert items == []
+    assert len(requests) == 1
+    assert requests[0][0] == "api/affair/uis/affairs"
+    assert requests[0][1]["appStatus"] == 1
+    assert requests[0][2] == 5
+
+
 def test_ehall_client_get_progress_overview_includes_category_counts(monkeypatch):
     requests = []
 

@@ -1,6 +1,18 @@
 $ErrorActionPreference = "Stop"
 $ProjectRoot = "D:\REINs\Documents\GZUS-PRO"
-$FlutterBin = "D:\REINs\Documents\flutter\bin\flutter.bat"
+$FlutterCandidates = @(
+    $env:FLUTTER_BIN,
+    "E:\REINs\Documents\flutter\bin\flutter.bat",
+    "D:\REINs\Documents\flutter\bin\flutter.bat",
+    "flutter"
+) | Where-Object { $_ }
+$FlutterBin = $FlutterCandidates | Where-Object {
+    $_ -eq "flutter" -or (Test-Path $_)
+} | Select-Object -First 1
+if (-not $FlutterBin) {
+    Write-Host "Flutter SDK not found. Set FLUTTER_BIN to flutter.bat." -ForegroundColor Red
+    exit 1
+}
 $ApkPath = "$ProjectRoot\apps\mobile_web\build\app\outputs\flutter-apk\app-release.apk"
 $PubspecPath = "$ProjectRoot\apps\mobile_web\pubspec.yaml"
 $CloudApiUrl = if ($env:API_BASE_URL) { $env:API_BASE_URL } else { "https://onegzus-onweb.pages.dev/api" }
@@ -50,7 +62,7 @@ if ($UseCloud) {
 
 Write-Host "[1/3] Building APK (API_BASE_URL=$ApiUrl)..." -ForegroundColor Cyan
 Push-Location "$ProjectRoot\apps\mobile_web"
-& $FlutterBin build apk --dart-define=API_BASE_URL=$ApiUrl
+& $FlutterBin build apk --release --target-platform=android-arm64,android-arm --dart-define=API_BASE_URL=$ApiUrl
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Build failed!" -ForegroundColor Red
     Pop-Location

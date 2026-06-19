@@ -190,6 +190,7 @@ async function login(config) {
       'User-Agent': UA,
     },
     body: encodeForm(payload),
+    signal: AbortSignal.timeout(12000),
   });
   const data = await response.json();
   if (data.code === 200 && data.token) {
@@ -217,6 +218,7 @@ async function post(config, path, params) {
       'User-Agent': UA,
     },
     body: encodeForm(payload),
+    signal: AbortSignal.timeout(12000),
   });
   return response.json();
 }

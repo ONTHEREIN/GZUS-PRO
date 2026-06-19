@@ -57,6 +57,10 @@ def _build_client(request: Request) -> SchoolSdkClient:
     return SchoolSdkClient(settings.jw_base_url, timeout_seconds=settings.request_timeout_seconds)
 
 
+def _should_return_jwxt_cookies(request: Request) -> bool:
+    return (request.headers.get("x-client-platform") or "").lower() in {"android", "ios"}
+
+
 @router.post("/login", response_model=AuthResponse)
 @limiter.limit("10/minute")
 def login(payload: LoginRequest, request: Request) -> dict:
@@ -87,7 +91,15 @@ def login(payload: LoginRequest, request: Request) -> dict:
         student_name or payload.account,
         student_account=payload.account,
     )
-    return {"status": "ok", "sessionId": session.id, "studentName": student_name, "studentId": None}
+    response = {
+        "status": "ok",
+        "sessionId": session.id,
+        "studentName": student_name,
+        "studentId": None,
+    }
+    if _should_return_jwxt_cookies(request):
+        response["jwxtCookies"] = client.get_jwxt_cookies_string()
+    return response
 
 
 def _try_get_student_id(client) -> str | None:
@@ -120,7 +132,15 @@ def submit_captcha(payload: CaptchaRequest, request: Request) -> dict:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc))
 
     session = sessions.create(client, student_name, student_account=account)
-    return {"status": "ok", "sessionId": session.id, "studentName": student_name, "studentId": None}
+    response = {
+        "status": "ok",
+        "sessionId": session.id,
+        "studentName": student_name,
+        "studentId": None,
+    }
+    if _should_return_jwxt_cookies(request):
+        response["jwxtCookies"] = client.get_jwxt_cookies_string()
+    return response
 
 
 @router.get("/ly/start")
@@ -286,7 +306,7 @@ def relogin(payload: ReloginRequest, request: Request) -> dict:
         student_account=account,
     )
 
-    return {
+    response = {
         "status": "ok",
         "sessionId": session.id,
         "studentName": student_name,
@@ -295,6 +315,9 @@ def relogin(payload: ReloginRequest, request: Request) -> dict:
         "ehallCookies": result.ehall_cookies,
         "ehallAuthToken": result.ehall_auth_token,
     }
+    if _should_return_jwxt_cookies(request):
+        response["jwxtCookies"] = result.cookies
+    return response
 
 
 @router.post("/auto-login", response_model=AuthResponse)
@@ -366,7 +389,7 @@ def auto_login(payload: AutoLoginRequest, request: Request) -> dict:
     )
 
     logger.info("[TIMING] auto_login endpoint total: %.2fs", time.time() - t_total)
-    return {
+    response = {
         "status": "ok",
         "sessionId": session.id,
         "studentName": student_name,
@@ -375,6 +398,9 @@ def auto_login(payload: AutoLoginRequest, request: Request) -> dict:
         "ehallCookies": result.ehall_cookies,
         "ehallAuthToken": result.ehall_auth_token,
     }
+    if _should_return_jwxt_cookies(request):
+        response["jwxtCookies"] = result.cookies
+    return response
 
 
 @router.get("/student-info")

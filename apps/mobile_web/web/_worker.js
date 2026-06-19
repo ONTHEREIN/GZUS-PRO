@@ -650,6 +650,142 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+function shouldReturnJwxtCookies(request) {
+  const platform = (request.headers.get('X-Client-Platform') || '').toLowerCase();
+  return platform === 'android' || platform === 'ios';
+}
+
+function md5(input) {
+  function add32(a, b) {
+    return (a + b) & 0xffffffff;
+  }
+  function cmn(q, a, b, x, s, t) {
+    a = add32(add32(a, q), add32(x, t));
+    return add32((a << s) | (a >>> (32 - s)), b);
+  }
+  function ff(a, b, c, d, x, s, t) {
+    return cmn((b & c) | ((~b) & d), a, b, x, s, t);
+  }
+  function gg(a, b, c, d, x, s, t) {
+    return cmn((b & d) | (c & (~d)), a, b, x, s, t);
+  }
+  function hh(a, b, c, d, x, s, t) {
+    return cmn(b ^ c ^ d, a, b, x, s, t);
+  }
+  function ii(a, b, c, d, x, s, t) {
+    return cmn(c ^ (b | (~d)), a, b, x, s, t);
+  }
+  function md5cycle(x, k) {
+    let [a, b, c, d] = x;
+    a = ff(a, b, c, d, k[0], 7, -680876936);
+    d = ff(d, a, b, c, k[1], 12, -389564586);
+    c = ff(c, d, a, b, k[2], 17, 606105819);
+    b = ff(b, c, d, a, k[3], 22, -1044525330);
+    a = ff(a, b, c, d, k[4], 7, -176418897);
+    d = ff(d, a, b, c, k[5], 12, 1200080426);
+    c = ff(c, d, a, b, k[6], 17, -1473231341);
+    b = ff(b, c, d, a, k[7], 22, -45705983);
+    a = ff(a, b, c, d, k[8], 7, 1770035416);
+    d = ff(d, a, b, c, k[9], 12, -1958414417);
+    c = ff(c, d, a, b, k[10], 17, -42063);
+    b = ff(b, c, d, a, k[11], 22, -1990404162);
+    a = ff(a, b, c, d, k[12], 7, 1804603682);
+    d = ff(d, a, b, c, k[13], 12, -40341101);
+    c = ff(c, d, a, b, k[14], 17, -1502002290);
+    b = ff(b, c, d, a, k[15], 22, 1236535329);
+    a = gg(a, b, c, d, k[1], 5, -165796510);
+    d = gg(d, a, b, c, k[6], 9, -1069501632);
+    c = gg(c, d, a, b, k[11], 14, 643717713);
+    b = gg(b, c, d, a, k[0], 20, -373897302);
+    a = gg(a, b, c, d, k[5], 5, -701558691);
+    d = gg(d, a, b, c, k[10], 9, 38016083);
+    c = gg(c, d, a, b, k[15], 14, -660478335);
+    b = gg(b, c, d, a, k[4], 20, -405537848);
+    a = gg(a, b, c, d, k[9], 5, 568446438);
+    d = gg(d, a, b, c, k[14], 9, -1019803690);
+    c = gg(c, d, a, b, k[3], 14, -187363961);
+    b = gg(b, c, d, a, k[8], 20, 1163531501);
+    a = gg(a, b, c, d, k[13], 5, -1444681467);
+    d = gg(d, a, b, c, k[2], 9, -51403784);
+    c = gg(c, d, a, b, k[7], 14, 1735328473);
+    b = gg(b, c, d, a, k[12], 20, -1926607734);
+    a = hh(a, b, c, d, k[5], 4, -378558);
+    d = hh(d, a, b, c, k[8], 11, -2022574463);
+    c = hh(c, d, a, b, k[11], 16, 1839030562);
+    b = hh(b, c, d, a, k[14], 23, -35309556);
+    a = hh(a, b, c, d, k[1], 4, -1530992060);
+    d = hh(d, a, b, c, k[4], 11, 1272893353);
+    c = hh(c, d, a, b, k[7], 16, -155497632);
+    b = hh(b, c, d, a, k[10], 23, -1094730640);
+    a = hh(a, b, c, d, k[13], 4, 681279174);
+    d = hh(d, a, b, c, k[0], 11, -358537222);
+    c = hh(c, d, a, b, k[3], 16, -722521979);
+    b = hh(b, c, d, a, k[6], 23, 76029189);
+    a = hh(a, b, c, d, k[9], 4, -640364487);
+    d = hh(d, a, b, c, k[12], 11, -421815835);
+    c = hh(c, d, a, b, k[15], 16, 530742520);
+    b = hh(b, c, d, a, k[2], 23, -995338651);
+    a = ii(a, b, c, d, k[0], 6, -198630844);
+    d = ii(d, a, b, c, k[7], 10, 1126891415);
+    c = ii(c, d, a, b, k[14], 15, -1416354905);
+    b = ii(b, c, d, a, k[5], 21, -57434055);
+    a = ii(a, b, c, d, k[12], 6, 1700485571);
+    d = ii(d, a, b, c, k[3], 10, -1894986606);
+    c = ii(c, d, a, b, k[10], 15, -1051523);
+    b = ii(b, c, d, a, k[1], 21, -2054922799);
+    a = ii(a, b, c, d, k[8], 6, 1873313359);
+    d = ii(d, a, b, c, k[15], 10, -30611744);
+    c = ii(c, d, a, b, k[6], 15, -1560198380);
+    b = ii(b, c, d, a, k[13], 21, 1309151649);
+    a = ii(a, b, c, d, k[4], 6, -145523070);
+    d = ii(d, a, b, c, k[11], 10, -1120210379);
+    c = ii(c, d, a, b, k[2], 15, 718787259);
+    b = ii(b, c, d, a, k[9], 21, -343485551);
+    x[0] = add32(a, x[0]);
+    x[1] = add32(b, x[1]);
+    x[2] = add32(c, x[2]);
+    x[3] = add32(d, x[3]);
+  }
+  function md5blk(s) {
+    const blocks = [];
+    for (let i = 0; i < 64; i += 4) {
+      blocks[i >> 2] = s.charCodeAt(i) + (s.charCodeAt(i + 1) << 8) +
+        (s.charCodeAt(i + 2) << 16) + (s.charCodeAt(i + 3) << 24);
+    }
+    return blocks;
+  }
+  function md51(s) {
+    let n = s.length;
+    const state = [1732584193, -271733879, -1732584194, 271733878];
+    let i;
+    for (i = 64; i <= n; i += 64) {
+      md5cycle(state, md5blk(s.substring(i - 64, i)));
+    }
+    s = s.substring(i - 64);
+    const tail = Array(16).fill(0);
+    for (i = 0; i < s.length; i++) {
+      tail[i >> 2] |= s.charCodeAt(i) << ((i % 4) << 3);
+    }
+    tail[i >> 2] |= 0x80 << ((i % 4) << 3);
+    if (i > 55) {
+      md5cycle(state, tail);
+      tail.fill(0);
+    }
+    tail[14] = n * 8;
+    md5cycle(state, tail);
+    return state;
+  }
+  function rhex(n) {
+    let s = '';
+    for (let j = 0; j < 4; j++) {
+      s += ((n >> (j * 8 + 4)) & 0x0f).toString(16) +
+        ((n >> (j * 8)) & 0x0f).toString(16);
+    }
+    return s;
+  }
+  return md51(unescape(encodeURIComponent(input))).map(rhex).join('');
+}
+
 // ─── CORS Headers ──────────────────────────────────────────────────
 function corsHeaders(request) {
   return {
@@ -1129,21 +1265,22 @@ export default {
           await sleep(2000);
           vercelResult = await createSessionOnBackend(result, account, password, env);
         }
-        if (!vercelResult.sessionId) {
-          console.error(`createSessionOnBackend failed twice after auto-login: ${vercelResult.error}`);
-          return errorResponse(`会话创建失败: ${vercelResult.error || '未知错误'}`, 503, request);
+        const edgeOnly = !vercelResult.sessionId;
+        if (edgeOnly) {
+          console.error(`createSessionOnBackend failed twice after auto-login, using edge session: ${vercelResult.error}`);
         }
 
         // Store local session mapping so proxied requests can inject cookies.
         // JWXT cookies are IP-bounded to this Worker's edge location, so
         // Vercel (different IP) cannot validate them — we must inject them
         // on every proxied request.
-        const sessionId = vercelResult.sessionId;
+        const sessionId = vercelResult.sessionId || generateSessionId();
         const sessionData = {
           account: account,
           cookies: result.cookies,
           ehallCookies: result.ehallCookies,
           studentName: result.studentName,
+          edgeOnly,
         };
         localSessions.set(sessionId, sessionData);
         const kvResult = await saveSessionToKV(sessionId, sessionData, env);
@@ -1154,9 +1291,11 @@ export default {
           studentName: result.studentName,
           studentId: null,
           credentialToken: result.credentialToken,
+          ...(shouldReturnJwxtCookies(request) ? { jwxtCookies: result.cookies } : {}),
           ehallCookies: result.ehallCookies,
           ehallAuthToken: null,
           _kv: kvResult,
+          _edgeOnly: edgeOnly,
         }, 200, request);
       } catch (e) {
         return errorResponse(`登录失败: ${e.message}`, 500, request);
@@ -1220,6 +1359,7 @@ export default {
           studentName: result.studentName,
           studentId: null,
           credentialToken: result.credentialToken || credentialToken,
+          ...(shouldReturnJwxtCookies(request) ? { jwxtCookies: result.cookies } : {}),
           ehallCookies: result.ehallCookies,
           ehallAuthToken: null,
           _kv: kvResult,
@@ -1453,6 +1593,99 @@ export default {
 
     function mergeNoticeItems(...groups) {
       return dedupeNoticeItems(groups.flat().filter(Boolean));
+    }
+
+    function extractEhallRecords(payload, depth = 0) {
+      if (!payload || depth > 5) return [];
+      if (Array.isArray(payload)) return payload.filter(item => item && typeof item === 'object');
+      if (typeof payload !== 'object') return [];
+      for (const key of ['records', 'rows', 'list', 'items', 'dataList', 'resultList']) {
+        if (Array.isArray(payload[key])) return payload[key];
+      }
+      for (const key of ['data', 'result', 'page', 'body']) {
+        const nested = extractEhallRecords(payload[key], depth + 1);
+        if (nested.length > 0) return nested;
+      }
+      return [];
+    }
+
+    function absoluteEhallUrl(raw) {
+      if (!raw) return null;
+      const value = String(raw).trim();
+      if (!value || value === '#') return null;
+      try {
+        return new URL(value, EHALL_URL + '/').toString();
+      } catch (e) {
+        return null;
+      }
+    }
+
+    function normalizeEhallApplication(record) {
+      const title = String(
+        record.appName || record.name || record.affairName || record.serviceName ||
+        record.title || record.app_name || record.affair_name || ''
+      ).trim();
+      if (!title) return null;
+      const id = record.id || record.appId || record.app_id || record.affairId || record.wf_num || title;
+      const department = record.department || record.deptName || record.applyDeptName ||
+        record.orgName || record.dept_name || null;
+      const type = record.type || record.typeName || record.categoryName || record.affairTypeName || null;
+      const rawTags = [record.tagName, record.tags, record.label, record.businessType]
+        .flatMap(value => Array.isArray(value) ? value : String(value || '').split(/[,\s，、/]+/))
+        .map(value => String(value).trim())
+        .filter(Boolean);
+      return {
+        id: String(id),
+        title,
+        department: department ? String(department) : null,
+        type: type ? String(type) : null,
+        tags: Array.from(new Set(rawTags)).slice(0, 6),
+        summary: record.description || record.summary || record.remark || null,
+        url: absoluteEhallUrl(record.url || record.appUrl || record.pcUrl || record.mobileUrl || record.href),
+      };
+    }
+
+    async function fetchEhallApplicationsFromEdge(session, env) {
+      const timestamp = String(Date.now());
+      const csrfKey = env.EHALL_CSRF_KEY || 'lianyi2019';
+      const params = new URLSearchParams({
+        pageNum: '1',
+        pageSize: '100',
+        isCustom: '0',
+        terminal: '1',
+        appStatus: '1',
+        csrfTimestamp: timestamp,
+        csrfToken: md5(`timestamp=${timestamp},key=${csrfKey}`),
+      });
+      const resp = await fetch(`${EHALL_URL}/api/affair/uis/affairs?${params.toString()}`, {
+        method: 'GET',
+        headers: {
+          'Cookie': session.ehallCookies,
+          'User-Agent': 'Mozilla/5.0 (Linux; Android 16) GZUS-PRO/1.0',
+          'Accept': 'application/json, text/plain, */*',
+          'Referer': EHALL_URL + '/',
+        },
+        signal: AbortSignal.timeout(8000),
+      });
+      if (!resp.ok) {
+        throw new Error(`eHall applications returned ${resp.status}`);
+      }
+      const text = await resp.text();
+      const payload = JSON.parse(text);
+      const meta = payload && typeof payload === 'object' ? payload.meta : null;
+      if (meta && meta.success === false) {
+        throw new Error(String(meta.message || 'eHall applications rejected'));
+      }
+      const seen = new Set();
+      return extractEhallRecords(payload)
+        .map(normalizeEhallApplication)
+        .filter(item => {
+          if (!item) return false;
+          const key = item.id || item.title;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
     }
 
     // ─── Helper: extract base64 student photo from info page HTML ─
@@ -1753,6 +1986,34 @@ export default {
       // Fall through to Vercel if edge fetch failed
     }
 
+    // ─── Edge eHall applications API ───────────────────────────
+    // This page is user-facing navigation; handle it at the edge to avoid
+    // Vercel timeout and keep a cache when eHall is slow.
+    if (path === 'ehall/applications' && request.method === 'GET') {
+      const sessionId = request.headers.get('X-Session-Id') || '';
+      const session = await getLocalSession(request, env);
+      const cacheKey = `ehall-applications:${sessionId}`;
+      if (session && session.ehallCookies) {
+        try {
+          const items = await fetchEhallApplicationsFromEdge(session, env);
+          if (items.length > 0) {
+            await saveAcademicCache(env, cacheKey, items);
+            return jsonResponse(items, 200, request);
+          }
+        } catch (e) {
+          console.warn(`[edge-applications] eHall fetch failed: ${e.message}`);
+        }
+        const cached = await loadAcademicCache(env, cacheKey);
+        if (cached && cached.data) {
+          const resp = jsonResponse(cached.data, 200, request);
+          resp.headers.set('X-Data-Source', 'edge-cache');
+          resp.headers.set('X-Data-Cached-At', new Date(cached.cachedAt).toISOString());
+          return resp;
+        }
+      }
+      // Fall through to Vercel if edge fetch failed and no cache exists.
+    }
+
     // ─── Edge notices API ─────────────────────────────────────
     // Handle notices at the Worker edge to avoid Vercel timeout.
     if (path === 'notices' && request.method === 'GET') {
@@ -1917,7 +2178,7 @@ async function createSessionOnBackend(loginResult, account, password, env) {
         ehall_cookies: loginResult.ehallCookies,
         student_name: loginResult.studentName,
       }),
-      signal: AbortSignal.timeout(15000),
+      signal: AbortSignal.timeout(30000),
     });
     if (res.ok) {
       const data = await res.json();

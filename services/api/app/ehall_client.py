@@ -214,19 +214,32 @@ class EhallClient:
                 break
         return items
 
-    def get_applications(self, page_size: int = 200, max_pages: int = 10) -> list[dict]:
-        items = self._get_application_page_set(
-            page_size=page_size,
-            max_pages=max_pages,
-            extra_params={"isCustom": 0, "terminal": 1, "appStatus": 1},
-        )
+    def get_applications(
+        self,
+        page_size: int = 80,
+        max_pages: int = 1,
+        request_timeout_seconds: int = 5,
+    ) -> list[dict]:
+        try:
+            items = self._get_application_page_set(
+                page_size=page_size,
+                max_pages=max_pages,
+                extra_params={"isCustom": 0, "terminal": 1, "appStatus": 1},
+                request_timeout_seconds=request_timeout_seconds,
+            )
+        except Exception:
+            return []
         if items:
             return items
-        return self._get_application_page_set(
-            page_size=page_size,
-            max_pages=max_pages,
-            extra_params={"isCustom": 0, "terminal": 1},
-        )
+        try:
+            return self._get_application_page_set(
+                page_size=page_size,
+                max_pages=max_pages,
+                extra_params={"isCustom": 0, "terminal": 1},
+                request_timeout_seconds=request_timeout_seconds,
+            )
+        except Exception:
+            return []
 
     def _get_application_page_set(
         self,
@@ -234,6 +247,7 @@ class EhallClient:
         page_size: int,
         max_pages: int,
         extra_params: dict[str, Any],
+        request_timeout_seconds: int | None = None,
     ) -> list[dict]:
         items: list[dict] = []
         seen: set[str] = set()
@@ -245,6 +259,8 @@ class EhallClient:
                     "pageSize": page_size,
                     **extra_params,
                 },
+                timeout_seconds=request_timeout_seconds,
+                max_retries=0,
             )
             records = extract_records(payload)
             if not records:
@@ -383,7 +399,14 @@ class EhallClient:
         response.raise_for_status()
         return not _looks_like_upload_error(response)
 
-    def _get_json(self, endpoint: str, params: dict[str, Any]) -> Any:
+    def _get_json(
+        self,
+        endpoint: str,
+        params: dict[str, Any],
+        *,
+        timeout_seconds: int | None = None,
+        max_retries: int | None = None,
+    ) -> Any:
         from app.config import get_settings
         settings = get_settings()
         csrf_key = settings.ehall_csrf_key or "lianyi2019"
@@ -396,10 +419,14 @@ class EhallClient:
             ).hexdigest(),
         }
         client = self._get_http_client()
-        last_exc: Exception | None = None
-        for attempt in range(_EHALL_MAX_RETRIES + 1):
+        retry_count = _EHALL_MAX_RETRIES if max_retries is None else max(0, max_retries)
+        timeout = timeout_seconds if timeout_seconds is not None else self.timeout_seconds
+        for attempt in range(retry_count + 1):
             try:
-                response = client.get(endpoint, params=query)
+                if timeout_seconds is None:
+                    response = client.get(endpoint, params=query)
+                else:
+                    response = client.get(endpoint, params=query, timeout=timeout)
                 if _looks_like_login(response):
                     raise EhallAuthenticationError("办事大厅会话已失效，请重新登录")
                 response.raise_for_status()
@@ -413,8 +440,7 @@ class EhallClient:
             except EhallAuthenticationError:
                 raise
             except (httpx.TimeoutException, httpx.ConnectError) as exc:
-                last_exc = exc
-                if attempt < _EHALL_MAX_RETRIES:
+                if attempt < retry_count:
                     wait = _EHALL_RETRY_BACKOFF_BASE * (2 ** attempt)
                     import time as _time
                     _time.sleep(wait)
@@ -430,7 +456,7 @@ class EhallClient:
                     continue
                 raise RuntimeError(f"办事大厅请求失败: {exc}") from exc
             except httpx.HTTPStatusError as exc:
-                if exc.response.status_code >= 500 and attempt < _EHALL_MAX_RETRIES:
+                if exc.response.status_code >= 500 and attempt < retry_count:
                     wait = _EHALL_RETRY_BACKOFF_BASE * (2 ** attempt)
                     import time as _time
                     _time.sleep(wait)

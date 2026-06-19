@@ -136,14 +136,12 @@ def _student_info(session: AppSession) -> tuple[str, str]:
 
 def _client() -> EcardClient:
     try:
-        # Route ecard through the Cloudflare Worker proxy when configured.
+        # When ECARD_WORKER_PROXY_ORIGIN is empty, use direct mode (no Worker
+        # proxy). This avoids the broken CF Worker → school fetch path that
+        # times out after 20s. Direct mode calls the school server via httpx.
         settings = get_settings()
-        proxy_origin = (
-            settings.ecard_worker_proxy_origin
-            or settings.frontend_base_url
-            or "https://onegzus-onweb.pages.dev"
-        )
-        return EcardClient(worker_proxy_origin=proxy_origin)
+        proxy_origin = settings.ecard_worker_proxy_origin or ""
+        return EcardClient(worker_proxy_origin=proxy_origin if proxy_origin else None)
     except EcardConfigurationError as exc:
         logger.error("ecard: configuration error: %s", exc)
         raise HTTPException(status_code=503, detail=str(exc)) from exc

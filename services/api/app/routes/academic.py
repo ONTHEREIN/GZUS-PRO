@@ -54,17 +54,19 @@ def _run_academic_call(call: Callable[[], T]) -> T:
             detail=str(exc),
         ) from exc
     except Exception as exc:
-        # Stale JWXT cookies → downstream call failed with
-        # non-auth error.  Return 401 so the frontend triggers
-        # a Worker-side relogin (fast, near China).
+        # Server-side / school-portal error (e.g. JWXT 502, timeout, parse
+        # failure).  Surface as 502 so _run_with_cache_fallback can serve the
+        # last good cache and the frontend shows an offline banner instead of
+        # forcing a relogin.  Only AuthenticationError (handled above) yields
+        # 401, since that is the one case where a relogin actually helps.
         logger.warning(
-            "Academic API call failed: %s: %s — treating as expired session",
+            "Academic API call failed: %s: %s — treating as upstream error",
             type(exc).__name__,
             exc,
         )
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="会话已过期，请重新登录",
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="学校系统暂时不可用，请稍后重试",
         ) from exc
 
 

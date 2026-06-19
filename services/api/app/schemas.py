@@ -122,6 +122,7 @@ class AuthResponse(BaseModel):
     captcha_token: str | None = Field(default=None, alias="captchaToken")
     captcha_image: str | None = Field(default=None, alias="captchaImage")
     credential_token: str | None = Field(default=None, alias="credentialToken")
+    jwxt_cookies: str | None = Field(default=None, alias="jwxtCookies")
     ehall_cookies: str | None = Field(default=None, alias="ehallCookies")
     ehall_auth_token: str | None = Field(default=None, alias="ehallAuthToken")
 
