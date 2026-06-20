@@ -1,11 +1,11 @@
 
 {
   "name": "entry",
-  "version": "1.0.0",
-  "description": "Please describe the basic information.",
+  "version": "0.1.1",
+  "description": "OneGZUS entry module.",
   "main": "",
-  "author": "",
-  "license": "",
+  "author": "gzus",
+  "license": "UNLICENSED",
   "dependencies": {},
 }
 

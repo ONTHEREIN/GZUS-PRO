@@ -961,11 +961,16 @@ export default {
     }
 
     // ─── CanvasKit chromium compat ─────────────────────────────
-    // The chromium CanvasKit variant tries to import main.dart.js
-    // from the canvaskit directory, but that file doesn't exist.
-    // Cloudflare Pages SPA fallback returns index.html instead,
-    // causing a JavaScript parse error and silent Flutter init failure.
-    // Return an empty JS response so CanvasKit init can continue.
+    // Production deploys keep the full CanvasKit bundle and may prune the
+    // chromium variant. Older bootstraps can still request the chromium path,
+    // so route those requests back to the full local bundle instead of letting
+    // the Pages SPA fallback return index.html.
+    if (url.pathname === '/canvaskit/chromium/canvaskit.js') {
+      return fetch(new Request(new URL('/canvaskit/canvaskit.js', url.origin), request));
+    }
+    if (url.pathname === '/canvaskit/chromium/canvaskit.wasm') {
+      return fetch(new Request(new URL('/canvaskit/canvaskit.wasm', url.origin), request));
+    }
     if (url.pathname === '/canvaskit/chromium/main.dart.js') {
       return new Response('// CanvasKit chromium compat stub', {
         status: 200,

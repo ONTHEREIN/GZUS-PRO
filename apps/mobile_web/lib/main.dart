@@ -1687,7 +1687,7 @@ class _DashboardShellState extends State<DashboardShell> {
 
     return PopScope(
       canPop: false,
-      onPopInvokedWithResult: (didPop, _) {
+      onPopInvoked: (didPop) {
         if (didPop) return;
         if (_overrideTabId != null) {
           setState(() => _overrideTabId = null);
@@ -3733,7 +3733,8 @@ class _HomePageState extends State<HomePage> {
                   Expanded(
                     child: ReorderableListView.builder(
                       itemCount: order.length,
-                      onReorderItem: (oldIndex, newIndex) async {
+                      onReorder: (oldIndex, newIndex) async {
+                        if (oldIndex < newIndex) newIndex -= 1;
                         final id = order.removeAt(oldIndex);
                         order.insert(newIndex, id);
                         await persist();
@@ -4136,6 +4137,7 @@ class _HomeCard extends StatelessWidget {
     required this.child,
     this.badge,
     this.onTap,
+    this.fillChild = false,
   });
 
   final String title;
@@ -4143,72 +4145,78 @@ class _HomeCard extends StatelessWidget {
   final Widget child;
   final String? badge;
   final VoidCallback? onTap;
+  final bool fillChild;
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final content = Container(
-      constraints: const BoxConstraints(minHeight: 196),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: gzusSurface(context),
-        borderRadius: BorderRadius.circular(GzusRadii.lg),
-        border: Border.all(color: gzusBorder(context)),
-        boxShadow: gzusShadow(context),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final canFillChild = fillChild && constraints.hasBoundedHeight;
+        final content = Container(
+          constraints: const BoxConstraints(minHeight: 196),
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: gzusSurface(context),
+            borderRadius: BorderRadius.circular(GzusRadii.lg),
+            border: Border.all(color: gzusBorder(context)),
+            boxShadow: gzusShadow(context),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisSize: canFillChild ? MainAxisSize.max : MainAxisSize.min,
             children: [
-              Container(
-                width: 34,
-                height: 34,
-                decoration: BoxDecoration(
-                  color: _accentFill(context),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Icon(icon, size: 19, color: cs.primary),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontWeight: FontWeight.w800),
-                ),
-              ),
-              if (badge != null)
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: _accentFill(context),
-                    borderRadius: BorderRadius.circular(999),
+              Row(
+                children: [
+                  Container(
+                    width: 34,
+                    height: 34,
+                    decoration: BoxDecoration(
+                      color: _accentFill(context),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Icon(icon, size: 19, color: cs.primary),
                   ),
-                  child: Text(
-                    badge!,
-                    style: TextStyle(
-                      color: cs.primary,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w800,
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontWeight: FontWeight.w800),
                     ),
                   ),
-                ),
+                  if (badge != null)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: _accentFill(context),
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Text(
+                        badge!,
+                        style: TextStyle(
+                          color: cs.primary,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              canFillChild ? Expanded(child: child) : child,
             ],
           ),
-          const SizedBox(height: 14),
-          child,
-        ],
-      ),
-    );
-    if (onTap == null) return content;
-    return _ScaleTap(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(GzusRadii.lg),
-      child: content,
+        );
+        if (onTap == null) return content;
+        return _ScaleTap(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(GzusRadii.lg),
+          child: content,
+        );
+      },
     );
   }
 }
@@ -4426,8 +4434,6 @@ class _NextClassHomeCard extends StatelessWidget {
 class _TodayTimelineHomeCard extends StatelessWidget {
   const _TodayTimelineHomeCard({required this.courses});
 
-  static const double _maxTimelineHeight = 270;
-
   final List<_TimedCourse> courses;
 
   @override
@@ -4436,17 +4442,15 @@ class _TodayTimelineHomeCard extends StatelessWidget {
       title: '今日时间线',
       icon: Icons.view_timeline,
       badge: '${courses.length} 节',
+      fillChild: true,
       child: courses.isEmpty
           ? const EmptyState(message: '今日无课')
-          : ConstrainedBox(
-              constraints: const BoxConstraints(maxHeight: _maxTimelineHeight),
-              child: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    for (final item in courses) _TimelineMiniRow(course: item),
-                  ],
-                ),
+          : SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (final item in courses) _TimelineMiniRow(course: item),
+                ],
               ),
             ),
     );
@@ -8011,7 +8015,7 @@ class _TeacherCandidateSelector extends StatelessWidget {
               Text('${group.teacher}：未找到候选教师')
             else
               DropdownButtonFormField<String>(
-                initialValue: selections[group.teacher]?.userid,
+                value: selections[group.teacher]?.userid,
                 decoration: InputDecoration(labelText: group.teacher),
                 items: [
                   for (final candidate in group.candidates)

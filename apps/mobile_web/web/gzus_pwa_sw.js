@@ -60,9 +60,10 @@ self.addEventListener('activate', (event) => {
       ]);
     })
   );
-  // Notify all clients to reload immediately after SW activation
+  // Notify only already-controlled clients. First-time installs should not
+  // reload the page while Flutter is still producing its first frame.
   event.waitUntil(
-    clients.matchAll({ includeUncontrolled: true }).then((clientList) => {
+    clients.matchAll({ type: 'window' }).then((clientList) => {
       clientList.forEach((client) => {
         client.postMessage({ type: 'GZUS_SW_UPDATED' });
       });

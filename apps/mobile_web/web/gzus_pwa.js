@@ -1,19 +1,22 @@
 // Auto-reload when Service Worker updates to avoid stale cached code
 if ('serviceWorker' in navigator) {
+  const hadServiceWorkerController = Boolean(navigator.serviceWorker.controller);
+  let reloadedForServiceWorkerUpdate = false;
+
+  const reloadForServiceWorkerUpdate = () => {
+    if (!hadServiceWorkerController || reloadedForServiceWorkerUpdate) return;
+    reloadedForServiceWorkerUpdate = true;
+    window.location.reload();
+  };
+
   navigator.serviceWorker.addEventListener('message', (event) => {
     if (event.data && event.data.type === 'GZUS_SW_UPDATED') {
       console.log('Service Worker updated, reloading page...');
-      window.location.reload();
+      reloadForServiceWorkerUpdate();
     }
   });
   // Also listen for controller change (new SW taking over)
-  navigator.serviceWorker.addEventListener('controllerchange', () => {
-    // Only reload if we haven't just reloaded (avoid infinite loop)
-    if (!window.__gzusSwReloaded) {
-      window.__gzusSwReloaded = true;
-      window.location.reload();
-    }
-  });
+  navigator.serviceWorker.addEventListener('controllerchange', reloadForServiceWorkerUpdate);
 }
 
 window.gzusWebPushInit = function() {

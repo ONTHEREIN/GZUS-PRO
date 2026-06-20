@@ -1,13 +1,28 @@
 
 {
   "app": {
-    "signingConfigs": [],
+    "signingConfigs": [
+      {
+        "name": "default",
+        "type": "HarmonyOS",
+        "material": {
+          "certpath": "D:\\REINs\\Documents\\GZUS-PRO\\apps\\mobile_web\\ohos\\signing\\debug\\app-debug-cert.cer",
+          "storePassword": "00000012345678901234567890123456",
+          "keyAlias": "debugKey",
+          "keyPassword": "00000012345678901234567890123456",
+          "profile": "D:\\REINs\\Documents\\GZUS-PRO\\apps\\mobile_web\\ohos\\signing\\debug\\debug-profile-device.p7b",
+          "signAlg": "SHA256withECDSA",
+          "storeFile": "D:\\REINs\\Documents\\GZUS-PRO\\apps\\mobile_web\\ohos\\signing\\debug\\debug-app.p12"
+        }
+      }
+    ],
     "products": [
       {
         "name": "default",
         "signingConfig": "default",
         "compatibleSdkVersion": "5.0.0(12)",
-        "runtimeOS": "HarmonyOS",
+        "targetSdkVersion": "5.0.0(12)",
+        "runtimeOS": "HarmonyOS"
       }
     ],
     "buildModeSet": [

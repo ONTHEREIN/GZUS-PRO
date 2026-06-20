@@ -1,5 +1,22 @@
 import 'package:flutter/material.dart';
 
+extension GzusColorCompat on Color {
+  Color withValues({double? alpha, double? red, double? green, double? blue}) {
+    return Color.fromARGB(
+      alpha == null ? this.alpha : (alpha * 255.0).round().clamp(0, 255),
+      red == null ? this.red : (red * 255.0).round().clamp(0, 255),
+      green == null ? this.green : (green * 255.0).round().clamp(0, 255),
+      blue == null ? this.blue : (blue * 255.0).round().clamp(0, 255),
+    );
+  }
+
+  double get r => red / 255.0;
+  double get g => green / 255.0;
+  double get b => blue / 255.0;
+
+  int toARGB32() => value;
+}
+
 class GzusColors {
   const GzusColors._();
 
@@ -106,7 +123,7 @@ ThemeData gzusTheme(Brightness brightness, {double navBarHeight = 76, Color seed
       ),
     ),
     dividerColor: border,
-    cardTheme: CardThemeData(
+    cardTheme: CardTheme(
       color: surface,
       elevation: 0,
       margin: EdgeInsets.zero,

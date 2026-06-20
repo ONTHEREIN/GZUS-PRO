@@ -615,7 +615,8 @@ void main() {
     expect(find.textContaining('移动应用开发'), findsWidgets);
   });
 
-  testWidgets('today timeline fits dense desktop home grid', (tester) async {
+  testWidgets('today timeline fits dense desktop home grid with large text',
+      (tester) async {
     final scheduleItems = List.generate(8, (index) {
       final section = index + 1;
       return {
@@ -633,6 +634,7 @@ void main() {
       tester,
       const Size(1180, 820),
       scheduleItems: scheduleItems,
+      textScaleFactor: 1.3,
     );
 
     expect(find.text('今日时间线'), findsOneWidget);
@@ -899,6 +901,7 @@ Future<void> _pumpDashboard(
   Size size, {
   bool hideEcard = false,
   List<Map<String, Object?>>? scheduleItems,
+  double textScaleFactor = 1,
 }) async {
   LiveActivityController.instance.resetForTest();
   debugHideEcardForTests = hideEcard;
@@ -909,7 +912,9 @@ Future<void> _pumpDashboard(
   SharedPreferences.setMockInitialValues({});
   tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1;
+  tester.platformDispatcher.textScaleFactorTestValue = textScaleFactor;
   addTearDown(tester.view.reset);
+  addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
 
   await tester.pumpWidget(
     MaterialApp(
