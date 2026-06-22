@@ -30,6 +30,10 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
   bool _checking = true;
   bool _webPushSubscribed = false;
 
+  /// Web Push 是否可用（后端启用 VAPID 且浏览器支持）。
+  /// 不可用时只要求通知权限即可完成配置。
+  bool _webPushEnabled = true;
+
   /// 防止 _checkPermissions() 重入
   bool _busy = false;
 
@@ -90,6 +94,7 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
     bool autoStart = false, battery = false, notif = false, alarm = true;
     String permStatus = 'default';
     bool webSub = false;
+    bool webEnabled = true;
     try {
       if (kIsWeb) {
         final webPush = WebPushService.instance;
@@ -97,9 +102,15 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
         final results = await Future.wait([
           webPush.getPermissionStatus(),
           webPush.isSubscribed(),
+          webPush.isSupported(),
+          _fetchWebPushConfig(),
         ]);
         permStatus = results[0] as String;
         webSub = results[1] as bool;
+        final supported = results[2] as bool;
+        final config = results[3] as Map<String, dynamic>?;
+        webEnabled =
+            supported && config != null && config['enabled'] == true;
       } else {
         final futures = <Future<bool>>[
           PermissionService.checkAutoStart(),
@@ -127,6 +138,7 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
         if (kIsWeb) {
           _notificationGranted = permStatus == 'granted';
           _webPushSubscribed = webSub;
+          _webPushEnabled = webEnabled;
         } else {
           _autoStartGranted = autoStart;
           _batteryOptimizationDisabled = battery;
@@ -138,7 +150,7 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
   }
 
   bool get _allGranted => kIsWeb
-      ? (_notificationGranted && _webPushSubscribed)
+      ? (_notificationGranted && (!_webPushEnabled || _webPushSubscribed))
       : (_autoStartGranted &&
           _batteryOptimizationDisabled &&
           _notificationGranted &&
@@ -164,10 +176,14 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
       final granted = await webPush.requestPermission();
       if (granted) {
         bool subscribed = false;
+        bool pushEnabled = false;
         try {
+          final supported = await webPush.isSupported();
           final config = await _fetchWebPushConfig();
-          if (config != null && config['enabled'] == true) {
-            final publicKey = config['publicKey'] as String?;
+          pushEnabled =
+              supported && config != null && config['enabled'] == true;
+          if (pushEnabled) {
+            final publicKey = config!['publicKey'] as String?;
             if (publicKey != null && publicKey.isNotEmpty) {
               await webPush.subscribe(
                 publicKey,
@@ -183,6 +199,7 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
           setState(() {
             _notificationGranted = true;
             _webPushSubscribed = subscribed;
+            _webPushEnabled = pushEnabled;
           });
         }
         return;
@@ -192,6 +209,41 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
     }
     // 权限未授予（或非 Web 平台），静默刷新状态
     _refreshPermissions();
+  }
+
+  /// 重试 Web Push 订阅（通知权限已授予但订阅失败时使用）
+  Future<void> _retryWebPushSubscribe() async {
+    if (_busy) return;
+    _busy = true;
+    try {
+      final webPush = WebPushService.instance;
+      await webPush.init();
+      final config = await _fetchWebPushConfig();
+      bool subscribed = false;
+      final pushEnabled =
+          config != null && config['enabled'] == true;
+      if (pushEnabled) {
+        final publicKey = config!['publicKey'] as String?;
+        if (publicKey != null && publicKey.isNotEmpty) {
+          await webPush.subscribe(
+            publicKey,
+            apiBaseUrl: widget.api.baseUrl,
+            sessionId: widget.api.sessionId ?? '',
+          );
+          subscribed = true;
+        }
+      }
+      if (mounted) {
+        setState(() {
+          _webPushSubscribed = subscribed;
+          _webPushEnabled = pushEnabled;
+        });
+      }
+    } catch (_) {
+      // 订阅失败，保持现状
+    } finally {
+      _busy = false;
+    }
   }
 
   Future<Map<String, dynamic>?> _fetchWebPushConfig() async {
@@ -335,6 +387,39 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
                       onAction: _requestNotification,
                       actionLabel: '授予权限',
                     ),
+                    if (kIsWeb &&
+                        _webPushEnabled &&
+                        _notificationGranted &&
+                        !_webPushSubscribed &&
+                        !_checking) ...[
+                      const SizedBox(height: 12),
+                      Container(
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color:
+                              colorScheme.errorContainer.withValues(alpha: 0.5),
+                          borderRadius: BorderRadius.circular(22),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(Icons.warning_amber_rounded,
+                                color: colorScheme.onErrorContainer),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Text(
+                                '推送订阅未完成，可能无法收到通知',
+                                style: TextStyle(
+                                    color: colorScheme.onErrorContainer),
+                              ),
+                            ),
+                            OutlinedButton(
+                              onPressed: _retryWebPushSubscribe,
+                              child: const Text('重试'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                     if (!kIsWeb && Platform.isAndroid) ...[
                       const SizedBox(height: 24),
                       SwitchListTile(
