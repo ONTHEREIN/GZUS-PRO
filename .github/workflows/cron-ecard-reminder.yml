@@ -13,6 +13,6 @@ jobs:
       - name: Trigger ecard reminder
         run: |
           curl -sS -o /dev/null -w 'HTTP %{http_code} in %{time_total}s\n' \
-            --max-time 15 \
+            --max-time 30 \
             -H "X-Internal-Key: ${{ secrets.INTERNAL_API_KEY }}" \
-            "https://api-one-zeta-dc0jrazxzq.vercel.app/internal/cron/ecard-reminder"
+            "https://onegzus.cc.cd/internal/cron/ecard-reminder"
