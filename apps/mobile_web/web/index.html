@@ -4,15 +4,16 @@
   <base href="$FLUTTER_BASE_HREF">
   <meta charset="UTF-8">
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
-  <meta name="description" content="软帮手 Dev OneGZUS">
+  <meta name="description" content="软帮手 OneGZUS">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>软帮手 Dev | OneGZUS</title>
+  <meta name="gzus-build-mode" content="auto">
+  <title>软帮手 | OneGZUS</title>
 
   <!-- PWA Meta Tags -->
   <meta name="theme-color" content="#3593FC">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="软帮手 Dev">
+  <meta name="apple-mobile-web-app-title" content="软帮手">
 
   <!-- Manifest -->
   <link rel="manifest" href="manifest.json">
@@ -54,32 +55,66 @@
     }
     .loading-text {
       margin-top: 16px;
-      color: #666;
+      color: #1f2937;
+      font-size: 16px;
+      font-weight: 600;
+    }
+    .loading-hint {
+      margin-top: 8px;
+      color: #6b7280;
       font-size: 14px;
+      text-align: center;
+      line-height: 1.6;
+      max-width: 280px;
+    }
+    .loading-actions {
+      display: none;
+      gap: 10px;
+      margin-top: 18px;
+    }
+    #loading-container.needs-help .loading-actions {
+      display: flex;
+    }
+    .loading-button {
+      appearance: none;
+      border: 1px solid #d1d5db;
+      border-radius: 8px;
+      background: #ffffff;
+      color: #111827;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 600;
+      padding: 9px 14px;
+    }
+    .loading-button.primary {
+      border-color: #3593FC;
+      background: #3593FC;
+      color: #ffffff;
     }
     @media (prefers-color-scheme: dark) {
       #loading-container { background: #1a1a1a; }
       .loading-spinner { border-color: #444; border-top-color: #3593FC; }
-      .loading-text { color: #aaa; }
+      .loading-text { color: #f3f4f6; }
+      .loading-hint { color: #a1a1aa; }
+      .loading-button {
+        border-color: #4b5563;
+        background: #27272a;
+        color: #f9fafb;
+      }
     }
   </style>
 </head>
 <body>
   <div id="loading-container">
     <div class="loading-spinner"></div>
-    <div class="loading-text">软帮手 Dev 加载中...</div>
+    <div id="loading-title" class="loading-text">软帮手加载中...</div>
+    <div id="loading-hint" class="loading-hint">正在准备校园服务</div>
+    <div class="loading-actions" aria-label="加载异常处理">
+      <button id="loading-refresh" class="loading-button primary" type="button">刷新</button>
+      <button id="loading-clear-cache" class="loading-button" type="button">清缓存并刷新</button>
+    </div>
   </div>
   <script src="gzus_pwa.js"></script>
   <script src="flutter_bootstrap.js" async></script>
-  <script>
-    // Hide loading indicator once Flutter renders
-    window.addEventListener('flutter-first-frame', function() {
-      var el = document.getElementById('loading-container');
-      if (el) {
-        el.classList.add('fade-out');
-        setTimeout(function() { el.remove(); }, 300);
-      }
-    });
-  </script>
 </body>
 </html>

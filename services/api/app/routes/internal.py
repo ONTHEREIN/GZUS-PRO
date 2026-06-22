@@ -7,7 +7,9 @@ They are protected by an internal API key.
 from __future__ import annotations
 
 import base64
+import json
 import logging
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel
@@ -192,3 +194,107 @@ def create_session_endpoint(
             logger.warning("Failed to install Worker proxy on session %s: %s", session.id[:8], exc)
 
     return {"sessionId": session.id, "credentialToken": encrypted_credentials}
+
+
+# ─── Cron job endpoints (called by GitHub Actions scheduled workflow) ─────
+
+@router.get("/cron/ecard-reminder")
+def ecard_reminder_cron(request: Request, x_internal_key: str | None = Header(None)) -> dict:
+    """Run ecard reminder for bindings (triggered by cron).
+
+    Each cron invocation gets a fresh 10 s Vercel budget. We process
+    bindings one at a time and stop before the timeout.  With the
+    global token cache, individual balance calls should stay fast.
+    """
+    _verify_internal_key(x_internal_key)
+
+    if not get_settings().ecard_openid:
+        return {"ok": True, "reason": "ecard not configured", "processed": 0}
+
+    import time as _time
+    from app.database import EcardBinding, PushRegistration, get_sync_session_factory
+    from app.ecard_client import EcardApiError, EcardClient, EcardRoomRef
+    from app.jobs import ecard_reminder_message
+    from app.push import send_push, send_web_push_to_student
+
+    deadline = _time.monotonic() + 9.0  # Stop 1 s before Vercel's 10 s kill
+    try:
+        client = EcardClient(
+            worker_proxy_origin=get_settings().ecard_worker_proxy_origin or None,
+        )
+    except Exception as exc:
+        logger.warning("ecard cron: cannot create client: %s", exc)
+        return {"ok": False, "error": str(exc)}
+
+    factory = get_sync_session_factory()
+    processed = 0
+    errors = 0
+
+    with factory() as db:
+        bindings = (
+            db.query(EcardBinding)
+            .filter(EcardBinding.reminder_enabled.is_(True))
+            .order_by(EcardBinding.last_checked_at.asc().nullsfirst())
+            .all()
+        )
+        for binding in bindings:
+            if _time.monotonic() > deadline:
+                logger.info("ecard cron: stopping at deadline, processed=%d", processed)
+                break
+            try:
+                room_ref = EcardRoomRef.from_id(binding.room_id)
+                summary = client.balance(room_ref, binding.student_id)
+            except Exception as exc:
+                logger.warning("ecard cron: balance failed for %s: %s", binding.student_id, exc)
+                errors += 1
+                continue
+
+            binding.last_summary_json = json.dumps(summary, ensure_ascii=False)
+            binding.last_checked_at = datetime.now(timezone.utc)
+            binding.updated_at = datetime.now(timezone.utc)
+            processed += 1
+
+            # Low-balance push notification
+            enabled_items = (
+                json.loads(binding.reminder_items)
+                if binding.reminder_items
+                else ["power", "cold_water", "hot_water"]
+            )
+            messages = ecard_reminder_message(
+                summary,
+                power_threshold=binding.low_power_threshold,
+                cold_water_threshold=binding.low_cold_water_threshold,
+                hot_water_threshold=binding.low_hot_water_threshold,
+                enabled_items=enabled_items,
+            )
+            for item_key, title, body in messages:
+                live_payload = {
+                    "id": f"ecard_cron:{binding.student_id}:{item_key}",
+                    "type": "ecard_reminder",
+                    "studentId": binding.student_id,
+                    "itemKey": item_key,
+                    "liveUpdate": True,
+                    "style": "progress",
+                    "shortCriticalText": "水电",
+                }
+                registration_ids = [
+                    item.registration_id
+                    for item in db.query(PushRegistration)
+                    .filter(PushRegistration.student_id == binding.student_id)
+                    .all()
+                ]
+                try:
+                    send_push(registration_ids, title, body, live_payload)
+                except Exception as exc:
+                    logger.warning("ecard cron: push failed for %s: %s", binding.student_id, exc)
+                try:
+                    send_web_push_to_student(binding.student_id, title, body, live_payload)
+                except Exception as exc:
+                    logger.warning("ecard cron: web push failed for %s: %s", binding.student_id, exc)
+
+        try:
+            db.commit()
+        except Exception as exc:
+            logger.error("ecard cron: commit failed: %s", exc)
+
+    return {"ok": True, "processed": processed, "errors": errors}

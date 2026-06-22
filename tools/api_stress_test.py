@@ -16,6 +16,7 @@ import statistics
 import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin
@@ -38,6 +39,19 @@ DEFAULT_ENDPOINTS = [
 ]
 
 PUBLIC_PATHS = {"/health"}
+MAX_BODY_SNIPPET = 240
+CAPTURED_RESPONSE_HEADERS = (
+    "content-type",
+    "server",
+    "cf-ray",
+    "cf-cache-status",
+    "x-data-source",
+    "x-data-cached-at",
+    "x-vercel-id",
+    "x-vercel-cache",
+    "x-proxy-status",
+    "retry-after",
+)
 
 PROFILE_ENDPOINTS = {
     "mixed": DEFAULT_ENDPOINTS,
@@ -79,6 +93,21 @@ class Sample:
     elapsed_ms: float
     ok: bool
     error: str = ""
+    diagnostic: str = ""
+    headers: dict[str, str] = field(default_factory=dict)
+    body_snippet: str = ""
+
+
+@dataclass
+class PreflightResult:
+    enabled: bool
+    ok: bool
+    conclusion: str
+    status: int | None = None
+    elapsed_ms: float = 0.0
+    diagnostic: str = ""
+    headers: dict[str, str] = field(default_factory=dict)
+    body_snippet: str = ""
 
 
 @dataclass
@@ -139,6 +168,51 @@ def endpoints_for_profile(profile: str) -> list[Endpoint]:
         Endpoint(name=name, method=method, path=path, weight=weight)
         for name, method, path, weight in PROFILE_ENDPOINTS[profile]
     ]
+
+
+def normalize_body_snippet(value: str, limit: int = MAX_BODY_SNIPPET) -> str:
+    return " ".join(value.replace("\x00", "").split())[:limit]
+
+
+def captured_headers(response: httpx.Response) -> dict[str, str]:
+    return {
+        name: response.headers[name]
+        for name in CAPTURED_RESPONSE_HEADERS
+        if name in response.headers
+    }
+
+
+def looks_like_html(headers: dict[str, str], body_snippet: str) -> bool:
+    content_type = headers.get("content-type", "").lower()
+    snippet = body_snippet.lower().lstrip()
+    return "text/html" in content_type or snippet.startswith("<!doctype html") or snippet.startswith("<html")
+
+
+def classify_response(
+    endpoint: str,
+    status: int | None,
+    headers: dict[str, str],
+    body_snippet: str,
+    ok: bool,
+) -> str:
+    if status is None:
+        return "transport_error"
+    if looks_like_html(headers, body_snippet):
+        return "html_error"
+    if status == 401 and ("会话" in body_snippet or "session" in body_snippet.lower()):
+        return "session_expired"
+    data_source = headers.get("x-data-source", "").lower()
+    if data_source == "edge-cache":
+        return "worker_edge_cache"
+    if '"source":"edge-jwxt"' in body_snippet.replace(" ", ""):
+        return "worker_edge_error"
+    if headers.get("x-vercel-id"):
+        return "worker_origin"
+    if endpoint == "schedule" and headers.get("cf-ray"):
+        return "worker_edge"
+    if ok:
+        return "ok"
+    return "api_error"
 
 
 async def auto_login(
@@ -208,14 +282,19 @@ async def validate_session(
     base_url: str,
     session_id: str | None,
     endpoints: list[Endpoint],
-) -> None:
+) -> PreflightResult:
     if not session_id and any(endpoint.path not in PUBLIC_PATHS for endpoint in endpoints):
-        raise RuntimeError(
-            "未提供 session，受保护接口无法预检。请传入 --session-id，或使用 "
-            "--credential-token/GZUS_CREDENTIAL_TOKEN 自动续登。"
+        return PreflightResult(
+            enabled=True,
+            ok=False,
+            conclusion=(
+                "未提供 session，受保护接口无法预检。请传入 --session-id，或使用 "
+                "--credential-token/GZUS_CREDENTIAL_TOKEN 自动续登。"
+            ),
+            diagnostic="missing_session",
         )
     if not session_id:
-        return
+        return PreflightResult(enabled=True, ok=True, conclusion="仅公共接口，无需 session 预检。")
     sample = await single_request(
         client,
         base_url,
@@ -223,10 +302,29 @@ async def validate_session(
         session_id,
     )
     if sample.status == 401:
-        raise RuntimeError(
-            "当前 session 已过期。请换新的 --session-id，或使用 "
-            "--credential-token/GZUS_CREDENTIAL_TOKEN 自动续登。"
+        return PreflightResult(
+            enabled=True,
+            ok=False,
+            conclusion=(
+                "当前 session 已过期。请换新的 --session-id，或使用 "
+                "--credential-token/GZUS_CREDENTIAL_TOKEN 自动续登。"
+            ),
+            status=sample.status,
+            elapsed_ms=sample.elapsed_ms,
+            diagnostic=sample.diagnostic,
+            headers=sample.headers,
+            body_snippet=sample.body_snippet,
         )
+    return PreflightResult(
+        enabled=True,
+        ok=sample.ok,
+        conclusion="预检通过。" if sample.ok else "预检失败，压测已停止。",
+        status=sample.status,
+        elapsed_ms=sample.elapsed_ms,
+        diagnostic=sample.diagnostic,
+        headers=sample.headers,
+        body_snippet=sample.body_snippet,
+    )
 
 
 async def single_request(
@@ -245,12 +343,24 @@ async def single_request(
         )
         await response.aread()
         elapsed_ms = (time.perf_counter() - started) * 1000
+        headers = captured_headers(response)
+        body_snippet = normalize_body_snippet(response.text)
+        ok = 200 <= response.status_code < 400
         return Sample(
             endpoint=endpoint.name,
             status=response.status_code,
             elapsed_ms=elapsed_ms,
-            ok=200 <= response.status_code < 400,
-            error="" if response.status_code < 400 else response.text[:160],
+            ok=ok,
+            error="" if ok else body_snippet[:160],
+            diagnostic=classify_response(
+                endpoint.name,
+                response.status_code,
+                headers,
+                body_snippet,
+                ok,
+            ),
+            headers=headers,
+            body_snippet=body_snippet,
         )
     except Exception as exc:
         elapsed_ms = (time.perf_counter() - started) * 1000
@@ -260,6 +370,7 @@ async def single_request(
             elapsed_ms=elapsed_ms,
             ok=False,
             error=f"{type(exc).__name__}: {exc}",
+            diagnostic="transport_error",
         )
 
 
@@ -320,7 +431,64 @@ def percentile(values: list[float], pct: float) -> float:
     return ordered[index]
 
 
-def render_report(stats: RunStats) -> None:
+def render_preflight(preflight: PreflightResult | None) -> None:
+    if preflight is None:
+        return
+    print("\n--- 预检结论 ---")
+    print(f"结果: {'通过' if preflight.ok else '失败'}")
+    print(f"结论: {preflight.conclusion}")
+    if preflight.status is not None:
+        print(
+            f"状态: {preflight.status} "
+            f"耗时={preflight.elapsed_ms:.1f}ms "
+            f"诊断={preflight.diagnostic or 'unknown'}"
+        )
+    if preflight.headers:
+        print(f"关键响应头: {preflight.headers}")
+    if preflight.body_snippet:
+        print(f"响应片段: {preflight.body_snippet}")
+
+
+def render_diagnostics(stats: RunStats) -> None:
+    diagnostics = Counter(sample.diagnostic or "unknown" for sample in stats.samples)
+    print(f"链路诊断: {dict(diagnostics)}")
+    print(
+        "关键判读: "
+        f"会话过期={diagnostics.get('session_expired', 0)} "
+        f"Worker命中={diagnostics.get('worker_edge', 0) + diagnostics.get('worker_edge_cache', 0) + diagnostics.get('worker_edge_error', 0)} "
+        f"Worker回源={diagnostics.get('worker_origin', 0)} "
+        f"HTML错包={diagnostics.get('html_error', 0)}"
+    )
+
+    schedule_samples = [sample for sample in stats.samples if sample.endpoint == "schedule"]
+    if not schedule_samples:
+        return
+
+    print("\n--- /schedule 诊断样本，最多 8 条 ---")
+    seen: set[tuple[int | None, str, str, str]] = set()
+    rendered = 0
+    for sample in schedule_samples:
+        key = (
+            sample.status,
+            sample.diagnostic,
+            sample.headers.get("x-data-source", ""),
+            sample.headers.get("x-vercel-id", ""),
+        )
+        if key in seen and sample.ok:
+            continue
+        seen.add(key)
+        print(
+            f"status={sample.status} elapsed={sample.elapsed_ms:.1f}ms "
+            f"诊断={sample.diagnostic or 'unknown'} "
+            f"headers={sample.headers} "
+            f"body={sample.body_snippet[:120]}"
+        )
+        rendered += 1
+        if rendered >= 8:
+            break
+
+
+def render_report(stats: RunStats, preflight: PreflightResult | None = None) -> None:
     latencies = [sample.elapsed_ms for sample in stats.samples]
     statuses = Counter(
         str(sample.status) if sample.status is not None else "ERR"
@@ -346,12 +514,10 @@ def render_report(stats: RunStats) -> None:
         f"max={max(latencies) if latencies else 0:.1f}"
     )
     print(f"状态码: {dict(statuses)}")
-    html_errors = sum(
-        1
-        for sample in stats.samples
-        if sample.error and "<!doctype html" in sample.error.lower()
-    )
+    html_errors = sum(1 for sample in stats.samples if sample.diagnostic == "html_error")
     print(f"HTML错误回包: {html_errors}")
+    render_diagnostics(stats)
+    render_preflight(preflight)
 
     print("\n--- 按接口统计 ---")
     for endpoint, samples in sorted(by_endpoint.items()):
@@ -370,23 +536,93 @@ def render_report(stats: RunStats) -> None:
         for sample in errors[:10]:
             print(
                 f"{sample.endpoint} status={sample.status} "
-                f"elapsed={sample.elapsed_ms:.1f}ms error={sample.error}"
+                f"elapsed={sample.elapsed_ms:.1f}ms "
+                f"诊断={sample.diagnostic or 'unknown'} "
+                f"headers={sample.headers} "
+                f"error={sample.error}"
             )
 
 
-def write_json_report(path: Path, stats: RunStats) -> None:
+def stats_summary(stats: RunStats) -> dict[str, Any]:
+    latencies = [sample.elapsed_ms for sample in stats.samples]
+    statuses = Counter(
+        str(sample.status) if sample.status is not None else "ERR"
+        for sample in stats.samples
+    )
+    diagnostics = Counter(sample.diagnostic or "unknown" for sample in stats.samples)
+    by_endpoint: dict[str, list[Sample]] = defaultdict(list)
+    for sample in stats.samples:
+        by_endpoint[sample.endpoint].append(sample)
+    return {
+        "statuses": dict(statuses),
+        "diagnostics": dict(diagnostics),
+        "htmlErrors": diagnostics.get("html_error", 0),
+        "sessionExpired": diagnostics.get("session_expired", 0),
+        "workerEdge": (
+            diagnostics.get("worker_edge", 0)
+            + diagnostics.get("worker_edge_cache", 0)
+            + diagnostics.get("worker_edge_error", 0)
+        ),
+        "workerOrigin": diagnostics.get("worker_origin", 0),
+        "latencyMs": {
+            "avg": statistics.mean(latencies) if latencies else 0,
+            "p50": percentile(latencies, 0.50),
+            "p95": percentile(latencies, 0.95),
+            "p99": percentile(latencies, 0.99),
+            "max": max(latencies) if latencies else 0,
+        },
+        "byEndpoint": {
+            endpoint: {
+                "total": len(samples),
+                "ok": sum(1 for sample in samples if sample.ok),
+                "failed": sum(1 for sample in samples if not sample.ok),
+                "diagnostics": dict(
+                    Counter(sample.diagnostic or "unknown" for sample in samples)
+                ),
+            }
+            for endpoint, samples in sorted(by_endpoint.items())
+        },
+    }
+
+
+def preflight_payload(preflight: PreflightResult | None) -> dict[str, Any]:
+    if preflight is None:
+        return {"enabled": False}
+    return {
+        "enabled": preflight.enabled,
+        "ok": preflight.ok,
+        "conclusion": preflight.conclusion,
+        "status": preflight.status,
+        "elapsedMs": preflight.elapsed_ms,
+        "diagnostic": preflight.diagnostic,
+        "headers": preflight.headers,
+        "bodySnippet": preflight.body_snippet,
+    }
+
+
+def write_json_report(
+    path: Path,
+    stats: RunStats,
+    preflight: PreflightResult | None = None,
+) -> None:
     payload: dict[str, Any] = {
+        "generatedAt": datetime.now(timezone.utc).isoformat(),
         "total": stats.total,
         "ok": stats.ok,
         "failed": stats.failed,
         "elapsedSeconds": stats.elapsed,
         "rps": stats.rps,
+        "preflight": preflight_payload(preflight),
+        "summary": stats_summary(stats),
         "samples": [
             {
                 "endpoint": sample.endpoint,
                 "status": sample.status,
                 "elapsedMs": sample.elapsed_ms,
                 "ok": sample.ok,
+                "diagnostic": sample.diagnostic,
+                "headers": sample.headers,
+                "bodySnippet": sample.body_snippet,
                 "error": sample.error,
             }
             for sample in stats.samples
@@ -399,6 +635,7 @@ def write_json_report(path: Path, stats: RunStats) -> None:
 async def run(args: argparse.Namespace) -> int:
     base_url = normalize_base_url(args.base_url)
     endpoints = args.endpoint or endpoints_for_profile(args.profile)
+    preflight: PreflightResult | None = None
     timeout = httpx.Timeout(args.timeout, connect=args.connect_timeout)
     limits = httpx.Limits(
         max_connections=max(args.concurrency * 2, 20),
@@ -432,7 +669,14 @@ async def run(args: argparse.Namespace) -> int:
         if not session_id and any(endpoint.path != "/health" for endpoint in endpoints):
             print("未提供 session，除 /health 外的接口可能返回 401。")
         if args.preflight:
-            await validate_session(client, base_url, session_id, endpoints)
+            preflight = await validate_session(client, base_url, session_id, endpoints)
+            if not preflight.ok:
+                stats = RunStats(started_at=time.perf_counter(), ended_at=time.perf_counter())
+                render_report(stats, preflight)
+                if args.json_report:
+                    write_json_report(Path(args.json_report), stats, preflight)
+                    print(f"\nJSON 报告已写入: {args.json_report}")
+                return 1
 
         if args.warmup > 0:
             print(f"预热 {args.warmup} 秒...")
@@ -477,9 +721,9 @@ async def run(args: argparse.Namespace) -> int:
         stop_event.set()
         await collector
 
-    render_report(stats)
+    render_report(stats, preflight)
     if args.json_report:
-        write_json_report(Path(args.json_report), stats)
+        write_json_report(Path(args.json_report), stats, preflight)
         print(f"\nJSON 报告已写入: {args.json_report}")
     return 0 if stats.failed == 0 or not args.fail_on_error else 1
 

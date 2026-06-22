@@ -54,7 +54,7 @@ flutter build apk --dart-define=API_BASE_URL=...
 # From services/api/
 python -m venv .venv && .venv\Scripts\activate     # Windows
 pip install -r requirements.txt
-uvicorn app.main:app --reload                       # local dev on :8000
+uvicorn app.main:app --reload --reload-dir app --reload-exclude .venv --host 0.0.0.0
 
 # Tests (no external services — in-memory SQLite, auto-configured)
 pytest
@@ -63,6 +63,7 @@ pytest
 ruff check .
 ```
 
+- Use the narrowed reload command above on Windows; bare `uvicorn --reload` can scan `.venv`/tooling and make local restarts very slow.
 - `pyproject.toml`: `testpaths = ["tests"]`, `asyncio_mode = "auto"`, `line-length = 100`, `target-version = "py311"`.
 - `test_api.py` and `test_login.py` in repo root of `services/api/` are **manual** integration tests requiring `GZUS_TEST_ACCOUNT`/`GZUS_TEST_PASSWORD` env vars. Not part of default `pytest`.
 

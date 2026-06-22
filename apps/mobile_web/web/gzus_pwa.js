@@ -19,6 +19,8 @@ if ('serviceWorker' in navigator) {
   navigator.serviceWorker.addEventListener('controllerchange', reloadForServiceWorkerUpdate);
 }
 
+initStartupLoading();
+
 window.gzusWebPushInit = function() {
   console.log('GZUS Web Push initialized');
 };
@@ -159,4 +161,126 @@ function requestHeaders(sessionId) {
     headers['X-Session-Id'] = sessionId;
   }
   return headers;
+}
+
+function initStartupLoading() {
+  const container = document.getElementById('loading-container');
+  if (!container) return;
+
+  const title = document.getElementById('loading-title');
+  const hint = document.getElementById('loading-hint');
+  const refresh = document.getElementById('loading-refresh');
+  const clearCache = document.getElementById('loading-clear-cache');
+  const appName = startupAppName();
+  let firstFrameArrived = false;
+  let slowTimer = null;
+  let fallbackTimer = null;
+
+  const setText = (nextTitle, nextHint) => {
+    if (title) title.textContent = nextTitle;
+    if (hint) hint.textContent = nextHint;
+  };
+
+  setText(`${appName}加载中...`, '正在准备校园服务');
+  applyStartupTitle(appName);
+
+  slowTimer = window.setTimeout(() => {
+    if (firstFrameArrived) return;
+    setText(`${appName}仍在加载...`, '如果长时间停在这里，可能是网络或缓存版本未更新');
+  }, 12000);
+
+  fallbackTimer = window.setTimeout(() => {
+    if (firstFrameArrived) return;
+    container.classList.add('needs-help');
+    setText(`${appName}加载时间过长`, '请先刷新；如果仍无响应，清缓存并刷新');
+  }, 25000);
+
+  if (refresh) {
+    refresh.addEventListener('click', () => {
+      window.location.reload();
+    });
+  }
+
+  if (clearCache) {
+    clearCache.addEventListener('click', async () => {
+      setText('正在清理缓存...', '清理完成后会自动刷新');
+      clearCache.disabled = true;
+      if (refresh) refresh.disabled = true;
+      await clearStartupCache();
+      window.location.replace(cacheBustedUrl());
+    });
+  }
+
+  window.addEventListener('flutter-first-frame', () => {
+    firstFrameArrived = true;
+    window.clearTimeout(slowTimer);
+    window.clearTimeout(fallbackTimer);
+    container.classList.add('fade-out');
+    window.setTimeout(() => container.remove(), 300);
+  });
+
+  window.addEventListener('error', () => {
+    if (firstFrameArrived) return;
+    container.classList.add('needs-help');
+    setText(`${appName}加载失败`, '请刷新；如果重复失败，清缓存并刷新');
+  });
+}
+
+function startupAppName() {
+  const configuredMode = document
+    .querySelector('meta[name="gzus-build-mode"]')
+    ?.getAttribute('content')
+    ?.trim()
+    .toLowerCase();
+  const hostname = window.location.hostname;
+  const isLocal = hostname === 'localhost' ||
+    hostname === '127.0.0.1' ||
+    hostname === '[::1]' ||
+    hostname.endsWith('.local');
+  const mode = configuredMode && configuredMode !== 'auto'
+    ? configuredMode
+    : (isLocal ? 'debug' : 'release');
+
+  if (mode === 'debug' || mode === 'dev' || mode === 'development') {
+    return '软帮手 Dev';
+  }
+  if (mode === 'profile' || mode === 'preview' || mode === 'staging') {
+    return '软帮手预览版';
+  }
+  return '软帮手';
+}
+
+function applyStartupTitle(appName) {
+  document.title = appName === '软帮手'
+    ? '软帮手 | OneGZUS'
+    : `${appName} | OneGZUS`;
+  const appleTitle = document.querySelector('meta[name="apple-mobile-web-app-title"]');
+  if (appleTitle) appleTitle.setAttribute('content', appName);
+  const description = document.querySelector('meta[name="description"]');
+  if (description) description.setAttribute('content', `${appName} OneGZUS`);
+}
+
+async function clearStartupCache() {
+  const tasks = [];
+  if ('caches' in window) {
+    tasks.push(
+      caches.keys()
+        .then((names) => Promise.all(names.map((name) => caches.delete(name))))
+        .catch((e) => console.error('Clear startup cache failed:', e))
+    );
+  }
+  if ('serviceWorker' in navigator) {
+    tasks.push(
+      navigator.serviceWorker.getRegistrations()
+        .then((registrations) => Promise.all(registrations.map((item) => item.unregister())))
+        .catch((e) => console.error('Unregister service worker failed:', e))
+    );
+  }
+  await Promise.all(tasks);
+}
+
+function cacheBustedUrl() {
+  const url = new URL(window.location.href);
+  url.searchParams.set('reload', Date.now().toString());
+  return url.toString();
 }

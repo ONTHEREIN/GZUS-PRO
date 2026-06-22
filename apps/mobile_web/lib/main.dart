@@ -40,7 +40,7 @@ import 'push_service.dart' deferred as push_service;
 @visibleForTesting
 bool debugHideEcardForTests = false;
 
-bool get _hideEcardOnCurrentPlatform => kIsWeb || debugHideEcardForTests;
+bool get _hideEcardOnCurrentPlatform => debugHideEcardForTests;
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();

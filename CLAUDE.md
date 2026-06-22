@@ -26,7 +26,7 @@ flutter build apk --dart-define=API_BASE_URL=...
 ```bash
 python -m venv .venv && .venv\Scripts\activate     # Windows
 pip install -r requirements.txt
-uvicorn app.main:app --reload                       # 本地开发，端口 :8000
+uvicorn app.main:app --reload --reload-dir app --reload-exclude .venv --host 0.0.0.0
 
 # 测试（无需外部服务 — 使用内存 SQLite）
 pytest
@@ -35,6 +35,7 @@ pytest
 ruff check .
 ```
 
+- Windows 本地开发使用上面的窄监听命令；裸 `uvicorn --reload` 可能扫描 `.venv`/工具链目录导致启动和重载很慢。
 - 测试通过 `conftest.py` 自动设置 `DEBUG=true`、`DATABASE_URL=sqlite:///:memory:` 和虚拟 `CREDENTIAL_ENCRYPTION_KEY`。
 - `test_api.py` 和 `test_login.py` 是**手动**集成测试，需要真实学校凭证（环境变量 `GZUS_TEST_ACCOUNT`/`GZUS_TEST_PASSWORD`），不在 `pytest` 默认运行范围内。
 

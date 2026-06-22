@@ -42,8 +42,12 @@ nul
 
 # Local agent/tool state
 .codebuddy/
+.codegenie/
 .workbuddy/
 .trae/
+
+# Local SDK/toolchains
+tools/flutter_ohos_3.22.0/
 
 # Gradle
 .gradle-home/
@@ -90,4 +94,3 @@ Desktop.ini
 .env
 .edgeone/*
 .tef_dist/*
-  
