@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gzus_pro_mobile_web/main.dart';
@@ -65,6 +66,65 @@ void main() {
       WsService.buildWsUrlForTest('http://127.0.0.1:8000/api', 'sid'),
       'ws://127.0.0.1:8000/api/ws/notifications?sessionId=sid',
     );
+  });
+
+  test('native ecard summary enriches backend cache with direct balance',
+      () async {
+    SharedPreferences.setMockInitialValues({});
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    debugDisableEcardDirectForTests = false;
+    debugEcardDirectClientFactoryForTests = () => _FakeEcardDirectClient(
+          balance: {
+            'powerBalance': 12.5,
+            'du': '度',
+            'formatPowerBalanceStr': '12.5 度',
+            'coldWaterBalance': 3.2,
+            'dun': '吨',
+            'coldWaterText': '3.2 吨',
+            'hotWaterBalance': 6.8,
+            'hotWaterText': '6.8 元',
+          },
+        );
+    addTearDown(() {
+      debugDefaultTargetPlatformOverride = null;
+      debugDisableEcardDirectForTests = false;
+      debugEcardDirectClientFactoryForTests = null;
+    });
+
+    final api = ApiClient(
+      baseUrl: 'https://api.example.test',
+      httpClient: MockClient((request) async {
+        if (request.method == 'GET' && request.url.path == '/ecard/summary') {
+          return http.Response(
+            jsonEncode({
+              'status': 'ok',
+              'roomId': 'CGCOMMON1111|1|A2|932',
+              'roomDisplay': '校本部 A2 A2-932',
+            }),
+            200,
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        if (request.method == 'PATCH' &&
+            request.url.path == '/ecard/summary-cache') {
+          return http.Response(
+            jsonEncode({'status': 'ok'}),
+            200,
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        return http.Response('not found', 404);
+      }),
+    );
+
+    final result = await api.ecardSummary(forceRefresh: true);
+
+    expect(result.data.powerBalance, 12.5);
+    expect(result.data.powerText, '12.5 度');
+    expect(result.data.coldWaterBalance, 3.2);
+    expect(result.data.coldWaterText, '3.2 吨');
+    expect(result.data.hotWaterBalance, 6.8);
+    expect(result.data.hotWaterText, '6.8 元');
   });
 
   test('live activity maps notification messages to targets', () {
@@ -1138,4 +1198,13 @@ ApiClient _mockApi({List<Map<String, Object?>>? scheduleItems}) {
   api.useSession('test-session');
   api.setStudentId('2024000000');
   return api;
+}
+
+class _FakeEcardDirectClient extends EcardDirectClient {
+  _FakeEcardDirectClient({this.balance});
+
+  final Map<String, dynamic>? balance;
+
+  @override
+  Future<Map<String, dynamic>?> getBalance(String roomId) async => balance;
 }

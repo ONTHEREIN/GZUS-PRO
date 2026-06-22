@@ -2253,9 +2253,11 @@ class _DashboardShellState extends State<DashboardShell> {
   }
 
   void _setFirstWeekStart(DateTime value) {
+    // 兜底归一化：确保首周开始日期始终为周一
+    final monday = _mondayOf(value);
     setState(() {
-      firstWeekStart = value;
-      if (autoWeek) currentWeek = _weekFromDate(value, DateTime.now());
+      firstWeekStart = monday;
+      if (autoWeek) currentWeek = _weekFromDate(monday, DateTime.now());
     });
     _saveScheduleSettings();
   }
@@ -8954,8 +8956,17 @@ class _ScheduleOnboardingPageState extends State<ScheduleOnboardingPage> {
       lastDate: lastDate,
       helpText: '选择第一周开始日期',
     );
-    if (picked != null && mounted) {
-      setState(() => _selected = picked);
+    if (picked == null || !mounted) return;
+    // 自动对齐到所选日期所在周的周一
+    final monday = _mondayOf(picked);
+    setState(() => _selected = monday);
+    if (monday != picked) {
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        SnackBar(
+          content: Text('已自动对齐到所在周的周一：${_dateText(monday)}'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
     }
   }
 
@@ -9065,7 +9076,7 @@ class _ScheduleOnboardingPageState extends State<ScheduleOnboardingPage> {
                         ),
                         const SizedBox(height: 14),
                         Text(
-                          '为了让课表、考试提醒和请假功能更准确，请选择本学期第一周的开始日期。你可以选择任意日期（不限于周一），系统会自动按所在周对齐计算。',
+                          '为了让课表、考试提醒和请假功能更准确，请选择本学期第一周的开始日期。选择任意一天后，系统会自动对齐到该日所在周的周一。',
                           style: textTheme.bodyMedium,
                         ),
                       ],
@@ -9113,7 +9124,7 @@ class _ScheduleOnboardingPageState extends State<ScheduleOnboardingPage> {
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          '选择学期第一周中的任意一天即可',
+                          '选择第一周中的任意一天，将自动对齐到该周周一',
                           style: textTheme.bodySmall?.copyWith(
                             color: colorScheme.onSurfaceVariant,
                           ),
@@ -9833,6 +9844,7 @@ class ScheduleInlineManage extends StatelessWidget {
   final VoidCallback onUseCurrentWeek;
 
   Future<void> _pickDate(BuildContext context) async {
+    final messenger = ScaffoldMessenger.maybeOf(context);
     final now = DateTime.now();
     final firstDate = DateTime(now.year - 6, 1, 1);
     final lastDate = DateTime(now.year + 6, 12, 31);
@@ -9847,7 +9859,18 @@ class ScheduleInlineManage extends StatelessWidget {
       lastDate: lastDate,
       helpText: '选择第一周开始日期',
     );
-    if (picked != null) onFirstWeekChanged(picked);
+    if (picked == null) return;
+    // 自动对齐到所选日期所在周的周一
+    final monday = _mondayOf(picked);
+    if (monday != picked) {
+      messenger?.showSnackBar(
+        SnackBar(
+          content: Text('已自动对齐到所在周的周一：${_dateText(monday)}'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
+    onFirstWeekChanged(monday);
   }
 
   @override

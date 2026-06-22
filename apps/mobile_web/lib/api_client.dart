@@ -1210,6 +1210,12 @@ bool debugEnableSchoolDirectForTests = false;
 @visibleForTesting
 http.Client? debugSchoolDirectHttpClientForTests;
 
+@visibleForTesting
+EcardDirectClient Function()? debugEcardDirectClientFactoryForTests;
+
+EcardDirectClient _createEcardDirectClient() =>
+    debugEcardDirectClientFactoryForTests?.call() ?? EcardDirectClient();
+
 class ApiClient {
   ApiClient({http.Client? httpClient, String? baseUrl, RequestCache? cache})
       : _http = httpClient ?? _createDefaultClient(),
@@ -2186,7 +2192,7 @@ class ApiClient {
   }) async {
     if (_isNativeMobile) {
       try {
-        final direct = await EcardDirectClient().getRooms(
+        final direct = await _createEcardDirectClient().getRooms(
           query: query,
           limit: limit,
         );
@@ -2211,18 +2217,25 @@ class ApiClient {
       return result.data;
     } catch (_) {
       if (!_isNativeMobile) rethrow;
-      final direct = EcardDirectClient();
+      final direct = _createEcardDirectClient();
       return direct.getRooms(query: query, limit: limit);
     }
   }
 
-  Future<DataResult<EcardSummary>> ecardSummary({bool forceRefresh = false}) =>
-      _cacheFirstObject<EcardSummary>(
-        cacheKey: 'ecard_summary',
-        fetch: () => _get('/ecard/summary'),
-        fromJson: (json) => EcardSummary.fromJson(json),
-        forceRefresh: forceRefresh,
-      );
+  Future<DataResult<EcardSummary>> ecardSummary(
+      {bool forceRefresh = false}) async {
+    final result = await _cacheFirstObject<EcardSummary>(
+      cacheKey: 'ecard_summary',
+      fetch: () => _get('/ecard/summary'),
+      fromJson: (json) => EcardSummary.fromJson(json),
+      forceRefresh: forceRefresh,
+    );
+    if (!_isNativeMobile) return result;
+    return DataResult<EcardSummary>(
+      data: await _enrichEcardSummaryDirect(result.data),
+      source: result.source,
+    );
+  }
 
   Future<EcardSummary> bindEcardRoom(EcardRoomItem room) async {
     final data = await _post('/ecard/binding', {
@@ -2271,7 +2284,8 @@ class ApiClient {
       return summary;
     }
     try {
-      final balance = await EcardDirectClient().getBalance(summary.roomId!);
+      final balance =
+          await _createEcardDirectClient().getBalance(summary.roomId!);
       if (balance == null) return summary;
       final data = _ecardSummaryToJson(summary);
       data.addAll({
@@ -2804,8 +2818,8 @@ String generateIcs({
     final endTime = icsScheduleTimes[course.endSection! - 1].$2;
     for (final week in weeks) {
       // 对齐到第一周所在周的周一，确保非周一日期也能正确生成 ICS
-      final mondayOfFirstWeek = firstWeekStart.subtract(
-          Duration(days: firstWeekStart.weekday - DateTime.monday));
+      final mondayOfFirstWeek = firstWeekStart
+          .subtract(Duration(days: firstWeekStart.weekday - DateTime.monday));
       final date = mondayOfFirstWeek
           .add(Duration(days: (week - 1) * 7 + (course.weekday! - 1)));
       final dateStr =
