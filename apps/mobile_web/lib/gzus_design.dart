@@ -123,7 +123,7 @@ ThemeData gzusTheme(Brightness brightness, {double navBarHeight = 76, Color seed
       ),
     ),
     dividerColor: border,
-    cardTheme: CardTheme(
+    cardTheme: CardThemeData(
       color: surface,
       elevation: 0,
       margin: EdgeInsets.zero,
