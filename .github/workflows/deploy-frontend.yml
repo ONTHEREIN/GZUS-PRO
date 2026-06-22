@@ -56,7 +56,7 @@ jobs:
           test -f apps/mobile_web/build/web/canvaskit/chromium/canvaskit.wasm
           test -f apps/mobile_web/build/web/icons/icon-192x192.png
           test -f apps/mobile_web/build/web/icons/icon-512x512.png
-          test -f apps/mobile_web/build/web/gzus_pwa_sw.js
+          test -f apps/mobile_web/build/web/manifest.json
           ! grep -q "{{flutter_" apps/mobile_web/build/web/flutter_bootstrap.js
           grep -q "canvasKitVariant: 'full'" apps/mobile_web/build/web/flutter_bootstrap.js
 
