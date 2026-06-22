@@ -28,6 +28,7 @@ const RSA_TAG = 'lyasp';
 const CAS_BASE = 'https://cas.gzus.edu.cn';
 const SERVICE_URL = 'https://jwxt.seig.edu.cn/sso/lyiotlogin';
 const EHALL_URL = 'https://ehall.gzus.edu.cn';
+const EHALL_CAS_SERVICE_URL = 'http://ehall.gzus.edu.cn/shiro-cas';
 const JWXT_BASE = 'https://jwxt.seig.edu.cn/jwglxt';
 
 // OCR character fixes for arithmetic captcha
@@ -193,10 +194,22 @@ class CookieJar {
     return parts.join('; ');
   }
 
-  getEhallSid() {
+  getEhallCookies() {
+    const parts = [];
     for (const [domain, nameMap] of this.cookies) {
-      if (domain.includes('ehall') && nameMap.has('sid')) {
-        return nameMap.get('sid');
+      if (domain.includes('ehall')) {
+        for (const [name, value] of nameMap) {
+          parts.push(`${name}=${value}`);
+        }
+      }
+    }
+    return parts.join('; ');
+  }
+
+  getEhallAuthToken() {
+    for (const [domain, nameMap] of this.cookies) {
+      if (domain.includes('ehall') && nameMap.has('Authorization')) {
+        return nameMap.get('Authorization');
       }
     }
     return null;
@@ -366,7 +379,7 @@ async function finalizeLogin(account, password, ticket, tgt, jar, timeout, env) 
   ]);
 
   const jwxtCookies = jwxtResult.status === 'fulfilled' ? jwxtResult.value : '';
-  const ehallCookies = ehallResult.status === 'fulfilled' ? ehallResult.value : null;
+  const ehallSession = ehallResult.status === 'fulfilled' ? ehallResult.value : null;
 
   // Get student name from JWXT info page
   let studentName = null;
@@ -388,7 +401,8 @@ async function finalizeLogin(account, password, ticket, tgt, jar, timeout, env) 
 
   return {
     cookies: jwxtCookies,
-    ehallCookies: ehallCookies ? `sid=${ehallCookies}` : null,
+    ehallCookies: ehallSession && ehallSession.cookies ? ehallSession.cookies : null,
+    ehallAuthToken: ehallSession && ehallSession.authToken ? ehallSession.authToken : null,
     studentName,
     credentialToken,
   };
@@ -429,7 +443,7 @@ async function fetchJwxtCookies(ticket, tgt, jar, timeout) {
 
 async function fetchEhallSession(tgt, jar, timeout) {
   if (!tgt) return null;
-  const ehallServiceUrl = `${EHALL_URL}/shiro-cas`;
+  const ehallServiceUrl = EHALL_CAS_SERVICE_URL;
   try {
     const stRes = await fetchWithCookies(
       `${CAS_BASE}/lyuapServer/v1/tickets/${tgt}`,
@@ -449,7 +463,13 @@ async function fetchEhallSession(tgt, jar, timeout) {
           { signal: AbortSignal.timeout(timeout) },
           jar
         );
-        return jar.getEhallSid();
+        const cookies = jar.getEhallCookies();
+        if (cookies) {
+          return {
+            cookies,
+            authToken: jar.getEhallAuthToken(),
+          };
+        }
       }
     }
   } catch {}
@@ -1286,6 +1306,7 @@ export default {
           account: account,
           cookies: result.cookies,
           ehallCookies: result.ehallCookies,
+          ehallAuthToken: result.ehallAuthToken,
           studentName: result.studentName,
           edgeOnly,
         };
@@ -1300,7 +1321,7 @@ export default {
           credentialToken: result.credentialToken,
           ...(shouldReturnJwxtCookies(request) ? { jwxtCookies: result.cookies } : {}),
           ehallCookies: result.ehallCookies,
-          ehallAuthToken: null,
+          ehallAuthToken: result.ehallAuthToken,
           _kv: kvResult,
           _edgeOnly: edgeOnly,
         }, 200, request);
@@ -1355,6 +1376,7 @@ export default {
           account: credentials.account,
           cookies: result.cookies,
           ehallCookies: result.ehallCookies,
+          ehallAuthToken: result.ehallAuthToken,
           studentName: result.studentName,
         };
         localSessions.set(sessionId, sessionData);
@@ -1368,7 +1390,7 @@ export default {
           credentialToken: result.credentialToken || credentialToken,
           ...(shouldReturnJwxtCookies(request) ? { jwxtCookies: result.cookies } : {}),
           ehallCookies: result.ehallCookies,
-          ehallAuthToken: null,
+          ehallAuthToken: result.ehallAuthToken,
           _kv: kvResult,
         }, 200, request);
       } catch (e) {
@@ -1627,16 +1649,45 @@ export default {
       }
     }
 
-    function normalizeEhallApplication(record) {
-      const title = String(
-        record.appName || record.name || record.affairName || record.serviceName ||
-        record.title || record.app_name || record.affair_name || ''
-      ).trim();
+    function firstEhallText(record, keys) {
+      for (const key of keys) {
+        const value = record[key];
+        if (value !== undefined && value !== null && String(value).trim()) {
+          return String(value).trim();
+        }
+      }
+      return null;
+    }
+
+    function ehallServiceUrl(record, id, section) {
+      const direct = firstEhallText(record, ['url', 'link', 'detailUrl', 'formUrl', 'applyUrl', 'appUrl', 'pcUrl', 'mobileUrl', 'href']);
+      if (direct && direct !== '无') {
+        const absolute = absoluteEhallUrl(direct);
+        if (absolute) return absolute;
+      }
+      if (id) {
+        return `${EHALL_URL}/#/affairs/copyAllAffairs/guide/${encodeURIComponent(id)}?id=${section}`;
+      }
+      return `${EHALL_URL}/#/affairs/copyAllAffairs?id=${section}`;
+    }
+
+    function normalizeEhallService(record, section) {
+      const title = firstEhallText(record, [
+        'appName', 'name', 'affairName', 'serviceName', 'taskName',
+        'title', 'processName', 'app_name', 'affair_name'
+      ]);
       if (!title) return null;
-      const id = record.id || record.appId || record.app_id || record.affairId || record.wf_num || title;
-      const department = record.department || record.deptName || record.applyDeptName ||
-        record.orgName || record.dept_name || null;
-      const type = record.type || record.typeName || record.categoryName || record.affairTypeName || null;
+      const id = firstEhallText(record, [
+        'id', 'appId', 'app_id', 'affairId', 'wf_num',
+        'taskId', 'processId', 'businessId'
+      ]) || title;
+      const department = firstEhallText(record, [
+        'departmentName', 'department', 'deptName', 'deptNames',
+        'applyDeptName', 'unitName', 'orgName', 'ownerDeptName', 'dept_name'
+      ]);
+      const type = firstEhallText(record, [
+        'type', 'typeName', 'categoryName', 'affairTypeName', 'businessTypeName'
+      ]);
       const rawTags = [record.tagName, record.tags, record.label, record.businessType]
         .flatMap(value => Array.isArray(value) ? value : String(value || '').split(/[,\s，、/]+/))
         .map(value => String(value).trim())
@@ -1644,23 +1695,29 @@ export default {
       return {
         id: String(id),
         title,
-        department: department ? String(department) : null,
-        type: type ? String(type) : null,
+        department,
+        type,
         tags: Array.from(new Set(rawTags)).slice(0, 6),
-        summary: record.description || record.summary || record.remark || null,
-        url: absoluteEhallUrl(record.url || record.appUrl || record.pcUrl || record.mobileUrl || record.href),
+        summary: firstEhallText(record, [
+          'describe', 'description', 'summary', 'remark', 'serviceObject', 'guide'
+        ]),
+        url: ehallServiceUrl(record, String(id), section),
       };
     }
 
-    async function fetchEhallApplicationsFromEdge(session, env) {
+    async function fetchEhallServicesFromEdge(session, env, {
+      label,
+      section,
+      params: serviceParams,
+      pageSize = 100,
+      timeoutMs = 15000,
+    }) {
       const timestamp = String(Date.now());
       const csrfKey = env.EHALL_CSRF_KEY || 'lianyi2019';
       const params = new URLSearchParams({
         pageNum: '1',
-        pageSize: '100',
-        isCustom: '0',
-        terminal: '1',
-        appStatus: '1',
+        pageSize: String(pageSize),
+        ...serviceParams,
         csrfTimestamp: timestamp,
         csrfToken: md5(`timestamp=${timestamp},key=${csrfKey}`),
       });
@@ -1672,20 +1729,20 @@ export default {
           'Accept': 'application/json, text/plain, */*',
           'Referer': EHALL_URL + '/',
         },
-        signal: AbortSignal.timeout(8000),
+        signal: AbortSignal.timeout(timeoutMs),
       });
       if (!resp.ok) {
-        throw new Error(`eHall applications returned ${resp.status}`);
+        throw new Error(`eHall ${label} returned ${resp.status}`);
       }
       const text = await resp.text();
       const payload = JSON.parse(text);
       const meta = payload && typeof payload === 'object' ? payload.meta : null;
       if (meta && meta.success === false) {
-        throw new Error(String(meta.message || 'eHall applications rejected'));
+        throw new Error(String(meta.message || `eHall ${label} rejected`));
       }
       const seen = new Set();
       return extractEhallRecords(payload)
-        .map(normalizeEhallApplication)
+        .map(record => normalizeEhallService(record, section))
         .filter(item => {
           if (!item) return false;
           const key = item.id || item.title;
@@ -1693,6 +1750,31 @@ export default {
           seen.add(key);
           return true;
         });
+    }
+
+    async function fetchEhallApplicationsFromEdge(session, env) {
+      const primary = await fetchEhallServicesFromEdge(session, env, {
+        label: 'applications',
+        section: 'yyzx',
+        params: { isCustom: '0', terminal: '1', appStatus: '1' },
+        pageSize: 100,
+      });
+      if (primary.length > 0) return primary;
+      return fetchEhallServicesFromEdge(session, env, {
+        label: 'applications',
+        section: 'yyzx',
+        params: { isCustom: '0', terminal: '1' },
+        pageSize: 100,
+      });
+    }
+
+    async function fetchEhallAffairsFromEdge(session, env) {
+      return fetchEhallServicesFromEdge(session, env, {
+        label: 'affairs',
+        section: 'bsdt',
+        params: {},
+        pageSize: 100,
+      });
     }
 
     // ─── Helper: extract base64 student photo from info page HTML ─
@@ -1993,32 +2075,40 @@ export default {
       // Fall through to Vercel if edge fetch failed
     }
 
-    // ─── Edge eHall applications API ───────────────────────────
-    // This page is user-facing navigation; handle it at the edge to avoid
-    // Vercel timeout and keep a cache when eHall is slow.
-    if (path === 'ehall/applications' && request.method === 'GET') {
+    // ─── Edge eHall services API ───────────────────────────────
+    // These pages need fresh eHall data; failures return explicit errors
+    // instead of empty lists so the app never treats a failed fetch as truth.
+    if ((path === 'ehall/applications' || path === 'ehall/affairs') && request.method === 'GET') {
       const sessionId = request.headers.get('X-Session-Id') || '';
       const session = await getLocalSession(request, env);
-      const cacheKey = `ehall-applications:${sessionId}`;
-      if (session && session.ehallCookies) {
-        try {
-          const items = await fetchEhallApplicationsFromEdge(session, env);
-          if (items.length > 0) {
-            await saveAcademicCache(env, cacheKey, items);
-            return jsonResponse(items, 200, request);
-          }
-        } catch (e) {
-          console.warn(`[edge-applications] eHall fetch failed: ${e.message}`);
-        }
-        const cached = await loadAcademicCache(env, cacheKey);
-        if (cached && cached.data) {
-          const resp = jsonResponse(cached.data, 200, request);
-          resp.headers.set('X-Data-Source', 'edge-cache');
-          resp.headers.set('X-Data-Cached-At', new Date(cached.cachedAt).toISOString());
-          return resp;
-        }
+      const kind = path === 'ehall/applications' ? 'applications' : 'affairs';
+      if (!sessionId || !session || !session.ehallCookies) {
+        return jsonResponse({
+          detail: '办事大厅会话不可用，请重新登录',
+          source: 'edge-ehall',
+          kind,
+        }, 401, request);
       }
-      // Fall through to Vercel if edge fetch failed and no cache exists.
+      try {
+        const items = kind === 'applications'
+          ? await fetchEhallApplicationsFromEdge(session, env)
+          : await fetchEhallAffairsFromEdge(session, env);
+        await saveAcademicCache(env, `ehall-${kind}:${sessionId}`, items);
+        const resp = jsonResponse(items, 200, request);
+        resp.headers.set('X-Data-Source', 'edge-ehall');
+        return resp;
+      } catch (e) {
+        const message = e && e.message ? e.message : String(e);
+        const lowerMessage = message.toLowerCase();
+        const status = lowerMessage.includes('timeout') || lowerMessage.includes('aborted') || lowerMessage.includes('timed out') ? 504 : 502;
+        console.warn(`[edge-${kind}] eHall fetch failed: ${message}`);
+        return jsonResponse({
+          detail: '办事大厅数据获取失败，请稍后重试',
+          source: 'edge-ehall',
+          kind,
+          error: message,
+        }, status, request);
+      }
     }
 
     // ─── Edge notices API ─────────────────────────────────────
@@ -2183,6 +2273,7 @@ async function createSessionOnBackend(loginResult, account, password, env) {
         cookies: loginResult.cookies,
         password: password || null,
         ehall_cookies: loginResult.ehallCookies,
+        ehall_auth_token: loginResult.ehallAuthToken,
         student_name: loginResult.studentName,
       }),
       signal: AbortSignal.timeout(30000),

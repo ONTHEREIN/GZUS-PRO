@@ -46,19 +46,39 @@ def tasks(session: AppSession = Depends(require_session)) -> list[dict]:
 def affairs(session: AppSession = Depends(require_session)) -> list[dict]:
     ehall_client = getattr(session, "ehall_client", None)
     if ehall_client is None:
-        return []
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="办事大厅会话不可用，请重新登录",
+        )
     try:
-        return ehall_client.get_affairs()
+        return ehall_client.get_affairs(
+            page_size=100,
+            max_pages=1,
+            request_timeout_seconds=5,
+            max_retries=0,
+        )
     except EhallAuthenticationError as exc:
         logger.warning("ehall affairs auth error: %s", exc)
-        return []
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="办事大厅会话已失效，请重新登录",
+        ) from exc
+    except Exception as exc:
+        logger.warning("ehall affairs unavailable: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="办事大厅数据获取失败，请稍后重试",
+        ) from exc
 
 
 @router.get("/applications", response_model=list[EhallApplicationItem])
 def applications(session: AppSession = Depends(require_session)) -> list[dict]:
     ehall_client = getattr(session, "ehall_client", None)
     if ehall_client is None:
-        return []
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="办事大厅会话不可用，请重新登录",
+        )
     try:
         return ehall_client.get_applications(
             page_size=80,
@@ -67,10 +87,16 @@ def applications(session: AppSession = Depends(require_session)) -> list[dict]:
         )
     except EhallAuthenticationError as exc:
         logger.warning("ehall applications auth error: %s", exc)
-        return []
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="办事大厅会话已失效，请重新登录",
+        ) from exc
     except Exception as exc:
         logger.warning("ehall applications unavailable: %s", exc)
-        return []
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="办事大厅数据获取失败，请稍后重试",
+        ) from exc
 
 
 @router.get("/progress", response_model=EhallProgressOverview)

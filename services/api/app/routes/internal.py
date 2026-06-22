@@ -44,6 +44,7 @@ class CreateSessionRequest(BaseModel):
     cookies: str
     password: str | None = None  # for generating Fernet credential token server-side
     ehall_cookies: str | None = None
+    ehall_auth_token: str | None = None
     student_name: str | None = None
 
 
@@ -164,6 +165,7 @@ def create_session_endpoint(
             ehall_client = EhallClient(
                 base_url=settings.ehall_base_url,
                 cookies=payload.ehall_cookies,
+                auth_token=payload.ehall_auth_token,
             )
         except Exception as exc:
             logger.warning("Failed to create ehall client: %s", exc)

@@ -176,10 +176,12 @@ class CasAutoLogin:
         self,
         cas_url: str = DEFAULT_CAS_URL,
         ehall_url: str = DEFAULT_EHALL_URL,
+        ehall_service_url: str | None = None,
         timeout: int = 30,
     ) -> None:
         self.cas_url = cas_url
         self.ehall_url = ehall_url
+        self.ehall_service_url = (ehall_service_url or "").strip()
         self.timeout = timeout
 
         parsed = urlparse(cas_url)
@@ -603,8 +605,9 @@ class CasAutoLogin:
         service. We request a ticket for ehall's shiro-cas endpoint, then
         follow the redirect to establish ehall session cookies.
         """
-        ehall_service_url = self.ehall_url.rstrip("/") + "/shiro-cas"
-        ehall_sid = None
+        ehall_service_url = self.ehall_service_url or self.ehall_url.rstrip("/") + "/shiro-cas"
+        ehall_cookies = None
+        ehall_token = None
 
         # Method 1: Use TGT to get ehall service ticket (preferred)
         if tgt:
@@ -621,31 +624,41 @@ class CasAutoLogin:
                         redirect_url = f"{ehall_service_url}?ticket={ehall_ticket}"
                         logger.info("Following ehall service URL: %s", _redact_url(redirect_url))
                         client.get(redirect_url, follow_redirects=True)
-                        ehall_sid = self._extract_ehall_sid(client)
-                        if ehall_sid:
-                            logger.info("Got ehall sid via TGT")
+                        ehall_cookies, ehall_token = self._extract_ehall_session(client)
+                        if ehall_cookies:
+                            logger.info("Got ehall session via TGT")
             except Exception as exc:
                 logger.warning("Failed to get ehall session via TGT: %s", exc)
 
         # Method 2: Direct navigation fallback
-        if not ehall_sid:
+        if not ehall_cookies:
             try:
                 client.get(f"{self.ehall_url.rstrip('/')}/", follow_redirects=True)
-                ehall_sid = self._extract_ehall_sid(client)
+                ehall_cookies, ehall_token = self._extract_ehall_session(client)
             except Exception as exc:
                 logger.debug("ehall direct navigation failed: %s", exc)
 
-        if not ehall_sid:
+        if not ehall_cookies:
             logger.warning("Failed to obtain ehall session")
             return None, None
 
-        ehall_cookies = f"sid={ehall_sid}"
-        return ehall_cookies, None
+        return ehall_cookies, ehall_token
 
     @staticmethod
-    def _extract_ehall_sid(client: httpx.Client) -> str | None:
-        """Extract the ehall 'sid' cookie value."""
+    def _extract_ehall_session(client: httpx.Client) -> tuple[str | None, str | None]:
+        """Extract eHall cookies and auth token.
+
+        The current eHall CAS flow sets ``customsid`` and an ``Authorization``
+        cookie instead of the older ``sid`` cookie.
+        """
+        cookie_parts: list[str] = []
+        auth_token = None
         for cookie in client.cookies.jar:
-            if "ehall" in (cookie.domain or "") and cookie.name == "sid":
-                return cookie.value
-        return None
+            if "ehall" not in (cookie.domain or ""):
+                continue
+            if cookie.name == "rememberMe" and cookie.value == "deleteMe":
+                continue
+            cookie_parts.append(f"{cookie.name}={cookie.value}")
+            if cookie.name == "Authorization":
+                auth_token = cookie.value
+        return ("; ".join(cookie_parts) if cookie_parts else None), auth_token

@@ -268,6 +268,7 @@ def relogin(payload: ReloginRequest, request: Request) -> dict:
     cas_auto_login = CasAutoLogin(
         cas_url=cas_url,
         ehall_url=settings.ehall_base_url,
+        ehall_service_url=settings.ehall_service_url,
         timeout=settings.cas_login_timeout_seconds,
     )
     result = cas_auto_login.auto_login(account, password)
@@ -341,6 +342,7 @@ def auto_login(payload: AutoLoginRequest, request: Request) -> dict:
     cas_auto_login = CasAutoLogin(
         cas_url=cas_url,
         ehall_url=settings.ehall_base_url,
+        ehall_service_url=settings.ehall_service_url,
         timeout=settings.cas_login_timeout_seconds,
     )
     t1 = time.time()

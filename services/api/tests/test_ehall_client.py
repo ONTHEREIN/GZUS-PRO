@@ -198,7 +198,7 @@ def test_ehall_client_get_affairs_paginates(monkeypatch):
     assert [request[1]["pageNum"] for request in requests] == [1, 2]
 
 
-def test_ehall_client_get_applications_timeout_returns_empty(monkeypatch):
+def test_ehall_client_get_applications_timeout_raises(monkeypatch):
     requests = []
 
     class FakeHttpClient:
@@ -216,12 +216,87 @@ def test_ehall_client_get_applications_timeout_returns_empty(monkeypatch):
     monkeypatch.setattr("app.ehall_client.httpx.Client", FakeHttpClient)
     client = EhallClient("https://ehall.gzus.edu.cn", "JSESSIONID=abc")
 
-    items = client.get_applications(page_size=80, max_pages=1, request_timeout_seconds=5)
+    with pytest.raises(RuntimeError):
+        client.get_applications(page_size=80, max_pages=1, request_timeout_seconds=5)
 
-    assert items == []
     assert len(requests) == 1
     assert requests[0][0] == "api/affair/uis/affairs"
     assert requests[0][1]["appStatus"] == 1
+    assert requests[0][2] == 5
+
+
+def test_ehall_client_get_applications_fallback_when_primary_empty(monkeypatch):
+    requests = []
+
+    class FakeResponse:
+        url = "https://ehall.gzus.edu.cn/api/affair/uis/affairs"
+        headers = {"content-type": "application/json"}
+        text = ""
+
+        def __init__(self, params):
+            self.params = params
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            if "appStatus" in self.params:
+                return {"meta": {"success": True}, "data": {"total": 0, "records": []}}
+            return {
+                "meta": {"success": True},
+                "data": {"total": 1, "records": [{"id": "app-1", "name": "网上申请"}]},
+            }
+
+    class FakeHttpClient:
+        is_closed = False
+
+        def __init__(self, **kwargs):
+            pass
+
+        def get(self, endpoint, params, timeout=None):
+            requests.append((endpoint, params, timeout))
+            return FakeResponse(params)
+
+    monkeypatch.setattr("app.ehall_client.httpx.Client", FakeHttpClient)
+    client = EhallClient("https://ehall.gzus.edu.cn", "JSESSIONID=abc")
+
+    items = client.get_applications(page_size=80, max_pages=1, request_timeout_seconds=5)
+
+    assert [item["title"] for item in items] == ["网上申请"]
+    assert len(requests) == 2
+    assert "appStatus" in requests[0][1]
+    assert "appStatus" not in requests[1][1]
+
+
+def test_ehall_client_get_affairs_short_timeout_no_retry(monkeypatch):
+    requests = []
+
+    class FakeHttpClient:
+        is_closed = False
+
+        def __init__(self, **kwargs):
+            pass
+
+        def get(self, endpoint, params, timeout=None):
+            requests.append((endpoint, params, timeout))
+            import httpx
+
+            raise httpx.TimeoutException("slow upstream")
+
+    monkeypatch.setattr("app.ehall_client.httpx.Client", FakeHttpClient)
+    client = EhallClient("https://ehall.gzus.edu.cn", "JSESSIONID=abc")
+
+    with pytest.raises(RuntimeError):
+        client.get_affairs(
+            page_size=100,
+            max_pages=1,
+            request_timeout_seconds=5,
+            max_retries=0,
+        )
+
+    assert len(requests) == 1
+    assert requests[0][0] == "api/affair/uis/affairs"
+    assert requests[0][1]["pageSize"] == 100
     assert requests[0][2] == 5
 
 

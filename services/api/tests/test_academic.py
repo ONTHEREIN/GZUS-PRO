@@ -61,7 +61,7 @@ class FakeEhallClient:
             }
         ]
 
-    def get_affairs(self):
+    def get_affairs(self, **kwargs):
         return [
             {
                 "id": "affair-1",
@@ -72,6 +72,26 @@ class FakeEhallClient:
                 "url": "https://ehall.gzus.edu.cn/#/affairs/copyAllAffairs/guide/affair-1?id=bsdt",
             }
         ]
+
+    def get_applications(self, **kwargs):
+        return [
+            {
+                "id": "app-1",
+                "title": "网上申请",
+                "department": "信息中心",
+                "type": "服务",
+                "tags": ["申请"],
+                "url": "https://ehall.gzus.edu.cn/#/affairs/copyAllAffairs/guide/app-1?id=yyzx",
+            }
+        ]
+
+
+class BrokenEhallClient:
+    def get_affairs(self, **kwargs):
+        raise RuntimeError("slow upstream")
+
+    def get_applications(self, **kwargs):
+        raise RuntimeError("slow upstream")
 
 
 def client_with_session():
@@ -164,6 +184,51 @@ def test_ehall_affairs_route_returns_business_items():
 
     assert affairs[0]["title"] == "学生请假"
     assert affairs[0]["department"] == "学生处"
+
+
+def test_ehall_applications_route_returns_application_items():
+    app = create_app()
+    session = app.state.sessions.create(
+        FakeClient(),
+        "测试学生",
+        ehall_client=FakeEhallClient(),
+    )
+    client = TestClient(app)
+
+    applications = client.get("/ehall/applications", headers={"X-Session-Id": session.id}).json()
+
+    assert applications[0]["title"] == "网上申请"
+    assert applications[0]["department"] == "信息中心"
+
+
+def test_ehall_affairs_route_returns_504_when_upstream_fails():
+    app = create_app()
+    session = app.state.sessions.create(
+        FakeClient(),
+        "测试学生",
+        ehall_client=BrokenEhallClient(),
+    )
+    client = TestClient(app)
+
+    response = client.get("/ehall/affairs", headers={"X-Session-Id": session.id})
+
+    assert response.status_code == 504
+    assert response.json()["detail"] == "办事大厅数据获取失败，请稍后重试"
+
+
+def test_ehall_applications_route_returns_504_when_upstream_fails():
+    app = create_app()
+    session = app.state.sessions.create(
+        FakeClient(),
+        "测试学生",
+        ehall_client=BrokenEhallClient(),
+    )
+    client = TestClient(app)
+
+    response = client.get("/ehall/applications", headers={"X-Session-Id": session.id})
+
+    assert response.status_code == 504
+    assert response.json()["detail"] == "办事大厅数据获取失败，请稍后重试"
 
 
 def test_academic_authentication_error_returns_json_401():

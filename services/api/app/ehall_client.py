@@ -186,7 +186,13 @@ class EhallClient:
             "items": items,
         }
 
-    def get_affairs(self, page_size: int = 200, max_pages: int = 10) -> list[dict]:
+    def get_affairs(
+        self,
+        page_size: int = 200,
+        max_pages: int = 10,
+        request_timeout_seconds: int | None = None,
+        max_retries: int | None = None,
+    ) -> list[dict]:
         items: list[dict] = []
         seen: set[str] = set()
         for page_num in range(1, max_pages + 1):
@@ -196,6 +202,8 @@ class EhallClient:
                     "pageNum": page_num,
                     "pageSize": page_size,
                 },
+                timeout_seconds=request_timeout_seconds,
+                max_retries=max_retries,
             )
             records = extract_records(payload)
             if not records:
@@ -220,26 +228,20 @@ class EhallClient:
         max_pages: int = 1,
         request_timeout_seconds: int = 5,
     ) -> list[dict]:
-        try:
-            items = self._get_application_page_set(
-                page_size=page_size,
-                max_pages=max_pages,
-                extra_params={"isCustom": 0, "terminal": 1, "appStatus": 1},
-                request_timeout_seconds=request_timeout_seconds,
-            )
-        except Exception:
-            return []
+        items = self._get_application_page_set(
+            page_size=page_size,
+            max_pages=max_pages,
+            extra_params={"isCustom": 0, "terminal": 1, "appStatus": 1},
+            request_timeout_seconds=request_timeout_seconds,
+        )
         if items:
             return items
-        try:
-            return self._get_application_page_set(
-                page_size=page_size,
-                max_pages=max_pages,
-                extra_params={"isCustom": 0, "terminal": 1},
-                request_timeout_seconds=request_timeout_seconds,
-            )
-        except Exception:
-            return []
+        return self._get_application_page_set(
+            page_size=page_size,
+            max_pages=max_pages,
+            extra_params={"isCustom": 0, "terminal": 1},
+            request_timeout_seconds=request_timeout_seconds,
+        )
 
     def _get_application_page_set(
         self,
