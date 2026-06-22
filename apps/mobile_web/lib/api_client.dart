@@ -2091,6 +2091,7 @@ class ApiClient {
     required DateTime startDate,
     required DateTime endDate,
     required DateTime firstWeekStart,
+    List<Map<String, dynamic>> courses = const [],
   }) async {
     final data = await _post('/ehall/leave/preview', {
       'year': year,
@@ -2098,6 +2099,7 @@ class ApiClient {
       'startDate': _dateOnly(startDate),
       'endDate': _dateOnly(endDate),
       'firstWeekStart': _dateOnly(firstWeekStart),
+      if (courses.isNotEmpty) 'courses': courses,
     });
     return LeavePreviewResponse.fromJson(data);
   }
@@ -2112,6 +2114,7 @@ class ApiClient {
     required String attachmentName,
     required Uint8List attachmentBytes,
     List<MatchedTeacherItem> teacherHandlers = const [],
+    List<Map<String, dynamic>> courses = const [],
   }) async {
     final data = await _post('/ehall/leave/fill', {
       'year': year,
@@ -2125,6 +2128,7 @@ class ApiClient {
       if (teacherHandlers.isNotEmpty)
         'teacherHandlers':
             teacherHandlers.map((item) => item.toJson()).toList(),
+      if (courses.isNotEmpty) 'courses': courses,
     });
     return LeaveFillResponse.fromJson(data);
   }
@@ -2284,8 +2288,8 @@ class ApiClient {
       return summary;
     }
     try {
-      final balance =
-          await _createEcardDirectClient().getBalance(summary.roomId!);
+      final balance = await _createEcardDirectClient()
+          .getBalance(summary.roomId!, studentId: summary.studentId);
       if (balance == null) return summary;
       final data = _ecardSummaryToJson(summary);
       data.addAll({
@@ -2304,8 +2308,13 @@ class ApiClient {
               balance['dun'] ?? summary.coldWaterUnit,
             ),
         'hotWaterBalance': balance['hotWaterBalance'],
-        'hotWaterText':
-            balance['hotWaterText'] ?? balance['formatHotWaterBalanceStr'],
+        'hotWaterUnit': balance['hotWaterUnit'] ?? summary.hotWaterUnit,
+        'hotWaterText': balance['hotWaterText'] ??
+            balance['formatHotWaterBalanceStr'] ??
+            _formatEcardValue(
+              balance['hotWaterBalance'],
+              balance['hotWaterUnit'] ?? summary.hotWaterUnit,
+            ),
         'updatedAt': DateTime.now().toIso8601String(),
       });
       _cache.set('ecard_summary', data);
@@ -3130,13 +3139,19 @@ class SchoolDirectClient {
     final range = _parseSectionRange(
       item['ksjc'] ?? item['jcs'] ?? item['jc'] ?? item['startSection'],
     );
+    final explicitEnd = _parseSectionRange(
+      item['jsjc'] ??
+          item['endSection'] ??
+          item['end_section'] ??
+          item['jc_end'],
+    ).$2;
     return {
       'name': item['kcmc'] ?? item['name'] ?? item['courseName'] ?? '',
       'teacher': item['jsxx'] ?? item['jsxm'] ?? item['xm'] ?? item['teacher'],
       'classroom': item['cdmc'] ?? item['classroom'] ?? item['location'],
       'weekday': item['xqj'] ?? item['weekday'] ?? item['weekDay'],
       'startSection': range.$1 ?? item['startSection'],
-      'endSection': range.$2 ?? item['endSection'],
+      'endSection': explicitEnd ?? range.$2 ?? item['endSection'],
       'weeks': item['zcd'] ?? item['weeks'] ?? item['week'],
       'kcbmc': item['kcbmc'],
       'raw': item,
@@ -3223,16 +3238,14 @@ class SchoolDirectClient {
 
   (int?, int?) _parseSectionRange(dynamic value) {
     if (value == null) return (null, null);
-    final text = '$value';
-    final dash = text.indexOf('-');
-    if (dash > 0) {
-      return (
-        int.tryParse(text.substring(0, dash)),
-        int.tryParse(text.substring(dash + 1)),
-      );
-    }
-    final parsed = int.tryParse(text);
-    return (parsed, parsed);
+    final numbers = RegExp(r'\d+')
+        .allMatches('$value')
+        .map((match) => int.tryParse(match.group(0)!))
+        .whereType<int>()
+        .toList();
+    if (numbers.isEmpty) return (null, null);
+    if (numbers.length == 1) return (numbers.first, numbers.first);
+    return (numbers.first, numbers[1]);
   }
 
   String? _stringOrNull(dynamic value) => value == null ? null : '$value';
@@ -3294,12 +3307,20 @@ class EcardDirectClient {
 
   Future<Map<String, dynamic>> _post(
       String path, Map<String, String> params) async {
+    final activeToken = _token;
     params['from'] ??= 'wxminiprogram';
     params['isWxEnterpriseXcx'] ??= 'false';
     params['wxRequest'] ??= 'wxRequest';
     params['openid'] = _openid;
-    if (_unionid != null && _unionid!.isNotEmpty) params['unionid'] = _unionid!;
-    if (_token != null && _token!.isNotEmpty) params['token'] = _token!;
+    if (activeToken != null &&
+        activeToken.isNotEmpty &&
+        _unionid != null &&
+        _unionid!.isNotEmpty) {
+      params['unionid'] = _unionid!;
+    }
+    if (activeToken != null && activeToken.isNotEmpty) {
+      params['token'] = activeToken;
+    }
     params['sign'] = _sign(params);
 
     final uri = Uri.parse('$_base/$path');
@@ -3344,32 +3365,44 @@ class EcardDirectClient {
 
     final items = <EcardRoomItem>[];
     final seen = <String>{};
+    final errors = <Object>[];
     for (final impl in ['CGCOMMON1111', 'CGCOMMON2222', 'CGCOMMON3333']) {
-      var r = await _post('powerfee/getRoomInfo', {'implType': impl});
-      // Retry on auth failure (code=203 or "未登录")
-      if (r['code'] == 203 || '${r['msg']}'.contains('未登录')) {
-        _invalidateToken();
-        if (!await login()) return [];
-        r = await _post('powerfee/getRoomInfo', {'implType': impl});
+      try {
+        var r = await _post('powerfee/getRoomInfo', {'implType': impl});
+        // Retry on auth failure (code=203 or "未登录")
+        if (r['code'] == 203 || '${r['msg']}'.contains('未登录')) {
+          _invalidateToken();
+          if (!await login()) return [];
+          r = await _post('powerfee/getRoomInfo', {'implType': impl});
+        }
+        if (!_isEcardOk(r)) {
+          errors.add(ApiException('${r['msg'] ?? '获取宿舍列表失败'}'));
+          continue;
+        }
+        final obj = r['obj'];
+        if (obj is! List) continue;
+        for (final room in obj) {
+          if (room is! Map) continue;
+          final id =
+              '${room['implType'] ?? impl}|${room['schoolAreaNo'] ?? ''}|${room['buildingNo'] ?? ''}|${room['roomNum'] ?? ''}';
+          if (seen.contains(id) || id.contains('||')) continue;
+          seen.add(id);
+          items.add(EcardRoomItem.fromJson({
+            'id': id,
+            'schoolArea': room['schoolArea'] ?? '',
+            'building': room['building'] ?? '',
+            'room': (room['room'] ?? '').replaceAll('#', '-'),
+            'displayName':
+                '${room['schoolArea'] ?? ''} ${room['building'] ?? ''} ${(room['room'] ?? room['roomNum'] ?? '').toString().replaceAll('#', '-')}'
+                    .trim(),
+          }));
+        }
+      } catch (exc) {
+        errors.add(exc);
       }
-      final obj = r['obj'];
-      if (obj is! List) continue;
-      for (final room in obj) {
-        if (room is! Map) continue;
-        final id =
-            '${room['implType'] ?? impl}|${room['schoolAreaNo'] ?? ''}|${room['buildingNo'] ?? ''}|${room['roomNum'] ?? ''}';
-        if (seen.contains(id) || id.contains('||')) continue;
-        seen.add(id);
-        items.add(EcardRoomItem.fromJson({
-          'id': id,
-          'schoolArea': room['schoolArea'] ?? '',
-          'building': room['building'] ?? '',
-          'room': (room['room'] ?? '').replaceAll('#', '-'),
-          'displayName':
-              '${room['schoolArea'] ?? ''} ${room['building'] ?? ''} ${(room['room'] ?? room['roomNum'] ?? '').toString().replaceAll('#', '-')}'
-                  .trim(),
-        }));
-      }
+    }
+    if (items.isEmpty && errors.isNotEmpty) {
+      throw ApiException('获取宿舍列表失败');
     }
     items.sort((a, b) => a.displayName.compareTo(b.displayName));
     if (query != null && query.trim().isNotEmpty) {
@@ -3386,7 +3419,8 @@ class EcardDirectClient {
     return items.take(limit).toList();
   }
 
-  Future<Map<String, dynamic>?> getBalance(String roomId) async {
+  Future<Map<String, dynamic>?> getBalance(String roomId,
+      {String? studentId}) async {
     if (_token == null && !await login()) return null;
     final parts = roomId.split('|');
     if (parts.length != 4) return null;
@@ -3408,8 +3442,49 @@ class EcardDirectClient {
       });
     }
     if (r['ret'] != true && r['code'] != 200 && r['code'] != 0) return null;
-    return r['obj'] as Map<String, dynamic>?;
+    final obj = r['obj'] as Map<String, dynamic>?;
+    if (obj == null) return null;
+
+    // Hot water fallback: when /powerfee/getBalance doesn't include
+    // hotWaterBalance, query /waterfee/memberInfo (personal hot-water account).
+    // Mirrors backend EcardClient.balance() and edge function getHotWaterBalance().
+    if (obj['hotWaterBalance'] == null &&
+        studentId != null &&
+        studentId.isNotEmpty) {
+      try {
+        final hotR = await _post('waterfee/memberInfo', {
+          'sno': studentId,
+          'implType': 'MINGHANBLUETOOTH',
+        });
+        if (hotR['ret'] == true || hotR['code'] == 200 || hotR['code'] == 0) {
+          final hotObj = hotR['obj'];
+          if (hotObj is Map) {
+            final balance = hotObj['balance'];
+            if (balance != null) {
+              obj['hotWaterBalance'] = balance;
+              obj['formatHotWaterBalanceStr'] = '$balance 元';
+            }
+          }
+        }
+      } catch (_) {
+        // Hot water is a personal account; may not be activated. Silently skip.
+      }
+    }
+    if (obj['hotWaterBalance'] != null &&
+        obj['formatHotWaterBalanceStr'] == null &&
+        obj['hotWaterText'] == null) {
+      obj['formatHotWaterBalanceStr'] = '${obj['hotWaterBalance']} 元';
+    }
+
+    return obj;
   }
+
+  bool _isEcardOk(Map<String, dynamic> data) =>
+      data['ret'] == true ||
+      data['code'] == 200 ||
+      data['code'] == 0 ||
+      data['resCode'] == 0 ||
+      data['resCode'] == '0';
 }
 
 // Dart MD5 implementation

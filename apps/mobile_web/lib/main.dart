@@ -53,6 +53,8 @@ void main() async {
     systemNavigationBarIconBrightness: Brightness.dark,
   ));
 
+  SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+
   runApp(const OneGzusApp());
 
   unawaited(_initDeferredServices());
@@ -1856,9 +1858,7 @@ class _DashboardShellState extends State<DashboardShell> {
                                   10,
                                   _autoHideNavBar
                                       ? 10
-                                      : _mobileNavBarHeight +
-                                          MediaQuery.paddingOf(context).bottom +
-                                          16 +
+                                      : MediaQuery.paddingOf(context).bottom +
                                           10),
                               child: _CenteredPage(
                                 maxWidth: 720,
@@ -4717,10 +4717,41 @@ class _UtilitiesHomeCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (!summary.isBound) {
+      return _HomeCard(
+        title: '宿舍绑定',
+        icon: Icons.home_work,
+        badge: '未绑定',
+        onTap: onTap,
+        child: Column(
+          children: [
+            const SizedBox(height: 4),
+            Icon(Icons.add_home_outlined,
+                size: 36, color: Theme.of(context).colorScheme.primary),
+            const SizedBox(height: 10),
+            Text('点击绑定宿舍',
+                style: TextStyle(
+                    fontWeight: FontWeight.w900,
+                    fontSize: 15,
+                    color: Theme.of(context).colorScheme.primary)),
+            const SizedBox(height: 4),
+            Text(
+              '绑定后可实时查看冷水、热水、电费余额',
+              textAlign: TextAlign.center,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                  fontSize: 12,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant),
+            ),
+          ],
+        ),
+      );
+    }
     return _HomeCard(
       title: '水电费余额',
       icon: Icons.water_drop,
-      badge: summary.isBound ? '实时' : '未绑定',
+      badge: '实时',
       onTap: onTap,
       child: Column(
         children: [
@@ -7637,6 +7668,7 @@ class _AutoLeavePageState extends State<AutoLeavePage> {
   PickedAttachment? _attachment;
   LeavePreviewResponse? _preview;
   LeaveFillResponse? _fillResult;
+  List<Map<String, dynamic>>? _scheduleCourses;
   final Map<String, StaffCandidateItem> _teacherSelections = {};
   String? _error;
   bool _loadingPreview = false;
@@ -7806,17 +7838,35 @@ class _AutoLeavePageState extends State<AutoLeavePage> {
       _loadingPreview = true;
       _error = null;
       _fillResult = null;
+      _scheduleCourses = null;
       _teacherSelections.clear();
     });
     try {
+      List<Map<String, dynamic>> courses = const [];
+      try {
+        courses = (await widget.api.schedule(
+          year: widget.year,
+          term: widget.term,
+        ))
+            .data
+            .raw;
+      } catch (_) {
+        courses = const [];
+      }
       final result = await widget.api.previewLeave(
         year: widget.year,
         term: widget.term,
         startDate: range.$1,
         endDate: range.$2,
         firstWeekStart: _mondayOf(widget.firstWeekStart),
+        courses: courses,
       );
-      if (mounted) setState(() => _preview = result);
+      if (mounted) {
+        setState(() {
+          _preview = result;
+          _scheduleCourses = courses.isEmpty ? null : courses;
+        });
+      }
     } catch (exc) {
       _handleError(exc);
     } finally {
@@ -7856,6 +7906,7 @@ class _AutoLeavePageState extends State<AutoLeavePage> {
         attachmentName: attachment.name,
         attachmentBytes: attachment.bytes,
         teacherHandlers: teacherHandlers,
+        courses: _scheduleCourses ?? const [],
       );
       if (mounted) setState(() => _fillResult = result);
     } catch (exc) {
@@ -13539,7 +13590,9 @@ class _EcardPageState extends State<EcardPage> {
       _error = null;
     });
     try {
-      final summary = await widget.api.bindEcardRoom(room);
+      final summary = await widget.api
+          .bindEcardRoom(room)
+          .timeout(const Duration(seconds: 45));
       if (!mounted) return;
       setState(() {
         _summaryFuture = Future.value(summary);
@@ -13555,7 +13608,11 @@ class _EcardPageState extends State<EcardPage> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(exc is ApiException ? exc.message : '宿舍绑定失败'),
+            content: Text(exc is ApiException
+                ? exc.message
+                : exc is TimeoutException
+                    ? '宿舍绑定超时，请稍后重试'
+                    : '宿舍绑定失败'),
           ),
         );
       }
@@ -14005,6 +14062,37 @@ class _RoomBindingPanelState extends State<_RoomBindingPanel> {
             onChanged: widget.onSearchChanged,
           ),
           const SizedBox(height: 12),
+          if (widget.isBinding)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: Theme.of(context)
+                    .colorScheme
+                    .primaryContainer
+                    .withValues(alpha: 0.5),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      '正在绑定宿舍，请稍候…',
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.onPrimaryContainer,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          if (widget.isBinding) const SizedBox(height: 12),
           if (widget.roomsFuture == null)
             const EmptyState(message: '请输入关键词搜索宿舍')
           else

@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Any, Literal
 from datetime import date
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -292,6 +292,7 @@ class LeavePreviewRequest(BaseModel):
     start_date: date = Field(alias="startDate")
     end_date: date = Field(alias="endDate")
     first_week_start: date | None = Field(default=None, alias="firstWeekStart")
+    courses: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class TeacherHandlerSelection(BaseModel):

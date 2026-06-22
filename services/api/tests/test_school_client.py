@@ -128,6 +128,7 @@ def test_normalize_schedule_course_from_school_fields():
     assert result["name"] == "线性代数"
     assert result["weekday"] == 2
     assert result["startSection"] == 3
+    assert result["endSection"] == 4
 
 
 def test_normalize_exam_and_grade():

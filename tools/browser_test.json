@@ -1,0 +1,8 @@
+[
+  ["open", "https://onegzus.cc.cd"],
+  ["wait", "3000"],
+  ["snapshot", "-i"],
+  ["click", "@e1"],
+  ["wait", "2000"],
+  ["snapshot", "-i"]
+]

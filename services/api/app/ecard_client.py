@@ -362,7 +362,8 @@ class EcardClient:
                     token_fresh = self.login()
                     data = self.post_api("/powerfee/getRoomInfo", {"implType": impl_type}, token=token_fresh)
                 if not is_ok(data):
-                    return []
+                    message = data.get("msg") or data.get("message") or "获取宿舍列表失败"
+                    raise EcardApiError(str(message))
             obj = data.get("obj") or []
             return obj if isinstance(obj, list) else [obj]
 

@@ -164,6 +164,11 @@ def _summary_from_binding(binding: EcardBinding, student_id: str | None = None) 
             data = _clean_summary_cache(json.loads(binding.last_summary_json))
         except json.JSONDecodeError:
             data = {}
+    # 如果 last_summary_json 中没有热水余额，尝试从独立缓存补充
+    if data.get("hotWaterBalance") is None and binding.hot_water_balance_cache is not None:
+        data["hotWaterBalance"] = binding.hot_water_balance_cache
+        data["hotWaterUnit"] = "元"
+        data["hotWaterText"] = f"{binding.hot_water_balance_cache:.2f}元"
     return {
         "status": "ok",
         "studentId": student_id,
@@ -189,15 +194,56 @@ def refresh_binding(
 ) -> dict[str, Any]:
     room_ref = EcardRoomRef.from_id(binding.room_id)
     logger.info("ecard: refreshing balance for student=%s room=%s", student_id, binding.room_id)
+    summary = None
+    api_error = None
     try:
         summary = (client or _client()).balance(room_ref, student_id)
-    except (EcardConfigurationError, EcardApiError):
+    except EcardConfigurationError:
         raise
+    except EcardApiError as exc:
+        # API 返回错误码（如认证失败、房间不存在），不 fallback
+        api_error = exc
+        logger.warning("ecard: balance API error for student=%s: %s", student_id, exc)
     except Exception as exc:
-        logger.error(
-            "ecard: balance refresh failed for student=%s: %s", student_id, exc, exc_info=True
+        # 其他异常（如超时、网络错误），尝试 fallback
+        api_error = exc
+        logger.warning(
+            "ecard: balance refresh failed for student=%s (will try cache fallback): %s",
+            student_id, exc, exc_info=True
         )
-        raise
+
+    if summary is None:
+        # API 调用失败，尝试从缓存恢复
+        if binding.hot_water_balance_cache is not None:
+            logger.info(
+                "ecard: using cached hot_water_balance for student=%s: %.2f",
+                student_id, binding.hot_water_balance_cache
+            )
+            # 从 last_summary_json 恢复其他字段，热水用缓存
+            cached_data = {}
+            if binding.last_summary_json:
+                try:
+                    cached_data = _clean_summary_cache(json.loads(binding.last_summary_json))
+                except json.JSONDecodeError:
+                    cached_data = {}
+            summary = {
+                **cached_data,
+                "hotWaterBalance": binding.hot_water_balance_cache,
+                "hotWaterUnit": "元",
+                "hotWaterText": f"{binding.hot_water_balance_cache:.2f}元",
+            }
+        else:
+            # 无缓存，抛出原始错误
+            if api_error:
+                raise api_error
+            summary = {}
+
+    # 更新缓存（如果成功获取了热水余额）
+    hot_balance = summary.get("hotWaterBalance")
+    if hot_balance is not None:
+        binding.hot_water_balance_cache = float(hot_balance)
+        binding.hot_water_cache_at = datetime.now(timezone.utc)
+
     binding.last_summary_json = json.dumps(summary, ensure_ascii=False)
     binding.last_checked_at = datetime.now(timezone.utc)
     binding.updated_at = datetime.now(timezone.utc)

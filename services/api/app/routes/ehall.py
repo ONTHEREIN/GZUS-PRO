@@ -3,6 +3,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
+from app.cache_service import load_and_get_cached_at, save_cache
 from app.ehall_client import EhallAuthenticationError
 from app.leave_service import (
     build_leave_fill_script,
@@ -11,6 +12,7 @@ from app.leave_service import (
     leave_days,
 )
 from app.routes.deps import require_session
+from app.school_client import AuthenticationError, MissingProxySlotError
 from app.schemas import (
     EhallAffairItem,
     EhallApplicationItem,
@@ -28,6 +30,61 @@ from app.staff_service import ensure_staff_loaded, resolve_teacher
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/ehall", tags=["ehall"])
+
+
+def _get_student_id(session: AppSession) -> str:
+    client = session.client
+    account = getattr(client, "_account", None)
+    if account:
+        return account
+    return session.student_name or "unknown"
+
+
+def _schedule_cache_params(year: int, term: int) -> dict[str, str]:
+    return {"year": str(year), "term": str(term)}
+
+
+def _load_leave_courses(payload: LeavePreviewRequest, session: AppSession) -> list[dict]:
+    if payload.courses:
+        return payload.courses
+
+    if session.client is None:
+        logger.error("ehall: session.client is None for session %s (leave courses)", session.id[:8])
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="会话已过期，请重新登录",
+        )
+
+    student_id = _get_student_id(session)
+    params = _schedule_cache_params(payload.year, payload.term)
+    try:
+        courses = session.client.get_schedule(str(payload.year), str(payload.term))
+        try:
+            save_cache(student_id, "schedule", courses, params)
+        except Exception:
+            logger.warning("Failed to save schedule cache for leave preview", exc_info=True)
+        return courses
+    except (AuthenticationError, MissingProxySlotError):
+        raise
+    except Exception as exc:
+        logger.warning(
+            "leave schedule fetch failed: %s: %s; trying cached schedule",
+            type(exc).__name__,
+            exc,
+            exc_info=True,
+        )
+        try:
+            cached, cached_at = load_and_get_cached_at(student_id, "schedule", params)
+        except Exception:
+            logger.warning("Failed to load schedule cache for leave preview", exc_info=True)
+            cached, cached_at = None, None
+        if isinstance(cached, list):
+            logger.info("Using cached schedule for leave preview, cached_at=%s", cached_at)
+            return cached
+        raise HTTPException(
+            status_code=status.HTTP_424_FAILED_DEPENDENCY,
+            detail="课表暂时无法获取，请先刷新课表后再匹配课程",
+        ) from exc
 
 
 @router.get("/tasks", response_model=list[NoticeItem])
@@ -116,14 +173,8 @@ def leave_preview(
     payload: LeavePreviewRequest,
     session: AppSession = Depends(require_session),
 ) -> dict:
-    if session.client is None:
-        logger.error("ehall: session.client is None for session %s (leave_preview)", session.id[:8])
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="会话已过期，请重新登录",
-        )
     try:
-        courses = session.client.get_schedule(str(payload.year), str(payload.term))
+        courses = _load_leave_courses(payload, session)
         return build_leave_preview(
             courses,
             start_date=payload.start_date,
@@ -134,6 +185,25 @@ def leave_preview(
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except AuthenticationError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+    except MissingProxySlotError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=str(exc),
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning(
+            "leave_preview failed: %s: %s — treating as upstream error",
+            type(exc).__name__,
+            exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="学校系统暂时不可用，请稍后重试",
+        ) from exc
 
 
 @router.post("/leave/fill", response_model=LeaveFillResponse)
@@ -156,7 +226,7 @@ def leave_fill(
             detail="会话已过期，请重新登录",
         )
     try:
-        courses = session.client.get_schedule(str(payload.year), str(payload.term))
+        courses = _load_leave_courses(payload, session)
         preview = build_leave_preview(
             courses,
             start_date=payload.start_date,
@@ -253,11 +323,30 @@ def leave_fill(
         }
     except EhallAuthenticationError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+    except AuthenticationError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+    except MissingProxySlotError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=str(exc),
+        ) from exc
+    except HTTPException:
+        raise
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except base64.binascii.Error as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="附件内容不是有效 Base64"
+        ) from exc
+    except Exception as exc:
+        logger.warning(
+            "leave_fill failed: %s: %s — treating as upstream error",
+            type(exc).__name__,
+            exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="学校系统暂时不可用，请稍后重试",
         ) from exc
 
 

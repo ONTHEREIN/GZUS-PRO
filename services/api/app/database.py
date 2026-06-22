@@ -42,6 +42,9 @@ class EcardBinding(Base):
     low_cold_water_threshold = Column(Float, default=5.0, nullable=False)
     low_hot_water_threshold = Column(Float, default=10.0, nullable=False)
     last_reminded_times = Column(Text, default='{}', nullable=True)
+    # 热水余额缓存（独立于 last_summary_json，用于超时 fallback）
+    hot_water_balance_cache = Column(Float, nullable=True)
+    hot_water_cache_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
@@ -279,6 +282,10 @@ def init_db():
         "student_account": "VARCHAR(100)",
         "revoked_at": "TIMESTAMP",
         "revoked_reason": "VARCHAR(100)",
+    })
+    _ensure_columns(engine, "ecard_bindings", {
+        "hot_water_balance_cache": "FLOAT",
+        "hot_water_cache_at": "TIMESTAMP",
     })
 
     if _is_sqlite(engine):

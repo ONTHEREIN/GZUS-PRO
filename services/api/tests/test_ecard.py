@@ -150,6 +150,24 @@ def test_rooms_raise_when_all_fetches_fail(monkeypatch):
         raise AssertionError("rooms() should not return an empty list when every fetch fails")
 
 
+def test_rooms_raise_when_all_fetches_return_errors(monkeypatch):
+    client = object.__new__(EcardClient)
+    client._token = "token"
+
+    def fake_post_api(path, params=None, *, token=None):
+        return {"ret": False, "code": 500, "msg": "upstream unavailable"}
+
+    monkeypatch.setattr(client, "post_api", fake_post_api)
+
+    try:
+        client.rooms()
+    except Exception as exc:
+        assert type(exc).__name__ == "EcardApiError"
+        assert str(exc) == "获取宿舍列表失败"
+    else:
+        raise AssertionError("rooms() should not return an empty list when every source errors")
+
+
 def test_power_consumption_uses_daily_details():
     client = object.__new__(EcardClient)
     client._token = "token"

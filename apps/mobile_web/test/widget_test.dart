@@ -82,7 +82,6 @@ void main() {
             'dun': '吨',
             'coldWaterText': '3.2 吨',
             'hotWaterBalance': 6.8,
-            'hotWaterText': '6.8 元',
           },
         );
     addTearDown(() {
@@ -1206,5 +1205,7 @@ class _FakeEcardDirectClient extends EcardDirectClient {
   final Map<String, dynamic>? balance;
 
   @override
-  Future<Map<String, dynamic>?> getBalance(String roomId) async => balance;
+  Future<Map<String, dynamic>?> getBalance(String roomId,
+          {String? studentId}) async =>
+      balance;
 }

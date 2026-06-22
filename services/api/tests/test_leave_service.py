@@ -83,6 +83,14 @@ class UnknownTeacherClient:
         pass
 
 
+class FailingScheduleClient:
+    def get_schedule(self, year, term):
+        raise RuntimeError("jwxt timeout")
+
+    def logout(self):
+        pass
+
+
 def test_week_spec_contains_ranges_and_parity():
     assert week_spec_contains("1-16周", 8)
     assert week_spec_contains("1-15单周", 7)
@@ -189,6 +197,59 @@ def test_leave_preview_route_returns_matches():
     response = client.post(
         "/ehall/leave/preview",
         headers={"X-Session-Id": session.id},
+        json={
+            "year": 2026,
+            "term": 2,
+            "startDate": monday.isoformat(),
+            "endDate": monday.isoformat(),
+            "firstWeekStart": first_week.isoformat(),
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["items"][0]["teacher"] == "张老师"
+
+
+def test_leave_preview_uses_payload_courses_when_schedule_fetch_fails():
+    app = create_app()
+    session = app.state.sessions.create(FailingScheduleClient(), "测试学生")
+    client = TestClient(app)
+    first_week = default_first_week_start(2026, 2)
+    monday = first_week + timedelta(days=7)
+
+    response = client.post(
+        "/ehall/leave/preview",
+        headers={"X-Session-Id": session.id},
+        json={
+            "year": 2026,
+            "term": 2,
+            "startDate": monday.isoformat(),
+            "endDate": monday.isoformat(),
+            "firstWeekStart": first_week.isoformat(),
+            "courses": FakeClient().get_schedule("2026", "2"),
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["items"][0]["courseName"] == "移动应用开发"
+
+
+def test_leave_preview_falls_back_to_cached_schedule():
+    app = create_app()
+    client = TestClient(app)
+    first_week = default_first_week_start(2026, 2)
+    monday = first_week + timedelta(days=7)
+    ok_session = app.state.sessions.create(FakeClient(), "测试学生")
+    fail_session = app.state.sessions.create(FailingScheduleClient(), "测试学生")
+
+    client.get(
+        "/schedule",
+        headers={"X-Session-Id": ok_session.id},
+        params={"year": "2026", "term": "2"},
+    )
+    response = client.post(
+        "/ehall/leave/preview",
+        headers={"X-Session-Id": fail_session.id},
         json={
             "year": 2026,
             "term": 2,

@@ -1,0 +1,164 @@
+### 热水余额 API 链路测试脚本
+### 使用方式：
+###   1. VSCode: 安装 "REST Client" 插件，右键 Run Request
+###   2. 浏览器控制台: 使用下方 JavaScript 版本
+
+### 步骤1: CAS 登录（获取 API session）
+### 注意：验证码需要手动填写，以下 placeholder 需替换
+
+@host = https://onegzus.cc.cd
+@casBase = https://cas.gzus.edu.cn
+@serviceUrl = https://jwxt.seig.edu.cn/sso/lyiotlogin
+@account = 2540232101
+@password = Limuliseig423.
+### @captchaCode = 手动填入验证码
+
+### 获取 public key
+GET {{host}}/auth/public-key
+Content-Type: application/json
+
+> {%
+    client.global.set("keyId", response.body.keyId);
+    client.global.set("publicKey", response.body.publicKey);
+    console.log("keyId:", response.body.keyId);
+%}
+
+### 用 public key 加密密码（手动执行 JS 版本，见下方）
+### POST {{host}}/auth/auto-login
+### Content-Type: application/json
+###
+### {
+###   "account": "2540232101",
+###   "encryptedPassword": "<RSA加密后的密码，需手动JS加密>",
+###   "keyId": "{{keyId}}"
+### }
+
+---
+
+### 浏览器控制台 JavaScript 版本（直接粘贴到 F12 控制台）：
+
+/*
+  OneGZUS 热水余额 API 链路测试
+  1. 打开 https://onegzus.cc.cd 并登录（或者跳过，直接用步骤2的 ticket）
+  2. 打开目标页面，按 F12，切换到 Console
+  3. 粘贴以下全部代码，按回车
+*/
+
+(async () => {
+  const host = 'https://onegzus.cc.cd';
+  const casBase = 'https://cas.gzus.edu.cn';
+  const account = '2540232101';
+  const password = 'Limuliseig423.';
+
+  // ========== RSA 加密（复制自 api_client.dart 的 Dart 实现）==========
+  // RSA public key from /auth/public-key
+  const MODULUS = BigInt('0x00b5eeb166e069920e80bebd1fea4829d3d1f3216f2aabe79b6c47a3c18dcee5fd22c2e7ac519cab59198ece036dcf289ea8201e2a0b9ded307f8fb704136eaeb670286f5ad44e691005ba9ea5af04ada5367cd724b5a26fdb5120cc95b6431604bd219c6b7d83a6f8f24b43918ea988a76f93c333aa5a20991493d4eb1117e7b1');
+  const EXPONENT = 0x10001n;
+
+  function rsaEncrypt(plaintext) {
+    const modulusBytes = (MODULUS.toString(2).length + 7) >> 3;
+    const numDigits = modulusBytes >> 1;
+    const hexDigits = numDigits << 2;
+    const codes = [];
+    for (let i = 0; i < plaintext.length; i++) codes.push(plaintext.charCodeAt(i));
+    while (codes.length % numDigits) codes.push(0);
+    const parts = [];
+    for (let i = 0; i < codes.length; i += numDigits) {
+      const chunk = codes.slice(i, i + numDigits);
+      let m = 0n;
+      for (let r = 0; r < numDigits >> 1; r++) {
+        const lo = chunk[r * 2] || 0;
+        const hi = chunk[r * 2 + 1] || 0;
+        m += BigInt(lo + (hi << 8)) << BigInt(16 * r);
+      }
+      parts.push(pow(m, EXPONENT, MODULUS).toString(16).padStart(hexDigits, '0'));
+    }
+    return parts.join(' ');
+  }
+
+  async function fetchJson(url, options = {}) {
+    const r = await fetch(url, {
+      ...options,
+      headers: { 'Content-Type': 'application/json', 'User-Agent': 'OneGZUS/1.0', ...options.headers },
+    });
+    const text = await r.text();
+    try { return JSON.parse(text); } catch { return { _raw: text, _status: r.status }; }
+  }
+
+  console.log('========== OneGZUS 热水余额链路测试 ==========');
+  console.log('学号:', account);
+
+  // Step 1: 获取 public key
+  console.log('\n[1/4] 获取 public key...');
+  const pk = await fetchJson(`${host}/auth/public-key`);
+  if (!pk.keyId) { console.error('  ✗ 获取 key 失败:', pk); return; }
+  console.log('  ✓ keyId:', pk.keyId);
+
+  // Step 2: RSA 加密密码并登录
+  const encryptedPwd = rsaEncrypt(password);
+  // 使用 crypto.subtle 做真正的 RSA 加密
+  const pemKey = pk.publicKey;
+  const pemBody = pemKey
+    .replace('-----BEGIN PUBLIC KEY-----', '')
+    .replace('-----END PUBLIC KEY-----')
+    .replace(/\s/g, '');
+  const binaryStr = atob(pemBody);
+  const bytes = new Uint8Array(binaryStr.length);
+  for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
+  const cryptoKey = await crypto.subtle.importKey(
+    'spki', bytes.buffer, { name: 'RSAES-PKCS1-v1_5', hash: 'SHA-256' }, false, ['encrypt']
+  );
+  const encryptedBytes = await crypto.subtle.encrypt(
+    { name: 'RSAES-PKCS1-v1_5' }, cryptoKey, new TextEncoder().encode(password)
+  );
+  const encryptedB64 = btoa(String.fromCharCode(...new Uint8Array(encryptedBytes)));
+
+  console.log('\n[2/4] API auto-login...');
+  const loginResp = await fetchJson(`${host}/auth/auto-login`, {
+    method: 'POST',
+    body: JSON.stringify({ account, encryptedPassword: encryptedB64, keyId: pk.keyId }),
+  });
+  const sessionId = loginResp.sessionId;
+  if (!sessionId) { console.error('  ✗ 登录失败:', loginResp); return; }
+  console.log('  ✓ sessionId:', sessionId.substring(0, 20) + '...');
+
+  // Step 3: GET /ecard/summary
+  console.log('\n[3/4] GET /ecard/summary (当前缓存)');
+  const summary = await fetchJson(`${host}/ecard/summary`, {
+    headers: { 'X-Session-Id': sessionId },
+  });
+  console.log('  status:', summary.status);
+  console.log('  宿舍:', summary.roomDisplay);
+  console.log('  电费:', summary.powerText || '-');
+  console.log('  冷水:', summary.coldWaterText || '-');
+  console.log('  热水:', summary.hotWaterText || '-', summary.hotWaterBalance != null ? `(${summary.hotWaterBalance})` : '(缓存=null)');
+
+  // Step 4: POST /ecard/refresh (走完整链路，可能超时)
+  console.log('\n[4/4] POST /ecard/refresh (完整链路，45s超时)...');
+  console.log('  ⚠  如果学校 API 超时，会返回 502，请等待...');
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 45000);
+  try {
+    const refresh = await fetchJson(`${host}/ecard/refresh`, {
+      method: 'POST',
+      headers: { 'X-Session-Id': sessionId, 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    console.log('\n========== 刷新结果 ==========');
+    console.log('  电费:', refresh.powerText || '-');
+    console.log('  冷水:', refresh.coldWaterText || '-');
+    console.log('  热水:', refresh.hotWaterText || '-', refresh.hotWaterBalance != null ? `✓ (${refresh.hotWaterBalance} 元)` : '✗ (null)');
+    if (refresh.hotWaterBalance != null) {
+      console.log('\n✓ 热水余额正常获取！');
+    } else {
+      console.log('\n✗ 热水余额为 null（API 超时或学校接口无返回）');
+    }
+  } catch (e) {
+    clearTimeout(timeoutId);
+    console.error('\n✗ /ecard/refresh 请求失败:', e.message);
+    console.log('  原因: Vercel -> 学校 API 网络超时（502 或超时）');
+    console.log('  解决: 部署后端更新（添加热水缓存 fallback）后重试');
+  }
+})();

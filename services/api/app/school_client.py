@@ -1500,13 +1500,16 @@ def normalize_schedule_course(value: Any) -> dict:
     start_section, end_section = parse_section_range(
         pick(data, "startSection", "start_section", "jc_start", "ksjc", "jcs", "jc")
     )
+    _, explicit_end_section = parse_section_range(
+        pick(data, "endSection", "end_section", "jc_end", "jsjc")
+    )
     return {
         "name": str(pick(data, "name", "courseName", "kcmc") or ""),
         "teacher": pick(data, "teacher", "jsxm", "teacherName", "xm"),
         "classroom": pick(data, "classroom", "location", "cdmc"),
         "weekday": pick(data, "weekday", "weekDay", "xqj"),
         "startSection": start_section,
-        "endSection": end_section,
+        "endSection": explicit_end_section or end_section,
         "weeks": pick(data, "weeks", "zcd", "week"),
         "kcbmc": pick(data, "kcbmc"),
         "raw": data,
@@ -2044,18 +2047,13 @@ def notice_summary(row_text: str, title: str, date: str | None) -> str | None:
 def parse_section_range(value: Any) -> tuple[int | None, int | None]:
     if value in (None, ""):
         return None, None
-    parts = str(value).replace("，", ",").split("-", 1)
-    try:
-        start = int(parts[0].strip())
-    except ValueError:
+    numbers = [int(match.group(0)) for match in re.finditer(r"\d+", str(value))]
+    if not numbers:
         return None, None
-    if len(parts) == 1:
+    start = numbers[0]
+    if len(numbers) == 1:
         return start, start
-    try:
-        end = int(parts[1].strip())
-    except ValueError:
-        end = start
-    return start, end
+    return start, numbers[1]
 
 
 def default_academic_period(year: str | int | None, term: str | int | None) -> tuple[int, int]:
