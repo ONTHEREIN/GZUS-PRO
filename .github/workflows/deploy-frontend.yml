@@ -37,8 +37,8 @@ jobs:
           cd apps/mobile_web/build/web
           # 移除调试符号文件
           find . -name "*.symbols" -delete
-          # 移除不需要的 CanvasKit 变体
-          rm -rf canvaskit/chromium
+          # 保留 chromium CanvasKit：Flutter Web 在 Chromium 浏览器会优先选择该变体。
+          # 删除它会让启动阶段请求回落到 SPA HTML，导致登录页一直停在加载界面。
           rm -rf canvaskit/experimental_webparagraph
           rm -f canvaskit/skwasm*.wasm canvaskit/skwasm*.js
           rm -f canvaskit/wimp.wasm canvaskit/wimp.js
@@ -46,6 +46,16 @@ jobs:
           rm -f assets/NOTICES
           echo "=== Cleaned build size ==="
           du -sh .
+
+      - name: Verify deployable web bundle
+        run: |
+          test -f apps/mobile_web/build/web/main.dart.js
+          test -f apps/mobile_web/build/web/canvaskit/canvaskit.js
+          test -f apps/mobile_web/build/web/canvaskit/canvaskit.wasm
+          test -f apps/mobile_web/build/web/canvaskit/chromium/canvaskit.js
+          test -f apps/mobile_web/build/web/canvaskit/chromium/canvaskit.wasm
+          ! grep -q "{{flutter_" apps/mobile_web/build/web/flutter_bootstrap.js
+          grep -q "canvasKitVariant: 'full'" apps/mobile_web/build/web/flutter_bootstrap.js
 
       - name: Deploy to Cloudflare Pages (onegzus-onweb)
         run: npx wrangler@latest pages deploy apps/mobile_web/build/web --project-name=onegzus-onweb --branch=master --commit-dirty=true

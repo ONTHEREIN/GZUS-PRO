@@ -966,10 +966,12 @@ export default {
     // so route those requests back to the full local bundle instead of letting
     // the Pages SPA fallback return index.html.
     if (url.pathname === '/canvaskit/chromium/canvaskit.js') {
-      return fetch(new Request(new URL('/canvaskit/canvaskit.js', url.origin), request));
+      const assetRequest = new Request(new URL('/canvaskit/canvaskit.js', request.url), request);
+      return env.ASSETS ? env.ASSETS.fetch(assetRequest) : fetch(assetRequest);
     }
     if (url.pathname === '/canvaskit/chromium/canvaskit.wasm') {
-      return fetch(new Request(new URL('/canvaskit/canvaskit.wasm', url.origin), request));
+      const assetRequest = new Request(new URL('/canvaskit/canvaskit.wasm', request.url), request);
+      return env.ASSETS ? env.ASSETS.fetch(assetRequest) : fetch(assetRequest);
     }
     if (url.pathname === '/canvaskit/chromium/main.dart.js') {
       return new Response('// CanvasKit chromium compat stub', {
