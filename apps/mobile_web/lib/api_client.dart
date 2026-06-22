@@ -1557,20 +1557,11 @@ class ApiClient {
 
   Future<LoginResult> login(String account, String password) async {
     _account = account;
-    await fetchPublicKey();
-    Map<String, dynamic> body = {'account': account};
-    if (_rsaPublicKeyPem != null && _rsaKeyId != null) {
-      final encrypted = _rsaEncrypt(password, _rsaPublicKeyPem!);
-      if (encrypted != null) {
-        body['encryptedPassword'] = encrypted;
-        body['keyId'] = _rsaKeyId;
-      } else {
-        body['password'] = password;
-      }
-    } else {
-      body['password'] = password;
-    }
-    final response = await _post('/auth/login', body);
+    final response = await _postLoginWithFreshKeyRetry(
+      '/auth/login',
+      account,
+      password,
+    );
     final result = LoginResult.fromJson(response);
     sessionId = result.sessionId;
     _captureTransientEhallAuth(result);
@@ -1604,20 +1595,11 @@ class ApiClient {
 
   Future<LoginResult> autoLogin(String account, String password) async {
     _account = account;
-    await fetchPublicKey();
-    Map<String, dynamic> body = {'account': account};
-    if (_rsaPublicKeyPem != null && _rsaKeyId != null) {
-      final encrypted = _rsaEncrypt(password, _rsaPublicKeyPem!);
-      if (encrypted != null) {
-        body['encryptedPassword'] = encrypted;
-        body['keyId'] = _rsaKeyId;
-      } else {
-        body['password'] = password;
-      }
-    } else {
-      body['password'] = password;
-    }
-    final response = await _post('/auth/auto-login', body);
+    final response = await _postLoginWithFreshKeyRetry(
+      '/auth/auto-login',
+      account,
+      password,
+    );
     final result = LoginResult.fromJson(response);
     sessionId = result.sessionId;
     _captureTransientEhallAuth(result);
@@ -1628,6 +1610,40 @@ class ApiClient {
     await _saveEhallAuth(result);
     return result;
   }
+
+  Future<Map<String, dynamic>> _postLoginWithFreshKeyRetry(
+    String path,
+    String account,
+    String password,
+  ) async {
+    await fetchPublicKey();
+    try {
+      return await _post(path, _loginPayload(account, password));
+    } on ApiException catch (e) {
+      if (!_isPasswordDecryptFailure(e.message)) rethrow;
+      await _refreshPublicKey();
+      return _post(path, _loginPayload(account, password));
+    }
+  }
+
+  Map<String, dynamic> _loginPayload(String account, String password) {
+    final body = <String, dynamic>{'account': account};
+    final publicKeyPem = _rsaPublicKeyPem;
+    final keyId = _rsaKeyId;
+    if (publicKeyPem != null && keyId != null) {
+      final encrypted = _rsaEncrypt(password, publicKeyPem);
+      if (encrypted != null) {
+        body['encryptedPassword'] = encrypted;
+        body['keyId'] = keyId;
+        return body;
+      }
+    }
+    body['password'] = password;
+    return body;
+  }
+
+  bool _isPasswordDecryptFailure(String message) =>
+      message.contains('密码解密失败') || message.contains('RSA密钥不匹配');
 
   Future<bool> checkHealth() async {
     if (_candidates.isEmpty) return false;
@@ -1799,6 +1815,12 @@ class ApiClient {
         _publicKeyFuture = null;
       }
     }
+  }
+
+  Future<void> _refreshPublicKey() async {
+    _rsaPublicKeyPem = null;
+    _rsaKeyId = null;
+    await _fetchPublicKeyOnce();
   }
 
   Future<void> _fetchPublicKeyOnce() async {
@@ -3222,8 +3244,10 @@ class EcardDirectClient {
   static DateTime? _cachedAt;
   static const _tokenTtl = Duration(minutes: 50);
 
-  String? get _token => (_cachedAt != null &&
-      DateTime.now().difference(_cachedAt!) < _tokenTtl) ? _cachedToken : null;
+  String? get _token =>
+      (_cachedAt != null && DateTime.now().difference(_cachedAt!) < _tokenTtl)
+          ? _cachedToken
+          : null;
   set _token(String? v) {
     _cachedToken = v;
     _cachedAt = DateTime.now();
