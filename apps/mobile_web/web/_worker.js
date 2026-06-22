@@ -811,7 +811,7 @@ function corsHeaders(request) {
   return {
     'Access-Control-Allow-Origin': request.headers.get('Origin') || '*',
     'Access-Control-Allow-Methods': 'GET,POST,PATCH,OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type,X-Session-Id,User-Agent',
+    'Access-Control-Allow-Headers': 'Content-Type,X-Session-Id,X-Client-Platform,User-Agent',
     'Access-Control-Max-Age': '86400',
   };
 }

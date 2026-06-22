@@ -1,4 +1,4 @@
-const CACHE_NAME = 'gzus-pwa-cache-v5';
+const CACHE_NAME = 'gzus-pwa-cache-v6';
 const API_CACHE_NAME = 'gzus-api-cache-v2';
 const API_CACHE_MAX_AGE_MS = 5 * 60 * 1000;
 const STATIC_ASSETS = [
