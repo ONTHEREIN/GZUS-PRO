@@ -202,7 +202,29 @@ async function handleStaticRequest(request) {
   const cache = await caches.open(CACHE_NAME);
   const url = new URL(request.url);
 
-  // Network-first for critical JS/WASM files to avoid stale code
+  // canvaskit 目录下的资源（WASM/JS）体积大且随 Flutter 版本发布，
+  // 采用 cache-first + 后台再验证策略，避免每次加载都等待网络。
+  const isCanvaskitAsset = url.pathname.startsWith('/canvaskit/') ||
+                           url.pathname.includes('/canvaskit/');
+
+  if (isCanvaskitAsset) {
+    const cached = await cache.match(request);
+    if (cached) {
+      revalidateStaticRequest(request, cache, request);
+      return cached;
+    }
+    // 首次加载：回退到网络
+    try {
+      const networkResponse = await fetch(request, { cache: 'no-store' });
+      await putStaticResponse(cache, request, networkResponse);
+      return networkResponse;
+    } catch (_) {
+      return Response.error();
+    }
+  }
+
+  // main.dart.js / flutter_bootstrap.js / manifest.json 等关键脚本：
+  // 保持 network-first 以避免部署后使用过期代码。
   const isCriticalAsset = url.pathname.endsWith('.js') ||
                           url.pathname.endsWith('.wasm') ||
                           url.pathname.endsWith('.json');

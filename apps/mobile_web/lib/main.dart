@@ -88,6 +88,7 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
   String? studentName;
   String? loginError;
   bool _backgroundGuideCompleted = false;
+  bool _scheduleOnboardingCompleted = false;
   DataSourceInfo _globalDataSource = const DataSourceInfo();
   bool get isOfflineMode => _globalDataSource.isStale;
 
@@ -281,16 +282,41 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
                     _finishLogin(result);
                   },
                 )
-              : !_backgroundGuideCompleted
-                  ? BackgroundGuidePage(
+              : !_scheduleOnboardingCompleted
+                  ? ScheduleOnboardingPage(
                       api: api,
-                      onComplete: () {
-                        WidgetsBinding.instance.addPostFrameCallback((_) {
-                          _navigatorKey.currentState?.pushNamedAndRemoveUntil(
-                              '/dashboard', (route) => false);
+                      studentName: studentName,
+                      onComplete: () async {
+                        final prefs =
+                            await SharedPreferences.getInstance();
+                        await prefs.setBool(
+                            'schedule_onboarding_completed', true);
+                        if (!mounted) return;
+                        setState(() {
+                          _scheduleOnboardingCompleted = true;
                         });
-                      })
-                  : _buildDashboardShell(),
+                      },
+                      onSkip: () async {
+                        final prefs =
+                            await SharedPreferences.getInstance();
+                        await prefs.setBool(
+                            'schedule_onboarding_completed', true);
+                        if (!mounted) return;
+                        setState(() {
+                          _scheduleOnboardingCompleted = true;
+                        });
+                      },
+                    )
+                  : !_backgroundGuideCompleted
+                      ? BackgroundGuidePage(
+                          api: api,
+                          onComplete: () {
+                            WidgetsBinding.instance.addPostFrameCallback((_) {
+                              _navigatorKey.currentState?.pushNamedAndRemoveUntil(
+                                  '/dashboard', (route) => false);
+                            });
+                          })
+                      : _buildDashboardShell(),
       routes: {
         '/dashboard': (context) {
           if (!loggedIn) {
@@ -396,12 +422,15 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
     }
 
     final guideCompleted = prefs.getBool('background_guide_completed') ?? false;
+    final scheduleOnboardingCompleted =
+        prefs.getBool('schedule_onboarding_completed') ?? false;
     if (!mounted) return;
     setState(() {
       initializing = false;
       loggedIn = true;
       studentName = prefs.getString('auth.studentName') ?? '软帮手';
       _backgroundGuideCompleted = guideCompleted;
+      _scheduleOnboardingCompleted = scheduleOnboardingCompleted;
       _globalDataSource = const DataSourceInfo(fromLocalCache: true);
       loginMethod = prefs.getString('auth.loginMethod');
     });
@@ -529,6 +558,7 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
       studentName = result.studentName;
       loginError = null;
       _backgroundGuideCompleted = false;
+      _scheduleOnboardingCompleted = false;
       loginMethod = result.loginMethod;
     });
 
@@ -591,6 +621,7 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
       loggedIn = false;
       studentName = null;
       _backgroundGuideCompleted = false;
+      _scheduleOnboardingCompleted = false;
       _globalDataSource = const DataSourceInfo();
       loginMethod = null;
       loginError = null;
@@ -2093,13 +2124,6 @@ class _DashboardShellState extends State<DashboardShell> {
       case 'credits':
         return CreditsPage(api: widget.api, onSessionExpired: widget.onLogout);
       case 'ecard':
-        if (kIsWeb) {
-          return const _WebUnsupportedPage(
-            title: '生活缴费',
-            icon: Icons.water_drop,
-            message: '生活缴费需要在手机 App 中使用，Web 端暂不支持查询水电余额。',
-          );
-        }
         return EcardPage(api: widget.api, onSessionExpired: widget.onLogout);
       case 'ftpUpload':
         return const FtpUploadPage();
@@ -2229,10 +2253,9 @@ class _DashboardShellState extends State<DashboardShell> {
   }
 
   void _setFirstWeekStart(DateTime value) {
-    final normalized = _mondayOf(value);
     setState(() {
-      firstWeekStart = normalized;
-      if (autoWeek) currentWeek = _weekFromDate(normalized, DateTime.now());
+      firstWeekStart = value;
+      if (autoWeek) currentWeek = _weekFromDate(value, DateTime.now());
     });
     _saveScheduleSettings();
   }
@@ -2294,12 +2317,8 @@ DateTime _mondayOf(DateTime date) {
 }
 
 int _weekFromDate(DateTime firstWeekStart, DateTime date) {
-  final start = DateTime(
-    firstWeekStart.year,
-    firstWeekStart.month,
-    firstWeekStart.day,
-  );
-  final current = DateTime(date.year, date.month, date.day);
+  final start = _mondayOf(firstWeekStart);
+  final current = _mondayOf(date);
   return (current.difference(start).inDays ~/ 7 + 1).clamp(1, 30);
 }
 
@@ -7793,7 +7812,7 @@ class _AutoLeavePageState extends State<AutoLeavePage> {
         term: widget.term,
         startDate: range.$1,
         endDate: range.$2,
-        firstWeekStart: widget.firstWeekStart,
+        firstWeekStart: _mondayOf(widget.firstWeekStart),
       );
       if (mounted) setState(() => _preview = result);
     } catch (exc) {
@@ -7830,7 +7849,7 @@ class _AutoLeavePageState extends State<AutoLeavePage> {
         term: widget.term,
         startDate: range.$1,
         endDate: range.$2,
-        firstWeekStart: widget.firstWeekStart,
+        firstWeekStart: _mondayOf(widget.firstWeekStart),
         reason: _reasonController.text.trim(),
         attachmentName: attachment.name,
         attachmentBytes: attachment.bytes,
@@ -8882,6 +8901,357 @@ class _MetaText extends StatelessWidget {
   }
 }
 
+/// 课表开始界面 — 让刚登录的用户选择第一周开始日期
+class ScheduleOnboardingPage extends StatefulWidget {
+  const ScheduleOnboardingPage({
+    super.key,
+    required this.api,
+    required this.studentName,
+    required this.onComplete,
+    required this.onSkip,
+  });
+
+  final ApiClient api;
+  final String? studentName;
+  final VoidCallback onComplete;
+  final VoidCallback onSkip;
+
+  @override
+  State<ScheduleOnboardingPage> createState() => _ScheduleOnboardingPageState();
+}
+
+class _ScheduleOnboardingPageState extends State<ScheduleOnboardingPage> {
+  late final int _year;
+  late final int _term;
+  late DateTime _selected;
+  bool _loading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _year = DateTime.now().month >= 9
+        ? DateTime.now().year
+        : DateTime.now().year - 1;
+    _term = DateTime.now().month >= 9 || DateTime.now().month <= 1 ? 1 : 2;
+    _selected = _defaultFirstWeekStart(_year, _term);
+  }
+
+  String get _termLabel {
+    return '$_year-${_term == 1 ? '第一学期' : '第二学期'}';
+  }
+
+  Future<void> _pickDate() async {
+    final now = DateTime.now();
+    final firstDate = DateTime(now.year - 6, 1, 1);
+    final lastDate = DateTime(now.year + 6, 12, 31);
+    final initial = _selected.isBefore(firstDate) || _selected.isAfter(lastDate)
+        ? now
+        : _selected;
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: firstDate,
+      lastDate: lastDate,
+      helpText: '选择第一周开始日期',
+    );
+    if (picked != null && mounted) {
+      setState(() => _selected = picked);
+    }
+  }
+
+  Future<void> _complete() async {
+    setState(() => _loading = true);
+    try {
+      // 保存到 SharedPreferences，键名与 _DashboardShellState 一致
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        'schedule.$_year.$_term.firstWeekStart',
+        _dateText(_selected),
+      );
+      await prefs.setInt(
+        'schedule.$_year.$_term.week',
+        _weekFromDate(_selected, DateTime.now()),
+      );
+      if (!mounted) return;
+      widget.onComplete();
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+    final compact = MediaQuery.sizeOf(context).width < 600;
+    final currentWeek = _weekFromDate(_selected, DateTime.now());
+    final weekdayName = _weekdayName(_selected.weekday);
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('欢迎使用软帮手'),
+        automaticallyImplyLeading: false,
+        actions: [
+          TextButton(
+            onPressed: _loading ? null : widget.onSkip,
+            child: const Text('使用默认'),
+          ),
+        ],
+      ),
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: EdgeInsets.all(compact ? 18 : 28),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 520),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // 顶部欢迎卡片
+                  Container(
+                    padding: const EdgeInsets.all(20),
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [
+                          colorScheme.primary.withValues(alpha: 0.18),
+                          colorScheme.primaryContainer.withValues(alpha: 0.55),
+                        ],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      ),
+                      borderRadius: BorderRadius.circular(28),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Container(
+                              width: 56,
+                              height: 56,
+                              decoration: BoxDecoration(
+                                color: colorScheme.primary,
+                                borderRadius: BorderRadius.circular(18),
+                              ),
+                              child: Icon(
+                                Icons.waving_hand,
+                                color: colorScheme.onPrimary,
+                                size: 28,
+                              ),
+                            ),
+                            const SizedBox(width: 14),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    widget.studentName == null
+                                        ? '你好！'
+                                        : '你好，${widget.studentName}！',
+                                    style: textTheme.headlineSmall?.copyWith(
+                                      fontWeight: FontWeight.w900,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    '让我们先设置一下课表',
+                                    style: textTheme.bodyMedium?.copyWith(
+                                      color: colorScheme.onSurfaceVariant,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 14),
+                        Text(
+                          '为了让课表、考试提醒和请假功能更准确，请选择本学期第一周的开始日期。你可以选择任意日期（不限于周一），系统会自动按所在周对齐计算。',
+                          style: textTheme.bodyMedium,
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                  // 学期信息
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 14, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: colorScheme.surfaceContainerLow,
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.school,
+                            size: 18, color: colorScheme.primary),
+                        const SizedBox(width: 8),
+                        Text(
+                          '当前学期：$_termLabel',
+                          style: textTheme.bodyMedium?.copyWith(
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  // 日期选择卡片
+                  Container(
+                    padding: const EdgeInsets.all(18),
+                    decoration: BoxDecoration(
+                      color: colorScheme.surfaceContainerLow,
+                      borderRadius: BorderRadius.circular(24),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '第一周开始日期',
+                          style: textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          '选择学期第一周中的任意一天即可',
+                          style: textTheme.bodySmall?.copyWith(
+                            color: colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                        const SizedBox(height: 14),
+                        InkWell(
+                          onTap: _pickDate,
+                          borderRadius: BorderRadius.circular(14),
+                          child: InputDecorator(
+                            decoration: InputDecoration(
+                              labelText: '已选日期',
+                              prefixIcon:
+                                  const Icon(Icons.calendar_month, size: 20),
+                              suffixIcon:
+                                  const Icon(Icons.arrow_drop_down, size: 22),
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(14),
+                              ),
+                            ),
+                            child: Text(
+                              '${_dateText(_selected)}（$weekdayName）',
+                              style: textTheme.titleMedium?.copyWith(
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            _OnboardingInfoChip(
+                              icon: Icons.view_week,
+                              label: '今天为第$currentWeek周',
+                            ),
+                            _OnboardingInfoChip(
+                              icon: Icons.event,
+                              label: '学期：$_termLabel',
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  // 操作按钮
+                  FilledButton.icon(
+                    onPressed: _loading ? null : _complete,
+                    icon: _loading
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.check_circle_outline, size: 20),
+                    label: const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 4),
+                      child: Text(
+                        '完成，开始使用',
+                        style: TextStyle(
+                            fontSize: 16, fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                    style: FilledButton.styleFrom(
+                      minimumSize: const Size.fromHeight(52),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Center(
+                    child: TextButton(
+                      onPressed: _loading ? null : widget.onSkip,
+                      child: Text(
+                        '暂不设置，使用默认日期',
+                        style: TextStyle(
+                          color: colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  String _weekdayName(int weekday) {
+    const names = {
+      DateTime.monday: '周一',
+      DateTime.tuesday: '周二',
+      DateTime.wednesday: '周三',
+      DateTime.thursday: '周四',
+      DateTime.friday: '周五',
+      DateTime.saturday: '周六',
+      DateTime.sunday: '周日',
+    };
+    return names[weekday] ?? '未知';
+  }
+}
+
+class _OnboardingInfoChip extends StatelessWidget {
+  const _OnboardingInfoChip({required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: colorScheme.secondaryContainer.withValues(alpha: 0.55),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: colorScheme.onSecondaryContainer),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: colorScheme.onSecondaryContainer,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class SchedulePage extends StatefulWidget {
   const SchedulePage({
     super.key,
@@ -8913,7 +9283,6 @@ class SchedulePage extends StatefulWidget {
 }
 
 class _SchedulePageState extends State<SchedulePage> {
-  late final TextEditingController firstWeekController;
   late Future<ScheduleResult> _scheduleFuture;
   ScheduleViewMode _viewMode = ScheduleViewMode.today;
   bool showJson = false;
@@ -8927,8 +9296,6 @@ class _SchedulePageState extends State<SchedulePage> {
   @override
   void initState() {
     super.initState();
-    firstWeekController =
-        TextEditingController(text: _dateText(widget.firstWeekStart));
     _scheduleFuture = _loadSchedule();
     _loadReminderSettings();
   }
@@ -8941,8 +9308,6 @@ class _SchedulePageState extends State<SchedulePage> {
         oldWidget.term != widget.term) {
       _scheduleFuture = _loadSchedule();
     }
-    final next = _dateText(widget.firstWeekStart);
-    if (firstWeekController.text != next) firstWeekController.text = next;
   }
 
   Future<ScheduleResult> _loadSchedule({bool forceRefresh = false}) =>
@@ -8990,12 +9355,6 @@ class _SchedulePageState extends State<SchedulePage> {
       beforeEndMinutes: beforeEndMinutes,
       firstWeekStart: firstWeekStr,
     );
-  }
-
-  @override
-  void dispose() {
-    firstWeekController.dispose();
-    super.dispose();
   }
 
   @override
@@ -9346,7 +9705,6 @@ class _SchedulePageState extends State<SchedulePage> {
                           ),
                           const SizedBox(height: 12),
                           ScheduleInlineManage(
-                            firstWeekController: firstWeekController,
                             firstWeekStart: widget.firstWeekStart,
                             currentWeek: widget.currentWeek,
                             autoWeek: widget.autoWeek,
@@ -9359,14 +9717,12 @@ class _SchedulePageState extends State<SchedulePage> {
                               widget.onCurrentWeekChanged(value);
                               localSetState(() {});
                             },
-                            onSaveFirstWeek: () {
-                              _saveFirstWeek();
+                            onFirstWeekChanged: (value) {
+                              widget.onFirstWeekChanged(value);
                               localSetState(() {});
                             },
                             onUseCurrentWeek: () {
-                              firstWeekController.text =
-                                  _dateText(_mondayOf(DateTime.now()));
-                              _saveFirstWeek();
+                              widget.onFirstWeekChanged(DateTime.now());
                               localSetState(() {});
                             },
                           ),
@@ -9385,16 +9741,6 @@ class _SchedulePageState extends State<SchedulePage> {
         },
       ),
     );
-  }
-
-  void _saveFirstWeek() {
-    final parsed = DateTime.tryParse(firstWeekController.text.trim());
-    if (parsed == null) {
-      setState(() => manageError = '日期格式应为 YYYY-MM-DD');
-      return;
-    }
-    setState(() => manageError = null);
-    widget.onFirstWeekChanged(parsed);
   }
 
   Future<void> _loadReminderSettings() async {
@@ -9467,26 +9813,42 @@ class _ScheduleToolsChip extends StatelessWidget {
 class ScheduleInlineManage extends StatelessWidget {
   const ScheduleInlineManage({
     super.key,
-    required this.firstWeekController,
     required this.firstWeekStart,
     required this.currentWeek,
     required this.autoWeek,
     required this.error,
     required this.onAutoWeekChanged,
     required this.onCurrentWeekChanged,
-    required this.onSaveFirstWeek,
+    required this.onFirstWeekChanged,
     required this.onUseCurrentWeek,
   });
 
-  final TextEditingController firstWeekController;
   final DateTime firstWeekStart;
   final int currentWeek;
   final bool autoWeek;
   final String? error;
   final ValueChanged<bool> onAutoWeekChanged;
   final ValueChanged<int> onCurrentWeekChanged;
-  final VoidCallback onSaveFirstWeek;
+  final ValueChanged<DateTime> onFirstWeekChanged;
   final VoidCallback onUseCurrentWeek;
+
+  Future<void> _pickDate(BuildContext context) async {
+    final now = DateTime.now();
+    final firstDate = DateTime(now.year - 6, 1, 1);
+    final lastDate = DateTime(now.year + 6, 12, 31);
+    final initial = firstWeekStart.isBefore(firstDate) ||
+            firstWeekStart.isAfter(lastDate)
+        ? now
+        : firstWeekStart;
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: firstDate,
+      lastDate: lastDate,
+      helpText: '选择第一周开始日期',
+    );
+    if (picked != null) onFirstWeekChanged(picked);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -9509,28 +9871,26 @@ class ScheduleInlineManage extends StatelessWidget {
                 ),
           ),
           const SizedBox(height: 12),
-          TextField(
-            controller: firstWeekController,
-            keyboardType: TextInputType.datetime,
-            decoration: const InputDecoration(
-              labelText: '第一周周一',
-              hintText: 'YYYY-MM-DD',
-              prefixIcon: Icon(Icons.calendar_month),
+          InkWell(
+            onTap: () => _pickDate(context),
+            borderRadius: BorderRadius.circular(12),
+            child: InputDecorator(
+              decoration: const InputDecoration(
+                labelText: '第一周开始日期',
+                prefixIcon: Icon(Icons.calendar_month),
+                suffixIcon: Icon(Icons.arrow_drop_down),
+              ),
+              child: Text(
+                _dateText(firstWeekStart),
+                style: Theme.of(context).textTheme.bodyLarge,
+              ),
             ),
-            onSubmitted: (_) => onSaveFirstWeek(),
           ),
           const SizedBox(height: 10),
           Wrap(
             spacing: 10,
             runSpacing: 10,
             children: [
-              FilledButton(
-                onPressed: onSaveFirstWeek,
-                child: const _IconLabel(
-                  icon: Icons.save,
-                  label: '保存第一周',
-                ),
-              ),
               OutlinedButton(
                 onPressed: onUseCurrentWeek,
                 child: const _IconLabel(

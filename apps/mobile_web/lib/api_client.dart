@@ -2521,15 +2521,16 @@ class ApiClient {
 
   Future<void> _doWarmup() async {
     try {
-      // Probe all candidates in parallel, pick the first one that responds
-      final results = await Future.wait(
-        _candidates.map((candidate) async {
+      // 并行探测所有候选地址，首个健康响应者胜出（无需等待慢节点超时）
+      final completer = Completer<String>();
+      for (final candidate in _candidates) {
+        unawaited(() async {
           try {
             final response = await _http
                 .get(Uri.parse('$candidate/health'), headers: _headers())
-                .timeout(const Duration(seconds: 5));
-            if (response.statusCode == 200) {
-              return candidate;
+                .timeout(const Duration(seconds: 3));
+            if (response.statusCode == 200 && !completer.isCompleted) {
+              completer.complete(candidate);
             }
           } on TimeoutException {
             // ignore
@@ -2538,16 +2539,14 @@ class ApiClient {
           } on SocketException {
             // ignore
           }
-          return null;
-        }),
-      );
-      // Pick the first healthy candidate
-      for (final result in results) {
-        if (result != null) {
-          _currentBaseUrl = result;
-          unawaited(fetchPublicKey());
-          return;
-        }
+        }());
+      }
+      // 整体上限 4 秒：即使所有候选都慢，也不会无限阻塞 warmup
+      final winner = await completer.future
+          .timeout(const Duration(seconds: 4), onTimeout: () => '');
+      if (winner.isNotEmpty) {
+        _currentBaseUrl = winner;
+        unawaited(fetchPublicKey());
       }
     } finally {
       _warmedUp = true;
@@ -2804,7 +2803,10 @@ String generateIcs({
     final startTime = icsScheduleTimes[course.startSection! - 1].$1;
     final endTime = icsScheduleTimes[course.endSection! - 1].$2;
     for (final week in weeks) {
-      final date = firstWeekStart
+      // 对齐到第一周所在周的周一，确保非周一日期也能正确生成 ICS
+      final mondayOfFirstWeek = firstWeekStart.subtract(
+          Duration(days: firstWeekStart.weekday - DateTime.monday));
+      final date = mondayOfFirstWeek
           .add(Duration(days: (week - 1) * 7 + (course.weekday! - 1)));
       final dateStr =
           '${date.year}${date.month.toString().padLeft(2, '0')}${date.day.toString().padLeft(2, '0')}';
