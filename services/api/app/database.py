@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, Column, DateTime, Float, Integer, String, Text, create_engine, event, text
+from sqlalchemy import Boolean, Column, DateTime, Float, Integer, String, Text, create_engine, event, inspect, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -297,8 +297,20 @@ def _ensure_columns(engine, table: str, columns: dict[str, str]) -> None:
     import logging
     _logger = logging.getLogger(__name__)
     try:
+        existing_columns = {column["name"] for column in inspect(engine).get_columns(table)}
+        missing_columns = {
+            col_name: col_type
+            for col_name, col_type in columns.items()
+            if col_name not in existing_columns
+        }
+        if not missing_columns:
+            return
+
         with engine.connect() as conn:
-            for col_name, col_type in columns.items():
+            if not _is_sqlite(engine):
+                conn.exec_driver_sql("SET lock_timeout = '2s'")
+                conn.exec_driver_sql("SET statement_timeout = '10s'")
+            for col_name, col_type in missing_columns.items():
                 try:
                     conn.exec_driver_sql(
                         f"ALTER TABLE {table} ADD COLUMN {col_name} {col_type}"
