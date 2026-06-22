@@ -9,7 +9,6 @@ from __future__ import annotations
 import base64
 import json
 import logging
-from datetime import datetime, timezone
 
 from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel
@@ -200,61 +199,44 @@ def create_session_endpoint(
 
 @router.get("/cron/ecard-reminder")
 def ecard_reminder_cron(request: Request, x_internal_key: str | None = Header(None)) -> dict:
-    """Run ecard reminder for bindings (triggered by cron).
+    """Send low-balance push notifications from cached binding data.
 
-    Each cron invocation gets a fresh 10 s Vercel budget. We process
-    bindings one at a time and stop before the timeout.  With the
-    global token cache, individual balance calls should stay fast.
+    Does NOT call the school API (Vercel→school is too slow).
+    Relies on `binding.last_summary_json` which is populated whenever
+    a user refreshes their ecard page via /ecard/refresh.
     """
     _verify_internal_key(x_internal_key)
 
     if not get_settings().ecard_openid:
         return {"ok": True, "reason": "ecard not configured", "processed": 0}
 
-    import time as _time
+    import datetime as _dt
     from app.database import EcardBinding, PushRegistration, get_sync_session_factory
-    from app.ecard_client import EcardApiError, EcardClient, EcardRoomRef
     from app.jobs import ecard_reminder_message
     from app.push import send_push, send_web_push_to_student
 
-    deadline = _time.monotonic() + 9.0  # Stop 1 s before Vercel's 10 s kill
-    try:
-        client = EcardClient(
-            worker_proxy_origin=get_settings().ecard_worker_proxy_origin or None,
-        )
-    except Exception as exc:
-        logger.warning("ecard cron: cannot create client: %s", exc)
-        return {"ok": False, "error": str(exc)}
-
     factory = get_sync_session_factory()
     processed = 0
-    errors = 0
+    notified = 0
 
     with factory() as db:
         bindings = (
             db.query(EcardBinding)
             .filter(EcardBinding.reminder_enabled.is_(True))
-            .order_by(EcardBinding.last_checked_at.asc().nullsfirst())
             .all()
         )
+        today_key = _dt.date.today().isoformat()
+
         for binding in bindings:
-            if _time.monotonic() > deadline:
-                logger.info("ecard cron: stopping at deadline, processed=%d", processed)
-                break
+            if not binding.last_summary_json:
+                continue
             try:
-                room_ref = EcardRoomRef.from_id(binding.room_id)
-                summary = client.balance(room_ref, binding.student_id)
-            except Exception as exc:
-                logger.warning("ecard cron: balance failed for %s: %s", binding.student_id, exc)
-                errors += 1
+                summary = json.loads(binding.last_summary_json)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if not isinstance(summary, dict):
                 continue
 
-            binding.last_summary_json = json.dumps(summary, ensure_ascii=False)
-            binding.last_checked_at = datetime.now(timezone.utc)
-            binding.updated_at = datetime.now(timezone.utc)
-            processed += 1
-
-            # Low-balance push notification
             enabled_items = (
                 json.loads(binding.reminder_items)
                 if binding.reminder_items
@@ -267,9 +249,23 @@ def ecard_reminder_cron(request: Request, x_internal_key: str | None = Header(No
                 hot_water_threshold=binding.low_hot_water_threshold,
                 enabled_items=enabled_items,
             )
+            if not messages:
+                continue
+
+            # Deduplicate: track per-day reminders
+            reminded_times = (
+                json.loads(binding.last_reminded_times)
+                if binding.last_reminded_times else {}
+            )
+            if binding.last_reminded_date != today_key:
+                reminded_times = {}
+                binding.last_reminded_date = today_key
+
             for item_key, title, body in messages:
+                if reminded_times.get(item_key, 0) >= 2:
+                    continue
                 live_payload = {
-                    "id": f"ecard_cron:{binding.student_id}:{item_key}",
+                    "id": f"ecard_cron:{binding.student_id}:{today_key}:{item_key}",
                     "type": "ecard_reminder",
                     "studentId": binding.student_id,
                     "itemKey": item_key,
@@ -277,24 +273,33 @@ def ecard_reminder_cron(request: Request, x_internal_key: str | None = Header(No
                     "style": "progress",
                     "shortCriticalText": "水电",
                 }
+                # Push notifications
                 registration_ids = [
                     item.registration_id
                     for item in db.query(PushRegistration)
                     .filter(PushRegistration.student_id == binding.student_id)
                     .all()
                 ]
-                try:
-                    send_push(registration_ids, title, body, live_payload)
-                except Exception as exc:
-                    logger.warning("ecard cron: push failed for %s: %s", binding.student_id, exc)
+                if registration_ids:
+                    try:
+                        send_push(registration_ids, title, body, live_payload)
+                    except Exception as exc:
+                        logger.warning("ecard cron: push failed for %s: %s",
+                                       binding.student_id, exc)
                 try:
                     send_web_push_to_student(binding.student_id, title, body, live_payload)
-                except Exception as exc:
-                    logger.warning("ecard cron: web push failed for %s: %s", binding.student_id, exc)
+                except Exception:
+                    pass
+                reminded_times[item_key] = reminded_times.get(item_key, 0) + 1
+                notified += 1
+
+            binding.last_reminded_times = json.dumps(reminded_times)
+            processed += 1
 
         try:
             db.commit()
         except Exception as exc:
             logger.error("ecard cron: commit failed: %s", exc)
 
+    return {"ok": True, "processed": processed, "notified": notified}
     return {"ok": True, "processed": processed, "errors": errors}
