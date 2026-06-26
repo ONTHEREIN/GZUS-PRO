@@ -2592,9 +2592,10 @@ class ApiClient {
     } on ApiException catch (e) {
       if (e.statusCode == 401) {
         if (e.isSingleDeviceConflict) {
-          await clearSavedAuthState();
-          onReloginFailed?.call();
-          rethrow;
+          // 数据接口偶发返回“其他设备登录”时，先不要全局清会话。
+          // 生产环境中该信号可能来自学校侧短暂会话错配；直接退出会导致
+          // 用户登录后取数失败并被踢回登录页。
+          throw ApiException(e.message, statusCode: 401);
         }
         await loadSavedCredentials();
         if (_credentialToken == null) {
