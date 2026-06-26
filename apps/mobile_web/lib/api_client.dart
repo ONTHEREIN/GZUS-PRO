@@ -2598,9 +2598,8 @@ class ApiClient {
         }
         await loadSavedCredentials();
         if (_credentialToken == null) {
-          // 无凭证 token 则无法自动 relogin（如密码登录场景），
-          // 抛出友好提示引导用户手动重新登录
-          await clearSavedAuthState();
+          // 无凭证 token 时无法自动 relogin，但不要清空本地登录态。
+          // 数据接口可能只是短暂拿不到 Worker/后端会话，直接退出会造成误踢。
           throw ApiException('登录已过期，请重新登录', statusCode: 401);
         }
         // --- Relogin with backoff ---
@@ -2623,18 +2622,17 @@ class ApiClient {
           _consecutiveReloginFailures = 0; // reset on success
         } on ApiException catch (e) {
           _consecutiveReloginFailures++;
-          // relogin 本身失败，清除凭证和触发 onReloginFailed
+          // relogin 本身失败时只清除失效的凭证 token，不清空 session。
+          // 避免学校系统/Worker 短暂失败被误判为用户需要退出登录。
           if (e.statusCode == 401) {
-            await clearSavedAuthState();
+            await clearSavedCredentialToken();
           } else {
             _credentialToken = null;
           }
-          onReloginFailed?.call();
           rethrow;
-        } catch (e) {
+        } catch (_) {
           _consecutiveReloginFailures++;
           _credentialToken = null;
-          onReloginFailed?.call();
           rethrow;
         }
         // relogin 成功，重试原始请求
@@ -2643,11 +2641,9 @@ class ApiClient {
           // 不是 session 过期问题，直接抛出异常
           try {
             return await request();
-          } on ApiException catch (e) {
-            if (e.statusCode == 401) {
-              await clearSavedAuthState();
-              onReloginFailed?.call();
-            }
+          } on ApiException {
+            // 重登成功后原接口仍 401，通常是该接口自己的权限/会话问题。
+            // 保留全局登录态，让页面展示错误或缓存数据。
             rethrow;
           }
         }
@@ -3365,6 +3361,7 @@ class EcardDirectClient {
 
     final items = <EcardRoomItem>[];
     final seen = <String>{};
+    final seenPhysical = <String>{};
     final errors = <Object>[];
     for (final impl in ['CGCOMMON1111', 'CGCOMMON2222', 'CGCOMMON3333']) {
       try {
@@ -3383,10 +3380,23 @@ class EcardDirectClient {
         if (obj is! List) continue;
         for (final room in obj) {
           if (room is! Map) continue;
-          final id =
-              '${room['implType'] ?? impl}|${room['schoolAreaNo'] ?? ''}|${room['buildingNo'] ?? ''}|${room['roomNum'] ?? ''}';
+          final effectiveImpl = '${room['implType'] ?? ''}'.isEmpty
+              ? impl
+              : '${room['implType']}';
+          final schoolAreaNo = '${room['schoolAreaNo'] ?? ''}';
+          final buildingNo = '${room['buildingNo'] ?? ''}';
+          final roomNum = '${room['roomNum'] ?? ''}';
+          final hasPhysicalKey = schoolAreaNo.isNotEmpty &&
+              buildingNo.isNotEmpty &&
+              roomNum.isNotEmpty;
+          final physicalKey = '$schoolAreaNo|$buildingNo|$roomNum';
+          final id = '$effectiveImpl|$schoolAreaNo|$buildingNo|$roomNum';
           if (seen.contains(id) || id.contains('||')) continue;
+          if (hasPhysicalKey && seenPhysical.contains(physicalKey)) {
+            continue;
+          }
           seen.add(id);
+          if (hasPhysicalKey) seenPhysical.add(physicalKey);
           items.add(EcardRoomItem.fromJson({
             'id': id,
             'schoolArea': room['schoolArea'] ?? '',

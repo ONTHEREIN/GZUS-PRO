@@ -30,6 +30,8 @@ const SERVICE_URL = 'https://jwxt.seig.edu.cn/sso/lyiotlogin';
 const EHALL_URL = 'https://ehall.gzus.edu.cn';
 const EHALL_CAS_SERVICE_URL = 'http://ehall.gzus.edu.cn/shiro-cas';
 const JWXT_BASE = 'https://jwxt.seig.edu.cn/jwglxt';
+const CANONICAL_APP_ORIGIN = 'https://onegzus.cc.cd';
+const STATIC_ASSET_PATH_RE = /(?:^\/(?:assets|canvaskit|icons)\/|^\/(?:flutter_bootstrap|flutter|main\.dart|gzus_pwa|gzus_pwa_sw)\.js$|^\/manifest\.json$|^\/version\.json$|^\/favicon\.png$|\.(?:js|mjs|wasm|json|otf|ttf|woff2?|png|jpg|jpeg|webp|gif|svg|ico|css|map)$)/i;
 
 // OCR character fixes for arithmetic captcha
 const OCR_CHAR_FIXES = {
@@ -828,6 +830,59 @@ function errorResponse(message, status = 401, request = null) {
   return jsonResponse({ detail: message }, status, request);
 }
 
+function isStaticAssetPath(pathname) {
+  return STATIC_ASSET_PATH_RE.test(pathname);
+}
+
+function isHtmlFallback(response) {
+  const contentType = response.headers.get('Content-Type') || '';
+  return contentType.toLowerCase().includes('text/html');
+}
+
+async function fetchAsset(request, env) {
+  return env && env.ASSETS ? env.ASSETS.fetch(request) : fetch(request);
+}
+
+async function fetchCanonicalStaticAsset(request) {
+  const url = new URL(request.url);
+  const canonicalUrl = new URL(url.pathname + url.search, CANONICAL_APP_ORIGIN);
+  if (url.origin === canonicalUrl.origin) return null;
+
+  try {
+    const fallbackRequest = new Request(canonicalUrl.toString(), {
+      method: 'GET',
+      headers: {
+        Accept: request.headers.get('Accept') || '*/*',
+      },
+    });
+    const response = await fetch(fallbackRequest);
+    if (response.ok && !isHtmlFallback(response)) return response;
+  } catch (e) {
+    console.warn(`[asset] canonical fallback failed for ${url.pathname}: ${e.message}`);
+  }
+  return null;
+}
+
+async function serveStaticAsset(request, env) {
+  const url = new URL(request.url);
+  const response = await fetchAsset(request, env);
+
+  if (!isStaticAssetPath(url.pathname)) return response;
+  if (response.ok && !isHtmlFallback(response)) return response;
+
+  const fallback = await fetchCanonicalStaticAsset(request);
+  if (fallback) return fallback;
+
+  return new Response(`Static asset not found: ${url.pathname}`, {
+    status: response.status >= 400 ? response.status : 404,
+    headers: {
+      'Content-Type': 'text/plain; charset=utf-8',
+      'Cache-Control': 'no-store',
+      ...corsHeaders(request),
+    },
+  });
+}
+
 // ─── Session store (memory + Cloudflare KV fallback) ─────────────
 // Memory is fast but per-instance.  KV provides cross-instance
 // persistence so a Worker cold-start or different colo can still
@@ -1087,9 +1142,9 @@ export default {
           method: request.method,
           headers: request.headers,
         });
-        return env.ASSETS.fetch(indexRequest);
+        return fetchAsset(indexRequest, env);
       }
-      return env.ASSETS.fetch(request);
+      return serveStaticAsset(request, env);
     }
 
     // ─── Health check ──────────────────────────────────────────
@@ -1142,10 +1197,11 @@ export default {
           fwdHeaders.set('User-Agent', 'Mozilla/5.0 (Linux; Android 16) GZUS-PRO/1.0');
         }
         // Add body for POST/PATCH requests
+        const proxyTimeoutMs = session_id ? 20000 : 65000;
         const fetchOpts = {
           method: method || 'GET',
           headers: fwdHeaders,
-          signal: AbortSignal.timeout(20000),
+          signal: AbortSignal.timeout(proxyTimeoutMs),
         };
         if (body.body && (method === 'POST' || method === 'PATCH' || method === 'PUT')) {
           fetchOpts.body = body.body;
@@ -1292,23 +1348,22 @@ export default {
           await sleep(2000);
           vercelResult = await createSessionOnBackend(result, account, password, env);
         }
-        const edgeOnly = !vercelResult.sessionId;
-        if (edgeOnly) {
-          console.error(`createSessionOnBackend failed twice after auto-login, using edge session: ${vercelResult.error}`);
+        if (!vercelResult.sessionId) {
+          console.error(`createSessionOnBackend failed twice after auto-login: ${vercelResult.error}`);
+          return errorResponse(`会话创建失败: ${vercelResult.error || '未知错误'}`, 503, request);
         }
 
         // Store local session mapping so proxied requests can inject cookies.
         // JWXT cookies are IP-bounded to this Worker's edge location, so
         // Vercel (different IP) cannot validate them — we must inject them
         // on every proxied request.
-        const sessionId = vercelResult.sessionId || generateSessionId();
+        const sessionId = vercelResult.sessionId;
         const sessionData = {
           account: account,
           cookies: result.cookies,
           ehallCookies: result.ehallCookies,
           ehallAuthToken: result.ehallAuthToken,
           studentName: result.studentName,
-          edgeOnly,
         };
         localSessions.set(sessionId, sessionData);
         const kvResult = await saveSessionToKV(sessionId, sessionData, env);
@@ -1323,7 +1378,6 @@ export default {
           ehallCookies: result.ehallCookies,
           ehallAuthToken: result.ehallAuthToken,
           _kv: kvResult,
-          _edgeOnly: edgeOnly,
         }, 200, request);
       } catch (e) {
         return errorResponse(`登录失败: ${e.message}`, 500, request);
@@ -2301,6 +2355,12 @@ async function proxyToVercel(request, env, url, hadLocalSession = true) {
     upstreamPath = upstreamPath.slice(4); // Remove /api
   }
   const upstreamUrl = new URL(upstreamPath + url.search, origin);
+  const isEcardPath = upstreamPath.startsWith('/ecard/');
+  const upstreamTimeoutMs = isEcardPath ? 65000 : 12000;
+
+  if ((request.headers.get('Upgrade') || '').toLowerCase() === 'websocket') {
+    return fetch(new Request(upstreamUrl, request));
+  }
 
   // Save the original request body so we can re-create it for each retry.
   // request.body is a ReadableStream that can only be consumed once.
@@ -2330,7 +2390,7 @@ async function proxyToVercel(request, env, url, hadLocalSession = true) {
       }
 
       const response = await fetch(upstreamRequest, {
-        signal: AbortSignal.timeout(12000),
+        signal: AbortSignal.timeout(upstreamTimeoutMs),
       });
       // If it's not a 5xx, return immediately
       if (response.status < 500) {
