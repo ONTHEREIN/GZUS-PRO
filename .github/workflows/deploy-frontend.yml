@@ -38,7 +38,7 @@ jobs:
           # 移除调试符号文件
           find . -name "*.symbols" -delete
           # 保留 chromium CanvasKit：Flutter Web 在 Chromium 浏览器会优先选择该变体。
-          # 删除它会让启动阶段请求回落到 SPA HTML，导致登录页一直停在加载界面。
+          # 删除它会让启动阶段请求回落到 SPA HTML，导致页面停在加载界面。
           rm -rf canvaskit/experimental_webparagraph
           rm -f canvaskit/skwasm*.wasm canvaskit/skwasm*.js
           rm -f canvaskit/wimp.wasm canvaskit/wimp.js
@@ -46,14 +46,18 @@ jobs:
           rm -f assets/NOTICES
           echo "=== Cleaned build size ==="
           du -sh .
+          echo "=== canvaskit/ contents ==="
+          ls -la canvaskit/ || true
 
       - name: Verify deployable web bundle
         run: |
+          set -x
           test -f apps/mobile_web/build/web/main.dart.js
           test -f apps/mobile_web/build/web/canvaskit/canvaskit.js
           test -f apps/mobile_web/build/web/canvaskit/canvaskit.wasm
           test -f apps/mobile_web/build/web/canvaskit/chromium/canvaskit.js
           test -f apps/mobile_web/build/web/canvaskit/chromium/canvaskit.wasm
+          test -n "$(find apps/mobile_web/build/web -maxdepth 1 -name 'main.dart.js_*.part.js' -print -quit)"
           test -f apps/mobile_web/build/web/icons/icon-192x192.png
           test -f apps/mobile_web/build/web/icons/icon-512x512.png
           test -f apps/mobile_web/build/web/manifest.json
@@ -71,3 +75,37 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Verify live static assets
+        run: |
+          set -euo pipefail
+          check_asset() {
+            local base_url="$1"
+            local path="$2"
+            local expected="$3"
+            local headers
+            headers="$(mktemp)"
+            curl -fsSL -D "$headers" -o /tmp/onegzus-asset "$base_url$path"
+            local content_type
+            content_type="$(grep -i '^content-type:' "$headers" | tail -1 | tr -d '\r' | cut -d: -f2- | xargs)"
+            echo "$base_url$path -> $content_type ($(wc -c < /tmp/onegzus-asset) bytes)"
+            if echo "$content_type" | grep -qi 'text/html'; then
+              echo "::error::$base_url$path returned HTML instead of $expected"
+              exit 1
+            fi
+            if ! echo "$content_type" | grep -qi "$expected"; then
+              echo "::error::$base_url$path returned unexpected content type: $content_type"
+              exit 1
+            fi
+          }
+          for base in "https://onegzus.cc.cd" "https://onegzus-onweb.pages.dev"; do
+            check_asset "$base" "/main.dart.js" "javascript"
+            check_asset "$base" "/main.dart.js_1.part.js" "javascript"
+            check_asset "$base" "/flutter_bootstrap.js" "javascript"
+            check_asset "$base" "/gzus_pwa_sw.js" "javascript"
+            check_asset "$base" "/manifest.json" "json"
+            check_asset "$base" "/canvaskit/canvaskit.js" "javascript"
+            check_asset "$base" "/canvaskit/canvaskit.wasm" "wasm"
+            check_asset "$base" "/canvaskit/chromium/canvaskit.js" "javascript"
+            check_asset "$base" "/canvaskit/chromium/canvaskit.wasm" "wasm"
+          done

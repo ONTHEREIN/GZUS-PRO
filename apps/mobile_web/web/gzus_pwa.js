@@ -175,10 +175,28 @@ function initStartupLoading() {
   let firstFrameArrived = false;
   let slowTimer = null;
   let fallbackTimer = null;
+  let recoveryTimer = null;
 
   const setText = (nextTitle, nextHint) => {
     if (title) title.textContent = nextTitle;
     if (hint) hint.textContent = nextHint;
+  };
+  const getRecoveredFlag = () => {
+    try {
+      return window.sessionStorage?.getItem('gzus_startup_recovered') === '1';
+    } catch (_) {
+      return false;
+    }
+  };
+  const setRecoveredFlag = () => {
+    try {
+      window.sessionStorage?.setItem('gzus_startup_recovered', '1');
+    } catch (_) {}
+  };
+  const clearRecoveredFlag = () => {
+    try {
+      window.sessionStorage?.removeItem('gzus_startup_recovered');
+    } catch (_) {}
   };
 
   setText(`${appName}加载中...`, '正在准备校园服务');
@@ -194,6 +212,21 @@ function initStartupLoading() {
     container.classList.add('needs-help');
     setText(`${appName}加载时间过长`, '请先刷新；如果仍无响应，清缓存并刷新');
   }, 25000);
+
+  recoveryTimer = window.setTimeout(async () => {
+    if (firstFrameArrived) return;
+    if (getRecoveredFlag()) return;
+    try {
+      setRecoveredFlag();
+      container.classList.add('needs-help');
+      setText('正在修复加载状态...', '将清理旧缓存并自动刷新一次');
+      await clearStartupCache();
+      window.location.replace(cacheBustedUrl());
+    } catch (_) {
+      container.classList.add('needs-help');
+      setText(`${appName}加载时间过长`, '请点击清缓存并刷新');
+    }
+  }, 30000);
 
   if (refresh) {
     refresh.addEventListener('click', () => {
@@ -215,6 +248,8 @@ function initStartupLoading() {
     firstFrameArrived = true;
     window.clearTimeout(slowTimer);
     window.clearTimeout(fallbackTimer);
+    window.clearTimeout(recoveryTimer);
+    clearRecoveredFlag();
     container.classList.add('fade-out');
     window.setTimeout(() => container.remove(), 300);
   });
