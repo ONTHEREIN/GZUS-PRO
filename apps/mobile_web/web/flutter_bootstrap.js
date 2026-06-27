@@ -11,7 +11,6 @@ if ('serviceWorker' in navigator) {
 
 _flutter.loader.load({
   config: {
-    canvasKitVariant: 'full',
     canvasKitBaseUrl: 'canvaskit/',
   },
   serviceWorkerSettings: {

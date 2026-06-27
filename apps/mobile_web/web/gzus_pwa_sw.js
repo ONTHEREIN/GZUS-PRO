@@ -8,6 +8,8 @@ const STATIC_ASSETS = [
   './main.dart.js',
   './canvaskit/canvaskit.js',
   './canvaskit/canvaskit.wasm',
+  './canvaskit/chromium/canvaskit.js',
+  './canvaskit/chromium/canvaskit.wasm',
   './manifest.json',
   './gzus_pwa.js',
   './icons/Icon-192.png',

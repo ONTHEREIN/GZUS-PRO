@@ -883,6 +883,17 @@ async function serveStaticAsset(request, env) {
   });
 }
 
+async function serveCanvaskitCompatAsset(request, env, fallbackPathname) {
+  const direct = await fetchAsset(request, env);
+  if (direct.ok && !isHtmlFallback(direct)) return direct;
+
+  const fallbackRequest = new Request(new URL(fallbackPathname, request.url), request);
+  const fallback = await fetchAsset(fallbackRequest, env);
+  if (fallback.ok && !isHtmlFallback(fallback)) return fallback;
+
+  return serveStaticAsset(request, env);
+}
+
 // ─── Session store (memory + Cloudflare KV fallback) ─────────────
 // Memory is fast but per-instance.  KV provides cross-instance
 // persistence so a Worker cold-start or different colo can still
@@ -1035,18 +1046,21 @@ export default {
       return new Response(null, { status: 204, headers: corsHeaders(request) });
     }
 
-    // ─── CanvasKit chromium compat ─────────────────────────────
-    // Production deploys keep the full CanvasKit bundle and may prune the
-    // chromium variant. Older bootstraps can still request the chromium path,
-    // so route those requests back to the full local bundle instead of letting
-    // the Pages SPA fallback return index.html.
+    // ─── CanvasKit compat ─────────────────────────────────────
+    // Prefer the requested CanvasKit variant. Some old deploys or edge colos
+    // may miss either the base or chromium path, so use the sibling variant
+    // only as a fallback instead of returning the SPA HTML/404 response.
+    if (url.pathname === '/canvaskit/canvaskit.js') {
+      return serveCanvaskitCompatAsset(request, env, '/canvaskit/chromium/canvaskit.js');
+    }
+    if (url.pathname === '/canvaskit/canvaskit.wasm') {
+      return serveCanvaskitCompatAsset(request, env, '/canvaskit/chromium/canvaskit.wasm');
+    }
     if (url.pathname === '/canvaskit/chromium/canvaskit.js') {
-      const assetRequest = new Request(new URL('/canvaskit/canvaskit.js', request.url), request);
-      return env.ASSETS ? env.ASSETS.fetch(assetRequest) : fetch(assetRequest);
+      return serveCanvaskitCompatAsset(request, env, '/canvaskit/canvaskit.js');
     }
     if (url.pathname === '/canvaskit/chromium/canvaskit.wasm') {
-      const assetRequest = new Request(new URL('/canvaskit/canvaskit.wasm', request.url), request);
-      return env.ASSETS ? env.ASSETS.fetch(assetRequest) : fetch(assetRequest);
+      return serveCanvaskitCompatAsset(request, env, '/canvaskit/canvaskit.wasm');
     }
     if (url.pathname === '/canvaskit/chromium/main.dart.js') {
       return new Response('// CanvasKit chromium compat stub', {

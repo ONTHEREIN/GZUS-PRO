@@ -62,7 +62,7 @@ jobs:
           test -f apps/mobile_web/build/web/icons/icon-512x512.png
           test -f apps/mobile_web/build/web/manifest.json
           ! grep -q "{{flutter_" apps/mobile_web/build/web/flutter_bootstrap.js
-          grep -q "canvasKitVariant: 'full'" apps/mobile_web/build/web/flutter_bootstrap.js
+          ! grep -q "canvasKitVariant: 'full'" apps/mobile_web/build/web/flutter_bootstrap.js
 
       - name: Deploy to Cloudflare Pages (onegzus-onweb)
         run: npx wrangler@latest pages deploy apps/mobile_web/build/web --project-name=onegzus-onweb --branch=master --commit-dirty=true
