@@ -41,10 +41,18 @@ nul
 =*
 
 # Local agent/tool state
+.agents/
+.arts/
+.claude/
+.codeartsdoer/
 .codebuddy/
 .codegenie/
+.playwright-cli/
 .workbuddy/
 .trae/
+.wrangler/
+apps/mobile_web/.wrangler/
+apps/mobile_web/Library/
 
 # Local SDK/toolchains
 tools/flutter_ohos_3.22.0/
@@ -64,6 +72,7 @@ android-sdk/
 *.gif
 *.bmp
 *.webp
+!apps/mobile_web/web/icons/*.png
 ui*.xml
 phone_ui_*.xml
 widget_*.xml
