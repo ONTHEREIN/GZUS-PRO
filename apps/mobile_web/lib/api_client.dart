@@ -2918,7 +2918,7 @@ class SchoolDirectClient {
     required http.Client httpClient,
   }) : _http = httpClient;
 
-  static const _base = 'https://jwxt.seig.edu.cn/jwglxt';
+  static const _base = 'https://jwxt.gzus.edu.cn/jwglxt';
   final String cookies;
   final String? account;
   final http.Client _http;

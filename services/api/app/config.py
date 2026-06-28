@@ -9,14 +9,14 @@ ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
 
 
 class Settings(BaseSettings):
-    jw_base_url: str = "https://jwxt.seig.edu.cn/jwglxt"
+    jw_base_url: str = "https://jwxt.gzus.edu.cn/jwglxt"
     jwxt_worker_proxy_origin: str = ""  # e.g. https://onegzus-onweb.pages.dev — route JWXT through Worker
     ehall_base_url: str = "https://ehall.gzus.edu.cn"
     ehall_staff_sync_url: str = ""
     ehall_staff_json_path: str = ""
     cas_login_url: str = "https://cas.gzus.edu.cn/lyuapServer/login"
     ehall_service_url: str = "http://ehall.gzus.edu.cn/shiro-cas"
-    jwxt_sso_service_url: str = "https://jwxt.seig.edu.cn/sso/lyiotlogin"
+    jwxt_sso_service_url: str = "https://jwxt.gzus.edu.cn/sso/lyiotlogin"
     public_api_base_url: str = "http://127.0.0.1:8000"
     frontend_base_url: str = "http://localhost:8080"
     cors_origins: str = Field(

@@ -198,8 +198,8 @@ def ly_sso_complete(payload: SsoCompleteRequest, request: Request) -> dict:
         with httpx.Client(follow_redirects=True, timeout=settings.cas_login_timeout_seconds) as http_client:
             response = http_client.get(redirect_url)
             response.raise_for_status()
-            # Extract cookies for the JWXT domain
-            jwxt_host = "jwxt.seig.edu.cn"
+            # Extract cookies for the configured JWXT domain, including parent-domain cookies.
+            jwxt_host = urlparse(settings.jwxt_sso_service_url).hostname or "jwxt.gzus.edu.cn"
             cookie_parts = []
             seen_keys = set()
             for cookie in http_client.cookies.jar:

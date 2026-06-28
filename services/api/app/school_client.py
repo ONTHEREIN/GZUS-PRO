@@ -11,8 +11,6 @@ from html.parser import HTMLParser
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
-import httpx
-
 from app.school_sdk_patches import apply_school_sdk_import_patches, apply_school_sdk_patches, apply_school_sdk_info_patch
 
 logger = logging.getLogger(__name__)
@@ -376,7 +374,6 @@ class SchoolSdkClient:
         }
         # Try httpx_client first
         if self._httpx_client is not None:
-            parsed = urlparse(self.base_url)
             origin = self._jwxt_origin()
             full_url = origin + INFO_URL
             try:
@@ -502,7 +499,6 @@ class SchoolSdkClient:
         """Fetch photo using the new encoded URL format (photo_cxEncodedXszp.html)."""
         # encoded_url is a relative path like /jwglxt/photo/photo_cxEncodedXszp.html?...
         if self._httpx_client is not None:
-            parsed = urlparse(self.base_url)
             origin = self._jwxt_origin()
             full_url = origin + encoded_url
             try:
@@ -543,7 +539,6 @@ class SchoolSdkClient:
         return self._fetch_photo_via_http(student_id)
 
     def _fetch_photo_via_httpx_client(self, student_id: str) -> Any:
-        parsed = urlparse(self.base_url)
         origin = self._jwxt_origin()
         full_url = origin + PHOTO_URL
         headers = {
@@ -573,7 +568,6 @@ class SchoolSdkClient:
         http = getattr(self._client, "_http", None) if self._client else None
         if http is not None:
             try:
-                parsed = urlparse(self.base_url)
                 origin = self._jwxt_origin()
                 photo_url = origin + PHOTO_URL
                 logger.debug("_fetch_photo_via_http: requesting %s", photo_url)
@@ -592,7 +586,6 @@ class SchoolSdkClient:
         try:
             import httpx as _httpx
             cookies = {name: value for name, value in cookie_jar.items()}
-            parsed = urlparse(self.base_url)
             origin = self._jwxt_origin()
             photo_url = origin + PHOTO_URL
             with _httpx.Client(timeout=self.timeout_seconds, follow_redirects=True, cookies=cookies) as client:
@@ -1122,9 +1115,6 @@ class SchoolSdkClient:
             raise
 
     def _proxy_via_httpx(self, method: str, url_or_endpoint: str, **kwargs: Any) -> Any:
-        from urllib.parse import urlparse as _urlparse
-
-        parsed = _urlparse(self.base_url)
         origin = self._jwxt_origin()
         full_url = origin + (url_or_endpoint if url_or_endpoint.startswith("/") else "/" + url_or_endpoint)
         request_kwargs: dict[str, Any] = {}
@@ -1142,7 +1132,6 @@ class SchoolSdkClient:
         logger.debug("proxy_via_httpx %s %s", method, full_url)
         import httpx
 
-        last_exc: Exception | None = None
         for attempt in range(_MAX_RETRIES + 1):
             try:
                 response = self._httpx_client.request(
@@ -1154,7 +1143,6 @@ class SchoolSdkClient:
                 response.raise_for_status()
                 return response
             except httpx.TimeoutException as exc:
-                last_exc = exc
                 if attempt < _MAX_RETRIES:
                     wait = _RETRY_BACKOFF_BASE * (2 ** attempt)
                     logger.warning(
@@ -1170,7 +1158,6 @@ class SchoolSdkClient:
                 )
                 raise RuntimeError("教务系统请求超时，请稍后重试") from exc
             except httpx.ConnectError as exc:
-                last_exc = exc
                 if attempt < _MAX_RETRIES:
                     wait = _RETRY_BACKOFF_BASE * (2 ** attempt)
                     logger.warning(
@@ -1255,13 +1242,19 @@ class SchoolSdkClient:
                 return name
         except Exception:  # noqa: BLE001
             pass
+        target = self._client if self._client is not None else result
+        try:
+            get_info = getattr(target, "get_info", None)
+            if callable(get_info):
+                return self._extract_student_name(get_info())
+        except Exception:  # noqa: BLE001
+            pass
         return None
 
     def _fetch_student_name_from_index(self) -> str | None:
         """Fetch student name from the JWXT info page (lightweight, no photo download)."""
         try:
             if self._httpx_client is not None:
-                parsed = urlparse(self.base_url)
                 origin = self._jwxt_origin()
                 full_url = origin + INFO_URL
                 response = self._httpx_client.get(
@@ -1330,8 +1323,14 @@ class SchoolSdkClient:
         if cookie_jar is None:
             return
         for key, value in pairs:
-            cookie_jar.set(key, value, domain="jwxt.seig.edu.cn", path="/")
-            cookie_jar.set(key, value, domain="jwxt.seig.edu.cn", path="/jwglxt")
+            for domain in self._jwxt_cookie_domains():
+                cookie_jar.set(key, value, domain=domain, path="/")
+                cookie_jar.set(key, value, domain=domain, path="/jwglxt")
+
+    def _jwxt_cookie_domains(self) -> list[str]:
+        configured_host = urlparse(self.base_url).hostname or "jwxt.gzus.edu.cn"
+        domains = [configured_host, "jwxt.gzus.edu.cn", "jwxt.seig.edu.cn"]
+        return list(dict.fromkeys(domain for domain in domains if domain))
 
     def apply_cookie_header(self, cookie_header: str) -> None:
         """Apply a Cookie header string (from Cloudflare Worker) to both the
@@ -1366,10 +1365,10 @@ class SchoolSdkClient:
 
         # Also apply to httpx_client cookie jar (used by _proxy_via_httpx)
         if self._httpx_client is not None:
-            import httpx
             for key, value in pairs:
-                self._httpx_client.cookies.set(key, value, domain="jwxt.seig.edu.cn", path="/")
-                self._httpx_client.cookies.set(key, value, domain="jwxt.seig.edu.cn", path="/jwglxt")
+                for domain in self._jwxt_cookie_domains():
+                    self._httpx_client.cookies.set(key, value, domain=domain, path="/")
+                    self._httpx_client.cookies.set(key, value, domain=domain, path="/jwglxt")
             logger.info("apply_cookie_header: applied %d pairs to httpx_client cookie jar", len(pairs))
 
 

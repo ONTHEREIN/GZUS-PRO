@@ -26,10 +26,21 @@ const RSA_TAG = 'lyasp';
 
 // CAS URLs
 const CAS_BASE = 'https://cas.gzus.edu.cn';
-const SERVICE_URL = 'https://jwxt.seig.edu.cn/sso/lyiotlogin';
+// jwxt.seig.edu.cn currently serves a certificate that does not match the
+// hostname on some networks. jwxt.gzus.edu.cn points at the same JWXT service
+// with a valid certificate, so use it for Worker-side JWXT fetches.
+const JWXT_ORIGIN = 'https://jwxt.gzus.edu.cn';
+const JWXT_LEGACY_ORIGIN = 'https://jwxt.seig.edu.cn';
+const JWXT_SERVICE_URL = `${JWXT_ORIGIN}/sso/lyiotlogin`;
+const JWXT_LEGACY_SERVICE_URL = `${JWXT_LEGACY_ORIGIN}/sso/lyiotlogin`;
+// Keep the initial CAS login service on the historical URL for compatibility;
+// after CAS login we request a fresh service ticket for JWXT_SERVICE_URL.
+const SERVICE_URL = JWXT_LEGACY_SERVICE_URL;
+const JWXT_SERVICE_URLS = [JWXT_SERVICE_URL, JWXT_LEGACY_SERVICE_URL];
 const EHALL_URL = 'https://ehall.gzus.edu.cn';
 const EHALL_CAS_SERVICE_URL = 'http://ehall.gzus.edu.cn/shiro-cas';
-const JWXT_BASE = 'https://jwxt.seig.edu.cn/jwglxt';
+const JWXT_BASE = `${JWXT_ORIGIN}/jwglxt`;
+const JWXT_REFERER = `${JWXT_BASE}/xtgl/index_initMenu.html`;
 const CANONICAL_APP_ORIGIN = 'https://onegzus.cc.cd';
 const STATIC_ASSET_PATH_RE = /(?:^\/(?:assets|canvaskit|icons)\/|^\/(?:flutter_bootstrap|flutter|main\.dart|gzus_pwa|gzus_pwa_sw)\.js$|^\/manifest\.json$|^\/version\.json$|^\/favicon\.png$|\.(?:js|mjs|wasm|json|otf|ttf|woff2?|png|jpg|jpeg|webp|gif|svg|ico|css|map)$)/i;
 
@@ -171,12 +182,19 @@ class CookieJar {
   }
 
   getHeaderForHost(host) {
+    return this.getCookiesForHost(host);
+  }
+
+  getCookiesForHost(host) {
     const parts = [];
+    const seenNames = new Set();
     const hostLower = host.toLowerCase();
     for (const [domain, nameMap] of this.cookies) {
       const domainLower = domain.toLowerCase();
       if (hostLower === domainLower || hostLower.endsWith('.' + domainLower)) {
         for (const [name, value] of nameMap) {
+          if (seenNames.has(name)) continue;
+          seenNames.add(name);
           parts.push(`${name}=${value}`);
         }
       }
@@ -216,6 +234,26 @@ class CookieJar {
     }
     return null;
   }
+}
+
+function getJwxtCookies(jar, preferredServiceUrl = JWXT_SERVICE_URL) {
+  const hosts = [
+    preferredServiceUrl,
+    JWXT_SERVICE_URL,
+    JWXT_LEGACY_SERVICE_URL,
+  ].map((serviceUrl) => {
+    try {
+      return new URL(serviceUrl).hostname;
+    } catch {
+      return '';
+    }
+  }).filter(Boolean);
+
+  for (const host of [...new Set(hosts)]) {
+    const cookies = jar.getCookiesForHost(host);
+    if (cookies) return cookies;
+  }
+  return '';
 }
 
 // ─── CAS Login Flow ────────────────────────────────────────────────
@@ -383,6 +421,18 @@ async function finalizeLogin(account, password, ticket, tgt, jar, timeout, env) 
   const jwxtCookies = jwxtResult.status === 'fulfilled' ? jwxtResult.value : '';
   const ehallSession = ehallResult.status === 'fulfilled' ? ehallResult.value : null;
 
+  if (!jwxtCookies) {
+    const reason = jwxtResult.status === 'rejected'
+      ? (jwxtResult.reason && jwxtResult.reason.message ? jwxtResult.reason.message : String(jwxtResult.reason))
+      : '未获取到教务系统会话 Cookie';
+    console.warn(`[auto-login] JWXT session unavailable: ${reason}`);
+    return {
+      error: `教务系统登录失败：${reason}`,
+      ehallCookies: ehallSession && ehallSession.cookies ? ehallSession.cookies : null,
+      ehallAuthToken: ehallSession && ehallSession.authToken ? ehallSession.authToken : null,
+    };
+  }
+
   // Get student name from JWXT info page
   let studentName = null;
   try {
@@ -411,36 +461,73 @@ async function finalizeLogin(account, password, ticket, tgt, jar, timeout, env) 
 }
 
 async function fetchJwxtCookies(ticket, tgt, jar, timeout) {
-  const redirectUrl = `${SERVICE_URL}?ticket=${ticket}`;
-  try {
-    await fetchWithCookies(redirectUrl, {
-      signal: AbortSignal.timeout(timeout),
-    }, jar);
-  } catch {}
+  const diagnostics = [];
 
-  let cookies = jar.getCookiesForDomain('jwxt');
-  if (!cookies && tgt) {
-    // Fallback: request new service ticket
+  async function followServiceTicket(serviceUrl, serviceTicket, source) {
+    if (!serviceUrl || !serviceTicket) return '';
+    const redirectUrl = serviceTicketUrl(serviceUrl, serviceTicket);
+    try {
+      const res = await fetchWithCookies(redirectUrl, {
+        signal: AbortSignal.timeout(timeout),
+      }, jar);
+      const cookies = getJwxtCookies(jar, serviceUrl);
+      const contentType = res.headers.get('Content-Type') || '';
+      diagnostics.push(`${source}:${new URL(serviceUrl).hostname}:status=${res.status}:cookies=${cookies ? cookies.length : 0}:type=${contentType}`);
+      return cookies || '';
+    } catch (e) {
+      diagnostics.push(`${source}:${new URL(serviceUrl).hostname}:error=${e && e.message ? e.message : String(e)}`);
+      return '';
+    }
+  }
+
+  async function requestServiceTicket(serviceUrl) {
+    if (!tgt || !serviceUrl) return '';
     try {
       const stRes = await fetchWithCookies(
         `${CAS_BASE}/lyuapServer/v1/tickets/${tgt}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: new URLSearchParams({ service: SERVICE_URL }),
+          body: new URLSearchParams({ service: serviceUrl }),
           signal: AbortSignal.timeout(timeout),
         },
         jar
       );
-      if (stRes.ok) {
-        const newTicket = (await stRes.text()).trim();
-        const newUrl = `${SERVICE_URL}?ticket=${newTicket}`;
-        await fetchWithCookies(newUrl, { signal: AbortSignal.timeout(timeout) }, jar);
-        cookies = jar.getCookiesForDomain('jwxt');
+      if (!stRes.ok) {
+        diagnostics.push(`st:${new URL(serviceUrl).hostname}:status=${stRes.status}`);
+        return '';
       }
-    } catch {}
+      const serviceTicket = (await stRes.text()).trim();
+      diagnostics.push(`st:${new URL(serviceUrl).hostname}:ok=${serviceTicket ? 'yes' : 'empty'}`);
+      return serviceTicket;
+    } catch (e) {
+      diagnostics.push(`st:${new URL(serviceUrl).hostname}:error=${e && e.message ? e.message : String(e)}`);
+      return '';
+    }
   }
-  return cookies || '';
+
+  // Prefer a fresh service ticket for the certificate-valid JWXT host.
+  for (const serviceUrl of JWXT_SERVICE_URLS) {
+    const freshTicket = await requestServiceTicket(serviceUrl);
+    const cookies = await followServiceTicket(serviceUrl, freshTicket, 'fresh');
+    if (cookies) return cookies;
+  }
+
+  // Last resort: use the ticket returned by the initial CAS login service.
+  const initialCookies = await followServiceTicket(SERVICE_URL, ticket, 'initial');
+  if (initialCookies) return initialCookies;
+
+  const jarCookies = getJwxtCookies(jar);
+  if (jarCookies) return jarCookies;
+
+  throw new Error(`未获取到教务系统会话 Cookie（${diagnostics.join('; ') || 'no diagnostics'}）`);
+}
+
+function serviceTicketUrl(serviceUrl, ticket) {
+  if (serviceUrl.includes('?')) {
+    return `${serviceUrl}&ticket=${encodeURIComponent(ticket)}`;
+  }
+  return `${serviceUrl}?ticket=${encodeURIComponent(ticket)}`;
 }
 
 async function fetchEhallSession(tgt, jar, timeout) {
@@ -1094,14 +1181,14 @@ export default {
       if (!jwxtCookies) {
         return new Response('JWXT session not found', { status: 502 });
       }
-      const jwxtUrl = 'https://jwxt.seig.edu.cn' + url.pathname + url.search;
+      const jwxtUrl = JWXT_ORIGIN + url.pathname + url.search;
       try {
         const jwxtRes = await fetch(jwxtUrl, {
           method: request.method,
           headers: {
             'Cookie': jwxtCookies,
             'User-Agent': 'Mozilla/5.0 (Linux; Android 16) GZUS-PRO/1.0',
-            'Referer': 'https://jwxt.seig.edu.cn/jwglxt/xtgl/index_initMenu.html',
+            'Referer': JWXT_REFERER,
             ...(request.method === 'POST' ? { 'Content-Type': request.headers.get('Content-Type') || 'application/x-www-form-urlencoded' } : {}),
           },
           body: request.method === 'POST' ? request.body : undefined,
@@ -1243,7 +1330,7 @@ export default {
       const session = await getLocalSession(request, env);
       if (!session || !session.cookies) return errorResponse('No session cookies found', 404, request);
 
-      const jwxtUrl = 'https://jwxt.seig.edu.cn/jwglxt/xtgl/index_initMenu.html';
+      const jwxtUrl = `${JWXT_BASE}/xtgl/index_initMenu.html`;
       try {
         const start = Date.now();
         const jwxtRes = await fetch(jwxtUrl, {
@@ -1474,11 +1561,11 @@ export default {
       const session = await getLocalSession(request, env);
       if (session && session.cookies) {
         try {
-          const [jwxtRes, html] = await fetchGbkText('https://jwxt.seig.edu.cn/jwglxt/xsxxxggl/xsgrxxwh_cxXsgrxx.html', {
+          const [jwxtRes, html] = await fetchGbkText(`${JWXT_BASE}/xsxxxggl/xsgrxxwh_cxXsgrxx.html`, {
             headers: {
               'Cookie': session.cookies,
               'User-Agent': 'Mozilla/5.0 (Linux; Android 16) GZUS-PRO/1.0',
-              'Referer': 'https://jwxt.seig.edu.cn/jwglxt/xtgl/index_initMenu.html',
+              'Referer': JWXT_REFERER,
             },
             signal: AbortSignal.timeout(15000),
           });
@@ -1538,12 +1625,12 @@ export default {
             if (photoUrl && session.cookies) {
               try {
                 const photoFullUrl = photoUrl.startsWith('http') ? photoUrl :
-                  'https://jwxt.seig.edu.cn' + (photoUrl.startsWith('/') ? '' : '/') + photoUrl;
+                  JWXT_ORIGIN + (photoUrl.startsWith('/') ? '' : '/') + photoUrl;
                 const photoRes = await fetch(photoFullUrl, {
                   headers: {
                     'Cookie': session.cookies,
                     'User-Agent': 'Mozilla/5.0 (Linux; Android 16) GZUS-PRO/1.0',
-                    'Referer': 'https://jwxt.seig.edu.cn/jwglxt/xtgl/index_initMenu.html',
+                    'Referer': JWXT_REFERER,
                   },
                   signal: AbortSignal.timeout(10000),
                 });
@@ -2009,19 +2096,19 @@ export default {
 
           let jwxtUrl, postData;
           if (path === 'exams') {
-            jwxtUrl = 'https://jwxt.seig.edu.cn/jwglxt/kwgl/kscx_cxXsksxxIndex.html?doType=query&gnmkdm=N358105';
+            jwxtUrl = `${JWXT_BASE}/kwgl/kscx_cxXsksxxIndex.html?doType=query&gnmkdm=N358105`;
             postData = new URLSearchParams({ ...baseParams, ksmcdmb_id: '', kch: '', kc: '', ksrq: '' });
           } else if (path === 'schedule') {
-            jwxtUrl = 'https://jwxt.seig.edu.cn/jwglxt/kbcx/xskbcx_cxXsKb.html';
+            jwxtUrl = `${JWXT_BASE}/kbcx/xskbcx_cxXsKb.html`;
             postData = new URLSearchParams({ ...baseParams, kzlx: 'ck' });
           } else if (path === 'grades') {
-            jwxtUrl = 'https://jwxt.seig.edu.cn/jwglxt/cjcx/cjcx_cxXsgrcj.html?doType=query&gnmkdm=N305005';
+            jwxtUrl = `${JWXT_BASE}/cjcx/cjcx_cxXsgrcj.html?doType=query&gnmkdm=N305005`;
             postData = new URLSearchParams({ ...baseParams, kch: '', kc: '' });
           } else if (path === 'credits') {
             if (!session.account) {
               jwxtUrl = null; // fall through to Vercel
             } else {
-              jwxtUrl = 'https://jwxt.seig.edu.cn/jwglxt/design/funcData_cxFuncDataList.html?func_widget_guid=37234863CD24BB76E063860810AC3761&gnmkdm=N255022';
+              jwxtUrl = `${JWXT_BASE}/design/funcData_cxFuncDataList.html?func_widget_guid=37234863CD24BB76E063860810AC3761&gnmkdm=N255022`;
               postData = new URLSearchParams({ gnmkdm: 'N255022', xh: session.account,
                 'queryModel.showCount': '15', 'queryModel.currentPage': '1',
                 'queryModel.sortName': ' ', 'queryModel.sortOrder': 'asc' });
@@ -2031,7 +2118,7 @@ export default {
             if (!session.account) {
               jwxtUrl = null; // fall through to Vercel
             } else {
-              jwxtUrl = 'https://jwxt.seig.edu.cn/jwglxt/jxdmgl/jxdmqkcx_cxJxdmqkcxIndex.html?doType=query&gnmkdm=N254315';
+              jwxtUrl = `${JWXT_BASE}/jxdmgl/jxdmqkcx_cxJxdmqkcxIndex.html?doType=query&gnmkdm=N254315`;
               postData = new URLSearchParams({
                 xh: session.account, xm: '', xh_id: '',
                 xnm: year, xqm: xqm, kch: '', kch_id: '',
@@ -2050,7 +2137,7 @@ export default {
                   'Cookie': session.cookies,
                   'Content-Type': 'application/x-www-form-urlencoded',
                   'User-Agent': 'Mozilla/5.0 (Linux; Android 16) GZUS-PRO/1.0',
-                  'Referer': 'https://jwxt.seig.edu.cn/jwglxt/xtgl/index_initMenu.html',
+                  'Referer': JWXT_REFERER,
                 },
                 body: postData.toString(),
                 signal: AbortSignal.timeout(15000),
@@ -2185,11 +2272,11 @@ export default {
       const session = await getLocalSession(request, env);
       if (session && session.cookies) {
         try {
-          const newsUrl = 'https://jwxt.seig.edu.cn/jwglxt/xtgl/index_cxNews.html?localeKey=zh_CN';
+          const newsUrl = `${JWXT_BASE}/xtgl/index_cxNews.html?localeKey=zh_CN`;
           const noticeHeaders = {
             'Cookie': session.cookies,
             'User-Agent': 'Mozilla/5.0 (Linux; Android 16) GZUS-PRO/1.0',
-            'Referer': 'https://jwxt.seig.edu.cn/jwglxt/xtgl/index_initMenu.html',
+            'Referer': JWXT_REFERER,
           };
           const isLoginPage = (value) => value.includes('login_slogin') || /<input[^>]*type\s*=\s*['"]password['"]/i.test(value);
           const [newsRes, html] = await fetchGbkText(newsUrl, {
@@ -2204,7 +2291,7 @@ export default {
               const indexItems = parseNoticeItems(html, newsUrl);
               const moreUrls = extractNoticeMoreUrls(html, newsUrl);
               if (moreUrls.length === 0) {
-                moreUrls.push('https://jwxt.seig.edu.cn/jwglxt/xtgl/xwck_cxMoreXwList.html');
+                moreUrls.push(`${JWXT_BASE}/xtgl/xwck_cxMoreXwList.html`);
               }
               const moreItemsPromise = Promise.all(
                 moreUrls.slice(0, 4).map(async (moreUrl) => {
@@ -2224,7 +2311,7 @@ export default {
               ).then(groups => groups.filter(group => group.length > 0));
               const dbsyItemsPromise = (async () => {
                 try {
-                  const dbsyUrl = 'https://jwxt.seig.edu.cn/jwglxt/xtgl/index_cxDbsy.html?localeKey=zh_CN';
+                  const dbsyUrl = `${JWXT_BASE}/xtgl/index_cxDbsy.html?localeKey=zh_CN`;
                   const [dbsyRes, dbsyHtml] = await fetchGbkText(dbsyUrl, {
                     headers: noticeHeaders,
                     signal: AbortSignal.timeout(15000),
