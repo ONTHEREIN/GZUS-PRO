@@ -2071,6 +2071,15 @@ export default {
       return items;
     }
 
+    function extractAcademicItems(data) {
+      if (Array.isArray(data)) return data;
+      if (!data || typeof data !== 'object') return null;
+      for (const key of ['items', 'kbList', 'rows', 'list', 'data']) {
+        if (Array.isArray(data[key])) return data[key];
+      }
+      return null;
+    }
+
     // ─── Edge academic API: /exams /schedule /grades /credits /attendance ─
     // Handle these at the Worker edge to avoid Vercel's 10-second
     // Hobby-plan timeout on the double-proxy chain.
@@ -2167,19 +2176,10 @@ export default {
                 await saveAcademicCache(env, cacheKey, normalized);
                 return jsonResponse(normalized, 200, request);
               }
-              // Common JWXT response formats — normalize field names for Flutter
-              if (data && data.items) {
-                const normalized = normalizeResultList(data.items, path);
-                await saveAcademicCache(env, cacheKey, normalized);
-                return jsonResponse(normalized, 200, request);
-              }
-              if (data && data.kbList) {
-                const normalized = normalizeResultList(data.kbList, path);
-                await saveAcademicCache(env, cacheKey, normalized);
-                return jsonResponse(normalized, 200, request);
-              }
-              if (data && Array.isArray(data)) {
-                const normalized = normalizeResultList(data, path);
+              // Common JWXT response formats — normalize field names for Flutter.
+              const academicItems = extractAcademicItems(data);
+              if (academicItems) {
+                const normalized = normalizeResultList(academicItems, path);
                 await saveAcademicCache(env, cacheKey, normalized);
                 return jsonResponse(normalized, 200, request);
               }
@@ -2188,6 +2188,10 @@ export default {
                 if (path === 'schedule') {
                   lastEdgeError = 'JWXT schedule returned object without kbList/items';
                   console.warn(`[edge-${path}] ${lastEdgeError}`);
+                } else if (path === 'credits' && Number(data.totalResult || data.totalCount || 0) === 0) {
+                  const normalized = [];
+                  await saveAcademicCache(env, cacheKey, normalized);
+                  return jsonResponse(normalized, 200, request);
                 } else {
                   await saveAcademicCache(env, cacheKey, data);
                   return jsonResponse(data, 200, request);
