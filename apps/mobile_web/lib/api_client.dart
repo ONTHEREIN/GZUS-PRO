@@ -80,6 +80,89 @@ class DataResult<T> {
   final DataSourceInfo source;
 }
 
+class DashboardModule {
+  const DashboardModule({
+    required this.status,
+    this.data,
+    this.source,
+    this.cachedAt,
+    this.error,
+    this.durationMs,
+  });
+
+  factory DashboardModule.fromJson(Map<String, dynamic>? json) {
+    if (json == null) return const DashboardModule(status: 'empty');
+    return DashboardModule(
+      status: json['status'] as String? ?? 'empty',
+      data: json['data'],
+      source: json['source'] as String?,
+      cachedAt: json['cachedAt'] as String?,
+      error: json['error'] as String?,
+      durationMs: json['durationMs'] is num
+          ? (json['durationMs'] as num).round()
+          : null,
+    );
+  }
+
+  final String status;
+  final dynamic data;
+  final String? source;
+  final String? cachedAt;
+  final String? error;
+  final int? durationMs;
+
+  bool get hasUsableData =>
+      data != null && status != 'error' && status != 'empty';
+
+  List<Map<String, dynamic>> listData() {
+    final raw = data;
+    if (raw is! List<dynamic>) return const [];
+    return raw.whereType<Map<String, dynamic>>().toList();
+  }
+
+  Map<String, dynamic>? objectData() {
+    final raw = data;
+    return raw is Map<String, dynamic> ? raw : null;
+  }
+}
+
+class DashboardSnapshot {
+  DashboardSnapshot({
+    required this.status,
+    required this.generatedAt,
+    required this.modules,
+    this.traceId,
+  });
+
+  factory DashboardSnapshot.fromJson(Map<String, dynamic> json) {
+    final rawModules = json['modules'];
+    final modules = <String, DashboardModule>{};
+    if (rawModules is Map<String, dynamic>) {
+      for (final entry in rawModules.entries) {
+        final value = entry.value;
+        modules[entry.key] = DashboardModule.fromJson(
+          value is Map<String, dynamic> ? value : null,
+        );
+      }
+    }
+    return DashboardSnapshot(
+      status: json['status'] as String? ?? 'ok',
+      generatedAt: json['generatedAt'] as String? ??
+          DateTime.now().toIso8601String(),
+      modules: modules,
+      traceId: json['traceId'] as String?,
+    );
+  }
+
+  final String status;
+  final String generatedAt;
+  final String? traceId;
+  final Map<String, DashboardModule> modules;
+
+  DashboardModule module(String key) =>
+      modules[key] ?? const DashboardModule(status: 'empty');
+}
+
 class CacheEntry<T> {
   final T data;
   final DateTime expiry;
@@ -2045,6 +2128,22 @@ class ApiClient {
         memoryTtl: const Duration(minutes: 30),
       );
 
+  Future<DataResult<DashboardSnapshot>> dashboard({
+    required int year,
+    required int term,
+    required int week,
+    bool forceRefresh = false,
+  }) =>
+      _cacheFirstObject<DashboardSnapshot>(
+        cacheKey: 'dashboard_${year}_${term}_$week',
+        fetch: () => _getDashboardObject(
+          '/dashboard?year=$year&term=$term&week=$week',
+        ),
+        fromJson: (json) => DashboardSnapshot.fromJson(json),
+        forceRefresh: forceRefresh,
+        memoryTtl: const Duration(minutes: 2),
+      );
+
   String _weatherPath(double? lat, double? lon) {
     if (lat != null && lon != null) {
       return '/weather?lat=${lat.toStringAsFixed(2)}&lon=${lon.toStringAsFixed(2)}';
@@ -2520,6 +2619,14 @@ class ApiClient {
     );
   }
 
+  Future<Map<String, dynamic>> _getDashboardObject(String path) async {
+    final url = _requireBaseUrl();
+    final response = await _http
+        .get(Uri.parse('$url$path'), headers: _headers())
+        .timeout(const Duration(seconds: 12));
+    return _decodeObject(response);
+  }
+
   String _resolveBaseUrl() {
     if (_currentBaseUrl.isEmpty) _currentBaseUrl = baseUrl;
     return _currentBaseUrl;
@@ -2535,11 +2642,44 @@ class ApiClient {
 
   Future<void>? _warmupFuture;
   bool _warmedUp = false;
+  bool _warmupDisposed = false;
+  final Set<Timer> _warmupTimers = {};
 
   void startWarmup() {
     if (_candidates.isEmpty) return;
+    if (_warmupDisposed) return;
     if (_warmedUp || _warmupFuture != null) return;
     _warmupFuture = _doWarmup();
+  }
+
+  Future<T> _withWarmupTimeout<T>(Future<T> future, Duration timeout) {
+    final completer = Completer<T>();
+    late final Timer timer;
+    timer = Timer(timeout, () {
+      if (!completer.isCompleted) {
+        completer.completeError(TimeoutException('warmup timeout', timeout));
+      }
+    });
+    _warmupTimers.add(timer);
+    future.then((value) {
+      if (!completer.isCompleted) completer.complete(value);
+    }, onError: (Object error, StackTrace stackTrace) {
+      if (!completer.isCompleted) {
+        completer.completeError(error, stackTrace);
+      }
+    }).whenComplete(() {
+      timer.cancel();
+      _warmupTimers.remove(timer);
+    });
+    return completer.future;
+  }
+
+  void dispose() {
+    _warmupDisposed = true;
+    for (final timer in List<Timer>.from(_warmupTimers)) {
+      timer.cancel();
+    }
+    _warmupTimers.clear();
   }
 
   Future<void> _doWarmup() async {
@@ -2549,10 +2689,13 @@ class ApiClient {
       for (final candidate in _candidates) {
         unawaited(() async {
           try {
-            final response = await _http
-                .get(Uri.parse('$candidate/health'), headers: _headers())
-                .timeout(const Duration(seconds: 3));
-            if (response.statusCode == 200 && !completer.isCompleted) {
+            final response = await _withWarmupTimeout(
+              _http.get(Uri.parse('$candidate/health'), headers: _headers()),
+              const Duration(seconds: 3),
+            );
+            if (!_warmupDisposed &&
+                response.statusCode == 200 &&
+                !completer.isCompleted) {
               completer.complete(candidate);
             }
           } on TimeoutException {
@@ -2565,14 +2708,19 @@ class ApiClient {
         }());
       }
       // 整体上限 4 秒：即使所有候选都慢，也不会无限阻塞 warmup
-      final winner = await completer.future
-          .timeout(const Duration(seconds: 4), onTimeout: () => '');
-      if (winner.isNotEmpty) {
+      final winner = await _withWarmupTimeout(
+        completer.future,
+        const Duration(seconds: 4),
+      ).catchError((_) => '');
+      if (!_warmupDisposed && winner.isNotEmpty) {
         _currentBaseUrl = winner;
         unawaited(fetchPublicKey());
       }
     } finally {
-      _warmedUp = true;
+      if (!_warmupDisposed) {
+        _warmedUp = true;
+      }
+      _warmupFuture = null;
     }
   }
 
@@ -2592,9 +2740,8 @@ class ApiClient {
     } on ApiException catch (e) {
       if (e.statusCode == 401) {
         if (e.isSingleDeviceConflict) {
-          // 数据接口偶发返回“其他设备登录”时，先不要全局清会话。
-          // 生产环境中该信号可能来自学校侧短暂会话错配；直接退出会导致
-          // 用户登录后取数失败并被踢回登录页。
+          await clearSavedAuthState();
+          onReloginFailed?.call();
           throw ApiException(e.message, statusCode: 401);
         }
         await loadSavedCredentials();
@@ -2706,8 +2853,15 @@ class ApiClient {
         'Content-Type': 'application/json',
         'User-Agent': 'Mozilla/5.0 (Linux; Android 16) GZUS-PRO/1.0',
         'X-Client-Platform': kIsWeb ? 'web' : defaultTargetPlatform.name,
+        'X-GZUS-Trace-Id': _newTraceId(),
         if (sessionId != null) 'X-Session-Id': sessionId!,
       };
+
+  String _newTraceId() {
+    final now = DateTime.now().microsecondsSinceEpoch.toRadixString(36);
+    final ns = namespace.hashCode.toUnsigned(20).toRadixString(36);
+    return 'gz-$now-$ns';
+  }
 
   Map<String, dynamic> _decodeObject(http.Response response) {
     final decoded = _decode(response);

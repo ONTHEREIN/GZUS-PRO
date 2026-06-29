@@ -29,7 +29,7 @@ _INFO_PATCH_MARKER = "_gzus_pro_info_patch_applied"
 def apply_school_sdk_import_patches() -> None:
     """Patch Python 3.14 compatibility gaps in the current school-sdk release."""
 
-    if not hasattr(ast, "Bytes"):
+    if ast.__dict__.get("Bytes") is not ast.Constant:
         ast.Bytes = ast.Constant  # type: ignore[attr-defined]
 
 

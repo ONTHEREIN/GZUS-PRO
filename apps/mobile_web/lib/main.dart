@@ -131,6 +131,7 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    api.dispose();
     super.dispose();
   }
 
@@ -2986,7 +2987,8 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  // 分模块异步加载的 Future
+  // 首页只请求一次 dashboard 快照，再派生各模块 Future，避免首屏请求风暴。
+  late Future<_HomeDashboardData> _dashboardFuture;
   late Future<StudentInfo> _infoFuture;
   late Future<ScheduleResult> _scheduleFuture;
   late Future<List<NoticeItem>> _noticesFuture;
@@ -3010,110 +3012,106 @@ class _HomePageState extends State<HomePage> {
   }
 
   void _initFutures({bool forceRefresh = false}) {
-    final isWidgetTest =
-        WidgetsBinding.instance.runtimeType.toString().contains('Test');
-    final lowPriorityDelay = forceRefresh || isWidgetTest
-        ? Duration.zero
-        : const Duration(milliseconds: 700);
-    final weatherDelay = forceRefresh || isWidgetTest
-        ? Duration.zero
-        : const Duration(milliseconds: 1200);
-    _infoFuture = _safeLoad(
-      widget.api.me(forceRefresh: forceRefresh).then((r) => r.data),
-      StudentInfo(studentId: '', name: '软帮手'),
+    _dashboardFuture = _safeLoad(
+      _loadDashboardData(forceRefresh: forceRefresh),
+      _emptyDashboardData(),
     );
-    _scheduleFuture = _safeLoad(
-      widget.api
-          .schedule(
-              year: widget.year, term: widget.term, forceRefresh: forceRefresh)
-          .then((r) => r.data),
-      ScheduleResult(items: const [], raw: const []),
-    );
-    _noticesFuture = _safeLoad(
-      widget.api.notices(forceRefresh: forceRefresh).then((r) => r.data),
-      const <NoticeItem>[],
-    );
-    _attendanceFuture = _safeLoad(
-      widget.api
-          .attendance(
-              year: widget.year, term: widget.term, forceRefresh: forceRefresh)
-          .then((r) => r.data),
-      AttendanceResponse.fromJson({'status': 'empty', 'items': []}),
-    );
-    _creditsFuture = _safeLoad(
-      Future.delayed(
-        lowPriorityDelay,
-        () =>
-            widget.api.credits(forceRefresh: forceRefresh).then((r) => r.data),
+    _infoFuture = _dashboardFuture.then((data) => data.info);
+    _scheduleFuture = _dashboardFuture.then(
+      (data) => ScheduleResult(
+        items: data.courses,
+        raw: data.courses.map((item) => item.raw).toList(),
       ),
-      const <CreditItem>[],
     );
-    _ecardFuture = widget.isPasswordLogin || _hideEcardOnCurrentPlatform
-        ? Future.value(EcardSummary.fromJson({'status': 'not_bound'}))
-        : _safeLoad(
-            Future.delayed(
-              lowPriorityDelay,
-              () => widget.api
-                  .ecardSummary(forceRefresh: forceRefresh)
-                  .then((r) => r.data),
-            ),
-            EcardSummary.fromJson({'status': 'not_bound'}),
-          );
-    _appsFuture = widget.isPasswordLogin
-        ? Future.value(const <EhallApplicationItem>[])
-        : _safeLoad(
-            Future.delayed(
-              lowPriorityDelay,
-              () => widget.api.ehallApplications(forceRefresh: forceRefresh),
-            ),
-            const <EhallApplicationItem>[],
-          );
-    _progressFuture = widget.isPasswordLogin
-        ? Future.value(
-            EhallProgressOverview.fromItems(const <EhallProgressItem>[]))
-        : _safeLoad(
-            Future.delayed(
-              lowPriorityDelay,
-              () =>
-                  widget.api.ehallProgressOverview(forceRefresh: forceRefresh),
-            ),
-            EhallProgressOverview.fromItems(const <EhallProgressItem>[]),
-          );
-    _weatherFuture = Future.delayed(
-      weatherDelay,
-      () => _loadWeather(forceRefresh: forceRefresh),
-    );
-    _gradesFuture = _safeLoad(
-      Future.delayed(
-        lowPriorityDelay,
-        () => widget.api
-            .grades(
-                year: widget.year,
-                term: widget.term,
-                forceRefresh: forceRefresh)
-            .then((r) => r.data),
-      ),
-      const <GradeItem>[],
-    ).then((grades) async {
-      if (grades.isNotEmpty) return grades;
+    _noticesFuture = _dashboardFuture.then((data) => data.notices);
+    _attendanceFuture = _dashboardFuture.then((data) => data.attendance);
+    _creditsFuture = _dashboardFuture.then((data) => data.credits);
+    _ecardFuture = _dashboardFuture.then((data) => data.ecard);
+    _appsFuture = _dashboardFuture.then((data) => data.apps);
+    _progressFuture = _dashboardFuture.then((data) => data.progressOverview);
+    _weatherFuture = _dashboardFuture.then((data) => data.weather);
+    _gradesFuture = _dashboardFuture.then((data) async {
+      if (data.grades != null && data.grades!.isNotEmpty) return data.grades!;
       return _loadLocalGrades();
     });
-    _examsFuture = _safeLoad(
-      Future.delayed(
-        lowPriorityDelay,
-        () => widget.api
-            .exams(
-                year: widget.year,
-                term: widget.term,
-                forceRefresh: forceRefresh)
-            .then((r) => r.data),
-      ),
-      const <ExamItem>[],
-    ).then((exams) async {
-      if (exams.isNotEmpty) return exams;
+    _examsFuture = _dashboardFuture.then((data) async {
+      if (data.exams != null && data.exams!.isNotEmpty) return data.exams!;
       return _loadLocalExams();
     });
+    unawaited(_dashboardFuture.then((_) => _updateHomeWidget()));
   }
+
+  Future<_HomeDashboardData> _loadDashboardData({
+    bool forceRefresh = false,
+  }) async {
+    final result = await widget.api.dashboard(
+      year: widget.year,
+      term: widget.term,
+      week: widget.currentWeek,
+      forceRefresh: forceRefresh,
+    );
+    final snapshot = result.data;
+
+    final info = snapshot.module('me').objectData();
+    final schedule = snapshot.module('schedule').listData();
+    final notices = snapshot.module('notices').listData();
+    final attendance = snapshot.module('attendance').objectData();
+    final credits = snapshot.module('credits').listData();
+    final ecard = snapshot.module('ecard').objectData();
+    final apps = snapshot.module('apps').listData();
+    final progress = snapshot.module('progress').objectData();
+    final weather = snapshot.module('weather').objectData();
+    final grades = snapshot.module('grades').listData();
+    final exams = snapshot.module('exams').listData();
+
+    final parsedGrades = grades.map((e) => GradeItem.fromJson(e)).toList();
+    final parsedExams = exams.map((e) => ExamItem.fromJson(e)).toList();
+    if (parsedGrades.isNotEmpty) unawaited(_saveLocalGrades(parsedGrades));
+    if (parsedExams.isNotEmpty) unawaited(_saveLocalExams(parsedExams));
+
+    return _HomeDashboardData(
+      info: info != null
+          ? StudentInfo.fromJson(info)
+          : StudentInfo(studentId: '', name: '软帮手'),
+      courses: schedule.map((e) => ScheduleCourse.fromJson(e)).toList(),
+      notices: notices.map((e) => NoticeItem.fromJson(e)).toList(),
+      attendance: attendance != null
+          ? AttendanceResponse.fromJson(attendance)
+          : AttendanceResponse.fromJson({'status': 'empty', 'items': []}),
+      credits: credits.map((e) => CreditItem.fromJson(e)).toList(),
+      ecard: ecard != null
+          ? EcardSummary.fromJson(ecard)
+          : EcardSummary.fromJson({'status': 'not_bound'}),
+      apps: widget.isPasswordLogin
+          ? const <EhallApplicationItem>[]
+          : apps.map((e) => EhallApplicationItem.fromJson(e)).toList(),
+      progressOverview: widget.isPasswordLogin
+          ? EhallProgressOverview.fromItems(const <EhallProgressItem>[])
+          : progress != null
+              ? EhallProgressOverview.fromJson(progress)
+              : EhallProgressOverview.fromItems(const <EhallProgressItem>[]),
+      weather: weather != null
+          ? WeatherData.fromJson(weather)
+          : await _loadLocalWeather(),
+      grades: parsedGrades,
+      exams: parsedExams,
+    );
+  }
+
+  _HomeDashboardData _emptyDashboardData() => _HomeDashboardData(
+        info: StudentInfo(studentId: '', name: '软帮手'),
+        courses: const [],
+        notices: const [],
+        attendance: AttendanceResponse.fromJson({'status': 'empty', 'items': []}),
+        credits: const [],
+        ecard: EcardSummary.fromJson({'status': 'not_bound'}),
+        apps: const [],
+        progressOverview:
+            EhallProgressOverview.fromItems(const <EhallProgressItem>[]),
+        weather: null,
+        grades: const [],
+        exams: const [],
+      );
 
   Future<WeatherData?> _loadWeather({bool forceRefresh = false}) async {
     final loc = await _safeLoad(_getLocationWithPermission(), null);
@@ -3458,22 +3456,8 @@ class _HomePageState extends State<HomePage> {
                 return RefreshIndicator(
                   onRefresh: () async {
                     setState(() => _initFutures(forceRefresh: true));
-                    // 等待所有模块加载完成
-                    await Future.wait([
-                      _infoFuture,
-                      _scheduleFuture,
-                      _noticesFuture,
-                      _attendanceFuture,
-                      _creditsFuture,
-                      _ecardFuture,
-                      _appsFuture,
-                      _progressFuture,
-                      _weatherFuture,
-                      _gradesFuture,
-                      _examsFuture,
-                    ]).catchError((_) => []);
-                    // 更新桌面小组件
-                    _updateHomeWidget();
+                    await _dashboardFuture.catchError((_) => _emptyDashboardData());
+                    unawaited(_updateHomeWidget());
                   },
                   child: columns == 1
                       ? ListView.separated(
