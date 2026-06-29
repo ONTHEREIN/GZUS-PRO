@@ -41,7 +41,7 @@ const EHALL_URL = 'https://ehall.gzus.edu.cn';
 const EHALL_CAS_SERVICE_URL = 'http://ehall.gzus.edu.cn/shiro-cas';
 const JWXT_BASE = `${JWXT_ORIGIN}/jwglxt`;
 const JWXT_REFERER = `${JWXT_BASE}/xtgl/index_initMenu.html`;
-const CANONICAL_APP_ORIGIN = 'https://onegzus.cc.cd';
+const CANONICAL_APP_ORIGIN = 'https://onegzus-onweb.pages.dev';
 const STATIC_ASSET_PATH_RE = /(?:^\/(?:assets|canvaskit|icons)\/|^\/(?:flutter_bootstrap|flutter|main\.dart|gzus_pwa|gzus_pwa_sw)\.js$|^\/manifest\.json$|^\/version\.json$|^\/favicon\.png$|\.(?:js|mjs|wasm|json|otf|ttf|woff2?|png|jpg|jpeg|webp|gif|svg|ico|css|map)$)/i;
 
 // OCR character fixes for arithmetic captcha
