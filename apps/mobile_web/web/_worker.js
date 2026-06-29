@@ -2461,7 +2461,8 @@ async function proxyToVercel(request, env, url, hadLocalSession = true) {
   }
   const upstreamUrl = new URL(upstreamPath + url.search, origin);
   const isEcardPath = upstreamPath.startsWith('/ecard/');
-  const upstreamTimeoutMs = isEcardPath ? 65000 : 12000;
+  const isSlowEhallPath = upstreamPath.startsWith('/ehall/leave/');
+  const upstreamTimeoutMs = (isEcardPath || isSlowEhallPath) ? 65000 : 12000;
 
   if ((request.headers.get('Upgrade') || '').toLowerCase() === 'websocket') {
     return fetch(new Request(upstreamUrl, request));
