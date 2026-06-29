@@ -302,4 +302,3 @@ def ecard_reminder_cron(request: Request, x_internal_key: str | None = Header(No
             logger.error("ecard cron: commit failed: %s", exc)
 
     return {"ok": True, "processed": processed, "notified": notified}
-    return {"ok": True, "processed": processed, "errors": errors}
