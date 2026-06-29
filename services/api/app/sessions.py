@@ -145,6 +145,10 @@ class SessionStore:
         self._db_factory = db_factory
         self._cleanup_task: asyncio.Task | None = None
         self._sessions: dict[str, AppSession] = {}
+        self._session_checked_at: dict[str, datetime] = {}
+        self._last_touch_at: dict[str, datetime] = {}
+        self._memory_cache_ttl = timedelta(seconds=30)
+        self._touch_write_interval = timedelta(seconds=60)
 
     def _get_db(self) -> DbSession:
         from sqlalchemy.orm import sessionmaker as SessionMaker
@@ -275,6 +279,8 @@ class SessionStore:
             db.add(row)
             db.commit()
             self._sessions[session.id] = session
+            self._session_checked_at[session.id] = datetime.now(timezone.utc).replace(tzinfo=None)
+            self._last_touch_at[session.id] = session.last_active_at.replace(tzinfo=None)
             logger.debug("Session %s created in DB (jwxt_cookies=%d chars)", session.id[:8], len(jwxt_cookies))
         except Exception:
             db.rollback()
@@ -284,8 +290,30 @@ class SessionStore:
 
         return session
 
-    def get(self, session_id: str, *, touch: bool = True) -> AppSession | None:
+    def get(
+        self,
+        session_id: str,
+        *,
+        touch: bool = True,
+        fresh: bool = False,
+    ) -> AppSession | None:
         from app.database import AppSessionModel
+
+        now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+        cached = self._sessions.get(session_id)
+        checked_at = self._session_checked_at.get(session_id)
+        if (
+            not fresh
+            and
+            cached is not None
+            and cached.revoked_at is None
+            and checked_at is not None
+            and now_naive - checked_at < self._memory_cache_ttl
+            and now_naive - cached.last_active_at < self._ttl
+        ):
+            if touch:
+                self.touch(session_id)
+            return cached
 
         # Retry DB connection acquisition (Vercel cold starts may fail
         # transiently, e.g. Neon compute waking from auto-suspend)
@@ -400,6 +428,7 @@ class SessionStore:
                 cached.push_platform = row.push_platform or "android"
                 cached.encrypted_credentials = row.encrypted_credentials
                 cached.student_account = row.student_account
+                self._session_checked_at[session_id] = datetime.now(timezone.utc).replace(tzinfo=None)
                 if touch:
                     self.touch(session_id)
                 return cached
@@ -452,6 +481,7 @@ class SessionStore:
             )
 
             self._sessions[session.id] = session
+            self._session_checked_at[session.id] = datetime.now(timezone.utc).replace(tzinfo=None)
             if touch:
                 self.touch(session_id)
 
@@ -473,6 +503,15 @@ class SessionStore:
     def touch(self, session_id: str) -> None:
         from app.database import AppSessionModel
 
+        now = datetime.now(timezone.utc)
+        now_naive = now.replace(tzinfo=None)
+        cached = self._sessions.get(session_id)
+        if cached is not None:
+            cached.last_active_at = now_naive
+        last_touch = self._last_touch_at.get(session_id)
+        if last_touch is not None and now_naive - last_touch < self._touch_write_interval:
+            return
+
         db = None
         try:
             db = self._get_db()
@@ -482,8 +521,9 @@ class SessionStore:
         try:
             row = db.query(AppSessionModel).filter(AppSessionModel.id == session_id).first()
             if row is not None:
-                row.last_active_at = datetime.now(timezone.utc)
+                row.last_active_at = now
                 db.commit()
+                self._last_touch_at[session_id] = now_naive
                 cached = self._sessions.get(session_id)
                 if cached is not None:
                     cached.last_active_at = row.last_active_at.replace(tzinfo=None)
@@ -546,6 +586,8 @@ class SessionStore:
                 db.delete(row)
                 db.commit()
             self._sessions.pop(session_id, None)
+            self._session_checked_at.pop(session_id, None)
+            self._last_touch_at.pop(session_id, None)
         except Exception:
             db.rollback()
             logger.warning("Failed to remove session %s", session_id[:8], exc_info=True)
@@ -593,6 +635,8 @@ class SessionStore:
                 for session_id, session in list(self._sessions.items()):
                     if session.last_active_at < cutoff_naive:
                         self._sessions.pop(session_id, None)
+                        self._session_checked_at.pop(session_id, None)
+                        self._last_touch_at.pop(session_id, None)
                 logger.info("Purged %d expired sessions", deleted)
         except Exception:
             db.rollback()

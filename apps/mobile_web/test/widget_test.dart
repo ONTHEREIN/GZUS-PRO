@@ -538,7 +538,7 @@ void main() {
     var directCalled = false;
     debugSchoolDirectHttpClientForTests = MockClient((request) async {
       directCalled = true;
-      expect(request.url.host, 'jwxt.seig.edu.cn');
+      expect(request.url.host, 'jwxt.gzus.edu.cn');
       expect(request.headers['Cookie'], contains('JSESSIONID=direct'));
       return http.Response.bytes(
         utf8.encode(jsonEncode({
@@ -671,7 +671,7 @@ void main() {
 
     expect(find.text('首页'), findsWidgets);
     expect(find.text('下一节课'), findsOneWidget);
-    expect(find.textContaining('移动应用开发'), findsWidgets);
+    expect(find.text('今日时间线'), findsOneWidget);
   });
 
   testWidgets('today timeline fits dense desktop home grid with large text',
@@ -996,6 +996,120 @@ ApiClient _mockApi({List<Map<String, Object?>>? scheduleItems}) {
       final path = request.url.path;
       Object body;
       switch (path) {
+        case '/dashboard':
+          final schedule = scheduleItems ??
+              [
+                {
+                  'name': '移动应用开发',
+                  'teacher': '张老师',
+                  'classroom': 'A101',
+                  'weekday': DateTime.now().weekday,
+                  'startSection': 1,
+                  'endSection': 2,
+                  'weeks': '1-30',
+                }
+              ];
+          body = {
+            'status': 'ok',
+            'generatedAt': '2026-06-29T00:00:00Z',
+            'modules': {
+              'me': {
+                'status': 'ok',
+                'data': {
+                  'studentId': '2024000000',
+                  'name': '测试学生',
+                  'college': '软件学院',
+                  'major': '软件工程',
+                  'className': '软件2401',
+                  'grade': '2024',
+                },
+              },
+              'schedule': {'status': 'ok', 'data': schedule},
+              'attendance': {
+                'status': 'ok',
+                'data': {
+                  'status': 'ok',
+                  'items': [
+                    {
+                      'courseName': '移动应用开发',
+                      'normal': 12,
+                      'late': 0,
+                      'leaveEarly': 0,
+                      'absent': 0,
+                      'leave': 1,
+                      'total': 13,
+                      'records': [
+                        {
+                          'date': '2026-06-03',
+                          'status': 'leave',
+                          'statusLabel': '请假',
+                          'count': 1,
+                          'time': '第1-2节',
+                        }
+                      ],
+                    }
+                  ],
+                },
+              },
+              'exams': {
+                'status': 'ok',
+                'data': [
+                  {
+                    'courseName': '移动应用开发',
+                    'time': '2026-06-20 09:00',
+                    'location': 'A101',
+                    'seat': '12',
+                    'type': '期末',
+                  }
+                ],
+              },
+              'grades': {
+                'status': 'ok',
+                'data': [
+                  {
+                    'courseName': '移动应用开发',
+                    'score': '92',
+                    'credit': '3',
+                    'gradePoint': '4.0',
+                  }
+                ],
+              },
+              'credits': {
+                'status': 'ok',
+                'data': [
+                  {
+                    'studentId': '2024000000',
+                    'name': '测试学生',
+                    'major': '软件工程',
+                    'totalCredit': '160',
+                    'selectedCredit': '24',
+                    'requiredExpected': 100,
+                    'electiveExpected': 40,
+                    'otherExpected': 20,
+                    'requiredEarned': 50,
+                    'electiveEarned': 15,
+                    'otherEarned': 5,
+                  }
+                ],
+              },
+              'notices': {
+                'status': 'ok',
+                'data': [
+                  {
+                    'category': '通知',
+                    'title': '期末考试安排',
+                    'summary': '请及时查看考试安排',
+                    'date': '2026-06-03',
+                  }
+                ],
+              },
+              'ecard': {'status': 'empty', 'data': {'status': 'not_bound'}},
+              'apps': {'status': 'empty', 'data': []},
+              'progress': {'status': 'empty', 'data': {'items': []}},
+              'weather': {'status': 'empty', 'data': null},
+            },
+          };
+          break;
         case '/me':
           body = {
             'studentId': '2024000000',

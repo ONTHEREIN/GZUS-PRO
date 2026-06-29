@@ -48,3 +48,15 @@ def test_ensure_columns_skips_existing_columns():
         event.remove(engine, "before_cursor_execute", _capture_statement)
 
     assert not any(statement.lstrip().upper().startswith("ALTER TABLE") for statement in statements)
+
+
+def test_init_db_skips_schema_work_on_vercel(monkeypatch):
+    monkeypatch.setenv("VERCEL", "1")
+    monkeypatch.setenv("DEBUG", "false")
+    get_settings.cache_clear()
+    database.reset_engine()
+
+    database.init_db()
+
+    assert database._db_initialized is True
+    assert database._engine is None

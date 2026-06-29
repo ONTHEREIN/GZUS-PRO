@@ -1,6 +1,8 @@
 import asyncio
 import logging
+import time
 from collections.abc import Callable
+from datetime import datetime, timezone
 from typing import TypeVar
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -27,6 +29,48 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["academic"])
 
 T = TypeVar("T")
+
+
+def _dashboard_module(name: str, call: Callable[[], T], *, empty) -> dict:
+    started = time.perf_counter()
+    try:
+        data = _run_academic_call(call)
+        status_value = "empty" if data == empty else "ok"
+        return {
+            "status": status_value,
+            "data": data,
+            "source": "api",
+            "durationMs": round((time.perf_counter() - started) * 1000),
+        }
+    except HTTPException as exc:
+        return {
+            "status": "error",
+            "data": empty,
+            "source": "api",
+            "error": str(exc.detail),
+            "durationMs": round((time.perf_counter() - started) * 1000),
+        }
+
+
+def _dashboard_ehall_module(call: Callable[[], T], *, empty) -> dict:
+    started = time.perf_counter()
+    try:
+        data = call()
+        return {
+            "status": "empty" if data == empty else "ok",
+            "data": data,
+            "source": "api",
+            "durationMs": round((time.perf_counter() - started) * 1000),
+        }
+    except Exception as exc:
+        logger.warning("Dashboard ehall module failed: %s", exc)
+        return {
+            "status": "error",
+            "data": empty,
+            "source": "api",
+            "error": "模块暂时不可用",
+            "durationMs": round((time.perf_counter() - started) * 1000),
+        }
 
 
 def _get_student_id(session: AppSession) -> str:
@@ -176,6 +220,98 @@ async def credits(
 ) -> list[dict]:
     student_id = _get_student_id(session)
     return await _run_with_cache_fallback("credits", student_id, session.client.get_credits)
+
+
+@router.get("/dashboard")
+async def dashboard(
+    request: Request,
+    year: str | None = None,
+    term: str | None = None,
+    week: str | None = None,
+    session: AppSession = Depends(require_session),
+) -> dict:
+    """Return a home-page snapshot with module-level failures.
+
+    Cloudflare Worker handles this route for production web traffic.  This
+    backend implementation keeps local dev, native clients, and Worker fallback
+    on the same wire shape without fanning the frontend out to many endpoints.
+    """
+    trace_id = request.headers.get("X-GZUS-Trace-Id") or f"api-{int(time.time() * 1000)}"
+
+    def build() -> dict:
+        modules = {
+            "me": _dashboard_module(
+                "me",
+                session.client.get_info if session.client else lambda: {},
+                empty={},
+            ),
+            "schedule": _dashboard_module(
+                "schedule",
+                lambda: session.client.get_schedule(year, term) if session.client else [],
+                empty=[],
+            ),
+            "notices": _dashboard_module(
+                "notices",
+                session.client.get_notices if session.client else lambda: [],
+                empty=[],
+            ),
+            "attendance": _dashboard_module(
+                "attendance",
+                lambda: {
+                    "status": "ok",
+                    "items": session.client.get_attendance(year, term),
+                }
+                if session.client
+                else {"status": "empty", "items": []},
+                empty={"status": "empty", "items": []},
+            ),
+            "credits": _dashboard_module(
+                "credits",
+                session.client.get_credits if session.client else lambda: [],
+                empty=[],
+            ),
+            "grades": _dashboard_module(
+                "grades",
+                lambda: session.client.get_grades(year, term) if session.client else [],
+                empty=[],
+            ),
+            "exams": _dashboard_module(
+                "exams",
+                lambda: session.client.get_exams(year, term) if session.client else [],
+                empty=[],
+            ),
+            "ecard": {
+                "status": "empty",
+                "data": {"status": "not_bound"},
+                "source": "api",
+                "durationMs": 0,
+            },
+            "weather": {
+                "status": "empty",
+                "data": None,
+                "source": "client",
+                "durationMs": 0,
+            },
+        }
+        ehall_client = getattr(session, "ehall_client", None)
+        modules["apps"] = _dashboard_ehall_module(
+            lambda: ehall_client.get_applications() if ehall_client else [],
+            empty=[],
+        )
+        modules["progress"] = _dashboard_ehall_module(
+            lambda: ehall_client.get_progress_overview() if ehall_client else {"items": []},
+            empty={"items": []},
+        )
+        return modules
+
+    loop = asyncio.get_event_loop()
+    modules = await loop.run_in_executor(None, build)
+    return {
+        "status": "ok",
+        "generatedAt": datetime.now(timezone.utc).isoformat(),
+        "traceId": trace_id,
+        "modules": modules,
+    }
 
 
 @router.get("/notices", response_model=list[NoticeItem])

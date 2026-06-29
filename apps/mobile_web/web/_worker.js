@@ -900,7 +900,7 @@ function corsHeaders(request) {
   return {
     'Access-Control-Allow-Origin': request.headers.get('Origin') || '*',
     'Access-Control-Allow-Methods': 'GET,POST,PATCH,OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type,X-Session-Id,X-Client-Platform,User-Agent',
+    'Access-Control-Allow-Headers': 'Content-Type,X-Session-Id,X-Client-Platform,X-GZUS-Trace-Id,User-Agent',
     'Access-Control-Max-Age': '86400',
   };
 }
@@ -955,10 +955,12 @@ async function serveStaticAsset(request, env) {
   const response = await fetchAsset(request, env);
 
   if (!isStaticAssetPath(url.pathname)) return response;
-  if (response.ok && !isHtmlFallback(response)) return response;
+  if (response.ok && !isHtmlFallback(response)) {
+    return withStaticCacheHeaders(response, url.pathname);
+  }
 
   const fallback = await fetchCanonicalStaticAsset(request);
-  if (fallback) return fallback;
+  if (fallback) return withStaticCacheHeaders(fallback, url.pathname);
 
   return new Response(`Static asset not found: ${url.pathname}`, {
     status: response.status >= 400 ? response.status : 404,
@@ -970,15 +972,25 @@ async function serveStaticAsset(request, env) {
   });
 }
 
-async function serveCanvaskitCompatAsset(request, env, fallbackPathname) {
-  const direct = await fetchAsset(request, env);
-  if (direct.ok && !isHtmlFallback(direct)) return direct;
-
-  const fallbackRequest = new Request(new URL(fallbackPathname, request.url), request);
-  const fallback = await fetchAsset(fallbackRequest, env);
-  if (fallback.ok && !isHtmlFallback(fallback)) return fallback;
-
-  return serveStaticAsset(request, env);
+function withStaticCacheHeaders(response, pathname) {
+  const headers = new Headers(response.headers);
+  if (pathname.startsWith('/canvaskit/')) {
+    headers.set('Cache-Control', 'public, max-age=604800, stale-while-revalidate=86400');
+  } else if (
+    pathname === '/main.dart.js' ||
+    pathname === '/flutter_bootstrap.js' ||
+    pathname === '/flutter.js' ||
+    pathname === '/gzus_pwa.js' ||
+    pathname === '/gzus_pwa_sw.js' ||
+    /^\/main\.dart\.js_\d+\.part\.js$/.test(pathname)
+  ) {
+    headers.set('Cache-Control', 'public, max-age=14400, stale-while-revalidate=86400');
+  }
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
 }
 
 // ─── Session store (memory + Cloudflare KV fallback) ─────────────
@@ -1123,6 +1135,39 @@ function injectSessionCookies(request, session) {
   });
 }
 
+function buildVercelProxyHeaders(request) {
+  const headers = new Headers(request.headers);
+  const removeHeaders = [
+    'Host',
+    'Connection',
+    'Keep-Alive',
+    'Proxy-Authenticate',
+    'Proxy-Authorization',
+    'TE',
+    'Trailer',
+    'Transfer-Encoding',
+    'Upgrade',
+    'CF-Connecting-IP',
+    'CF-IPCountry',
+    'CF-Ray',
+    'CF-Visitor',
+    'CDN-Loop',
+    'X-Forwarded-Host',
+    'X-Forwarded-Proto',
+    'X-Real-IP',
+  ];
+  for (const name of removeHeaders) {
+    headers.delete(name);
+  }
+
+  const clientIp = request.headers.get('CF-Connecting-IP');
+  if (clientIp && !headers.get('X-Forwarded-For')) {
+    headers.set('X-Forwarded-For', clientIp);
+  }
+  headers.set('X-Forwarded-Proto', 'https');
+  return headers;
+}
+
 // ─── Main Worker Handler ───────────────────────────────────────────
 export default {
   async fetch(request, env, context) {
@@ -1133,21 +1178,18 @@ export default {
       return new Response(null, { status: 204, headers: corsHeaders(request) });
     }
 
-    // ─── CanvasKit compat ─────────────────────────────────────
-    // Prefer the requested CanvasKit variant. Some old deploys or edge colos
-    // may miss either the base or chromium path, so use the sibling variant
-    // only as a fallback instead of returning the SPA HTML/404 response.
-    if (url.pathname === '/canvaskit/canvaskit.js') {
-      return serveCanvaskitCompatAsset(request, env, '/canvaskit/chromium/canvaskit.js');
-    }
-    if (url.pathname === '/canvaskit/canvaskit.wasm') {
-      return serveCanvaskitCompatAsset(request, env, '/canvaskit/chromium/canvaskit.wasm');
-    }
-    if (url.pathname === '/canvaskit/chromium/canvaskit.js') {
-      return serveCanvaskitCompatAsset(request, env, '/canvaskit/canvaskit.js');
-    }
-    if (url.pathname === '/canvaskit/chromium/canvaskit.wasm') {
-      return serveCanvaskitCompatAsset(request, env, '/canvaskit/canvaskit.wasm');
+    // ─── CanvasKit assets ─────────────────────────────────────
+    // CanvasKit JS and WASM must come from the same variant. Do not fall back
+    // between /canvaskit and /canvaskit/chromium because Flutter's loader
+    // decides the WASM URL before requesting the JS file; mixing variants can
+    // crash startup with undefined CanvasKit symbols.
+    if (
+      url.pathname === '/canvaskit/canvaskit.js' ||
+      url.pathname === '/canvaskit/canvaskit.wasm' ||
+      url.pathname === '/canvaskit/chromium/canvaskit.js' ||
+      url.pathname === '/canvaskit/chromium/canvaskit.wasm'
+    ) {
+      return serveStaticAsset(request, env);
     }
     if (url.pathname === '/canvaskit/chromium/main.dart.js') {
       return new Response('// CanvasKit chromium compat stub', {
@@ -1223,6 +1265,7 @@ export default {
                url.pathname.startsWith('/leave/') ||
                url.pathname === '/weather' ||
                url.pathname.startsWith('/ws') ||
+               url.pathname.startsWith('/dashboard') ||
                url.pathname.startsWith('/exams') ||
                url.pathname.startsWith('/schedule') ||
                url.pathname.startsWith('/grades') ||
@@ -2080,6 +2123,370 @@ export default {
       return null;
     }
 
+    function dashboardCacheKey(sessionId, module, year, term) {
+      return `dashboard:${sessionId}:${module}:${year || ''}:${term || ''}`;
+    }
+
+    async function loadDashboardCache(env, key, ttlSeconds) {
+      const local = localAcademicCache.get(key);
+      if (local && Date.now() - local.cachedAt < ttlSeconds * 1000) return local;
+      try {
+        if (env && env.SESSIONS_KV) {
+          const raw = await env.SESSIONS_KV.get(key);
+          if (raw) {
+            const data = JSON.parse(raw);
+            localAcademicCache.set(key, data);
+            return data;
+          }
+        }
+      } catch (e) {
+        console.warn(`[dashboard-cache] load failed for ${key}: ${e.message}`);
+      }
+      return null;
+    }
+
+    async function saveDashboardCache(env, key, data, ttlSeconds) {
+      const payload = { data, cachedAt: Date.now() };
+      localAcademicCache.set(key, payload);
+      try {
+        if (env && env.SESSIONS_KV) {
+          await env.SESSIONS_KV.put(key, JSON.stringify(payload), { expirationTtl: ttlSeconds });
+        }
+      } catch (e) {
+        console.warn(`[dashboard-cache] save failed for ${key}: ${e.message}`);
+      }
+    }
+
+    function withTimeout(promise, timeoutMs, label) {
+      return Promise.race([
+        promise,
+        new Promise((_, reject) => setTimeout(
+          () => reject(new Error(`${label} timeout after ${timeoutMs}ms`)),
+          timeoutMs,
+        )),
+      ]);
+    }
+
+    async function dashboardModule({
+      name,
+      sessionId,
+      year,
+      term,
+      ttlSeconds,
+      timeoutMs,
+      fetcher,
+    }) {
+      const started = Date.now();
+      const key = dashboardCacheKey(sessionId, name, year, term);
+      try {
+        const data = await withTimeout(fetcher(), timeoutMs, `dashboard:${name}`);
+        const status = Array.isArray(data) && data.length === 0 ? 'empty' : 'ok';
+        await saveDashboardCache(env, key, data, ttlSeconds);
+        return {
+          status,
+          data,
+          source: 'edge',
+          durationMs: Date.now() - started,
+        };
+      } catch (e) {
+        const cached = await loadDashboardCache(env, key, ttlSeconds);
+        if (cached && cached.data !== undefined) {
+          return {
+            status: 'stale',
+            data: cached.data,
+            source: 'edge-cache',
+            cachedAt: new Date(cached.cachedAt).toISOString(),
+            error: e && e.message ? e.message : String(e),
+            durationMs: Date.now() - started,
+          };
+        }
+        return {
+          status: 'error',
+          data: Array.isArray(name) ? [] : null,
+          source: 'edge',
+          error: e && e.message ? e.message : String(e),
+          durationMs: Date.now() - started,
+        };
+      }
+    }
+
+    function academicRequestConfig(module, year, term, account) {
+      const termMap = { '1': '3', '2': '12', '3': '16' };
+      const xqm = termMap[String(term)] || '';
+      const nd = String(Date.now());
+      const baseParams = {
+        xnm: String(year),
+        xqm,
+        _search: 'false',
+        nd,
+        'queryModel.showCount': '100',
+        'queryModel.currentPage': '1',
+        'queryModel.sortName': '',
+        'queryModel.sortOrder': 'asc',
+        time: '1',
+      };
+      if (module === 'exams') {
+        return {
+          url: `${JWXT_BASE}/kwgl/kscx_cxXsksxxIndex.html?doType=query&gnmkdm=N358105`,
+          body: new URLSearchParams({ ...baseParams, ksmcdmb_id: '', kch: '', kc: '', ksrq: '' }),
+        };
+      }
+      if (module === 'schedule') {
+        return {
+          url: `${JWXT_BASE}/kbcx/xskbcx_cxXsKb.html`,
+          body: new URLSearchParams({ ...baseParams, kzlx: 'ck' }),
+        };
+      }
+      if (module === 'grades') {
+        return {
+          url: `${JWXT_BASE}/cjcx/cjcx_cxXsgrcj.html?doType=query&gnmkdm=N305005`,
+          body: new URLSearchParams({ ...baseParams, kch: '', kc: '' }),
+        };
+      }
+      if (module === 'credits' && account) {
+        return {
+          url: `${JWXT_BASE}/design/funcData_cxFuncDataList.html?func_widget_guid=37234863CD24BB76E063860810AC3761&gnmkdm=N255022`,
+          body: new URLSearchParams({
+            gnmkdm: 'N255022',
+            xh: account,
+            'queryModel.showCount': '15',
+            'queryModel.currentPage': '1',
+            'queryModel.sortName': ' ',
+            'queryModel.sortOrder': 'asc',
+          }),
+        };
+      }
+      if (module === 'attendance' && account) {
+        return {
+          url: `${JWXT_BASE}/jxdmgl/jxdmqkcx_cxJxdmqkcxIndex.html?doType=query&gnmkdm=N254315`,
+          body: new URLSearchParams({
+            xh: account,
+            xm: '',
+            xh_id: '',
+            xnm: String(year),
+            xqm,
+            kch: '',
+            kch_id: '',
+            gnmkdm: 'N254315',
+            'queryModel.showCount': '100',
+            'queryModel.currentPage': '1',
+            'queryModel.sortName': '',
+            'queryModel.sortOrder': 'asc',
+          }),
+        };
+      }
+      return null;
+    }
+
+    async function fetchDashboardAcademic(module, session, year, term) {
+      const config = academicRequestConfig(module, year, term, session.account);
+      if (!config) return module === 'attendance' ? { status: 'empty', items: [] } : [];
+      const [jwxtRes, data] = await fetchGbkJson(config.url, {
+        method: 'POST',
+        headers: {
+          'Cookie': session.cookies,
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'User-Agent': 'Mozilla/5.0 (Linux; Android 16) GZUS-PRO/1.0',
+          'Referer': JWXT_REFERER,
+        },
+        body: config.body.toString(),
+        signal: AbortSignal.timeout(4500),
+      });
+      if (!jwxtRes || !jwxtRes.ok || !data) {
+        throw new Error(`JWXT ${module} returned ${jwxtRes ? jwxtRes.status : 'null'}`);
+      }
+      if (module === 'attendance') {
+        const items = Array.isArray(data.items) ? data.items : extractAcademicItems(data) || [];
+        return { status: 'ok', items: normalizeResultList(items, module) };
+      }
+      const items = extractAcademicItems(data);
+      if (items) return normalizeResultList(items, module);
+      if (module === 'credits' && data && typeof data === 'object') {
+        if (Number(data.totalResult || data.totalCount || 0) === 0) return [];
+        return normalizeResultList([data], module);
+      }
+      throw new Error(`JWXT ${module} returned unexpected format`);
+    }
+
+    function extractDashboardStudentInfo(html) {
+      const getField = (id) => {
+        const re = new RegExp(`id="${id}"[^>]*>([\\s\\S]*?)<\\/`, 'i');
+        const m = html.match(re);
+        if (!m) return null;
+        return m[1]
+          .replace(/<[^>]+>/g, '')
+          .replace(/&nbsp;/g, ' ')
+          .replace(/&lt;/g, '<')
+          .replace(/&gt;/g, '>')
+          .replace(/&amp;/g, '&')
+          .replace(/\s+/g, ' ')
+          .trim();
+      };
+      const getFieldMulti = (ids) => {
+        for (const id of ids) {
+          const v = getField(id);
+          if (v) return v;
+        }
+        return null;
+      };
+      return {
+        studentId: getField('col_xh') || '',
+        name: getField('col_xm') || '',
+        college: getFieldMulti(['col_jg_id', 'col_jg', 'col_xy', 'col_xyName']) || null,
+        major: getFieldMulti(['col_zyh_id', 'col_zyfx_id', 'col_zy', 'col_zymc']) || null,
+        className: getFieldMulti(['col_bh_id', 'col_bh', 'col_bj']) || null,
+        grade: getFieldMulti(['col_njdm_id', 'col_nj']) || null,
+        gender: getField('col_xbm') || null,
+        idNumber: getField('col_zjhm') || null,
+        birthDate: getField('col_csrq') || null,
+        ethnicity: getField('col_mzm') || null,
+        politicalStatus: getField('col_zzmmm') || null,
+        enrollDate: getField('col_rxrq') || null,
+        nativePlace: getField('col_jg') || null,
+        studentStatus: getField('col_xjztdm') || null,
+        educationLevel: getField('col_pyccdm') || null,
+        phone: getField('col_sjhm') || null,
+        email: getField('col_dzyx') || null,
+        address: getField('col_jtdz') || null,
+        photoDataUrl: null,
+      };
+    }
+
+    async function fetchDashboardMe(session) {
+      const [jwxtRes, html] = await fetchGbkText(`${JWXT_BASE}/xsxxxggl/xsgrxxwh_cxXsgrxx.html`, {
+        headers: {
+          'Cookie': session.cookies,
+          'User-Agent': 'Mozilla/5.0 (Linux; Android 16) GZUS-PRO/1.0',
+          'Referer': JWXT_REFERER,
+        },
+        signal: AbortSignal.timeout(3500),
+      });
+      if (!jwxtRes || !jwxtRes.ok || !html) throw new Error('个人资料获取失败');
+      const info = extractDashboardStudentInfo(html);
+      if (!info.name && !info.studentId) throw new Error('个人资料为空');
+      return info;
+    }
+
+    async function fetchDashboardNotices(session) {
+      const newsUrl = `${JWXT_BASE}/xtgl/index_cxNews.html?localeKey=zh_CN`;
+      const [newsRes, html] = await fetchGbkText(newsUrl, {
+        headers: {
+          'Cookie': session.cookies,
+          'User-Agent': 'Mozilla/5.0 (Linux; Android 16) GZUS-PRO/1.0',
+          'Referer': JWXT_REFERER,
+        },
+        signal: AbortSignal.timeout(3500),
+      });
+      if (!newsRes || !newsRes.ok || !html) throw new Error('通知获取失败');
+      return parseNoticeItems(html, newsUrl).slice(0, 20);
+    }
+
+    async function fetchDashboardBackend(path, request, session, timeoutMs) {
+      const origin = (env.API_ORIGIN || 'https://api-one-zeta-dc0jrazxzq.vercel.app').replace(/\/$/, '');
+      const headers = new Headers(request.headers);
+      if (session.cookies) headers.set('Cookie', session.cookies);
+      if (session.ehallCookies) headers.set('X-Ehall-Cookies', session.ehallCookies);
+      if (session.account) headers.set('X-Student-Account', session.account);
+      headers.set('X-Worker-Auth', '1');
+      const resp = await fetch(new URL(path, origin), {
+        method: 'GET',
+        headers,
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      if (!resp.ok) throw new Error(`${path} returned ${resp.status}`);
+      return resp.json();
+    }
+
+    // ─── Dashboard snapshot ───────────────────────────────────
+    if (path === 'dashboard' && request.method === 'GET') {
+      const traceId = request.headers.get('X-GZUS-Trace-Id') ||
+        `edge-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+      const sessionId = request.headers.get('X-Session-Id') || '';
+      const session = await getLocalSession(request, env);
+      if (!sessionId || !session || !session.cookies) {
+        return jsonResponse({ detail: '会话已过期，请重新登录', traceId }, 401, request);
+      }
+      const defaults = defaultAcademicPeriod();
+      const year = url.searchParams.get('year') || defaults.year;
+      const term = url.searchParams.get('term') || defaults.term;
+      const modules = {};
+      const jobs = {
+        me: dashboardModule({
+          name: 'me', sessionId, year, term, ttlSeconds: 86400, timeoutMs: 4000,
+          fetcher: () => fetchDashboardMe(session),
+        }),
+        schedule: dashboardModule({
+          name: 'schedule', sessionId, year, term, ttlSeconds: 1800, timeoutMs: 5000,
+          fetcher: () => fetchDashboardAcademic('schedule', session, year, term),
+        }),
+        notices: dashboardModule({
+          name: 'notices', sessionId, year, term, ttlSeconds: 300, timeoutMs: 4000,
+          fetcher: () => fetchDashboardNotices(session),
+        }),
+        attendance: dashboardModule({
+          name: 'attendance', sessionId, year, term, ttlSeconds: 1800, timeoutMs: 5000,
+          fetcher: () => fetchDashboardAcademic('attendance', session, year, term),
+        }),
+        credits: dashboardModule({
+          name: 'credits', sessionId, year, term, ttlSeconds: 1800, timeoutMs: 5000,
+          fetcher: () => fetchDashboardAcademic('credits', session, year, term),
+        }),
+        grades: dashboardModule({
+          name: 'grades', sessionId, year, term, ttlSeconds: 1800, timeoutMs: 5000,
+          fetcher: () => fetchDashboardAcademic('grades', session, year, term),
+        }),
+        exams: dashboardModule({
+          name: 'exams', sessionId, year, term, ttlSeconds: 1800, timeoutMs: 5000,
+          fetcher: () => fetchDashboardAcademic('exams', session, year, term),
+        }),
+        apps: dashboardModule({
+          name: 'apps', sessionId, year, term, ttlSeconds: 600, timeoutMs: 3500,
+          fetcher: () => session.ehallCookies ? fetchEhallApplicationsFromEdge(session, env) : [],
+        }),
+        progress: dashboardModule({
+          name: 'progress', sessionId, year, term, ttlSeconds: 300, timeoutMs: 3500,
+          fetcher: () => session.ehallCookies
+            ? fetchDashboardBackend('/ehall/progress', request, session, 3000)
+            : { items: [] },
+        }),
+        ecard: dashboardModule({
+          name: 'ecard', sessionId, year, term, ttlSeconds: 600, timeoutMs: 3500,
+          fetcher: () => fetchDashboardBackend('/ecard/summary', request, session, 3000),
+        }),
+      };
+      const settled = await withTimeout(
+        Promise.all(Object.entries(jobs).map(async ([name, promise]) => [name, await promise])),
+        8000,
+        'dashboard',
+      ).catch(async (e) => {
+        console.warn(`[dashboard] total timeout trace=${traceId}: ${e.message}`);
+        return Promise.all(Object.entries(jobs).map(async ([name, promise]) => {
+          try {
+            return [name, await withTimeout(promise, 50, name)];
+          } catch (err) {
+            return [name, {
+              status: 'error',
+              data: null,
+              source: 'edge',
+              error: err && err.message ? err.message : String(err),
+              durationMs: 8000,
+            }];
+          }
+        }));
+      });
+      for (const [name, value] of settled) modules[name] = value;
+      modules.weather = { status: 'empty', data: null, source: 'client', durationMs: 0 };
+      const response = jsonResponse({
+        status: 'ok',
+        generatedAt: new Date().toISOString(),
+        traceId,
+        modules,
+      }, 200, request);
+      response.headers.set('X-GZUS-Trace-Id', traceId);
+      response.headers.set('Cache-Control', 'no-store');
+      return response;
+    }
+
     // ─── Edge academic API: /exams /schedule /grades /credits /attendance ─
     // Handle these at the Worker edge to avoid Vercel's 10-second
     // Hobby-plan timeout on the double-proxy chain.
@@ -2485,14 +2892,18 @@ async function proxyToVercel(request, env, url, hadLocalSession = true) {
       // Re-create the upstream request for each attempt — body streams
       // can only be consumed once, so we MUST rebuild the request.
       let upstreamRequest;
+      const upstreamHeaders = buildVercelProxyHeaders(request);
       if (savedBody !== null) {
         upstreamRequest = new Request(upstreamUrl, {
           method: request.method,
-          headers: request.headers,
+          headers: upstreamHeaders,
           body: savedBody,
         });
       } else {
-        upstreamRequest = new Request(upstreamUrl, request);
+        upstreamRequest = new Request(upstreamUrl, {
+          method: request.method,
+          headers: upstreamHeaders,
+        });
       }
 
       const response = await fetch(upstreamRequest, {

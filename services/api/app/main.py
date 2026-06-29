@@ -103,7 +103,13 @@ def create_app() -> FastAPI:
         allow_origin_regex=settings.cors_origin_regex_value,
         allow_credentials=False,
         allow_methods=["GET", "POST", "PATCH"],
-        allow_headers=["X-Session-Id", "X-Client-Platform", "Content-Type", "User-Agent"],
+        allow_headers=[
+            "X-Session-Id",
+            "X-Client-Platform",
+            "X-GZUS-Trace-Id",
+            "Content-Type",
+            "User-Agent",
+        ],
     )
 
     @app.exception_handler(Exception)

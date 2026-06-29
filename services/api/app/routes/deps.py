@@ -167,7 +167,17 @@ def require_session(
             detail="登录已过期，请重新登录",
         )
 
-    session = request.app.state.sessions.get(x_session_id, touch=False)
+    method = getattr(request, "method", "GET")
+    fresh_required = method.upper() in {"POST", "PATCH", "DELETE"}
+    if fresh_required:
+        try:
+            session = request.app.state.sessions.get(x_session_id, touch=False, fresh=True)
+        except TypeError as exc:
+            if "fresh" not in str(exc):
+                raise
+            session = request.app.state.sessions.get(x_session_id, touch=False)
+    else:
+        session = request.app.state.sessions.get(x_session_id, touch=False)
     if session is None:
         logger.warning(
             "require_session: session %s not found in DB for %s",

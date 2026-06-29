@@ -54,6 +54,8 @@ def test_require_session_rejects_idle_session_before_touching_it():
         - timedelta(seconds=1)
     )
     _set_last_active(session.id, stale_at)
+    session.last_active_at = stale_at
+    store._session_checked_at.pop(session.id, None)
 
     with pytest.raises(HTTPException) as exc:
         require_session(_request_for(store), x_session_id=session.id)
@@ -64,11 +66,28 @@ def test_require_session_rejects_idle_session_before_touching_it():
     )
 
 
-def test_require_session_touches_fresh_session_after_validation():
+def test_require_session_uses_memory_cache_without_immediate_db_touch():
     store = SessionStore(ttl_seconds=7200)
     session = store.create(_Client())
     old_active_at = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=10)
     _set_last_active(session.id, old_active_at)
+
+    result = require_session(_request_for(store), x_session_id=session.id)
+
+    assert result.id == session.id
+    assert _get_row(session.id).last_active_at.replace(microsecond=0) == old_active_at.replace(
+        microsecond=0
+    )
+
+
+def test_require_session_touches_db_after_throttle_window():
+    store = SessionStore(ttl_seconds=7200)
+    session = store.create(_Client())
+    old_active_at = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=2)
+    _set_last_active(session.id, old_active_at)
+    session.last_active_at = old_active_at
+    store._session_checked_at.pop(session.id, None)
+    store._last_touch_at[session.id] = old_active_at
 
     result = require_session(_request_for(store), x_session_id=session.id)
 

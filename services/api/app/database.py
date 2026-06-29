@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 
 from sqlalchemy import Boolean, Column, DateTime, Float, Integer, String, Text, create_engine, event, inspect, text
@@ -272,6 +273,10 @@ def _apply_sqlite_pragmas(engine) -> None:
 def init_db():
     global _db_initialized
     if _db_initialized:
+        return
+    settings = get_settings()
+    if os.environ.get("VERCEL") == "1" and not settings.debug:
+        _db_initialized = True
         return
     engine = get_sync_engine()
     Base.metadata.create_all(engine)
