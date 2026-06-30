@@ -2522,7 +2522,9 @@ export default {
             postData = new URLSearchParams({ ...baseParams, kch: '', kc: '' });
           } else if (path === 'credits') {
             if (!session.account) {
-              jwxtUrl = null; // fall through to Vercel
+              jwxtUrl = null;
+              lastEdgeStatus = 401;
+              lastEdgeError = '缺少学号，无法查询学分';
             } else {
               jwxtUrl = `${JWXT_BASE}/design/funcData_cxFuncDataList.html?func_widget_guid=37234863CD24BB76E063860810AC3761&gnmkdm=N255022`;
               postData = new URLSearchParams({ gnmkdm: 'N255022', xh: session.account,
@@ -2547,6 +2549,7 @@ export default {
 
           if (jwxtUrl) {
             const fetchAcademic = async () => {
+              const directTimeoutMs = path === 'credits' ? 4500 : 8000;
               const [jwxtRes, data] = await fetchGbkJson(jwxtUrl, {
                 method: 'POST',
                 headers: {
@@ -2556,7 +2559,7 @@ export default {
                   'Referer': JWXT_REFERER,
                 },
                 body: postData.toString(),
-                signal: AbortSignal.timeout(15000),
+                signal: AbortSignal.timeout(directTimeoutMs),
               });
               return { jwxtRes, data };
             };
@@ -2599,6 +2602,10 @@ export default {
                   const normalized = [];
                   await saveAcademicCache(env, cacheKey, normalized);
                   return jsonResponse(normalized, 200, request);
+                } else if (path === 'credits') {
+                  const normalized = normalizeResultList([data], path);
+                  await saveAcademicCache(env, cacheKey, normalized);
+                  return jsonResponse(normalized, 200, request);
                 } else {
                   await saveAcademicCache(env, cacheKey, data);
                   return jsonResponse(data, 200, request);
@@ -2616,7 +2623,7 @@ export default {
           lastEdgeError = e && e.message ? e.message : String(e);
           console.warn(`[edge-${path}] JWXT direct fetch failed: ${lastEdgeError}`);
         }
-        if (path === 'schedule') {
+        if (path === 'schedule' || path === 'credits') {
           const defaults = defaultAcademicPeriod();
           const year = url.searchParams.get('year') || defaults.year;
           const term = url.searchParams.get('term') || defaults.term;
@@ -2627,6 +2634,20 @@ export default {
             resp.headers.set('X-Data-Source', 'edge-cache');
             resp.headers.set('X-Data-Cached-At', new Date(cached.cachedAt).toISOString());
             return resp;
+          }
+          if (path === 'credits') {
+            const lowerError = (lastEdgeError || '').toLowerCase();
+            const status = lastEdgeStatus === 401
+              ? 401
+              : (lowerError.includes('timeout') || lowerError.includes('aborted') ? 504 : 502);
+            return jsonResponse({
+              detail: status === 401 ? '登录信息不完整，请重新登录' : '学分服务响应较慢，请稍后下拉刷新',
+              source: 'edge-jwxt',
+              status: lastEdgeStatus,
+              error: lastEdgeError || 'JWXT credits request failed',
+              year,
+              term,
+            }, status, request);
           }
           return jsonResponse({
             detail: '课表服务暂时不可用，请稍后重试',
