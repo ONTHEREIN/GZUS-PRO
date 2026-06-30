@@ -2355,33 +2355,18 @@ class ApiClient {
   Future<EcardSummary> refreshEcard() async {
     final pcache = await _getPersistentCache();
     if (_isNativeMobile) {
-      final cached = _cachedObject(pcache, 'ecard_summary') ??
-          _cache.get<Map<String, dynamic>>('ecard_summary');
-      if (cached != null) {
-        return _enrichEcardSummaryDirect(EcardSummary.fromJson(cached));
-      }
       final summary =
           await ecardSummary(forceRefresh: true).then((r) => r.data);
-      return _enrichEcardSummaryDirect(summary);
+      return _enrichEcardSummaryDirect(summary, requireLive: true);
     }
-    try {
-      final data = await _post('/ecard/refresh', {});
-      _cache.set('ecard_summary', data);
-      await pcache.set('ecard_summary', data);
-      return _enrichEcardSummaryDirect(EcardSummary.fromJson(data));
-    } catch (_) {
-      final cached = _cachedObject(pcache, 'ecard_summary') ??
-          _cache.get<Map<String, dynamic>>('ecard_summary');
-      if (cached != null) {
-        final direct =
-            await _enrichEcardSummaryDirect(EcardSummary.fromJson(cached));
-        return direct;
-      }
-      rethrow;
-    }
+    final data = await _post('/ecard/refresh', {});
+    _cache.set('ecard_summary', data);
+    await pcache.set('ecard_summary', data);
+    return _enrichEcardSummaryDirect(EcardSummary.fromJson(data));
   }
 
-  Future<EcardSummary> _enrichEcardSummaryDirect(EcardSummary summary) async {
+  Future<EcardSummary> _enrichEcardSummaryDirect(EcardSummary summary,
+      {bool requireLive = false}) async {
     if (!_isNativeMobile) return summary;
     if (!summary.isBound || summary.roomId == null || summary.roomId!.isEmpty) {
       return summary;
@@ -2389,7 +2374,10 @@ class ApiClient {
     try {
       final balance = await _createEcardDirectClient()
           .getBalance(summary.roomId!, studentId: summary.studentId);
-      if (balance == null) return summary;
+      if (balance == null) {
+        if (requireLive) throw ApiException('水电余额刷新失败，请稍后重试');
+        return summary;
+      }
       final data = _ecardSummaryToJson(summary);
       data.addAll({
         'powerBalance': balance['powerBalance'],
@@ -2421,7 +2409,11 @@ class ApiClient {
       await pcache.set('ecard_summary', data);
       await _updateEcardSummaryCache(data);
       return EcardSummary.fromJson(data);
-    } catch (_) {
+    } catch (exc) {
+      if (requireLive) {
+        if (exc is ApiException) rethrow;
+        throw ApiException('水电余额刷新失败，请稍后重试');
+      }
       return summary;
     }
   }
@@ -3158,7 +3150,7 @@ class SchoolDirectClient {
       throw ApiException('缺少学号，无法直连学分');
     }
     final data = await _postJson(
-      '$_base/design/funcData_cxFuncDataList.html?func_widget_guid=37234863CD24BB76E063860810AC3761&gnmkdm=N255022',
+      '$_base/design/funcData_cxFuncDataList.html?func_widget_guid=555A63AA3F6BB8E4E065CAE6002842BA&gnmkdm=N255022',
       {
         'gnmkdm': 'N255022',
         'xh': studentId,

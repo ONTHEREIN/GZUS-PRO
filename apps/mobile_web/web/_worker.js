@@ -2245,7 +2245,7 @@ export default {
       }
       if (module === 'credits' && account) {
         return {
-          url: `${JWXT_BASE}/design/funcData_cxFuncDataList.html?func_widget_guid=37234863CD24BB76E063860810AC3761&gnmkdm=N255022`,
+          url: `${JWXT_BASE}/design/funcData_cxFuncDataList.html?func_widget_guid=555A63AA3F6BB8E4E065CAE6002842BA&gnmkdm=N255022`,
           body: new URLSearchParams({
             gnmkdm: 'N255022',
             xh: account,
@@ -2526,7 +2526,7 @@ export default {
               lastEdgeStatus = 401;
               lastEdgeError = '缺少学号，无法查询学分';
             } else {
-              jwxtUrl = `${JWXT_BASE}/design/funcData_cxFuncDataList.html?func_widget_guid=37234863CD24BB76E063860810AC3761&gnmkdm=N255022`;
+              jwxtUrl = `${JWXT_BASE}/design/funcData_cxFuncDataList.html?func_widget_guid=555A63AA3F6BB8E4E065CAE6002842BA&gnmkdm=N255022`;
               postData = new URLSearchParams({ gnmkdm: 'N255022', xh: session.account,
                 'queryModel.showCount': '15', 'queryModel.currentPage': '1',
                 'queryModel.sortName': ' ', 'queryModel.sortOrder': 'asc' });

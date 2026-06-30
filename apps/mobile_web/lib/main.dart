@@ -13525,8 +13525,7 @@ class _EcardPageState extends State<EcardPage> {
 
   Future<void> _silentRefresh() async {
     try {
-      final summary =
-          await widget.api.ecardSummary(forceRefresh: true).then((r) => r.data);
+      final summary = await widget.api.refreshEcard();
       if (!mounted) return;
       setState(() => _summaryFuture = Future.value(summary));
     } catch (_) {
@@ -13552,10 +13551,9 @@ class _EcardPageState extends State<EcardPage> {
 
   Future<void> _refreshEcardPage() async {
     setState(() {
+      _refreshing = true;
       _error = null;
       _refreshVersion++;
-      _summaryFuture =
-          widget.api.ecardSummary(forceRefresh: true).then((r) => r.data);
       if (_roomsFuture != null) {
         _roomsFuture = widget.api.ecardRooms(
           query: _lastSearchQuery,
@@ -13563,7 +13561,15 @@ class _EcardPageState extends State<EcardPage> {
         );
       }
     });
-    await _summaryFuture;
+    try {
+      final summary = await widget.api.refreshEcard();
+      if (!mounted) return;
+      setState(() => _summaryFuture = Future.value(summary));
+    } catch (exc) {
+      _handleError(exc);
+    } finally {
+      if (mounted) setState(() => _refreshing = false);
+    }
   }
 
   Future<void> _bindRoom(EcardRoomItem room) async {
