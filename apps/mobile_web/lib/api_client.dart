@@ -2355,6 +2355,16 @@ class ApiClient {
   Future<EcardSummary> refreshEcard() async {
     final pcache = await _getPersistentCache();
     if (_isNativeMobile) {
+      final cached = _cachedObject(pcache, 'ecard_summary') ??
+          _cache.get<Map<String, dynamic>>('ecard_summary');
+      if (cached != null) {
+        final cachedSummary = EcardSummary.fromJson(cached);
+        if (cachedSummary.isBound &&
+            cachedSummary.roomId != null &&
+            cachedSummary.roomId!.isNotEmpty) {
+          return _enrichEcardSummaryDirect(cachedSummary, requireLive: true);
+        }
+      }
       final summary =
           await ecardSummary(forceRefresh: true).then((r) => r.data);
       return _enrichEcardSummaryDirect(summary, requireLive: true);

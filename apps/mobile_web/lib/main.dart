@@ -13732,6 +13732,7 @@ class _EcardPageState extends State<EcardPage> {
                 _EcardConsumptionPanel(
                   api: widget.api,
                   refreshVersion: _refreshVersion,
+                  onSessionExpired: widget.onSessionExpired,
                 ),
               ],
             ],
@@ -14407,10 +14408,12 @@ class _EcardConsumptionPanel extends StatefulWidget {
   const _EcardConsumptionPanel({
     required this.api,
     required this.refreshVersion,
+    this.onSessionExpired,
   });
 
   final ApiClient api;
   final int refreshVersion;
+  final VoidCallback? onSessionExpired;
 
   @override
   State<_EcardConsumptionPanel> createState() => _EcardConsumptionPanelState();
@@ -14447,7 +14450,16 @@ class _EcardConsumptionPanelState extends State<_EcardConsumptionPanel> {
           if (snapshot.connectionState != ConnectionState.done) {
             return const Center(child: CircularProgressIndicator());
           }
-          if (snapshot.hasError) return const EmptyState(message: '消费记录加载失败');
+          if (snapshot.hasError) {
+            final error = snapshot.error;
+            final isSessionError = error is ApiException && error.statusCode == 401;
+            if (isSessionError && widget.onSessionExpired != null) {
+              return _SessionExpiredPrompt(onRelogin: widget.onSessionExpired!);
+            }
+            return EmptyState(
+              message: error is ApiException ? error.message : '消费记录加载失败',
+            );
+          }
           final data = snapshot.data;
           if (data == null || data.items.isEmpty) {
             return EmptyState(message: data?.message ?? '暂无消费记录');

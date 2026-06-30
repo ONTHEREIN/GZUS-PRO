@@ -192,7 +192,7 @@ void main() {
 
     final summary = await api.refreshEcard();
 
-    expect(summaryRequests, 1);
+    expect(summaryRequests, 0);
     expect(summary.powerBalance, 22.0);
     expect(summary.powerText, '22.0 度');
     expect(summary.coldWaterBalance, 4.5);
