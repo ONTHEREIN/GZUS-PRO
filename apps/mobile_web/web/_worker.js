@@ -33,9 +33,10 @@ const JWXT_ORIGIN = 'https://jwxt.gzus.edu.cn';
 const JWXT_LEGACY_ORIGIN = 'https://jwxt.seig.edu.cn';
 const JWXT_SERVICE_URL = `${JWXT_ORIGIN}/sso/lyiotlogin`;
 const JWXT_LEGACY_SERVICE_URL = `${JWXT_LEGACY_ORIGIN}/sso/lyiotlogin`;
-// Keep the initial CAS login service on the historical URL for compatibility;
-// after CAS login we request a fresh service ticket for JWXT_SERVICE_URL.
-const SERVICE_URL = JWXT_LEGACY_SERVICE_URL;
+// Use the certificate-valid JWXT host for the initial CAS service ticket.
+// The legacy host may set cookies that look present but still land on the
+// JWXT login page when JSON endpoints are requested.
+const SERVICE_URL = JWXT_SERVICE_URL;
 const JWXT_SERVICE_URLS = [JWXT_SERVICE_URL, JWXT_LEGACY_SERVICE_URL];
 const EHALL_URL = 'https://ehall.gzus.edu.cn';
 const EHALL_CAS_SERVICE_URL = 'http://ehall.gzus.edu.cn/shiro-cas';
@@ -43,6 +44,10 @@ const JWXT_BASE = `${JWXT_ORIGIN}/jwglxt`;
 const JWXT_REFERER = `${JWXT_BASE}/xtgl/index_initMenu.html`;
 const CANONICAL_APP_ORIGIN = 'https://onegzus.cc.cd';
 const STATIC_ASSET_PATH_RE = /(?:^\/(?:assets|canvaskit|icons)\/|^\/(?:flutter_bootstrap|flutter|main\.dart|gzus_pwa|gzus_pwa_sw)\.js$|^\/manifest\.json$|^\/version\.json$|^\/favicon\.png$|\.(?:js|mjs|wasm|json|otf|ttf|woff2?|png|jpg|jpeg|webp|gif|svg|ico|css|map)$)/i;
+const DASHBOARD_DIRECT_TIMEOUT_MS = 9000;
+const DASHBOARD_BACKEND_TIMEOUT_MS = 12000;
+const DASHBOARD_MODULE_TIMEOUT_MS = 13000;
+const DASHBOARD_TOTAL_TIMEOUT_MS = 20000;
 
 // OCR character fixes for arithmetic captcha
 const OCR_CHAR_FIXES = {
@@ -463,6 +468,33 @@ async function finalizeLogin(account, password, ticket, tgt, jar, timeout, env) 
 async function fetchJwxtCookies(ticket, tgt, jar, timeout) {
   const diagnostics = [];
 
+  function looksLikeJwxtLoginPage(text) {
+    return text.includes('login_slogin') ||
+      /<input[^>]*type\s*=\s*['"]password['"]/i.test(text) ||
+      text.includes('lyuapServer/login');
+  }
+
+  async function verifyJwxtCookies(serviceUrl, cookies, source) {
+    if (!cookies) return '';
+    try {
+      const origin = new URL(serviceUrl).origin;
+      const [res, html] = await fetchGbkText(`${origin}/jwglxt/xsxxxggl/xsgrxxwh_cxXsgrxx.html`, {
+        headers: {
+          'Cookie': cookies,
+          'User-Agent': 'Mozilla/5.0 (Linux; Android 16) GZUS-PRO/1.0',
+          'Referer': `${origin}/jwglxt/xtgl/index_initMenu.html`,
+        },
+        signal: AbortSignal.timeout(Math.min(timeout, 10000)),
+      });
+      const ok = Boolean(res && res.ok && html && !looksLikeJwxtLoginPage(html));
+      diagnostics.push(`${source}:${new URL(serviceUrl).hostname}:verify=${ok ? 'ok' : 'login-page'}:status=${res ? res.status : 'null'}`);
+      return ok ? cookies : '';
+    } catch (e) {
+      diagnostics.push(`${source}:${new URL(serviceUrl).hostname}:verify-error=${e && e.message ? e.message : String(e)}`);
+      return '';
+    }
+  }
+
   async function followServiceTicket(serviceUrl, serviceTicket, source) {
     if (!serviceUrl || !serviceTicket) return '';
     const redirectUrl = serviceTicketUrl(serviceUrl, serviceTicket);
@@ -473,7 +505,7 @@ async function fetchJwxtCookies(ticket, tgt, jar, timeout) {
       const cookies = getJwxtCookies(jar, serviceUrl);
       const contentType = res.headers.get('Content-Type') || '';
       diagnostics.push(`${source}:${new URL(serviceUrl).hostname}:status=${res.status}:cookies=${cookies ? cookies.length : 0}:type=${contentType}`);
-      return cookies || '';
+      return verifyJwxtCookies(serviceUrl, cookies, source);
     } catch (e) {
       diagnostics.push(`${source}:${new URL(serviceUrl).hostname}:error=${e && e.message ? e.message : String(e)}`);
       return '';
@@ -506,19 +538,53 @@ async function fetchJwxtCookies(ticket, tgt, jar, timeout) {
     }
   }
 
-  // Prefer a fresh service ticket for the certificate-valid JWXT host.
-  for (const serviceUrl of JWXT_SERVICE_URLS) {
+  async function freshCookies(serviceUrl, source = 'fresh') {
     const freshTicket = await requestServiceTicket(serviceUrl);
-    const cookies = await followServiceTicket(serviceUrl, freshTicket, 'fresh');
+    return followServiceTicket(serviceUrl, freshTicket, source);
+  }
+
+  async function delayedFreshCookies(serviceUrl, delayMs) {
+    await sleep(delayMs);
+    return freshCookies(serviceUrl, 'fresh-retry');
+  }
+
+  async function firstNonEmpty(attempts) {
+    const pending = attempts.map((promise) => {
+      let wrapped;
+      wrapped = promise.catch(() => '').then((cookies) => ({ wrapped, cookies }));
+      return wrapped;
+    });
+    while (pending.length > 0) {
+      const { wrapped, cookies } = await Promise.race(pending);
+      if (cookies) return cookies;
+      const index = pending.indexOf(wrapped);
+      if (index >= 0) pending.splice(index, 1);
+    }
+    return '';
+  }
+
+  // Prefer the certificate-valid JWXT host. Legacy/initial tickets may produce
+  // cookies that are accepted by CAS but later return HTML for JSON endpoints.
+  const canonicalCookies = await firstNonEmpty([
+    freshCookies(JWXT_SERVICE_URL),
+    delayedFreshCookies(JWXT_SERVICE_URL, 1200),
+  ]);
+  if (canonicalCookies) return canonicalCookies;
+
+  for (const serviceUrl of JWXT_SERVICE_URLS) {
+    if (serviceUrl === JWXT_SERVICE_URL) continue;
+    const cookies = await freshCookies(serviceUrl);
     if (cookies) return cookies;
   }
 
-  // Last resort: use the ticket returned by the initial CAS login service.
   const initialCookies = await followServiceTicket(SERVICE_URL, ticket, 'initial');
   if (initialCookies) return initialCookies;
 
   const jarCookies = getJwxtCookies(jar);
-  if (jarCookies) return jarCookies;
+  if (jarCookies) {
+    const verified = await verifyJwxtCookies(JWXT_SERVICE_URL, jarCookies, 'jar');
+    if (verified) return verified;
+  }
 
   throw new Error(`未获取到教务系统会话 Cookie（${diagnostics.join('; ') || 'no diagnostics'}）`);
 }
@@ -612,6 +678,10 @@ async function ocrRecognize(imageBytes, env) {
 }
 
 // ─── Credential Encryption/Decryption (Web Crypto AES-GCM) ──────────
+const CREDENTIAL_TOKEN_VERSION = 1;
+const CREDENTIAL_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
+const CREDENTIAL_TOKEN_CLOCK_SKEW_MS = 5 * 60 * 1000;
+
 async function encryptCredentials(account, password, key) {
   const encoder = new TextEncoder();
   const keyData = await crypto.subtle.digest('SHA-256', encoder.encode(key));
@@ -619,7 +689,12 @@ async function encryptCredentials(account, password, key) {
     'raw', keyData, { name: 'AES-GCM' }, false, ['encrypt']
   );
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const plaintext = `${account}:${password}`;
+  const plaintext = JSON.stringify({
+    version: CREDENTIAL_TOKEN_VERSION,
+    issuedAt: Date.now(),
+    account,
+    password,
+  });
   const encrypted = await crypto.subtle.encrypt(
     { name: 'AES-GCM', iv },
     cryptoKey,
@@ -631,7 +706,7 @@ async function encryptCredentials(account, password, key) {
   return btoa(String.fromCharCode(...combined));
 }
 
-async function decryptCredentials(token, key) {
+async function decryptCredentials(token, key, now) {
   const encoder = new TextEncoder();
   const keyData = await crypto.subtle.digest('SHA-256', encoder.encode(key));
   const cryptoKey = await crypto.subtle.importKey(
@@ -646,11 +721,24 @@ async function decryptCredentials(token, key) {
     ciphertext
   );
   const plaintext = new TextDecoder().decode(decrypted);
-  const colonIdx = plaintext.indexOf(':');
-  if (colonIdx === -1) throw new Error('Invalid credential format');
+  const credentials = JSON.parse(plaintext);
+  if (
+    credentials.version !== CREDENTIAL_TOKEN_VERSION ||
+    !Number.isSafeInteger(credentials.issuedAt) ||
+    typeof credentials.account !== 'string' ||
+    credentials.account.length === 0 ||
+    typeof credentials.password !== 'string' ||
+    credentials.password.length === 0
+  ) {
+    throw new Error('Invalid credential format');
+  }
+  const age = now - credentials.issuedAt;
+  if (age < -CREDENTIAL_TOKEN_CLOCK_SKEW_MS || age > CREDENTIAL_TOKEN_TTL_MS) {
+    throw new Error('Credential token expired');
+  }
   return {
-    account: plaintext.substring(0, colonIdx),
-    password: plaintext.substring(colonIdx + 1),
+    account: credentials.account,
+    password: credentials.password,
   };
 }
 
@@ -950,6 +1038,26 @@ async function fetchCanonicalStaticAsset(request) {
   return null;
 }
 
+async function fetchQuerylessStaticAsset(request, env) {
+  const url = new URL(request.url);
+  if (!url.search) return null;
+  url.search = '';
+
+  try {
+    const assetRequest = new Request(url.toString(), {
+      method: 'GET',
+      headers: {
+        Accept: request.headers.get('Accept') || '*/*',
+      },
+    });
+    const response = await fetchAsset(assetRequest, env);
+    if (response.ok && !isHtmlFallback(response)) return response;
+  } catch (e) {
+    console.warn(`[asset] queryless fallback failed for ${url.pathname}: ${e.message}`);
+  }
+  return null;
+}
+
 async function serveStaticAsset(request, env) {
   const url = new URL(request.url);
   const response = await fetchAsset(request, env);
@@ -958,6 +1066,9 @@ async function serveStaticAsset(request, env) {
   if (response.ok && !isHtmlFallback(response)) {
     return withStaticCacheHeaders(response, url.pathname);
   }
+
+  const queryless = await fetchQuerylessStaticAsset(request, env);
+  if (queryless) return withStaticCacheHeaders(queryless, url.pathname);
 
   const fallback = await fetchCanonicalStaticAsset(request);
   if (fallback) return withStaticCacheHeaders(fallback, url.pathname);
@@ -999,6 +1110,11 @@ function withStaticCacheHeaders(response, pathname) {
 // inject JWXT cookies (which are IP-bounded to the Worker edge).
 const SESSION_KV_TTL = 7200; // 2 hours, matches Vercel session TTL
 const localSessions = new Map(); // sessionId -> { cookies, ehallCookies, studentName }
+const localAccountSessions = new Map(); // account hash -> current sessionId
+// 会话「当前账号有效性」验证结果的内存缓存窗口：窗口内跳过 KV index 读取，
+// 避免每个带 session 的请求都产生一次 KV 读（跨实例踢下线感知最坏延迟一个窗口）。
+const SESSION_VALIDATION_CACHE_MS = 60 * 1000;
+const localSessionValidatedAt = new Map(); // sessionId -> last validated timestamp
 const ACADEMIC_CACHE_TTL = 1800; // 30 minutes, enough to absorb JWXT bursts
 const localAcademicCache = new Map(); // key -> { data, cachedAt }
 const localAcademicInFlight = new Map(); // key -> Promise<{ jwxtRes, data }>
@@ -1009,33 +1125,195 @@ function generateSessionId() {
   return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
 }
 
-async function saveSessionToKV(sessionId, data, env) {
+async function accountSessionIndexKey(account) {
+  const digest = await crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(account)
+  );
+  const accountHash = Array.from(
+    new Uint8Array(digest),
+    byte => byte.toString(16).padStart(2, '0')
+  ).join('');
+  return `account-session:${accountHash}`;
+}
+
+function createEdgeSessionData(account, loginResult, expiresAt) {
+  return {
+    account,
+    cookies: loginResult.cookies,
+    ehallCookies: loginResult.ehallCookies,
+    ehallAuthToken: loginResult.ehallAuthToken,
+    studentName: loginResult.studentName,
+    expiresAt,
+  };
+}
+
+function requireSessionsKV(env) {
   if (!env || !env.SESSIONS_KV) {
-    return { ok: false, reason: 'env.SESSIONS_KV not available' };
+    throw new Error('Cloudflare KV 绑定 SESSIONS_KV 不可用');
   }
+  return env.SESSIONS_KV;
+}
+
+async function createPersistentSession(loginResult, account, env) {
+  requireSessionsKV(env);
+  let backendResult = null;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    backendResult = await createSessionOnBackend(loginResult, account, env);
+    if (backendResult.sessionId) break;
+    console.warn('[session] 后端会话创建失败', {
+      attempt,
+      maxAttempts: 2,
+      status: backendResult.status,
+      error: backendResult.error,
+    });
+    if (attempt < 2) await sleep(2000);
+  }
+  if (!backendResult || !backendResult.sessionId) {
+    throw new Error(backendResult && backendResult.error
+      ? backendResult.error
+      : '后端未返回会话标识');
+  }
+
+  const sessionData = createEdgeSessionData(
+    account,
+    loginResult,
+    Date.now() + SESSION_KV_TTL * 1000
+  );
+  await saveSessionToKV(backendResult.sessionId, sessionData, env);
+  return backendResult.sessionId;
+}
+
+async function validateCurrentAccountSession(sessionId, data, env, now) {
+  if (
+    !data ||
+    typeof data !== 'object' ||
+    typeof data.account !== 'string' ||
+    data.account.length === 0 ||
+    typeof data.cookies !== 'string' ||
+    data.cookies.length === 0 ||
+    !Number.isSafeInteger(data.expiresAt) ||
+    now >= data.expiresAt
+  ) {
+    await deleteSessionFromStores(sessionId, data, env);
+    return false;
+  }
+  // 验证窗口内直接信任内存结论，避免每请求一次 KV index 读
+  const lastValidated = localSessionValidatedAt.get(sessionId) || 0;
+  if (now - lastValidated < SESSION_VALIDATION_CACHE_MS) {
+    return true;
+  }
+  const indexKey = await accountSessionIndexKey(data.account);
+  let currentSessionId = localAccountSessions.get(indexKey) || null;
+  if (env && env.SESSIONS_KV) {
+    currentSessionId = await env.SESSIONS_KV.get(indexKey);
+  }
+  if (currentSessionId && currentSessionId !== sessionId) {
+    localSessions.delete(sessionId);
+    localSessionValidatedAt.delete(sessionId);
+    return false;
+  }
+  localAccountSessions.set(indexKey, sessionId);
+  localSessionValidatedAt.set(sessionId, now);
+  return true;
+}
+
+async function saveSessionToKV(sessionId, data, env) {
+  const sessionsKV = requireSessionsKV(env);
+  const indexKey = data.account
+    ? await accountSessionIndexKey(data.account)
+    : null;
+  const previousLocalSessionId = indexKey
+    ? localAccountSessions.get(indexKey)
+    : null;
   const key = `session:${sessionId}`;
   const cookiesLen = (data.cookies || '').length;
   const maxRetries = 2;
+  let previousKvSessionId = null;
+  let previousKvSessionResolved = false;
+  let lastError = null;
 
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      await env.SESSIONS_KV.put(
+      if (indexKey && !previousKvSessionResolved) {
+        previousKvSessionId = await sessionsKV.get(indexKey);
+        previousKvSessionResolved = true;
+      }
+      await sessionsKV.put(
         key,
         JSON.stringify(data),
         { expirationTtl: SESSION_KV_TTL }
       );
-      console.log(`[kv] Session ${sessionId.slice(0, 8)} saved to KV (${cookiesLen} chars cookies)`);
-      return { ok: true };
-    } catch (e) {
-      console.warn(
-        `[kv] Failed to save session ${sessionId.slice(0, 8)} (attempt ${attempt + 1}/${maxRetries}):`, e.message
-      );
-      if (attempt < maxRetries - 1) {
-        await sleep(200);
+      if (indexKey) {
+        await sessionsKV.put(
+          indexKey,
+          sessionId,
+          { expirationTtl: SESSION_KV_TTL }
+        );
       }
+      if (previousKvSessionId && previousKvSessionId !== sessionId) {
+        await sessionsKV.delete(`session:${previousKvSessionId}`);
+      }
+      if (previousLocalSessionId && previousLocalSessionId !== sessionId) {
+        localSessions.delete(previousLocalSessionId);
+      }
+      localSessions.set(sessionId, data);
+      if (indexKey) localAccountSessions.set(indexKey, sessionId);
+      console.log('[kv] 会话已持久化', {
+        sessionId: sessionId.slice(0, 8),
+        cookiesLength: cookiesLen,
+      });
+      return;
+    } catch (error) {
+      lastError = error;
+      console.warn('[kv] 会话持久化失败', {
+        sessionId: sessionId.slice(0, 8),
+        attempt,
+        maxAttempts: maxRetries,
+        error: error.message,
+      });
+      if (attempt < maxRetries) await sleep(200);
     }
   }
-  return { ok: false, reason: `KV write failed after ${maxRetries} attempts` };
+  throw new Error(
+    `Cloudflare KV 会话写入失败：session=${sessionId.slice(0, 8)}, ` +
+    `attempts=${maxRetries}, error=${lastError ? lastError.message : 'unknown'}`,
+    { cause: lastError }
+  );
+}
+
+async function deleteSessionFromStores(sessionId, data, env) {
+  localSessions.delete(sessionId);
+  localSessionValidatedAt.delete(sessionId);
+  const indexKey = data && data.account
+    ? await accountSessionIndexKey(data.account)
+    : null;
+  if (indexKey && localAccountSessions.get(indexKey) === sessionId) {
+    localAccountSessions.delete(indexKey);
+  }
+  if (!env || !env.SESSIONS_KV) return;
+
+  let lastError = null;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const currentSessionId = indexKey
+        ? await env.SESSIONS_KV.get(indexKey)
+        : null;
+      await env.SESSIONS_KV.delete(`session:${sessionId}`);
+      if (indexKey && currentSessionId === sessionId) {
+        await env.SESSIONS_KV.delete(indexKey);
+      }
+      return;
+    } catch (error) {
+      lastError = error;
+      console.warn(
+        `[kv] Failed to delete session ${sessionId.slice(0, 8)} ` +
+        `(attempt ${attempt}/2): ${error.message}`
+      );
+      if (attempt < 2) await sleep(200);
+    }
+  }
+  throw lastError;
 }
 
 async function getLocalSession(request, env) {
@@ -1044,7 +1322,15 @@ async function getLocalSession(request, env) {
 
   // 1. In-memory (same Worker instance that handled login)
   let data = localSessions.get(sessionId);
-  if (data) return data;
+  if (data) {
+    const isCurrent = await validateCurrentAccountSession(
+      sessionId,
+      data,
+      env,
+      Date.now()
+    );
+    return isCurrent ? data : null;
+  }
 
   // 2. KV fallback (different Worker instance, cold-start, etc.)
   try {
@@ -1052,6 +1338,14 @@ async function getLocalSession(request, env) {
       const raw = await env.SESSIONS_KV.get(`session:${sessionId}`);
       if (raw) {
         data = JSON.parse(raw);
+        if (!await validateCurrentAccountSession(
+          sessionId,
+          data,
+          env,
+          Date.now()
+        )) {
+          return null;
+        }
         localSessions.set(sessionId, data); // cache for subsequent requests
         console.log(`[kv] Session ${sessionId.slice(0, 8)} restored from KV`);
         return data;
@@ -1459,6 +1753,7 @@ export default {
       try {
         const body = await request.json();
         let { account, password, encryptedPassword, keyId } = body;
+        account = account || body.studentId || body.student_id || body.username;
 
         // If password is RSA-encrypted, call Vercel's fast decrypt endpoint
         // instead of proxying the entire auto-login (CAS login is too slow).
@@ -1482,35 +1777,13 @@ export default {
           return errorResponse(result.error, 401, request);
         }
 
-        // Create a session on Vercel backend.
-        // This is NOT best-effort — if it fails, the frontend will get
-        // a sessionId that doesn't exist in the DB, causing immediate
-        // 401 "会话已过期" on subsequent API calls.
-        let vercelResult = await createSessionOnBackend(result, account, password, env);
-        if (!vercelResult.sessionId) {
-          // Retry once after a short delay (Vercel cold-start / Neon wake-up)
-          await sleep(2000);
-          vercelResult = await createSessionOnBackend(result, account, password, env);
+        let sessionId;
+        try {
+          sessionId = await createPersistentSession(result, account, env);
+        } catch (error) {
+          console.error('[auto-login] 会话持久化失败', { error: error.message });
+          return errorResponse(`会话创建失败: ${error.message}`, 503, request);
         }
-        if (!vercelResult.sessionId) {
-          console.error(`createSessionOnBackend failed twice after auto-login: ${vercelResult.error}`);
-          return errorResponse(`会话创建失败: ${vercelResult.error || '未知错误'}`, 503, request);
-        }
-
-        // Store local session mapping so proxied requests can inject cookies.
-        // JWXT cookies are IP-bounded to this Worker's edge location, so
-        // Vercel (different IP) cannot validate them — we must inject them
-        // on every proxied request.
-        const sessionId = vercelResult.sessionId;
-        const sessionData = {
-          account: account,
-          cookies: result.cookies,
-          ehallCookies: result.ehallCookies,
-          ehallAuthToken: result.ehallAuthToken,
-          studentName: result.studentName,
-        };
-        localSessions.set(sessionId, sessionData);
-        const kvResult = await saveSessionToKV(sessionId, sessionData, env);
 
         return jsonResponse({
           status: 'ok',
@@ -1521,7 +1794,6 @@ export default {
           ...(shouldReturnJwxtCookies(request) ? { jwxtCookies: result.cookies } : {}),
           ehallCookies: result.ehallCookies,
           ehallAuthToken: result.ehallAuthToken,
-          _kv: kvResult,
         }, 200, request);
       } catch (e) {
         return errorResponse(`登录失败: ${e.message}`, 500, request);
@@ -1545,7 +1817,7 @@ export default {
         // Decrypt credentials using AES-GCM (same algorithm as encryptCredentials)
         let credentials;
         try {
-          credentials = await decryptCredentials(credentialToken, key);
+          credentials = await decryptCredentials(credentialToken, key, Date.now());
         } catch (e) {
           return errorResponse('凭据已失效，请重新登录', 401, request);
         }
@@ -1557,28 +1829,13 @@ export default {
           return errorResponse(result.error, 401, request);
         }
 
-        // Always keep a local session (cookies are IP-bounded to this Worker).
-        // Create session on Vercel backend — retry once on failure.
-        let vercelResult = await createSessionOnBackend(result, credentials.account, credentials.password, env);
-        if (!vercelResult.sessionId) {
-          await sleep(2000);
-          vercelResult = await createSessionOnBackend(result, credentials.account, credentials.password, env);
+        let sessionId;
+        try {
+          sessionId = await createPersistentSession(result, credentials.account, env);
+        } catch (error) {
+          console.error('[relogin] 会话持久化失败', { error: error.message });
+          return errorResponse(`会话创建失败: ${error.message}`, 503, request);
         }
-        if (!vercelResult.sessionId) {
-          console.error(`createSessionOnBackend failed twice after relogin: ${vercelResult.error}`);
-          return errorResponse(`会话创建失败: ${vercelResult.error || '未知错误'}`, 503, request);
-        }
-
-        const sessionId = vercelResult.sessionId;
-        const sessionData = {
-          account: credentials.account,
-          cookies: result.cookies,
-          ehallCookies: result.ehallCookies,
-          ehallAuthToken: result.ehallAuthToken,
-          studentName: result.studentName,
-        };
-        localSessions.set(sessionId, sessionData);
-        const kvResult = await saveSessionToKV(sessionId, sessionData, env);
 
         return jsonResponse({
           status: 'ok',
@@ -1589,10 +1846,36 @@ export default {
           ...(shouldReturnJwxtCookies(request) ? { jwxtCookies: result.cookies } : {}),
           ehallCookies: result.ehallCookies,
           ehallAuthToken: result.ehallAuthToken,
-          _kv: kvResult,
         }, 200, request);
       } catch (e) {
         return errorResponse(`重新登录失败: ${e.message}`, 500, request);
+      }
+    }
+
+    // ─── Logout (edge + backend) ───────────────────────────────
+    if (path === 'auth/logout' && request.method === 'POST') {
+      const sessionId = request.headers.get('X-Session-Id');
+      if (!sessionId) {
+        return errorResponse('缺少会话标识', 400, request);
+      }
+      try {
+        const localSession = await getLocalSession(request, env);
+        const upstreamRequest = localSession
+          ? injectSessionCookies(request, localSession)
+          : request;
+        const response = await proxyToVercel(
+          upstreamRequest,
+          env,
+          new URL(request.url),
+          !!localSession
+        );
+        await deleteSessionFromStores(sessionId, localSession, env);
+        return response;
+      } catch (error) {
+        console.error(
+          `[logout] Failed to revoke session ${sessionId.slice(0, 8)}: ${error.message}`
+        );
+        return errorResponse('退出登录失败，请重试', 503, request);
       }
     }
 
@@ -2119,8 +2402,19 @@ export default {
       if (!data || typeof data !== 'object') return null;
       for (const key of ['items', 'kbList', 'rows', 'list', 'data']) {
         if (Array.isArray(data[key])) return data[key];
+        if (data[key] && typeof data[key] === 'object') {
+          const nested = extractAcademicItems(data[key]);
+          if (nested) return nested;
+        }
       }
       return null;
+    }
+
+    function unwrapCreditObject(data) {
+      if (data && data.data && typeof data.data === 'object' && !Array.isArray(data.data)) {
+        return data.data;
+      }
+      return data;
     }
 
     function dashboardCacheKey(sessionId, module, year, term) {
@@ -2178,6 +2472,28 @@ export default {
     }) {
       const started = Date.now();
       const key = dashboardCacheKey(sessionId, name, year, term);
+      // SWR：TTL 内命中缓存则立即返回（stale），后台静默刷新缓存。
+      // 前端 hasUsableData 将 stale 视为可用数据并显示缓存标识。
+      const cached = await loadDashboardCache(env, key, ttlSeconds);
+      if (cached && cached.data !== undefined) {
+        if (context && typeof context.waitUntil === 'function') {
+          context.waitUntil((async () => {
+            try {
+              const fresh = await withTimeout(fetcher(), timeoutMs, `dashboard:${name}:refresh`);
+              await saveDashboardCache(env, key, fresh, ttlSeconds);
+            } catch (e) {
+              console.warn(`[dashboard] 后台刷新失败 ${name}: ${e && e.message ? e.message : e}`);
+            }
+          })());
+        }
+        return {
+          status: 'stale',
+          data: cached.data,
+          source: 'edge-cache',
+          cachedAt: new Date(cached.cachedAt).toISOString(),
+          durationMs: Date.now() - started,
+        };
+      }
       try {
         const data = await withTimeout(fetcher(), timeoutMs, `dashboard:${name}`);
         const status = Array.isArray(data) && data.length === 0 ? 'empty' : 'ok';
@@ -2189,20 +2505,9 @@ export default {
           durationMs: Date.now() - started,
         };
       } catch (e) {
-        const cached = await loadDashboardCache(env, key, ttlSeconds);
-        if (cached && cached.data !== undefined) {
-          return {
-            status: 'stale',
-            data: cached.data,
-            source: 'edge-cache',
-            cachedAt: new Date(cached.cachedAt).toISOString(),
-            error: e && e.message ? e.message : String(e),
-            durationMs: Date.now() - started,
-          };
-        }
         return {
           status: 'error',
-          data: Array.isArray(name) ? [] : null,
+          data: null,
           source: 'edge',
           error: e && e.message ? e.message : String(e),
           durationMs: Date.now() - started,
@@ -2290,9 +2595,12 @@ export default {
           'Referer': JWXT_REFERER,
         },
         body: config.body.toString(),
-        signal: AbortSignal.timeout(4500),
+        signal: AbortSignal.timeout(DASHBOARD_DIRECT_TIMEOUT_MS),
       });
       if (!jwxtRes || !jwxtRes.ok || !data) {
+        if (module === 'schedule' && jwxtRes && jwxtRes.ok) {
+          return [];
+        }
         throw new Error(`JWXT ${module} returned ${jwxtRes ? jwxtRes.status : 'null'}`);
       }
       if (module === 'attendance') {
@@ -2302,9 +2610,12 @@ export default {
       const items = extractAcademicItems(data);
       if (items) return normalizeResultList(items, module);
       if (module === 'credits' && data && typeof data === 'object') {
-        if (Number(data.totalResult || data.totalCount || 0) === 0) return [];
-        return normalizeResultList([data], module);
+        const creditData = unwrapCreditObject(data);
+        const totalResult = creditData.totalResult ?? creditData.totalCount ?? -1;
+        if (Number(totalResult) === 0) return [];
+        return normalizeResultList([creditData], module);
       }
+      if (module === 'schedule') return [];
       throw new Error(`JWXT ${module} returned unexpected format`);
     }
 
@@ -2359,7 +2670,7 @@ export default {
           'User-Agent': 'Mozilla/5.0 (Linux; Android 16) GZUS-PRO/1.0',
           'Referer': JWXT_REFERER,
         },
-        signal: AbortSignal.timeout(3500),
+        signal: AbortSignal.timeout(DASHBOARD_DIRECT_TIMEOUT_MS),
       });
       if (!jwxtRes || !jwxtRes.ok || !html) throw new Error('个人资料获取失败');
       const info = extractDashboardStudentInfo(html);
@@ -2375,7 +2686,7 @@ export default {
           'User-Agent': 'Mozilla/5.0 (Linux; Android 16) GZUS-PRO/1.0',
           'Referer': JWXT_REFERER,
         },
-        signal: AbortSignal.timeout(3500),
+        signal: AbortSignal.timeout(DASHBOARD_DIRECT_TIMEOUT_MS),
       });
       if (!newsRes || !newsRes.ok || !html) throw new Error('通知获取失败');
       return parseNoticeItems(html, newsUrl).slice(0, 20);
@@ -2383,7 +2694,7 @@ export default {
 
     async function fetchDashboardBackend(path, request, session, timeoutMs) {
       const origin = (env.API_ORIGIN || 'https://api-one-zeta-dc0jrazxzq.vercel.app').replace(/\/$/, '');
-      const headers = new Headers(request.headers);
+      const headers = buildVercelProxyHeaders(request);
       if (session.cookies) headers.set('Cookie', session.cookies);
       if (session.ehallCookies) headers.set('X-Ehall-Cookies', session.ehallCookies);
       if (session.account) headers.set('X-Student-Account', session.account);
@@ -2412,51 +2723,61 @@ export default {
       const modules = {};
       const jobs = {
         me: dashboardModule({
-          name: 'me', sessionId, year, term, ttlSeconds: 86400, timeoutMs: 4000,
+          name: 'me', sessionId, year, term, ttlSeconds: 86400,
+          timeoutMs: DASHBOARD_MODULE_TIMEOUT_MS,
           fetcher: () => fetchDashboardMe(session),
         }),
         schedule: dashboardModule({
-          name: 'schedule', sessionId, year, term, ttlSeconds: 1800, timeoutMs: 5000,
+          name: 'schedule', sessionId, year, term, ttlSeconds: 1800,
+          timeoutMs: DASHBOARD_MODULE_TIMEOUT_MS,
           fetcher: () => fetchDashboardAcademic('schedule', session, year, term),
         }),
         notices: dashboardModule({
-          name: 'notices', sessionId, year, term, ttlSeconds: 300, timeoutMs: 4000,
+          name: 'notices', sessionId, year, term, ttlSeconds: 300,
+          timeoutMs: DASHBOARD_MODULE_TIMEOUT_MS,
           fetcher: () => fetchDashboardNotices(session),
         }),
         attendance: dashboardModule({
-          name: 'attendance', sessionId, year, term, ttlSeconds: 1800, timeoutMs: 5000,
+          name: 'attendance', sessionId, year, term, ttlSeconds: 1800,
+          timeoutMs: DASHBOARD_MODULE_TIMEOUT_MS,
           fetcher: () => fetchDashboardAcademic('attendance', session, year, term),
         }),
         credits: dashboardModule({
-          name: 'credits', sessionId, year, term, ttlSeconds: 1800, timeoutMs: 5000,
+          name: 'credits', sessionId, year, term, ttlSeconds: 1800,
+          timeoutMs: DASHBOARD_MODULE_TIMEOUT_MS,
           fetcher: () => fetchDashboardAcademic('credits', session, year, term),
         }),
         grades: dashboardModule({
-          name: 'grades', sessionId, year, term, ttlSeconds: 1800, timeoutMs: 5000,
+          name: 'grades', sessionId, year, term, ttlSeconds: 1800,
+          timeoutMs: DASHBOARD_MODULE_TIMEOUT_MS,
           fetcher: () => fetchDashboardAcademic('grades', session, year, term),
         }),
         exams: dashboardModule({
-          name: 'exams', sessionId, year, term, ttlSeconds: 1800, timeoutMs: 5000,
+          name: 'exams', sessionId, year, term, ttlSeconds: 1800,
+          timeoutMs: DASHBOARD_MODULE_TIMEOUT_MS,
           fetcher: () => fetchDashboardAcademic('exams', session, year, term),
         }),
         apps: dashboardModule({
-          name: 'apps', sessionId, year, term, ttlSeconds: 600, timeoutMs: 3500,
+          name: 'apps', sessionId, year, term, ttlSeconds: 600,
+          timeoutMs: DASHBOARD_MODULE_TIMEOUT_MS,
           fetcher: () => session.ehallCookies ? fetchEhallApplicationsFromEdge(session, env) : [],
         }),
         progress: dashboardModule({
-          name: 'progress', sessionId, year, term, ttlSeconds: 300, timeoutMs: 3500,
+          name: 'progress', sessionId, year, term, ttlSeconds: 300,
+          timeoutMs: DASHBOARD_MODULE_TIMEOUT_MS,
           fetcher: () => session.ehallCookies
-            ? fetchDashboardBackend('/ehall/progress', request, session, 3000)
+            ? fetchDashboardBackend('/ehall/progress', request, session, DASHBOARD_BACKEND_TIMEOUT_MS)
             : { items: [] },
         }),
         ecard: dashboardModule({
-          name: 'ecard', sessionId, year, term, ttlSeconds: 600, timeoutMs: 3500,
-          fetcher: () => fetchDashboardBackend('/ecard/summary', request, session, 3000),
+          name: 'ecard', sessionId, year, term, ttlSeconds: 600,
+          timeoutMs: DASHBOARD_MODULE_TIMEOUT_MS,
+          fetcher: () => fetchDashboardBackend('/ecard/summary', request, session, DASHBOARD_BACKEND_TIMEOUT_MS),
         }),
       };
       const settled = await withTimeout(
         Promise.all(Object.entries(jobs).map(async ([name, promise]) => [name, await promise])),
-        8000,
+        DASHBOARD_TOTAL_TIMEOUT_MS,
         'dashboard',
       ).catch(async (e) => {
         console.warn(`[dashboard] total timeout trace=${traceId}: ${e.message}`);
@@ -2469,7 +2790,7 @@ export default {
               data: null,
               source: 'edge',
               error: err && err.message ? err.message : String(err),
-              durationMs: 8000,
+              durationMs: DASHBOARD_TOTAL_TIMEOUT_MS,
             }];
           }
         }));
@@ -2560,50 +2881,84 @@ export default {
               });
               return { jwxtRes, data };
             };
-            let resultPromise = path === 'schedule' ? localAcademicInFlight.get(cacheKey) : null;
-            if (!resultPromise) {
-              resultPromise = fetchAcademic();
-              if (path === 'schedule') {
-                localAcademicInFlight.set(cacheKey, resultPromise);
-              }
-            }
-            const { jwxtRes, data } = await resultPromise.finally(() => {
-              if (path === 'schedule' && localAcademicInFlight.get(cacheKey) === resultPromise) {
-                localAcademicInFlight.delete(cacheKey);
-              }
-            });
-
-            if (jwxtRes && jwxtRes.ok && data) {
+            // 归一化 JWXT 响应为前端约定格式；无法识别时返回 null
+            const normalizeAcademicData = (raw) => {
               // attendance returns { status: 'ok', items: [...] }
-              if (path === 'attendance' && data && data.items) {
-                const normalized = {
-                  status: 'ok',
-                  items: normalizeResultList(data.items, path),
+              if (path === 'attendance' && raw && raw.items) {
+                return {
+                  value: { status: 'ok', items: normalizeResultList(raw.items, path) },
                 };
-                await saveAcademicCache(env, cacheKey, normalized);
-                return jsonResponse(normalized, 200, request);
               }
               // Common JWXT response formats — normalize field names for Flutter.
-              const academicItems = extractAcademicItems(data);
+              const academicItems = extractAcademicItems(raw);
               if (academicItems) {
-                const normalized = normalizeResultList(academicItems, path);
-                await saveAcademicCache(env, cacheKey, normalized);
-                return jsonResponse(normalized, 200, request);
+                return { value: normalizeResultList(academicItems, path) };
               }
               // Single object (credits totals, etc.)
-              if (data && typeof data === 'object' && !Array.isArray(data)) {
+              if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
                 if (path === 'schedule') {
-                  lastEdgeError = 'JWXT schedule returned object without kbList/items';
-                  console.warn(`[edge-${path}] ${lastEdgeError}`);
-                } else if (path === 'credits' && Number(data.totalResult || data.totalCount || 0) === 0) {
-                  const normalized = [];
-                  await saveAcademicCache(env, cacheKey, normalized);
-                  return jsonResponse(normalized, 200, request);
-                } else {
-                  await saveAcademicCache(env, cacheKey, data);
-                  return jsonResponse(data, 200, request);
+                  return { value: [], emptyReason: 'schedule-without-items' };
                 }
+                if (path === 'credits') {
+                  const creditData = unwrapCreditObject(raw);
+                  const totalResult = creditData.totalResult ?? creditData.totalCount ?? -1;
+                  return {
+                    value: Number(totalResult) === 0
+                      ? []
+                      : normalizeResultList([creditData], path),
+                  };
+                }
+                return { value: raw };
               }
+              return null;
+            };
+            // 请求去重：同 cacheKey 的进行中请求（含 SWR 后台刷新）共享一个 Promise
+            const startFetchAndCache = () => {
+              let p = localAcademicInFlight.get(cacheKey);
+              if (!p) {
+                p = (async () => {
+                  const { jwxtRes, data } = await fetchAcademic();
+                  if (jwxtRes && jwxtRes.ok && data) {
+                    const result = normalizeAcademicData(data);
+                    if (result !== null) {
+                      await saveAcademicCache(env, cacheKey, result.value);
+                      return { ok: true, value: result.value, emptyReason: result.emptyReason, jwxtRes };
+                    }
+                  }
+                  return { ok: false, jwxtRes };
+                })();
+                localAcademicInFlight.set(cacheKey, p);
+                p.finally(() => {
+                  if (localAcademicInFlight.get(cacheKey) === p) {
+                    localAcademicInFlight.delete(cacheKey);
+                  }
+                });
+              }
+              return p;
+            };
+            // SWR：TTL 内命中缓存立即返回（边缘响应从秒级降到毫秒级），
+            // 并通过 waitUntil 后台静默刷新缓存
+            const cached = await loadAcademicCache(env, cacheKey);
+            if (cached && cached.data !== undefined) {
+              if (context && typeof context.waitUntil === 'function') {
+                context.waitUntil(startFetchAndCache().catch(() => {}));
+              }
+              const resp = jsonResponse(cached.data, 200, request);
+              resp.headers.set('X-Data-Source', 'edge-cache');
+              resp.headers.set('X-Data-Cached-At', new Date(cached.cachedAt).toISOString());
+              return resp;
+            }
+            const result = await startFetchAndCache();
+            if (result.ok) {
+              const resp = jsonResponse(result.value, 200, request);
+              if (result.emptyReason) {
+                resp.headers.set('X-Data-Source', 'edge-empty');
+                resp.headers.set('X-Data-Reason', result.emptyReason);
+              }
+              return resp;
+            }
+            const jwxtRes = result.jwxtRes;
+            if (jwxtRes && jwxtRes.ok) {
               lastEdgeError = 'JWXT returned unexpected data format';
               console.warn(`[edge-${path}] ${lastEdgeError}`);
             } else {
@@ -2628,14 +2983,10 @@ export default {
             resp.headers.set('X-Data-Cached-At', new Date(cached.cachedAt).toISOString());
             return resp;
           }
-          return jsonResponse({
-            detail: '课表服务暂时不可用，请稍后重试',
-            source: 'edge-jwxt',
-            status: lastEdgeStatus,
-            error: lastEdgeError || 'JWXT request failed',
-            year,
-            term,
-          }, 502, request);
+          const resp = jsonResponse([], 200, request);
+          resp.headers.set('X-Data-Source', 'edge-empty');
+          resp.headers.set('X-Data-Reason', lastEdgeError || 'JWXT request failed');
+          return resp;
         }
       }
       // Fall through to Vercel if edge fetch failed
@@ -2824,7 +3175,7 @@ async function decryptPasswordOnVercel(encryptedPassword, keyId, env) {
 
 // ─── Create session on Vercel backend ──────────────────────────────
 // Returns { sessionId: string } on success, or { error: string, status: number } on failure.
-async function createSessionOnBackend(loginResult, account, password, env) {
+async function createSessionOnBackend(loginResult, account, env) {
   const vercelOrigin = (env.API_ORIGIN || 'https://api-one-zeta-dc0jrazxzq.vercel.app').replace(/\/$/, '');
 
   try {
@@ -2837,7 +3188,6 @@ async function createSessionOnBackend(loginResult, account, password, env) {
       body: JSON.stringify({
         account,
         cookies: loginResult.cookies,
-        password: password || null,
         ehall_cookies: loginResult.ehallCookies,
         ehall_auth_token: loginResult.ehallAuthToken,
         student_name: loginResult.studentName,
@@ -2846,7 +3196,7 @@ async function createSessionOnBackend(loginResult, account, password, env) {
     });
     if (res.ok) {
       const data = await res.json();
-      return { sessionId: data.sessionId, credentialToken: data.credentialToken || null };
+      return { sessionId: data.sessionId };
     }
     // Log non-OK response for debugging
     const errorText = await res.text().catch(() => '');
