@@ -23,7 +23,6 @@ import 'leave_attachment.dart';
 import 'persistent_cache.dart' deferred as persistent_cache;
 import 'ws_service.dart' deferred as ws_service;
 import 'mobile_sso.dart' deferred as mobile_sso;
-import 'avatar_open.dart' deferred as avatar_open;
 import 'background_service.dart' deferred as background_service;
 import 'reminder_service.dart' deferred as reminder_service;
 import 'ics_download.dart' deferred as ics_download;
@@ -37,16 +36,22 @@ import 'models/grade_models.dart';
 import 'models/home_config.dart';
 import 'models/nav_config.dart';
 import 'pages/ftp/ftp_upload_page.dart';
+import 'pages/info/info_page.dart';
+import 'pages/applications/applications_page.dart';
+import 'pages/credits/credits_page.dart';
+import 'pages/business/business_page.dart';
 import 'pages/more/more_page.dart';
+import 'pages/notices/notices_page.dart';
 import 'test_flags.dart';
 import 'widgets/async_panel.dart';
 import 'widgets/badges.dart';
 import 'widgets/data_table.dart';
+import 'widgets/icon_label.dart';
 import 'widgets/empty_state.dart';
 import 'widgets/info_tile.dart';
-import 'widgets/meta_text.dart';
 import 'widgets/open_browser.dart';
 import 'widgets/page_panel.dart';
+import 'widgets/progress.dart';
 import 'widgets/scale_tap.dart';
 import 'widgets/web_unsupported.dart';
 
@@ -1102,7 +1107,7 @@ class _LoginPageState extends State<LoginPage>
                                     onPressed: (loading || !agreedToTerms)
                                         ? null
                                         : _login,
-                                    child: _IconLabel(
+                                    child: IconLabel(
                                       icon: Icons.login,
                                       label: loading ? '登录中...' : '办事大厅统一登录',
                                       centered: true,
@@ -4347,7 +4352,7 @@ class _BusinessProgressHomeCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _ProgressCategoryStrip(categories: overview.categories),
+          ProgressCategoryStrip(categories: overview.categories),
           const SizedBox(height: 12),
           if (items.isEmpty)
             const EmptyState(message: '暂无业务进度')
@@ -4357,141 +4362,11 @@ class _BusinessProgressHomeCard extends StatelessWidget {
               child: SingleChildScrollView(
                 child: Column(
                   children: [
-                    for (final item in items) _ProgressMiniRow(item: item),
+                    for (final item in items) ProgressMiniRow(item: item),
                   ],
                 ),
               ),
             ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ProgressCategoryStrip extends StatelessWidget {
-  const _ProgressCategoryStrip({required this.categories});
-
-  final List<EhallProgressCategory> categories;
-
-  @override
-  Widget build(BuildContext context) {
-    final source = categories.isEmpty
-        ? EhallProgressOverview.fromItems(const <EhallProgressItem>[])
-            .categories
-        : categories;
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final tileWidth = constraints.maxWidth < 420 ? 96.0 : 112.0;
-        return SizedBox(
-          height: 82,
-          child: ListView.separated(
-            scrollDirection: Axis.horizontal,
-            itemCount: source.length,
-            separatorBuilder: (_, __) => const SizedBox(width: 8),
-            itemBuilder: (context, index) => SizedBox(
-              width: tileWidth,
-              child: _ProgressCategoryTile(category: source[index]),
-            ),
-          ),
-        );
-      },
-    );
-  }
-}
-
-class _ProgressCategoryTile extends StatelessWidget {
-  const _ProgressCategoryTile({required this.category});
-
-  final EhallProgressCategory category;
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final isActive = category.count > 0;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
-      decoration: BoxDecoration(
-        color: isActive
-            ? cs.primaryContainer.withValues(alpha: 0.75)
-            : cs.surfaceContainerHighest.withValues(alpha: 0.62),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Center(
-        child: FittedBox(
-          fit: BoxFit.scaleDown,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                category.label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: isActive ? cs.onPrimaryContainer : cs.onSurfaceVariant,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              const SizedBox(height: 2),
-              Text(
-                '${category.count}',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: isActive ? cs.onPrimaryContainer : cs.onSurfaceVariant,
-                  fontSize: 16,
-                  fontWeight: FontWeight.w900,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _ProgressMiniRow extends StatelessWidget {
-  const _ProgressMiniRow({required this.item});
-
-  final EhallProgressItem item;
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final value = ((item.progress ?? 0).clamp(0, 100)) / 100;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            children: [
-              Expanded(
-                flex: 3,
-                child: Text(item.title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontWeight: FontWeight.w700)),
-              ),
-              const SizedBox(width: 8),
-              Flexible(
-                flex: 2,
-                child: Align(
-                  alignment: Alignment.centerRight,
-                  child:
-                      StatusPill(label: item.statusLabel, color: cs.primary),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          _StaticProgressBar(value: value),
-          const SizedBox(height: 4),
-          Text(item.currentNode ?? item.summary ?? item.category,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12)),
         ],
       ),
     );
@@ -4645,7 +4520,7 @@ class _CreditsHomeCard extends StatelessWidget {
               style:
                   const TextStyle(fontSize: 24, fontWeight: FontWeight.w900)),
           const SizedBox(height: 10),
-          _StaticProgressBar(value: progress),
+          StaticProgressBar(value: progress),
           const SizedBox(height: 12),
           _HomeInfoLine(
               '必修',
@@ -5289,32 +5164,6 @@ class _HomeMeta extends StatelessWidget {
   }
 }
 
-
-class _StaticProgressBar extends StatelessWidget {
-  const _StaticProgressBar({required this.value});
-
-  final double value;
-
-  @override
-  Widget build(BuildContext context) {
-    final clamped = value.clamp(0.0, 1.0).toDouble();
-    final cs = Theme.of(context).colorScheme;
-    return Container(
-      height: 6,
-      clipBehavior: Clip.antiAlias,
-      decoration: BoxDecoration(
-        color: cs.outlineVariant.withValues(alpha: 0.55),
-        borderRadius: BorderRadius.circular(3),
-      ),
-      child: FractionallySizedBox(
-        alignment: Alignment.centerLeft,
-        widthFactor: clamped,
-        child: Container(color: cs.primary),
-      ),
-    );
-  }
-}
-
 class _HomeInfoLine extends StatelessWidget {
   const _HomeInfoLine(this.label, this.value);
 
@@ -5342,719 +5191,6 @@ class _HomeInfoLine extends StatelessWidget {
           ),
         ],
       ),
-    );
-  }
-}
-
-class InfoPage extends StatefulWidget {
-  const InfoPage({super.key, required this.api, this.onSessionExpired});
-
-  final ApiClient api;
-  final VoidCallback? onSessionExpired;
-
-  @override
-  State<InfoPage> createState() => _InfoPageState();
-}
-
-class _InfoPageState extends State<InfoPage> {
-  late Future<StudentInfo> _infoFuture;
-
-  @override
-  void initState() {
-    super.initState();
-    _infoFuture = _loadInfo();
-  }
-
-  @override
-  void didUpdateWidget(covariant InfoPage oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.api != widget.api) {
-      _infoFuture = _loadInfo();
-    }
-  }
-
-  Future<StudentInfo> _loadInfo({bool forceRefresh = false}) =>
-      widget.api.me(forceRefresh: forceRefresh).then((r) => r.data);
-
-  Future<void> _refreshInfo() async {
-    setState(() => _infoFuture = _loadInfo(forceRefresh: true));
-    await _infoFuture;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return PageRefresh(
-      onRefresh: _refreshInfo,
-      child: AsyncPanel<StudentInfo>(
-        future: _infoFuture,
-        onSessionExpired: widget.onSessionExpired,
-        builder: (info) => LayoutBuilder(
-          builder: (context, constraints) {
-            final wide = constraints.maxWidth >= 720;
-            final tiles = [
-              InfoTile(icon: Icons.person, label: '姓名', value: info.name),
-              InfoTile(icon: Icons.badge, label: '学号', value: info.studentId),
-              InfoTile(
-                  icon: Icons.apartment,
-                  label: '学院',
-                  value: info.college ?? '-'),
-              InfoTile(
-                  icon: Icons.school, label: '专业', value: info.major ?? '-'),
-              InfoTile(
-                  icon: Icons.groups,
-                  label: '班级',
-                  value: info.className ?? '-'),
-              InfoTile(
-                  icon: Icons.calendar_today,
-                  label: '年级',
-                  value: info.grade ?? '-'),
-              if (info.gender != null)
-                InfoTile(icon: Icons.wc, label: '性别', value: info.gender!),
-              if (info.idNumber != null)
-                InfoTile(
-                    icon: Icons.credit_card,
-                    label: '证件号码',
-                    value: info.idNumber!),
-              if (info.birthDate != null)
-                InfoTile(
-                    icon: Icons.cake, label: '出生日期', value: info.birthDate!),
-              if (info.ethnicity != null)
-                InfoTile(
-                    icon: Icons.people, label: '民族', value: info.ethnicity!),
-              if (info.politicalStatus != null)
-                InfoTile(
-                    icon: Icons.flag,
-                    label: '政治面貌',
-                    value: info.politicalStatus!),
-              if (info.enrollDate != null)
-                InfoTile(
-                    icon: Icons.event, label: '入学日期', value: info.enrollDate!),
-              if (info.nativePlace != null)
-                InfoTile(
-                    icon: Icons.place, label: '籍贯', value: info.nativePlace!),
-              if (info.studentStatus != null)
-                InfoTile(
-                    icon: Icons.how_to_reg,
-                    label: '学籍状态',
-                    value: info.studentStatus!),
-              if (info.educationLevel != null)
-                InfoTile(
-                    icon: Icons.workspace_premium,
-                    label: '培养层次',
-                    value: info.educationLevel!),
-              if (info.phone != null)
-                InfoTile(icon: Icons.phone, label: '手机号码', value: info.phone!),
-              if (info.email != null)
-                InfoTile(icon: Icons.email, label: '电子邮箱', value: info.email!),
-              if (info.address != null)
-                InfoTile(icon: Icons.home, label: '家庭地址', value: info.address!),
-            ];
-            if (wide) {
-              return Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  SizedBox(
-                    width: 300,
-                    child: PagePanel(
-                      title: '个人信息',
-                      icon: Icons.badge,
-                      child: Center(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            StudentAvatar(
-                              photoDataUrl: info.photoDataUrl,
-                              name: info.name,
-                            ),
-                            const SizedBox(height: 16),
-                            Text(info.name,
-                                style: const TextStyle(
-                                    fontSize: 18, fontWeight: FontWeight.w700)),
-                            if (info.studentId.isNotEmpty)
-                              Text(info.studentId,
-                                  style: TextStyle(
-                                      color: Theme.of(context)
-                                          .colorScheme
-                                          .onSurfaceVariant)),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: PagePanel(
-                      title: '详细信息',
-                      icon: Icons.info_outline,
-                      expandChild: true,
-                      child: SingleChildScrollView(
-                        physics: const AlwaysScrollableScrollPhysics(),
-                        child:
-                            Wrap(spacing: 12, runSpacing: 12, children: tiles),
-                      ),
-                    ),
-                  ),
-                ],
-              );
-            }
-            return SingleChildScrollView(
-              physics: const AlwaysScrollableScrollPhysics(),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  const SizedBox(height: 12),
-                  StudentAvatar(
-                    photoDataUrl: info.photoDataUrl,
-                    name: info.name,
-                  ),
-                  const SizedBox(height: 8),
-                  Text(info.name,
-                      style: const TextStyle(
-                          fontSize: 18, fontWeight: FontWeight.w700)),
-                  if (info.studentId.isNotEmpty)
-                    Text(info.studentId,
-                        style: TextStyle(
-                            color: Theme.of(context)
-                                .colorScheme
-                                .onSurfaceVariant)),
-                  const SizedBox(height: 12),
-                  Wrap(
-                    alignment: WrapAlignment.center,
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: tiles,
-                  ),
-                  const SizedBox(height: 24),
-                ],
-              ),
-            );
-          },
-        ),
-      ),
-    );
-  }
-}
-
-class StudentAvatar extends StatelessWidget {
-  const StudentAvatar(
-      {super.key, required this.photoDataUrl, required this.name});
-
-  final String? photoDataUrl;
-  final String name;
-
-  @override
-  Widget build(BuildContext context) {
-    final image = photoDataUrl;
-    return GestureDetector(
-      onTap: image != null && image.isNotEmpty
-          ? () => _showAvatarOverlay(context, image)
-          : null,
-      child: Container(
-        width: 112,
-        height: 144,
-        clipBehavior: Clip.antiAlias,
-        decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.surfaceContainerHighest,
-          borderRadius: BorderRadius.circular(8),
-          border:
-              Border.all(color: Theme.of(context).colorScheme.outlineVariant),
-        ),
-        child: image == null || image.isEmpty
-            ? Center(
-                child: Text(
-                  name.isEmpty ? '-' : name.characters.first,
-                  style: const TextStyle(
-                      fontSize: 32, fontWeight: FontWeight.w600),
-                ),
-              )
-            : Stack(
-                fit: StackFit.expand,
-                children: [
-                  Image.memory(
-                    base64Decode(image.substring(image.indexOf(',') + 1)),
-                    fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) =>
-                        const Center(child: Icon(Icons.person)),
-                  ),
-                  Positioned(
-                    right: 4,
-                    bottom: 4,
-                    child: Container(
-                      padding: const EdgeInsets.all(4),
-                      decoration: BoxDecoration(
-                        color: Colors.black.withValues(alpha: 0.5),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: const Icon(
-                        Icons.zoom_in,
-                        color: Colors.white,
-                        size: 16,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-      ),
-    );
-  }
-
-  void _showAvatarOverlay(BuildContext context, String dataUrl) {
-    showDialog(
-      context: context,
-      barrierColor: Colors.black.withValues(alpha: 0.5),
-      builder: (dialogContext) => _AvatarOverlayDialog(
-        photoDataUrl: dataUrl,
-        name: name,
-      ),
-    );
-  }
-}
-
-class _AvatarOverlayDialog extends StatelessWidget {
-  const _AvatarOverlayDialog({
-    required this.photoDataUrl,
-    required this.name,
-  });
-
-  final String photoDataUrl;
-  final String name;
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Center(
-      child: Material(
-        color: Colors.transparent,
-        child: Container(
-          constraints: const BoxConstraints(maxWidth: 400),
-          decoration: BoxDecoration(
-            color: cs.surface,
-            borderRadius: BorderRadius.circular(12),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.3),
-                blurRadius: 32,
-                offset: const Offset(0, 8),
-              ),
-            ],
-          ),
-          padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 28),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Row(
-                children: [
-                  Icon(Icons.photo_camera, size: 20, color: cs.primary),
-                  const SizedBox(width: 8),
-                  Text(
-                    '📸 头像抓取成功',
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w700,
-                      color: cs.onSurface,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              Container(
-                width: 160,
-                height: 160,
-                clipBehavior: Clip.antiAlias,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  border: Border.all(color: cs.primary, width: 3),
-                ),
-                child: Image.memory(
-                  base64Decode(
-                      photoDataUrl.substring(photoDataUrl.indexOf(',') + 1)),
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, __, ___) =>
-                      const Center(child: Icon(Icons.person, size: 48)),
-                ),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                name,
-                style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
-                  color: cs.onSurface,
-                ),
-              ),
-              const SizedBox(height: 16),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  FilledButton.icon(
-                    onPressed: () => _openInNewTab(context),
-                    icon: const Icon(Icons.open_in_new, size: 18),
-                    label: const Text('新标签页打开'),
-                    style: FilledButton.styleFrom(
-                      backgroundColor: cs.primary,
-                      foregroundColor: cs.onPrimary,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  OutlinedButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    style: OutlinedButton.styleFrom(
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                    ),
-                    child: const Text('关闭'),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  void _openInNewTab(BuildContext context) {
-    avatar_open.loadLibrary().then((_) {
-      avatar_open.openAvatarInNewTab(photoDataUrl, name);
-    });
-    Navigator.of(context).pop();
-  }
-}
-
-class _BusinessProgressSection extends StatefulWidget {
-  const _BusinessProgressSection({
-    required this.api,
-    required this.refreshVersion,
-    this.onSessionExpired,
-  });
-
-  final ApiClient api;
-  final int refreshVersion;
-  final VoidCallback? onSessionExpired;
-
-  @override
-  State<_BusinessProgressSection> createState() =>
-      _BusinessProgressSectionState();
-}
-
-class _BusinessProgressSectionState extends State<_BusinessProgressSection> {
-  String _status = '全部';
-  bool _expanded = false;
-  late Future<EhallProgressOverview> _progressFuture;
-
-  @override
-  void initState() {
-    super.initState();
-    _progressFuture = widget.api.ehallProgressOverview();
-  }
-
-  @override
-  void didUpdateWidget(covariant _BusinessProgressSection oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.api != widget.api ||
-        oldWidget.refreshVersion != widget.refreshVersion) {
-      _progressFuture = widget.api.ehallProgressOverview(
-        forceRefresh: oldWidget.refreshVersion != widget.refreshVersion,
-      );
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return FutureBuilder<EhallProgressOverview>(
-      future: _progressFuture,
-      builder: (context, snapshot) {
-        if (snapshot.connectionState != ConnectionState.done) {
-          return const SizedBox(
-            height: 72,
-            child: Center(child: CircularProgressIndicator()),
-          );
-        }
-        if (snapshot.hasError) {
-          // 不再在 401 时触发 onSessionExpired，_withFallback 已处理 relogin
-          return const SizedBox.shrink();
-        }
-        final overview = snapshot.data ??
-            EhallProgressOverview.fromItems(const <EhallProgressItem>[]);
-        final items = overview.items;
-        final statuses = [
-          '全部',
-          ...items
-              .map((item) => item.statusLabel)
-              .where((item) => item.isNotEmpty)
-              .toSet(),
-        ];
-        final filtered = _status == '全部'
-            ? items
-            : items.where((item) => item.statusLabel == _status).toList();
-        return Container(
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.surfaceContainerLow,
-            borderRadius: BorderRadius.circular(18),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                children: [
-                  Icon(Icons.route,
-                      size: 20, color: Theme.of(context).colorScheme.primary),
-                  const SizedBox(width: 8),
-                  const Expanded(
-                    child: Text('业务进度',
-                        style: TextStyle(fontWeight: FontWeight.w800)),
-                  ),
-                  Text('${filtered.length} 项',
-                      style: TextStyle(
-                          color:
-                              Theme.of(context).colorScheme.onSurfaceVariant)),
-                  const SizedBox(width: 4),
-                  IconButton(
-                    visualDensity: VisualDensity.compact,
-                    icon:
-                        Icon(_expanded ? Icons.expand_less : Icons.expand_more),
-                    onPressed: () => setState(() => _expanded = !_expanded),
-                  ),
-                ],
-              ),
-              if (_expanded) ...[
-                const SizedBox(height: 10),
-                _ProgressCategoryStrip(categories: overview.categories),
-                const SizedBox(height: 10),
-                SizedBox(
-                  height: 40,
-                  child: ListView.separated(
-                    scrollDirection: Axis.horizontal,
-                    itemCount: statuses.length,
-                    separatorBuilder: (_, __) => const SizedBox(width: 8),
-                    itemBuilder: (context, index) {
-                      final status = statuses[index];
-                      return ChoiceChip(
-                        label: Text(status),
-                        selected: _status == status,
-                        onSelected: (_) => setState(() => _status = status),
-                      );
-                    },
-                  ),
-                ),
-                const SizedBox(height: 10),
-                if (filtered.isEmpty)
-                  const EmptyState(message: '暂无业务进度')
-                else
-                  Column(
-                    children: [
-                      for (final item in filtered.take(5))
-                        InkWell(
-                          onTap: () => openInAppBrowser(context, item.url),
-                          child: _ProgressMiniRow(item: item),
-                        ),
-                    ],
-                  ),
-              ],
-            ],
-          ),
-        );
-      },
-    );
-  }
-}
-
-class BusinessPage extends StatefulWidget {
-  const BusinessPage({super.key, required this.api, this.onSessionExpired});
-
-  final ApiClient api;
-  final VoidCallback? onSessionExpired;
-
-  @override
-  State<BusinessPage> createState() => _BusinessPageState();
-}
-
-class _BusinessPageState extends State<BusinessPage> {
-  String _query = '';
-  String _department = '全部';
-  int _refreshVersion = 0;
-  late Future<List<EhallAffairItem>> _affairsFuture;
-
-  @override
-  void initState() {
-    super.initState();
-    _affairsFuture = _loadAffairs();
-  }
-
-  @override
-  void didUpdateWidget(covariant BusinessPage oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.api != widget.api) {
-      _affairsFuture = _loadAffairs();
-    }
-  }
-
-  Future<List<EhallAffairItem>> _loadAffairs({bool forceRefresh = false}) =>
-      widget.api.ehallAffairs(forceRefresh: forceRefresh);
-
-  Future<void> _refreshAffairs() async {
-    setState(() {
-      _refreshVersion++;
-      _affairsFuture = _loadAffairs(forceRefresh: true);
-    });
-    await _affairsFuture;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AsyncPanel<List<EhallAffairItem>>(
-      future: _affairsFuture,
-      emptyMessage: '暂无业务',
-      onSessionExpired: widget.onSessionExpired,
-      builder: (items) {
-        final departments = _departments(items);
-        final filtered = items.where((item) {
-          final query = _query.trim().toLowerCase();
-          final matchesDepartment =
-              _department == '全部' || item.department == _department;
-          final searchable = [
-            item.title,
-            item.department ?? '',
-            item.type ?? '',
-            item.summary ?? '',
-            ...item.tags,
-          ].join(' ').toLowerCase();
-          return matchesDepartment &&
-              (query.isEmpty || searchable.contains(query));
-        }).toList();
-        return PagePanel(
-          title: '业务',
-          icon: Icons.apps,
-          expandChild: true,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              _BusinessProgressSection(
-                api: widget.api,
-                refreshVersion: _refreshVersion,
-                onSessionExpired: widget.onSessionExpired,
-              ),
-              const SizedBox(height: 12),
-              _BusinessFilters(
-                departments: departments,
-                selectedDepartment: _department,
-                onQueryChanged: (value) => setState(() => _query = value),
-                onDepartmentChanged: (value) =>
-                    setState(() => _department = value),
-              ),
-              const SizedBox(height: 12),
-              Text(
-                '共 ${filtered.length} 项',
-                style: TextStyle(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  fontSize: 13,
-                ),
-              ),
-              const SizedBox(height: 10),
-              Expanded(
-                child: PageRefresh(
-                  onRefresh: _refreshAffairs,
-                  child: filtered.isEmpty
-                      ? ListView(
-                          physics: const AlwaysScrollableScrollPhysics(),
-                          children: const [
-                            SizedBox(height: 120),
-                            EmptyState(message: '没有匹配的业务'),
-                          ],
-                        )
-                      : LayoutBuilder(
-                          builder: (context, constraints) {
-                            final columns = _contentGridColumns(
-                              constraints.maxWidth,
-                              minTileWidth: 170,
-                              maxColumns: 4,
-                            );
-                            return GridView.builder(
-                              physics: const AlwaysScrollableScrollPhysics(),
-                              gridDelegate:
-                                  SliverGridDelegateWithFixedCrossAxisCount(
-                                crossAxisCount: columns,
-                                crossAxisSpacing: 10,
-                                mainAxisSpacing: 10,
-                                childAspectRatio: columns == 1 ? 2.8 : 1.35,
-                              ),
-                              itemCount: filtered.length,
-                              itemBuilder: (context, index) =>
-                                  _BusinessItemTile(item: filtered[index]),
-                            );
-                          },
-                        ),
-                ),
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  List<String> _departments(List<EhallAffairItem> items) {
-    final values = items
-        .map((item) => item.department?.trim())
-        .where((value) => value != null && value.isNotEmpty)
-        .cast<String>()
-        .toSet()
-        .toList()
-      ..sort();
-    return ['全部', ...values];
-  }
-}
-
-class _BusinessFilters extends StatelessWidget {
-  const _BusinessFilters({
-    required this.departments,
-    required this.selectedDepartment,
-    required this.onQueryChanged,
-    required this.onDepartmentChanged,
-  });
-
-  final List<String> departments;
-  final String selectedDepartment;
-  final ValueChanged<String> onQueryChanged;
-  final ValueChanged<String> onDepartmentChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        TextField(
-          onChanged: onQueryChanged,
-          decoration: const InputDecoration(
-            prefixIcon: Icon(Icons.search),
-            hintText: '搜索业务',
-            border: OutlineInputBorder(),
-            isDense: true,
-          ),
-        ),
-        const SizedBox(height: 10),
-        SizedBox(
-          height: 40,
-          child: ListView.separated(
-            scrollDirection: Axis.horizontal,
-            itemCount: departments.length,
-            separatorBuilder: (_, __) => const SizedBox(width: 8),
-            itemBuilder: (context, index) {
-              final department = departments[index];
-              return ChoiceChip(
-                label: Text(department),
-                selected: selectedDepartment == department,
-                onSelected: (_) => onDepartmentChanged(department),
-              );
-            },
-          ),
-        ),
-      ],
     );
   }
 }
@@ -6166,14 +5302,14 @@ class _AutoLeavePageState extends State<AutoLeavePage> {
                       ),
                       OutlinedButton(
                         onPressed: _chooseAttachment,
-                        child: _IconLabel(
+                        child: IconLabel(
                           icon: Icons.image,
                           label: _attachment?.name ?? '选择图片',
                         ),
                       ),
                       FilledButton(
                         onPressed: _loadingPreview ? null : _loadPreview,
-                        child: _IconLabel(
+                        child: IconLabel(
                           icon: Icons.search,
                           label: _loadingPreview ? '匹配中...' : '匹配课程',
                         ),
@@ -6186,7 +5322,7 @@ class _AutoLeavePageState extends State<AutoLeavePage> {
                                 _filling
                             ? null
                             : _fillLeave,
-                        child: _IconLabel(
+                        child: IconLabel(
                           icon: Icons.auto_fix_high,
                           label: _filling ? '生成中...' : '生成请假单',
                         ),
@@ -6616,735 +5752,6 @@ class _InfoChip extends StatelessWidget {
     );
   }
 }
-
-class _BusinessItemTile extends StatelessWidget {
-  const _BusinessItemTile({required this.item});
-
-  final EhallAffairItem item;
-
-  @override
-  Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-    final inner = Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: colorScheme.outlineVariant),
-        color: colorScheme.surface,
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const IconBadge(icon: Icons.apps, size: 32),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  item.title,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                      fontSize: 16, fontWeight: FontWeight.w700),
-                ),
-                const SizedBox(height: 6),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 4,
-                  children: [
-                    if (item.department != null && item.department!.isNotEmpty)
-                      MetaText(item.department!),
-                    if (item.type != null && item.type!.isNotEmpty)
-                      MetaText(item.type!),
-                    for (final tag in item.tags.take(2)) MetaText(tag),
-                  ],
-                ),
-                if (item.summary != null && item.summary!.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  Text(
-                    item.summary!,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(color: colorScheme.onSurfaceVariant),
-                  ),
-                ],
-              ],
-            ),
-          ),
-          const SizedBox(width: 8),
-          Icon(Icons.open_in_new, size: 18, color: colorScheme.primary),
-        ],
-      ),
-    );
-    return ScaleTap(
-      onTap: () => openInAppBrowser(context, item.url),
-      borderRadius: BorderRadius.circular(8),
-      child: inner,
-    );
-  }
-}
-
-
-class ApplicationsPage extends StatefulWidget {
-  const ApplicationsPage({super.key, required this.api, this.onSessionExpired});
-
-  final ApiClient api;
-  final VoidCallback? onSessionExpired;
-
-  @override
-  State<ApplicationsPage> createState() => _ApplicationsPageState();
-}
-
-class _ApplicationsPageState extends State<ApplicationsPage> {
-  String _query = '';
-  String _department = '全部';
-  String _type = '全部';
-  String _tag = '全部';
-  String? _loadError;
-  bool _filtersExpanded = false;
-  late Future<List<EhallApplicationItem>> _applicationsFuture;
-
-  @override
-  void initState() {
-    super.initState();
-    _applicationsFuture = _loadApplications();
-  }
-
-  @override
-  void didUpdateWidget(covariant ApplicationsPage oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.api != widget.api) {
-      _applicationsFuture = _loadApplications();
-    }
-  }
-
-  Future<List<EhallApplicationItem>> _loadApplications({
-    bool forceRefresh = false,
-  }) async {
-    try {
-      final items = await widget.api
-          .ehallApplications(forceRefresh: forceRefresh)
-          .timeout(const Duration(seconds: 12));
-      _loadError = null;
-      return items;
-    } catch (_) {
-      _loadError = '办事大厅暂时不可用，下拉可重试';
-      return const [];
-    }
-  }
-
-  Future<void> _refreshApplications() async {
-    setState(() => _applicationsFuture = _loadApplications(forceRefresh: true));
-    await _applicationsFuture;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return FutureBuilder<List<EhallApplicationItem>>(
-      future: _applicationsFuture,
-      builder: (context, snapshot) {
-        final loading = snapshot.connectionState != ConnectionState.done;
-        final items = snapshot.data ?? const <EhallApplicationItem>[];
-        final departments = _values(items.map((item) => item.department));
-        final types = _values(items.map((item) => item.type));
-        final tags = _values(items.expand((item) => item.tags));
-        final filtered = items.where(_matches).toList();
-        final emptyMessage = _loadError ?? '没有匹配的应用';
-        return PagePanel(
-          title: '应用',
-          icon: Icons.dashboard_customize,
-          expandChild: true,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              TextField(
-                onChanged: (value) => setState(() => _query = value),
-                decoration: const InputDecoration(
-                  prefixIcon: Icon(Icons.search),
-                  hintText: '搜索应用',
-                  isDense: true,
-                ),
-              ),
-              const SizedBox(height: 12),
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.surfaceContainerLow,
-                  borderRadius: BorderRadius.circular(22),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    InkWell(
-                      onTap: () =>
-                          setState(() => _filtersExpanded = !_filtersExpanded),
-                      child: Row(
-                        children: [
-                          Icon(Icons.filter_list,
-                              size: 18,
-                              color: Theme.of(context).colorScheme.primary),
-                          const SizedBox(width: 8),
-                          const Expanded(
-                            child: Text('筛选',
-                                style: TextStyle(fontWeight: FontWeight.w700)),
-                          ),
-                          Icon(_filtersExpanded
-                              ? Icons.expand_less
-                              : Icons.expand_more),
-                        ],
-                      ),
-                    ),
-                    if (_filtersExpanded) ...[
-                      const SizedBox(height: 10),
-                      _ApplicationFilterChips(
-                        label: '部门',
-                        values: departments,
-                        selected: _department,
-                        onChanged: (value) =>
-                            setState(() => _department = value),
-                      ),
-                      _ApplicationFilterChips(
-                        label: '分类',
-                        values: types,
-                        selected: _type,
-                        onChanged: (value) => setState(() => _type = value),
-                      ),
-                      _ApplicationFilterChips(
-                        label: '标签',
-                        values: tags,
-                        selected: _tag,
-                        onChanged: (value) => setState(() => _tag = value),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                '共 ${filtered.length} 个应用',
-                style: TextStyle(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  fontSize: 13,
-                ),
-              ),
-              const SizedBox(height: 10),
-              Expanded(
-                child: PageRefresh(
-                  onRefresh: _refreshApplications,
-                  child: loading
-                      ? const Center(child: CircularProgressIndicator())
-                      : filtered.isEmpty
-                          ? ListView(
-                              physics: const AlwaysScrollableScrollPhysics(),
-                              children: [
-                                const SizedBox(height: 120),
-                                EmptyState(message: emptyMessage),
-                              ],
-                            )
-                          : LayoutBuilder(
-                              builder: (context, constraints) {
-                                final columns = _contentGridColumns(
-                                  constraints.maxWidth,
-                                  minTileWidth: 170,
-                                  maxColumns: 4,
-                                );
-                                return GridView.builder(
-                                  physics:
-                                      const AlwaysScrollableScrollPhysics(),
-                                  gridDelegate:
-                                      SliverGridDelegateWithFixedCrossAxisCount(
-                                    crossAxisCount: columns,
-                                    crossAxisSpacing: 10,
-                                    mainAxisSpacing: 10,
-                                    childAspectRatio: columns == 1 ? 3.4 : 1.35,
-                                  ),
-                                  itemCount: filtered.length,
-                                  itemBuilder: (context, index) =>
-                                      _ApplicationItemTile(
-                                          item: filtered[index]),
-                                );
-                              },
-                            ),
-                ),
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  bool _matches(EhallApplicationItem item) {
-    final query = _query.trim().toLowerCase();
-    final searchable = [
-      item.title,
-      item.department ?? '',
-      item.type ?? '',
-      item.summary ?? '',
-      ...item.tags,
-    ].join(' ').toLowerCase();
-    return (_department == '全部' || item.department == _department) &&
-        (_type == '全部' || item.type == _type) &&
-        (_tag == '全部' || item.tags.contains(_tag)) &&
-        (query.isEmpty || searchable.contains(query));
-  }
-
-  List<String> _values(Iterable<String?> values) {
-    final result = values
-        .map((value) => value?.trim())
-        .where((value) => value != null && value.isNotEmpty)
-        .cast<String>()
-        .toSet()
-        .toList()
-      ..sort();
-    return ['全部', ...result];
-  }
-}
-
-int _contentGridColumns(
-  double width, {
-  required double minTileWidth,
-  int maxColumns = 4,
-}) {
-  if (width < minTileWidth * 1.6) return 1;
-  return (width / minTileWidth).floor().clamp(2, maxColumns);
-}
-
-class _ApplicationFilterChips extends StatelessWidget {
-  const _ApplicationFilterChips({
-    required this.label,
-    required this.values,
-    required this.selected,
-    required this.onChanged,
-  });
-
-  final String label;
-  final List<String> values;
-  final String selected;
-  final ValueChanged<String> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    if (values.length <= 1) return const SizedBox.shrink();
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Wrap(
-        spacing: 8,
-        runSpacing: 8,
-        children: [
-          for (var index = 0; index < values.length; index++)
-            ChoiceChip(
-              label: Text(index == 0 ? '$label: 全部' : values[index]),
-              selected: selected == values[index],
-              onSelected: (_) => onChanged(values[index]),
-            ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ApplicationItemTile extends StatelessWidget {
-  const _ApplicationItemTile({required this.item});
-
-  final EhallApplicationItem item;
-
-  @override
-  Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-    final inner = Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: colorScheme.outlineVariant),
-        color: colorScheme.surface,
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const IconBadge(icon: Icons.dashboard_customize, size: 32),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  item.title,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                      fontSize: 16, fontWeight: FontWeight.w700),
-                ),
-                const SizedBox(height: 6),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 4,
-                  children: [
-                    if (item.department != null && item.department!.isNotEmpty)
-                      MetaText(item.department!),
-                    if (item.type != null && item.type!.isNotEmpty)
-                      MetaText(item.type!),
-                    for (final tag in item.tags.take(2)) MetaText(tag),
-                  ],
-                ),
-                if (item.summary != null && item.summary!.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  Text(
-                    item.summary!,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(color: colorScheme.onSurfaceVariant),
-                  ),
-                ],
-              ],
-            ),
-          ),
-          const SizedBox(width: 8),
-          Icon(Icons.open_in_new, size: 18, color: colorScheme.primary),
-        ],
-      ),
-    );
-    return ScaleTap(
-      onTap: () => openInAppBrowser(context, item.url),
-      borderRadius: BorderRadius.circular(8),
-      child: inner,
-    );
-  }
-}
-
-String _noticeItemTitle(NoticeItem item) {
-  final value = item.title.trim();
-  return value.isEmpty ? '未命名通知' : value;
-}
-
-String _noticeDetailTitle(NoticeItem item, NoticeDetail detail) {
-  final value = detail.title.trim();
-  return value.isEmpty ? _noticeItemTitle(item) : value;
-}
-
-class NoticesPage extends StatefulWidget {
-  const NoticesPage({super.key, required this.api, this.onSessionExpired});
-
-  final ApiClient api;
-  final VoidCallback? onSessionExpired;
-
-  @override
-  State<NoticesPage> createState() => _NoticesPageState();
-}
-
-class _NoticesPageState extends State<NoticesPage> {
-  int? _selectedIndex;
-  late Future<List<NoticeItem>> _noticesFuture;
-
-  @override
-  void initState() {
-    super.initState();
-    _noticesFuture = _loadNotices();
-  }
-
-  @override
-  void didUpdateWidget(covariant NoticesPage oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.api != widget.api) {
-      _noticesFuture = _loadNotices();
-    }
-  }
-
-  Future<List<NoticeItem>> _loadNotices({bool forceRefresh = false}) =>
-      widget.api.notices(forceRefresh: forceRefresh).then((r) => r.data);
-
-  Future<void> _refreshNotices() async {
-    setState(() => _noticesFuture = _loadNotices(forceRefresh: true));
-    final items = await _noticesFuture;
-    if (mounted && _selectedIndex != null && _selectedIndex! >= items.length) {
-      setState(() => _selectedIndex = null);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return PageRefresh(
-      onRefresh: _refreshNotices,
-      child: AsyncPanel<List<NoticeItem>>(
-        future: _noticesFuture,
-        emptyMessage: '暂无通知',
-        onSessionExpired: widget.onSessionExpired,
-        builder: (items) => LayoutBuilder(
-          builder: (context, constraints) {
-            final wide = constraints.maxWidth >= 720;
-            if (wide) {
-              return Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  SizedBox(
-                    width: 350,
-                    child: PagePanel(
-                      title: '通知',
-                      icon: Icons.info_outline,
-                      expandChild: true,
-                      child: ListView.separated(
-                        physics: const AlwaysScrollableScrollPhysics(),
-                        itemCount: items.length,
-                        separatorBuilder: (_, __) => const SizedBox(height: 10),
-                        itemBuilder: (context, index) => GestureDetector(
-                          onTap: () => setState(() => _selectedIndex = index),
-                          child: Container(
-                            decoration: _selectedIndex == index
-                                ? BoxDecoration(
-                                    color: Theme.of(context)
-                                        .colorScheme
-                                        .primaryContainer,
-                                    borderRadius: BorderRadius.circular(8),
-                                  )
-                                : null,
-                            child: NoticeCard(item: items[index]),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: PagePanel(
-                      title: _selectedIndex != null
-                          ? _noticeItemTitle(items[_selectedIndex!])
-                          : '通知详情',
-                      icon: Icons.article,
-                      expandChild: true,
-                      child: _selectedIndex != null
-                          ? _NoticeDetailContent(
-                              api: widget.api,
-                              item: items[_selectedIndex!],
-                              onSessionExpired: widget.onSessionExpired,
-                            )
-                          : const Center(child: Text('请选择一条通知查看详情')),
-                    ),
-                  ),
-                ],
-              );
-            }
-            return PagePanel(
-              title: '通知',
-              icon: Icons.info_outline,
-              expandChild: true,
-              child: ListView.separated(
-                physics: const AlwaysScrollableScrollPhysics(),
-                itemCount: items.length,
-                separatorBuilder: (_, __) => const SizedBox(height: 10),
-                itemBuilder: (context, index) => NoticeCard(item: items[index]),
-              ),
-            );
-          },
-        ),
-      ),
-    );
-  }
-}
-
-class _NoticeDetailContent extends StatefulWidget {
-  const _NoticeDetailContent(
-      {required this.api, required this.item, this.onSessionExpired});
-  final ApiClient api;
-  final NoticeItem item;
-  final VoidCallback? onSessionExpired;
-
-  @override
-  State<_NoticeDetailContent> createState() => _NoticeDetailContentState();
-}
-
-class _NoticeDetailContentState extends State<_NoticeDetailContent> {
-  late Future<NoticeDetail> _detailFuture;
-
-  @override
-  void initState() {
-    super.initState();
-    _loadDetail();
-  }
-
-  @override
-  void didUpdateWidget(covariant _NoticeDetailContent oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.item.url != widget.item.url) _loadDetail();
-  }
-
-  void _loadDetail() {
-    if (widget.item.url != null && widget.item.url!.isNotEmpty) {
-      _detailFuture =
-          widget.api.fetchNoticeDetail(widget.item.url!).then((r) => r.data);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (widget.item.url == null || widget.item.url!.isEmpty) {
-      return SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              _noticeItemTitle(widget.item),
-              style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                    fontWeight: FontWeight.w800,
-                    height: 1.25,
-                  ),
-            ),
-            const SizedBox(height: 10),
-            if (widget.item.date != null)
-              Text(widget.item.date!,
-                  style: TextStyle(
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
-                      fontSize: 13)),
-            const SizedBox(height: 12),
-            if (widget.item.summary != null && widget.item.summary!.isNotEmpty)
-              Text(widget.item.summary!,
-                  style: const TextStyle(fontSize: 15, height: 1.6))
-            else
-              const Text('暂无详情内容'),
-          ],
-        ),
-      );
-    }
-    return FutureBuilder<NoticeDetail>(
-      future: _detailFuture,
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: CircularProgressIndicator());
-        }
-        if (snapshot.hasError) {
-          return Center(child: Text('加载失败: ${snapshot.error}'));
-        }
-        final detail = snapshot.data!;
-        final title = _noticeDetailTitle(widget.item, detail);
-        return SingleChildScrollView(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                title,
-                style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                      fontWeight: FontWeight.w800,
-                      height: 1.25,
-                    ),
-              ),
-              const SizedBox(height: 10),
-              if (detail.date != null)
-                Text(detail.date!,
-                    style: TextStyle(
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
-                        fontSize: 13)),
-              const SizedBox(height: 8),
-              Text(detail.contentHtml.replaceAll(RegExp(r'<[^>]*>'), ''),
-                  style: const TextStyle(fontSize: 15, height: 1.6)),
-            ],
-          ),
-        );
-      },
-    );
-  }
-}
-
-class NoticeCard extends StatelessWidget {
-  const NoticeCard({super.key, required this.item});
-
-  final NoticeItem item;
-
-  String get _title {
-    return _noticeItemTitle(item);
-  }
-
-  String? get _summary {
-    final value = item.summary?.trim();
-    if (value == null || value.isEmpty || value == _title) return null;
-    return value;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-    final summary = _summary;
-    final hasUrl = item.url != null && item.url!.isNotEmpty;
-
-    return Card(
-      clipBehavior: Clip.antiAlias,
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const IconBadge(icon: Icons.info_outline, size: 32),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        _title,
-                        maxLines: 3,
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.titleMedium?.copyWith(
-                              color: colorScheme.onSurface,
-                              fontWeight: FontWeight.w800,
-                              height: 1.25,
-                            ) ??
-                            TextStyle(
-                              color: colorScheme.onSurface,
-                              fontSize: 16,
-                              fontWeight: FontWeight.w800,
-                              height: 1.25,
-                            ),
-                      ),
-                      const SizedBox(height: 6),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 4,
-                        children: [
-                          MetaText(item.category),
-                          if (item.date != null) MetaText(item.date!),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-            if (summary != null) ...[
-              const SizedBox(height: 8),
-              Text(
-                summary,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(color: colorScheme.onSurfaceVariant),
-              ),
-            ],
-            if (hasUrl) ...[
-              const SizedBox(height: 12),
-              Align(
-                alignment: Alignment.centerRight,
-                child: FilledButton.tonalIcon(
-                  onPressed: () => openInAppBrowser(context, item.url),
-                  icon: const Icon(Icons.open_in_new, size: 18),
-                  label: const Text('打开通知'),
-                ),
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-
-/// 课表开始界面 — 让刚登录的用户选择第一周开始日期
 class ScheduleOnboardingPage extends StatefulWidget {
   const ScheduleOnboardingPage({
     super.key,
@@ -8037,7 +6444,7 @@ class _SchedulePageState extends State<SchedulePage> {
                                   });
                                   localSetState(() {});
                                 },
-                                child: _IconLabel(
+                                child: IconLabel(
                                   icon: Icons.visibility,
                                   label: showAllCourses ? '仅本周' : '全部课程',
                                 ),
@@ -8045,7 +6452,7 @@ class _SchedulePageState extends State<SchedulePage> {
                               Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  const _IconLabel(
+                                  const IconLabel(
                                     icon: Icons.notifications_active,
                                     label: '上下课提醒',
                                   ),
@@ -8061,7 +6468,7 @@ class _SchedulePageState extends State<SchedulePage> {
                               Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  const _IconLabel(
+                                  const IconLabel(
                                     icon: Icons.code,
                                     label: 'JSON',
                                   ),
@@ -8116,7 +6523,7 @@ class _SchedulePageState extends State<SchedulePage> {
                                           } catch (_) {}
                                         }
                                       },
-                                child: _IconLabel(
+                                child: IconLabel(
                                   icon: Icons.download,
                                   label: _exporting ? '导出中...' : '导出 ICS',
                                 ),
@@ -8163,7 +6570,7 @@ class _SchedulePageState extends State<SchedulePage> {
                                           } catch (_) {}
                                         }
                                       },
-                                child: const _IconLabel(
+                                child: const IconLabel(
                                   icon: Icons.event_available,
                                   label: '一键导入日历',
                                 ),
@@ -8377,7 +6784,7 @@ class ScheduleInlineManage extends StatelessWidget {
             children: [
               OutlinedButton(
                 onPressed: onUseCurrentWeek,
-                child: const _IconLabel(
+                child: const IconLabel(
                   icon: Icons.access_time,
                   label: '今天所在周设为第1周',
                 ),
@@ -8388,7 +6795,7 @@ class ScheduleInlineManage extends StatelessWidget {
           Row(
             children: [
               Expanded(
-                child: _IconLabel(
+                child: IconLabel(
                   icon: Icons.schedule,
                   label: '自动计算：第$autoWeekValue周',
                 ),
@@ -9820,7 +8227,7 @@ class _AttendancePageState extends State<AttendancePage> {
             onSelected: (_) => setState(() => _filterType = item.$1),
           ),
         PopupMenuButton<String>(
-          icon: _IconLabel(
+          icon: IconLabel(
             icon: Icons.sort,
             label: _sortField == 'none' ? '异常优先' : _sortLabel,
           ),
@@ -10319,7 +8726,7 @@ class _AttendanceCard extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 10),
-              Expanded(child: _StaticProgressBar(value: rate)),
+              Expanded(child: StaticProgressBar(value: rate)),
             ],
           ),
           const SizedBox(height: 10),
@@ -10496,7 +8903,7 @@ class AttendanceOverview extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 14),
-          _StaticProgressBar(value: rate),
+          StaticProgressBar(value: rate),
           const SizedBox(height: 14),
           Wrap(
             alignment: WrapAlignment.center,
@@ -10721,7 +9128,7 @@ class _ExamsPageState extends State<ExamsPage> {
                                         }
                                       }
                                     },
-                              child: _IconLabel(
+                              child: IconLabel(
                                 icon: Icons.event_available,
                                 label: _exporting ? '导出中...' : '导入至日历',
                               ),
@@ -10827,7 +9234,7 @@ class _ExamsPageState extends State<ExamsPage> {
                                       }
                                     }
                                   },
-                            child: _IconLabel(
+                            child: IconLabel(
                               icon: Icons.event_available,
                               label: _exporting ? '导出中...' : '导入至日历',
                             ),
@@ -11519,285 +9926,6 @@ class GradeGroupRow extends StatelessWidget {
     );
   }
 }
-
-class CreditsPage extends StatefulWidget {
-  const CreditsPage({super.key, required this.api, this.onSessionExpired});
-
-  final ApiClient api;
-  final VoidCallback? onSessionExpired;
-
-  @override
-  State<CreditsPage> createState() => _CreditsPageState();
-}
-
-class _CreditsPageState extends State<CreditsPage> {
-  late Future<List<CreditItem>> _creditsFuture;
-
-  @override
-  void initState() {
-    super.initState();
-    _creditsFuture = _loadCredits();
-  }
-
-  @override
-  void didUpdateWidget(covariant CreditsPage oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.api != widget.api) {
-      _creditsFuture = _loadCredits();
-    }
-  }
-
-  Future<List<CreditItem>> _loadCredits({bool forceRefresh = false}) =>
-      widget.api.credits(forceRefresh: forceRefresh).then((r) => r.data);
-
-  Future<void> _refreshCredits() async {
-    setState(() => _creditsFuture = _loadCredits(forceRefresh: true));
-    await _creditsFuture;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return PageRefresh(
-      onRefresh: _refreshCredits,
-      child: AsyncPanel<List<CreditItem>>(
-        future: _creditsFuture,
-        onSessionExpired: widget.onSessionExpired,
-        builder: (items) => LayoutBuilder(
-          builder: (context, constraints) {
-            final wide = constraints.maxWidth >= 720;
-            if (wide) {
-              return Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  SizedBox(
-                    width: 300,
-                    child: PagePanel(
-                      title: '学分概览',
-                      icon: Icons.auto_stories,
-                      child: Column(
-                        children: [
-                          for (final item in items) ...[
-                            _CreditOverviewCard(item: item),
-                            if (item != items.last) const SizedBox(height: 12),
-                          ],
-                        ],
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: PagePanel(
-                      title: '学分统计',
-                      icon: Icons.auto_stories,
-                      expandChild: true,
-                      child: SingleChildScrollView(
-                        physics: const AlwaysScrollableScrollPhysics(),
-                        child: Column(
-                          children: [
-                            for (final item in items)
-                              Padding(
-                                padding: const EdgeInsets.only(bottom: 12),
-                                child: CreditCard(item: item),
-                              ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              );
-            }
-            return PagePanel(
-              title: '学分统计',
-              icon: Icons.auto_stories,
-              expandChild: true,
-              child: SingleChildScrollView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                child: Column(
-                  children: [
-                    for (final item in items)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 12),
-                        child: CreditCard(item: item),
-                      ),
-                  ],
-                ),
-              ),
-            );
-          },
-        ),
-      ),
-    );
-  }
-}
-
-class _CreditOverviewCard extends StatelessWidget {
-  const _CreditOverviewCard({required this.item});
-  final CreditItem item;
-
-  @override
-  Widget build(BuildContext context) {
-    final expected =
-        item.requiredExpected + item.electiveExpected + item.otherExpected;
-    final earned = item.requiredEarned + item.electiveEarned + item.otherEarned;
-    final totalExpected =
-        item.totalExpected == 0 ? expected : item.totalExpected;
-    final totalEarned = item.totalEarned == 0 ? earned : item.totalEarned;
-    final progress = expected <= 0 ? 0.0 : (earned / expected).clamp(0.0, 1.0);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          '${item.name ?? '-'} · ${item.major ?? '-'}',
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-        ),
-        const SizedBox(height: 8),
-        Row(
-          children: [
-            Expanded(
-                child: Text('已修 ${totalEarned.toStringAsFixed(1)}',
-                    style: const TextStyle(fontSize: 13))),
-            Text('应修 ${totalExpected.toStringAsFixed(1)}',
-                style: const TextStyle(fontSize: 13)),
-          ],
-        ),
-        const SizedBox(height: 4),
-        LinearProgressIndicator(value: progress),
-        const SizedBox(height: 6),
-        Wrap(
-          spacing: 8,
-          runSpacing: 4,
-          children: [
-            InfoTile(
-                icon: Icons.check,
-                label: '必修',
-                value: '${item.requiredEarned}/${item.requiredExpected}'),
-            InfoTile(
-                icon: Icons.book,
-                label: '选修',
-                value: '${item.electiveEarned}/${item.electiveExpected}'),
-          ],
-        ),
-      ],
-    );
-  }
-}
-
-class CreditCard extends StatelessWidget {
-  const CreditCard({super.key, required this.item});
-
-  final CreditItem item;
-
-  @override
-  Widget build(BuildContext context) {
-    final expected =
-        item.requiredExpected + item.electiveExpected + item.otherExpected;
-    final earned = item.requiredEarned + item.electiveEarned + item.otherEarned;
-    final totalExpected =
-        item.totalExpected == 0 ? expected : item.totalExpected;
-    final totalEarned = item.totalEarned == 0 ? earned : item.totalEarned;
-    final progress = expected <= 0 ? 0.0 : (earned / expected).clamp(0.0, 1.0);
-    return Card(
-      clipBehavior: Clip.antiAlias,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                const IconBadge(icon: Icons.auto_stories, size: 36),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    '${item.name ?? '-'} · ${item.major ?? '-'}',
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 12,
-              runSpacing: 8,
-              children: [
-                InfoTile(
-                    icon: Icons.verified,
-                    label: '培养方案总学分',
-                    value: item.totalCredit ?? '-'),
-                InfoTile(
-                    icon: Icons.check_circle,
-                    label: '已修学分',
-                    value: totalEarned.toStringAsFixed(2)),
-                InfoTile(
-                    icon: Icons.list,
-                    label: '应修合计',
-                    value: totalExpected.toStringAsFixed(2)),
-                InfoTile(
-                    icon: Icons.auto_stories,
-                    label: '选课学分',
-                    value: item.selectedCredit ?? '-'),
-              ],
-            ),
-            const SizedBox(height: 12),
-            LinearProgressIndicator(value: progress),
-            const SizedBox(height: 12),
-            SimpleTable(
-              headers: const ['类别', '应修', '实修'],
-              rows: [
-                ['必修', '${item.requiredExpected}', '${item.requiredEarned}'],
-                ['选修', '${item.electiveExpected}', '${item.electiveEarned}'],
-                ['其他', '${item.otherExpected}', '${item.otherEarned}'],
-                ['合计', '$expected', '$earned'],
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _IconLabel extends StatelessWidget {
-  const _IconLabel({
-    required this.icon,
-    required this.label,
-    this.centered = false,
-  });
-
-  final IconData icon;
-  final String label;
-  final bool centered;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: centered ? MainAxisSize.max : MainAxisSize.min,
-      mainAxisAlignment:
-          centered ? MainAxisAlignment.center : MainAxisAlignment.start,
-      children: [
-        Icon(icon, size: 15),
-        const SizedBox(width: 6),
-        Flexible(
-          child: Text(
-            label,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-
 class EcardPage extends StatefulWidget {
   const EcardPage({super.key, required this.api, this.onSessionExpired});
 
