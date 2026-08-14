@@ -77,6 +77,15 @@ class _EcardPageState extends State<EcardPage> {
       final summary = await widget.api.refreshEcard();
       if (!mounted) return;
       setState(() => _summaryFuture = Future.value(summary));
+      if (summary.stale) {
+        // 后端刷新失败、返回的是旧缓存:明确提示,避免用户以为数据已更新
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+                '刷新失败：${summary.staleReason ?? '一卡通服务暂时不可用'}，当前显示的是缓存数据'),
+          ),
+        );
+      }
     } catch (exc) {
       _handleError(exc);
     } finally {
@@ -97,7 +106,11 @@ class _EcardPageState extends State<EcardPage> {
         );
       }
     });
-    await _summaryFuture;
+    try {
+      await _summaryFuture;
+    } catch (_) {
+      // FutureBuilder 会展示错误;这里避免未捕获的异步异常
+    }
   }
 
   Future<void> _bindRoom(EcardRoomItem room) async {

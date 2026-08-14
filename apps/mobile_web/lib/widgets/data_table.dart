@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../gzus_design.dart';
+import '../responsive/breakpoints.dart';
 import 'badges.dart';
 import 'page_panel.dart';
 
@@ -28,101 +29,105 @@ class MobileRecordCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final compact = MediaQuery.sizeOf(context).width < 600;
-    final colorScheme = Theme.of(context).colorScheme;
-    final cardColor = highlighted
-        ? colorScheme.primaryContainer.withValues(alpha: 0.55)
-        : highlight
-            ? colorScheme.secondaryContainer.withValues(alpha: 0.5)
-            : null;
-    return Container(
-      margin: const EdgeInsets.symmetric(vertical: 6),
-      decoration: BoxDecoration(
-        color: cardColor ?? gzusSurface(context),
-        borderRadius: BorderRadius.circular(compact ? 16 : 20),
-        border: Border.all(color: gzusBorder(context)),
-      ),
-      child: Padding(
-        padding: EdgeInsets.all(compact ? 12 : 16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
+    return GzusLayout(
+      builder: (context, breakpoint) {
+        final compact = breakpoint == GzusBreakpoint.compact;
+        final colorScheme = Theme.of(context).colorScheme;
+        final cardColor = highlighted
+            ? colorScheme.primaryContainer.withValues(alpha: 0.55)
+            : highlight
+                ? colorScheme.secondaryContainer.withValues(alpha: 0.5)
+                : null;
+        return Container(
+          margin: const EdgeInsets.symmetric(vertical: 6),
+          decoration: BoxDecoration(
+            color: cardColor ?? gzusSurface(context),
+            borderRadius: BorderRadius.circular(compact ? 16 : 20),
+            border: Border.all(color: gzusBorder(context)),
+          ),
+          child: Padding(
+            padding: EdgeInsets.all(compact ? 12 : 16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                IconBadge(icon: icon, size: compact ? 32 : 40),
-                SizedBox(width: compact ? 10 : 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    IconBadge(icon: icon, size: compact ? 32 : 40),
+                    SizedBox(width: compact ? 10 : 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Expanded(
-                            child: Text(
-                              title,
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  title,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: compact ? 15 : 16,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ),
+                              if (trailing != null) ...[
+                                const SizedBox(width: 8),
+                                trailing!,
+                              ],
+                            ],
+                          ),
+                          if (subtitle != null) ...[
+                            const SizedBox(height: 4),
+                            Text(
+                              subtitle!,
                               maxLines: 2,
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(
-                                fontSize: compact ? 15 : 16,
-                                fontWeight: FontWeight.w700,
+                                color: colorScheme.onSurfaceVariant,
+                                fontSize: compact ? 12 : 13,
                               ),
                             ),
-                          ),
-                          if (trailing != null) ...[
-                            const SizedBox(width: 8),
-                            trailing!,
                           ],
                         ],
                       ),
-                      if (subtitle != null) ...[
-                        const SizedBox(height: 4),
-                        Text(
-                          subtitle!,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: colorScheme.onSurfaceVariant,
-                            fontSize: compact ? 12 : 13,
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
+                if (rows.isNotEmpty) ...[
+                  SizedBox(height: compact ? 10 : 14),
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      final itemWidth = compact
+                          ? ((constraints.maxWidth - 8) / 2).clamp(118.0, 220.0)
+                          : null;
+                      return Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          for (final row in rows)
+                            MetricPill(
+                              icon: row.$1,
+                              label: row.$2,
+                              value: row.$3,
+                              width: itemWidth?.toDouble(),
+                              dense: compact,
+                            ),
+                        ],
+                      );
+                    },
+                  ),
+                ],
+                if (extraRows != null && extraRows!.isNotEmpty) ...[
+                  SizedBox(height: compact ? 10 : 14),
+                  ...extraRows!,
+                ],
               ],
             ),
-            if (rows.isNotEmpty) ...[
-              SizedBox(height: compact ? 10 : 14),
-              LayoutBuilder(
-                builder: (context, constraints) {
-                  final itemWidth = compact
-                      ? ((constraints.maxWidth - 8) / 2).clamp(118.0, 220.0)
-                      : null;
-                  return Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      for (final row in rows)
-                        MetricPill(
-                          icon: row.$1,
-                          label: row.$2,
-                          value: row.$3,
-                          width: itemWidth?.toDouble(),
-                          dense: compact,
-                        ),
-                    ],
-                  );
-                },
-              ),
-            ],
-            if (extraRows != null && extraRows!.isNotEmpty) ...[
-              SizedBox(height: compact ? 10 : 14),
-              ...extraRows!,
-            ],
-          ],
-        ),
-      ),
+          ),
+        );
+      },
     );
   }
 }
@@ -136,6 +141,7 @@ class SimpleTable extends StatelessWidget {
     this.rowHighlightColors = const {},
     this.rowTextColors = const {},
     this.columnFlexs = const [],
+    this.minColumnWidth = 88.0,
   });
 
   final List<String> headers;
@@ -145,12 +151,18 @@ class SimpleTable extends StatelessWidget {
   final Map<int, Color> rowTextColors;
   final List<int> columnFlexs;
 
+  /// 每列最小宽度。若同时提供 [columnFlexs]，则按 flex 比例放大最小宽度。
+  final double minColumnWidth;
+
   @override
   Widget build(BuildContext context) {
     final border = BorderSide(color: gzusBorder(context));
     return LayoutBuilder(
       builder: (context, constraints) {
-        final minWidth = headers.length * 104.0;
+        final totalFlex = columnFlexs.isEmpty
+            ? headers.length
+            : columnFlexs.take(headers.length).fold<int>(0, (a, b) => a + b);
+        final minWidth = totalFlex * minColumnWidth;
         final tableWidth = constraints.maxWidth.isFinite
             ? constraints.maxWidth.clamp(minWidth, double.infinity).toDouble()
             : minWidth;
@@ -166,7 +178,8 @@ class SimpleTable extends StatelessWidget {
                       values: headers,
                       strong: true,
                       border: border,
-                      columnFlexs: columnFlexs),
+                      columnFlexs: columnFlexs,
+                      minColumnWidth: minColumnWidth),
                   for (var i = 0; i < rows.length; i++)
                     SimpleTableRow(
                       values: rows[i],
@@ -175,6 +188,7 @@ class SimpleTable extends StatelessWidget {
                       highlightColor: rowHighlightColors[i],
                       textColor: rowTextColors[i],
                       columnFlexs: columnFlexs,
+                      minColumnWidth: minColumnWidth,
                     ),
                 ],
               ),
@@ -187,15 +201,17 @@ class SimpleTable extends StatelessWidget {
 }
 
 class SimpleTableRow extends StatelessWidget {
-  const SimpleTableRow(
-      {super.key,
-      required this.values,
-      required this.border,
-      this.strong = false,
-      this.highlighted = false,
-      this.highlightColor,
-      this.textColor,
-      this.columnFlexs = const []});
+  const SimpleTableRow({
+    super.key,
+    required this.values,
+    required this.border,
+    this.strong = false,
+    this.highlighted = false,
+    this.highlightColor,
+    this.textColor,
+    this.columnFlexs = const [],
+    this.minColumnWidth = 88.0,
+  });
 
   final List<String> values;
   final BorderSide border;
@@ -204,6 +220,7 @@ class SimpleTableRow extends StatelessWidget {
   final Color? highlightColor;
   final Color? textColor;
   final List<int> columnFlexs;
+  final double minColumnWidth;
 
   @override
   Widget build(BuildContext context) {
@@ -222,23 +239,27 @@ class SimpleTableRow extends StatelessWidget {
         color: highlighted ? textColor ?? accent : null,
         strong: strong || highlighted,
         columnFlexs: columnFlexs,
+        minColumnWidth: minColumnWidth,
       ),
     );
   }
 }
 
 class SimpleTableRowContent extends StatelessWidget {
-  const SimpleTableRowContent(
-      {super.key,
-      required this.values,
-      this.color,
-      this.strong = false,
-      this.columnFlexs = const []});
+  const SimpleTableRowContent({
+    super.key,
+    required this.values,
+    this.color,
+    this.strong = false,
+    this.columnFlexs = const [],
+    this.minColumnWidth = 88.0,
+  });
 
   final List<String> values;
   final Color? color;
   final bool strong;
   final List<int> columnFlexs;
+  final double minColumnWidth;
 
   @override
   Widget build(BuildContext context) {
@@ -247,13 +268,20 @@ class SimpleTableRowContent extends StatelessWidget {
         for (var i = 0; i < values.length; i++)
           Expanded(
             flex: i < columnFlexs.length ? columnFlexs[i] : 1,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-              child: _AutoScrollText(
-                text: values[i],
-                style: TextStyle(
-                  color: color,
-                  fontWeight: strong ? FontWeight.w600 : FontWeight.normal,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                minWidth: minColumnWidth *
+                    (i < columnFlexs.length ? columnFlexs[i] : 1),
+              ),
+              child: Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                child: _AutoScrollText(
+                  text: values[i],
+                  style: TextStyle(
+                    color: color,
+                    fontWeight: strong ? FontWeight.w600 : FontWeight.normal,
+                  ),
                 ),
               ),
             ),

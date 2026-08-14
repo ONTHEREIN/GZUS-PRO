@@ -7,10 +7,13 @@ import 'package:share_plus/share_plus.dart';
 import '../../api_client.dart';
 import '../../models/grade_models.dart';
 import '../../ics_download.dart' deferred as ics_download;
+import '../../responsive/breakpoints.dart';
+import '../../responsive/sizing.dart';
 import '../../widgets/async_panel.dart';
 import '../../widgets/data_table.dart';
 import '../../widgets/icon_label.dart';
 import '../../widgets/page_panel.dart';
+import '../../widgets/page_silent_refresh.dart';
 
 class ExamsPage extends StatefulWidget {
   const ExamsPage(
@@ -29,7 +32,8 @@ class ExamsPage extends StatefulWidget {
   State<ExamsPage> createState() => _ExamsPageState();
 }
 
-class _ExamsPageState extends State<ExamsPage> {
+class _ExamsPageState extends State<ExamsPage>
+    with PageSilentRefresh<ExamsPage> {
   var sortMode = 'term';
   bool sortAscending = false;
   bool _exporting = false;
@@ -117,13 +121,23 @@ class _ExamsPageState extends State<ExamsPage> {
           }
           return LayoutBuilder(
             builder: (context, constraints) {
-              final wide = constraints.maxWidth >= 720;
+              final breakpoint = constraints.maxWidth.gzusBreakpoint;
+              final wide = breakpoint != GzusBreakpoint.compact;
+              final pane = GzusSizing.splitPaneAdaptive(
+                constraints.maxWidth,
+                breakpoint,
+                mediumRatio: 0.38,
+                expandedRatio: 0.34,
+                largeRatio: 0.30,
+                minSide: 240,
+                maxSide: 320,
+              );
               if (wide) {
                 return Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     SizedBox(
-                      width: 280,
+                      width: pane.side,
                       child: Column(
                         children: [
                           Align(
@@ -336,6 +350,12 @@ class _ExamsPageState extends State<ExamsPage> {
   Future<void> _refreshExams() async {
     setState(() => _examsFuture = _loadExams(forceRefresh: true));
     await _examsFuture;
+  }
+
+  @override
+  void silentRefresh() {
+    if (!mounted) return;
+    setState(() => _examsFuture = _loadExams());
   }
 
   Future<List<PeriodExam>> _loadExams({bool forceRefresh = false}) async {

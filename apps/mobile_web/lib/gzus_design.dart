@@ -51,7 +51,8 @@ class GzusRadii {
   static const xl = 24.0;
 }
 
-ThemeData gzusTheme(Brightness brightness, {double navBarHeight = 76, Color seedColor = GzusColors.blue}) {
+ThemeData gzusTheme(Brightness brightness,
+    {double navBarHeight = 76, Color seedColor = GzusColors.blue}) {
   final isDark = brightness == Brightness.dark;
   final scheme = ColorScheme.fromSeed(
     seedColor: seedColor,
@@ -206,8 +207,7 @@ ThemeData gzusTheme(Brightness brightness, {double navBarHeight = 76, Color seed
     ),
     chipTheme: ChipThemeData(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
-      selectedColor:
-          isDark ? scheme.primary.withValues(alpha: 0.18) : seedSoft,
+      selectedColor: isDark ? scheme.primary.withValues(alpha: 0.18) : seedSoft,
       backgroundColor: surfaceSoft,
       side: BorderSide(color: border),
       labelStyle: TextStyle(fontWeight: FontWeight.w700, color: textColor),
@@ -257,4 +257,40 @@ List<BoxShadow> gzusShadow(BuildContext context) {
       offset: const Offset(0, 16),
     ),
   ];
+}
+
+/// OneGZUS 命名文字样式。
+///
+/// 页面应优先使用 [ThemeData.textTheme] 中的语义样式；对于局部需要统一微调的场景，
+/// 使用本类可以减少硬编码 `fontSize:` 和重复 `TextStyle`。
+abstract final class GzusTextStyles {
+  const GzusTextStyles._();
+
+  static TextStyle? cardTitle(BuildContext context) {
+    return Theme.of(context).textTheme.titleMedium;
+  }
+
+  static TextStyle? cardSubtitle(BuildContext context) {
+    return Theme.of(context).textTheme.bodySmall;
+  }
+
+  static TextStyle? metricValue(BuildContext context) {
+    return Theme.of(context).textTheme.titleLarge?.copyWith(
+          fontWeight: FontWeight.w800,
+        );
+  }
+
+  static TextStyle? metricLabel(BuildContext context) {
+    return Theme.of(context).textTheme.labelMedium;
+  }
+
+  static TextStyle? bodyEmphasis(BuildContext context) {
+    return Theme.of(context).textTheme.bodyMedium?.copyWith(
+          fontWeight: FontWeight.w700,
+        );
+  }
+
+  static TextStyle? caption(BuildContext context) {
+    return Theme.of(context).textTheme.labelSmall;
+  }
 }

@@ -5,9 +5,11 @@ import '../../api_client.dart';
 import '../../gzus_design.dart';
 import '../../models/nav_config.dart';
 import '../../test_flags.dart';
+import '../../widgets/grid_columns.dart';
 import '../../widgets/scale_tap.dart';
 import '../../widgets/seed_color_picker.dart';
 import '../../update_service.dart' deferred as update_service;
+import '../admin/admin_page.dart';
 
 class MorePage extends StatefulWidget {
   const MorePage({
@@ -30,6 +32,8 @@ class MorePage extends StatefulWidget {
     this.onAutoHideNavBarChanged,
     this.loginMethod,
     this.onShowBackgroundGuide,
+    this.isAdmin = false,
+    this.isOwner = false,
   });
 
   final ApiClient api;
@@ -50,6 +54,10 @@ class MorePage extends StatefulWidget {
   final ValueChanged<bool>? onAutoHideNavBarChanged;
   final String? loginMethod;
   final VoidCallback? onShowBackgroundGuide;
+
+  /// 管理后台身份（由 main.dart 传入，控制「管理后台」入口显隐与 owner 权限）
+  final bool isAdmin;
+  final bool isOwner;
 
   bool get isPasswordLogin => loginMethod == 'password';
 
@@ -158,29 +166,38 @@ class _MorePageState extends State<MorePage> {
               ),
               SliverPadding(
                 padding: const EdgeInsets.symmetric(horizontal: 20),
-                sliver: SliverGrid(
-                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 4,
-                    mainAxisSpacing: 12,
-                    crossAxisSpacing: 12,
-                    childAspectRatio: 1,
-                  ),
-                  delegate: SliverChildListDelegate([
-                    for (final tab in [..._barTabs])
-                      _MoreGridItem(
-                        tab: tab,
-                        editing: true,
-                        canRemove: !tab.isFixed,
-                        onRemove: () {
-                          if (!tab.isFixed && _barTabs.length > 2) {
-                            setState(() {
-                              _barTabs.remove(tab);
-                              _moreTabs.add(tab);
-                            });
-                          }
-                        },
+                sliver: SliverLayoutBuilder(
+                  builder: (context, constraints) {
+                    final columns = contentGridColumns(
+                      constraints.crossAxisExtent,
+                      minTileWidth: 72,
+                      maxColumns: 5,
+                    );
+                    return SliverGrid(
+                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: columns,
+                        mainAxisSpacing: 12,
+                        crossAxisSpacing: 12,
+                        childAspectRatio: columns < 3 ? 0.9 : 1,
                       ),
-                  ]),
+                      delegate: SliverChildListDelegate([
+                        for (final tab in [..._barTabs])
+                          _MoreGridItem(
+                            tab: tab,
+                            editing: true,
+                            canRemove: !tab.isFixed,
+                            onRemove: () {
+                              if (!tab.isFixed && _barTabs.length > 2) {
+                                setState(() {
+                                  _barTabs.remove(tab);
+                                  _moreTabs.add(tab);
+                                });
+                              }
+                            },
+                          ),
+                      ]),
+                    );
+                  },
                 ),
               ),
               SliverToBoxAdapter(
@@ -193,49 +210,67 @@ class _MorePageState extends State<MorePage> {
               ),
               SliverPadding(
                 padding: const EdgeInsets.symmetric(horizontal: 20),
-                sliver: SliverGrid(
-                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 4,
-                    mainAxisSpacing: 12,
-                    crossAxisSpacing: 12,
-                    childAspectRatio: 1,
-                  ),
-                  delegate: SliverChildListDelegate([
-                    for (final tab in [..._moreTabs])
-                      _MoreGridItem(
-                        tab: tab,
-                        editing: true,
-                        canAdd: canAddNavBarTab,
-                        onAdd: () {
-                          if (canAddNavBarTab) {
-                            setState(() {
-                              _moreTabs.remove(tab);
-                              _barTabs.add(tab);
-                            });
-                          }
-                        },
+                sliver: SliverLayoutBuilder(
+                  builder: (context, constraints) {
+                    final columns = contentGridColumns(
+                      constraints.crossAxisExtent,
+                      minTileWidth: 72,
+                      maxColumns: 5,
+                    );
+                    return SliverGrid(
+                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: columns,
+                        mainAxisSpacing: 12,
+                        crossAxisSpacing: 12,
+                        childAspectRatio: columns < 3 ? 0.9 : 1,
                       ),
-                  ]),
+                      delegate: SliverChildListDelegate([
+                        for (final tab in [..._moreTabs])
+                          _MoreGridItem(
+                            tab: tab,
+                            editing: true,
+                            canAdd: canAddNavBarTab,
+                            onAdd: () {
+                              if (canAddNavBarTab) {
+                                setState(() {
+                                  _moreTabs.remove(tab);
+                                  _barTabs.add(tab);
+                                });
+                              }
+                            },
+                          ),
+                      ]),
+                    );
+                  },
                 ),
               ),
             ] else ...[
               SliverPadding(
                 padding: const EdgeInsets.symmetric(horizontal: 20),
-                sliver: SliverGrid(
-                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 4,
-                    mainAxisSpacing: 12,
-                    crossAxisSpacing: 12,
-                    childAspectRatio: 1,
-                  ),
-                  delegate: SliverChildListDelegate([
-                    for (final tab in [..._moreTabs])
-                      _MoreGridItem(
-                        tab: tab,
-                        editing: false,
-                        onTap: () => widget.onNavigate(tab.tabId),
+                sliver: SliverLayoutBuilder(
+                  builder: (context, constraints) {
+                    final columns = contentGridColumns(
+                      constraints.crossAxisExtent,
+                      minTileWidth: 72,
+                      maxColumns: 5,
+                    );
+                    return SliverGrid(
+                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: columns,
+                        mainAxisSpacing: 12,
+                        crossAxisSpacing: 12,
+                        childAspectRatio: columns < 3 ? 0.9 : 1,
                       ),
-                  ]),
+                      delegate: SliverChildListDelegate([
+                        for (final tab in [..._moreTabs])
+                          _MoreGridItem(
+                            tab: tab,
+                            editing: false,
+                            onTap: () => widget.onNavigate(tab.tabId),
+                          ),
+                      ]),
+                    );
+                  },
                 ),
               ),
             ],
@@ -398,6 +433,19 @@ class _MorePageState extends State<MorePage> {
                           subtitle: const Text('设置后台保活和推送'),
                           trailing: const Icon(Icons.chevron_right),
                           onTap: widget.onShowBackgroundGuide,
+                        ),
+                      if (widget.isAdmin)
+                        ListTile(
+                          leading: const Icon(Icons.admin_panel_settings),
+                          title: const Text('管理后台'),
+                          subtitle: const Text('会话/统计/系统状态'),
+                          trailing: const Icon(Icons.chevron_right),
+                          onTap: () => Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (context) => AdminPage(
+                                  api: widget.api, isOwner: widget.isOwner),
+                            ),
+                          ),
                         ),
                       ListTile(
                         key: const ValueKey('home-widget-guide-tile'),

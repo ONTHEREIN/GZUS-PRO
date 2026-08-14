@@ -181,7 +181,9 @@ class _ApplicationsPageState extends State<ApplicationsPage> {
                                     crossAxisCount: columns,
                                     crossAxisSpacing: 10,
                                     mainAxisSpacing: 10,
-                                    childAspectRatio: columns == 1 ? 3.4 : 1.35,
+                                    childAspectRatio: columns == 1
+                                        ? 2.4
+                                        : (columns == 2 ? 1.5 : 1.35),
                                   ),
                                   itemCount: filtered.length,
                                   itemBuilder: (context, index) =>

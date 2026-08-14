@@ -7,11 +7,15 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../api_client.dart';
 import '../../live_activity_service.dart';
 import '../../models/grade_models.dart';
-import '../../local_notification_service.dart' deferred as local_notification_service;
+import '../../local_notification_service.dart'
+    deferred as local_notification_service;
 import '../../live_update_service.dart' deferred as live_update_service;
+import '../../responsive/breakpoints.dart';
+import '../../responsive/sizing.dart';
 import '../../widgets/async_panel.dart';
 import '../../widgets/data_table.dart';
 import '../../widgets/page_panel.dart';
+import '../../widgets/page_silent_refresh.dart';
 import '../../widgets/scale_tap.dart';
 
 class GradesPage extends StatefulWidget {
@@ -31,7 +35,8 @@ class GradesPage extends StatefulWidget {
   State<GradesPage> createState() => _GradesPageState();
 }
 
-class _GradesPageState extends State<GradesPage> {
+class _GradesPageState extends State<GradesPage>
+    with PageSilentRefresh<GradesPage> {
   late Future<List<GradeGroup>> _gradesFuture;
   late String _periodsSignature;
 
@@ -61,14 +66,24 @@ class _GradesPageState extends State<GradesPage> {
         onSessionExpired: widget.onSessionExpired,
         builder: (items) => LayoutBuilder(
           builder: (context, constraints) {
-            final wide = constraints.maxWidth >= 720;
-            if (wide) {
+            final breakpoint = constraints.maxWidth.gzusBreakpoint;
+            final compact = breakpoint == GzusBreakpoint.compact;
+            final pane = GzusSizing.splitPaneAdaptive(
+              constraints.maxWidth,
+              breakpoint,
+              mediumRatio: 0.42,
+              expandedRatio: 0.36,
+              largeRatio: 0.32,
+              minSide: 260,
+              maxSide: 340,
+            );
+            if (!compact) {
               final retakeCount = items.where((g) => g.hasRetake).length;
               return Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   SizedBox(
-                    width: 300,
+                    width: pane.side,
                     child: PagePanel(
                       title: '成绩统计',
                       icon: Icons.bar_chart,
@@ -117,6 +132,12 @@ class _GradesPageState extends State<GradesPage> {
   Future<void> _refreshGrades() async {
     setState(() => _gradesFuture = _loadGrades(forceRefresh: true));
     await _gradesFuture;
+  }
+
+  @override
+  void silentRefresh() {
+    if (!mounted) return;
+    setState(() => _gradesFuture = _loadGrades());
   }
 
   Future<List<GradeGroup>> _loadGrades({bool forceRefresh = false}) async {
@@ -400,7 +421,8 @@ class GradeGroupRow extends StatelessWidget {
       latest.grade.gradePoint ?? '-',
     ];
     if (!group.hasRetake) {
-      if (examTag == null) return SimpleTableRow(values: values, border: border);
+      if (examTag == null)
+        return SimpleTableRow(values: values, border: border);
       return Container(
         decoration: BoxDecoration(
           border: Border(bottom: border),

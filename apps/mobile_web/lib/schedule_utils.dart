@@ -8,6 +8,39 @@ DateTime mondayOf(DateTime date) {
   return day.subtract(Duration(days: day.weekday - DateTime.monday));
 }
 
+/// 根据日期推导学年学期（月份启发式，与后端 academic_period.py 保持一致）。
+/// 9-12 月、1 月 → 第 1 学期（秋）；2-8 月 → 第 2 学期（春）。
+/// 学年从 9 月跨年（9 月起的学年号 = 当前自然年）。
+(int, int) academicPeriodOf(DateTime date) {
+  final year = date.month >= 9 ? date.year : date.year - 1;
+  final term = date.month >= 9 || date.month <= 1 ? 1 : 2;
+  return (year, term);
+}
+
+/// 用已保存的各学期开学日期（键 "{year}-{term}"，值 yyyy-MM-dd）反推
+/// 当前学期：学期区间为 [开学周一, 开学周一 + 30 周)，相邻学期区间可能重叠，
+/// 多个命中取开学日期最新者；无命中或数据缺失返回 null（回退 [academicPeriodOf]）。
+(int, int)? academicPeriodFromFirstWeeks(
+    Map<String, String> firstWeeks, DateTime date) {
+  final today = DateTime(date.year, date.month, date.day);
+  (DateTime, int, int)? best;
+  for (final entry in firstWeeks.entries) {
+    final parts = entry.key.split('-');
+    if (parts.length != 2) continue;
+    final year = int.tryParse(parts[0]);
+    final term = int.tryParse(parts[1]);
+    if (year == null || term == null || (term != 1 && term != 2)) continue;
+    final start = DateTime.tryParse(entry.value);
+    if (start == null) continue;
+    final end = start.add(const Duration(days: 30 * 7));
+    if (today.isBefore(start) || !today.isBefore(end)) continue;
+    if (best == null || start.isAfter(best.$1)) {
+      best = (start, year, term);
+    }
+  }
+  return best == null ? null : (best.$2, best.$3);
+}
+
 /// 根据学年和学期推导默认的第一周周一。
 /// 第 1 学期（秋）9 月 1 日起，第 2 学期（春）3 月 1 日起。
 DateTime defaultFirstWeekStart(int year, int term) {
@@ -26,6 +59,14 @@ int weekFromDate(DateTime firstWeekStart, DateTime date,
 /// 格式化为 `yyyy-MM-dd`。
 String dateText(DateTime date) =>
     '${date.year.toString().padLeft(4, '0')}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+
+/// 生成 [year] 年 [month] 月的日历网格：6 行 × 7 列共 42 天，
+/// 周一开头，首尾用相邻月的日期补位（如 2026-09 → 首日 8/31、末日 10/11）。
+List<DateTime> calendarMonthDays(int year, int month) {
+  final first = DateTime(year, month, 1);
+  final gridStart = mondayOf(first);
+  return List.generate(42, (index) => gridStart.add(Duration(days: index)));
+}
 
 /// 16 节课的起止时间（record 形式，`$1`=开始、`$2`=结束）。
 const scheduleTimes = <(String, String)>[

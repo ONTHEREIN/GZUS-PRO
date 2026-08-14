@@ -12,8 +12,11 @@ import '../../models/home_config.dart';
 import '../../test_flags.dart';
 import '../../schedule_utils.dart';
 import '../../widgets/badges.dart';
+import '../../responsive/breakpoints.dart';
 import '../../widgets/empty_state.dart';
 import '../../widgets/page_panel.dart';
+import '../../widgets/page_silent_refresh.dart';
+import '../../widgets/grid_columns.dart';
 import '../../widgets/progress.dart';
 import '../../widgets/scale_tap.dart';
 
@@ -82,7 +85,8 @@ class HomePage extends StatefulWidget {
   State<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends State<HomePage> {
+class _HomePageState extends State<HomePage>
+    with PageSilentRefresh<HomePage> {
   // 首页只请求一次 dashboard 快照，再派生各模块 Future，避免首屏请求风暴。
   late Future<HomeDashboardData> _dashboardFuture;
   late Future<StudentInfo> _infoFuture;
@@ -135,6 +139,12 @@ class _HomePageState extends State<HomePage> {
       return _loadLocalExams();
     });
     unawaited(_dashboardFuture.then((_) => _updateHomeWidget()));
+  }
+
+  @override
+  void silentRefresh() {
+    if (!mounted) return;
+    setState(() => _initFutures());
   }
 
   Future<HomeDashboardData> _loadDashboardData({
@@ -198,7 +208,8 @@ class _HomePageState extends State<HomePage> {
         info: StudentInfo(studentId: '', name: '软帮手'),
         courses: const [],
         notices: const [],
-        attendance: AttendanceResponse.fromJson({'status': 'empty', 'items': []}),
+        attendance:
+            AttendanceResponse.fromJson({'status': 'empty', 'items': []}),
         credits: const [],
         ecard: EcardSummary.fromJson({'status': 'not_bound'}),
         apps: const [],
@@ -504,13 +515,10 @@ class _HomePageState extends State<HomePage> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Expanded(
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                final columns = constraints.maxWidth >= 980
-                    ? 3
-                    : constraints.maxWidth >= 640
-                        ? 2
-                        : 1;
+            child: GzusLayout(
+              builder: (context, breakpoint) {
+                final columns =
+                    gridColumnsForBreakpoint(breakpoint, maxColumns: 3);
                 final spacing = columns == 1 ? 10.0 : 12.0;
                 final visible = _moduleOrder
                     .where((id) => !_hiddenModules.contains(id))
@@ -521,7 +529,8 @@ class _HomePageState extends State<HomePage> {
                 return RefreshIndicator(
                   onRefresh: () async {
                     setState(() => _initFutures(forceRefresh: true));
-                    await _dashboardFuture.catchError((_) => _emptyDashboardData());
+                    await _dashboardFuture
+                        .catchError((_) => _emptyDashboardData());
                     unawaited(_updateHomeWidget());
                   },
                   child: columns == 1
@@ -548,7 +557,7 @@ class _HomePageState extends State<HomePage> {
                             crossAxisCount: columns,
                             mainAxisSpacing: spacing,
                             crossAxisSpacing: spacing,
-                            mainAxisExtent: 360,
+                            childAspectRatio: _homeCardAspectRatio(breakpoint),
                           ),
                           itemCount: visible.length,
                           itemBuilder: (context, i) {
@@ -605,6 +614,19 @@ class _HomePageState extends State<HomePage> {
         firstWeekStart: widget.firstWeekStart,
       );
     } catch (_) {}
+  }
+
+  /// 首页多列卡片网格的宽高比。
+  ///
+  /// 宽度越大，卡片可以越“扁”，给 fillChild 模块留出足够高度，
+  /// 同时避免小屏上过高的空白。
+  double _homeCardAspectRatio(GzusBreakpoint breakpoint) {
+    return switch (breakpoint) {
+      GzusBreakpoint.compact => 1.0,
+      GzusBreakpoint.medium => 1.12,
+      GzusBreakpoint.expanded => 1.18,
+      GzusBreakpoint.large => 1.22,
+    };
   }
 
   Widget _homeModuleFor(String id) {
@@ -1008,8 +1030,9 @@ class NotificationOpenBridge {
   }
 }
 
-/// 分模块异步加载的卡片包装器：加载中显示骨架屏，加载完成后显示实际内容
-class _AsyncModuleCard<T> extends StatelessWidget {
+/// 分模块异步加载的卡片包装器：首次加载显示骨架屏；
+/// 静默刷新（future 更换）期间保留旧内容，不闪骨架屏。
+class _AsyncModuleCard<T> extends StatefulWidget {
   const _AsyncModuleCard({
     required this.future,
     required this.title,
@@ -1025,21 +1048,36 @@ class _AsyncModuleCard<T> extends StatelessWidget {
   final bool allowNull;
 
   @override
+  State<_AsyncModuleCard<T>> createState() => _AsyncModuleCardState<T>();
+}
+
+class _AsyncModuleCardState<T> extends State<_AsyncModuleCard<T>> {
+  T? _lastData;
+
+  @override
   Widget build(BuildContext context) {
     return FutureBuilder<T>(
-      future: future,
+      future: widget.future,
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
+          if (_lastData != null) {
+            // 静默刷新中：展示旧数据，不闪骨架屏
+            return _buildCard(_lastData as T);
+          }
           return _HomeCard(
-            title: title,
-            icon: icon,
+            title: widget.title,
+            icon: widget.icon,
             child: const _ShimmerPlaceholder(),
           );
         }
         if (snapshot.hasError) {
+          if (_lastData != null) {
+            // 静默刷新失败：保留旧数据
+            return _buildCard(_lastData as T);
+          }
           return _HomeCard(
-            title: title,
-            icon: icon,
+            title: widget.title,
+            icon: widget.icon,
             child: const Center(
               child: Padding(
                 padding: EdgeInsets.symmetric(vertical: 24),
@@ -1049,10 +1087,13 @@ class _AsyncModuleCard<T> extends StatelessWidget {
           );
         }
         final data = snapshot.data;
-        if (!allowNull && data == null) {
+        if (!widget.allowNull && data == null) {
+          if (_lastData != null) {
+            return _buildCard(_lastData as T);
+          }
           return _HomeCard(
-            title: title,
-            icon: icon,
+            title: widget.title,
+            icon: widget.icon,
             child: const Center(
               child: Padding(
                 padding: EdgeInsets.symmetric(vertical: 24),
@@ -1061,10 +1102,17 @@ class _AsyncModuleCard<T> extends StatelessWidget {
             ),
           );
         }
-        return builder(data as T);
+        _lastData = data;
+        return _buildCard(data as T);
       },
     );
   }
+
+  Widget _buildCard(T data) => _HomeCard(
+        title: widget.title,
+        icon: widget.icon,
+        child: widget.builder(data),
+      );
 }
 
 /// 骨架屏占位组件
@@ -1151,7 +1199,6 @@ class _StaggeredAppearState extends State<_StaggeredAppear>
     );
   }
 }
-
 
 class _HomeCard extends StatelessWidget {
   const _HomeCard({
@@ -1243,7 +1290,6 @@ class _HomeCard extends StatelessWidget {
     );
   }
 }
-
 
 class _TimedCourse {
   const _TimedCourse({
@@ -1520,65 +1566,92 @@ class _WeekGridHomeCard extends StatelessWidget {
       title: '周课表',
       icon: Icons.grid_view,
       badge: '紧凑',
-      child: SingleChildScrollView(
-        child: Column(
-          children: [
-            Row(
-              children: [
-                const SizedBox(width: 36),
-                for (final day in days)
-                  Expanded(
-                    child: Text('周$day',
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(fontSize: 12)),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 6),
-            for (final slot in slots)
+      fillChild: true,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final labelWidth = constraints.maxWidth < 280 ? 28.0 : 36.0;
+          final cellWidth =
+              (constraints.maxWidth - labelWidth - 8) / days.length;
+          final cellHeight =
+              (constraints.maxHeight - 24 - 6 - 8) / slots.length;
+          final fontSize =
+              cellWidth < 44 ? 9.0 : (cellWidth < 58 ? 10.0 : 11.0);
+          return Column(
+            children: [
               Row(
                 children: [
-                  SizedBox(
-                    width: 36,
-                    child: Text('$slot-${slot + 1}',
-                        style: TextStyle(
-                            color:
-                                Theme.of(context).colorScheme.onSurfaceVariant,
-                            fontSize: 11)),
-                  ),
-                  for (var day = 1; day <= 5; day++)
+                  SizedBox(width: labelWidth),
+                  for (final day in days)
                     Expanded(
-                      child: _WeekGridCell(
-                        course: _firstOrNull(courses.where((item) {
-                          final start = item.startSection ?? 0;
-                          return item.weekday == day &&
-                              start >= slot &&
-                              start <= slot + 1;
-                        })),
-                      ),
+                      child: Text('周$day',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(fontSize: fontSize + 2)),
                     ),
                 ],
               ),
-          ],
-        ),
+              const SizedBox(height: 6),
+              Expanded(
+                child: Column(
+                  children: [
+                    for (final slot in slots)
+                      Expanded(
+                        child: Row(
+                          children: [
+                            SizedBox(
+                              width: labelWidth,
+                              child: Text('$slot-${slot + 1}',
+                                  style: TextStyle(
+                                      color: Theme.of(context)
+                                          .colorScheme
+                                          .onSurfaceVariant,
+                                      fontSize: fontSize + 1)),
+                            ),
+                            for (var day = 1; day <= 5; day++)
+                              Expanded(
+                                child: _WeekGridCell(
+                                  course: _firstOrNull(courses.where((item) {
+                                    final start = item.startSection ?? 0;
+                                    return item.weekday == day &&
+                                        start >= slot &&
+                                        start <= slot + 1;
+                                  })),
+                                  height: cellHeight,
+                                  fontSize: fontSize,
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
 }
 
 class _WeekGridCell extends StatelessWidget {
-  const _WeekGridCell({required this.course});
+  const _WeekGridCell({
+    required this.course,
+    required this.height,
+    required this.fontSize,
+  });
 
   final ScheduleCourse? course;
+  final double height;
+  final double fontSize;
 
   @override
   Widget build(BuildContext context) {
     final item = course;
     final cs = Theme.of(context).colorScheme;
     return Container(
-      height: 50,
+      height: height,
       margin: const EdgeInsets.all(2),
-      padding: const EdgeInsets.all(5),
+      padding: const EdgeInsets.all(3),
       decoration: BoxDecoration(
         color: item == null
             ? cs.surfaceContainerHighest.withValues(alpha: 0.35)
@@ -1593,10 +1666,12 @@ class _WeekGridCell extends StatelessWidget {
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
                 textAlign: TextAlign.center,
-                style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 10,
-                    fontWeight: FontWeight.w800),
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: fontSize,
+                  fontWeight: FontWeight.w800,
+                  height: 1.05,
+                ),
               ),
             ),
     );
@@ -2012,37 +2087,43 @@ class _ProfileHomeCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return _HomeCard(
-      title: '个人资料',
-      icon: Icons.badge,
-      badge: '已认证',
-      onTap: onTap,
-      child: Row(
-        children: [
-          CircleAvatar(
-            radius: 34,
-            child: Text(info.name.isEmpty ? '-' : info.name.characters.first),
+    return GzusLayout(
+      builder: (context, breakpoint) {
+        final compact = breakpoint == GzusBreakpoint.compact;
+        return _HomeCard(
+          title: '个人资料',
+          icon: Icons.badge,
+          badge: '已认证',
+          onTap: onTap,
+          child: Row(
+            children: [
+              CircleAvatar(
+                radius: compact ? 30 : 36,
+                child:
+                    Text(info.name.isEmpty ? '-' : info.name.characters.first),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(info.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                            fontSize: 20, fontWeight: FontWeight.w900)),
+                    const SizedBox(height: 6),
+                    _HomeInfoLine('学号', info.studentId),
+                    _HomeInfoLine('专业', info.major ?? '-'),
+                    _HomeInfoLine('班级', info.className ?? '-'),
+                    if (info.gender != null) _HomeInfoLine('性别', info.gender!),
+                  ],
+                ),
+              ),
+            ],
           ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(info.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                        fontSize: 20, fontWeight: FontWeight.w900)),
-                const SizedBox(height: 6),
-                _HomeInfoLine('学号', info.studentId),
-                _HomeInfoLine('专业', info.major ?? '-'),
-                _HomeInfoLine('班级', info.className ?? '-'),
-                if (info.gender != null) _HomeInfoLine('性别', info.gender!),
-              ],
-            ),
-          ),
-        ],
-      ),
+        );
+      },
     );
   }
 }
@@ -2063,27 +2144,34 @@ class _AppsHomeCard extends StatelessWidget {
       onTap: onTap,
       child: visible.isEmpty
           ? const EmptyState(message: '暂无应用')
-          : Wrap(
-              alignment: WrapAlignment.center,
-              spacing: 10,
-              runSpacing: 10,
-              children: [
-                for (final app in visible)
-                  SizedBox(
-                    width: 72,
-                    child: Column(
-                      children: [
-                        const IconBadge(icon: Icons.dashboard_customize),
-                        const SizedBox(height: 6),
-                        Text(app.title,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(fontSize: 12)),
-                      ],
-                    ),
-                  ),
-              ],
+          : LayoutBuilder(
+              builder: (context, constraints) {
+                final itemWidth = constraints.maxWidth < 240
+                    ? constraints.maxWidth / 4 - 10
+                    : (constraints.maxWidth / 4).clamp(64.0, 84.0);
+                return Wrap(
+                  alignment: WrapAlignment.start,
+                  spacing: 10,
+                  runSpacing: 10,
+                  children: [
+                    for (final app in visible)
+                      SizedBox(
+                        width: itemWidth,
+                        child: Column(
+                          children: [
+                            const IconBadge(icon: Icons.dashboard_customize),
+                            const SizedBox(height: 6),
+                            Text(app.title,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(fontSize: 12)),
+                          ],
+                        ),
+                      ),
+                  ],
+                );
+              },
             ),
     );
   }
@@ -2312,13 +2400,14 @@ class _GradesHomeCard extends StatelessWidget {
             ],
           ),
           const Divider(height: 20),
-          SizedBox(
-            height: 152,
+          ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: 120, maxHeight: 220),
             child: sorted.isEmpty
                 ? const Center(child: Text('暂无成绩数据'))
                 : ListView.separated(
-                    physics: const NeverScrollableScrollPhysics(),
-                    itemCount: sorted.length.clamp(0, 4),
+                    padding: EdgeInsets.zero,
+                    physics: const ClampingScrollPhysics(),
+                    itemCount: sorted.length.clamp(0, 6),
                     separatorBuilder: (_, __) => const SizedBox(height: 8),
                     itemBuilder: (context, i) {
                       final g = sorted[i];

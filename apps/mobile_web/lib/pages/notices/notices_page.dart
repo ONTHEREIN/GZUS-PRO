@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
 
 import '../../api_client.dart';
+import '../../responsive/breakpoints.dart';
+import '../../responsive/sizing.dart';
 import '../../widgets/async_panel.dart';
 import '../../widgets/badges.dart';
 import '../../widgets/meta_text.dart';
 import '../../widgets/open_browser.dart';
 import '../../widgets/page_panel.dart';
+import '../../widgets/page_silent_refresh.dart';
 
 String _noticeItemTitle(NoticeItem item) {
   final value = item.title.trim();
@@ -27,7 +30,8 @@ class NoticesPage extends StatefulWidget {
   State<NoticesPage> createState() => _NoticesPageState();
 }
 
-class _NoticesPageState extends State<NoticesPage> {
+class _NoticesPageState extends State<NoticesPage>
+    with PageSilentRefresh<NoticesPage> {
   int? _selectedIndex;
   late Future<List<NoticeItem>> _noticesFuture;
 
@@ -57,6 +61,12 @@ class _NoticesPageState extends State<NoticesPage> {
   }
 
   @override
+  void silentRefresh() {
+    if (!mounted) return;
+    setState(() => _noticesFuture = _loadNotices());
+  }
+
+  @override
   Widget build(BuildContext context) {
     return PageRefresh(
       onRefresh: _refreshNotices,
@@ -66,13 +76,23 @@ class _NoticesPageState extends State<NoticesPage> {
         onSessionExpired: widget.onSessionExpired,
         builder: (items) => LayoutBuilder(
           builder: (context, constraints) {
-            final wide = constraints.maxWidth >= 720;
+            final breakpoint = constraints.maxWidth.gzusBreakpoint;
+            final wide = breakpoint != GzusBreakpoint.compact;
+            final pane = GzusSizing.splitPaneAdaptive(
+              constraints.maxWidth,
+              breakpoint,
+              mediumRatio: 0.45,
+              expandedRatio: 0.38,
+              largeRatio: 0.34,
+              minSide: 280,
+              maxSide: 380,
+            );
             if (wide) {
               return Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   SizedBox(
-                    width: 350,
+                    width: pane.side,
                     child: PagePanel(
                       title: '通知',
                       icon: Icons.info_outline,
@@ -92,7 +112,10 @@ class _NoticesPageState extends State<NoticesPage> {
                                     borderRadius: BorderRadius.circular(8),
                                   )
                                 : null,
-                            child: NoticeCard(item: items[index]),
+                            child: NoticeCard(
+                            item: items[index],
+                            resolveUrl: widget.api.resolveMediaUrl,
+                          ),
                           ),
                         ),
                       ),
@@ -126,7 +149,10 @@ class _NoticesPageState extends State<NoticesPage> {
                 physics: const AlwaysScrollableScrollPhysics(),
                 itemCount: items.length,
                 separatorBuilder: (_, __) => const SizedBox(height: 10),
-                itemBuilder: (context, index) => NoticeCard(item: items[index]),
+                itemBuilder: (context, index) => NoticeCard(
+                  item: items[index],
+                  resolveUrl: widget.api.resolveMediaUrl,
+                ),
               ),
             );
           },
@@ -171,6 +197,7 @@ class _NoticeDetailContentState extends State<_NoticeDetailContent> {
 
   @override
   Widget build(BuildContext context) {
+    final coverUrl = _resolveCover();
     if (widget.item.url == null || widget.item.url!.isEmpty) {
       return SingleChildScrollView(
         padding: const EdgeInsets.all(16),
@@ -190,6 +217,10 @@ class _NoticeDetailContentState extends State<_NoticeDetailContent> {
                   style: TextStyle(
                       color: Theme.of(context).colorScheme.onSurfaceVariant,
                       fontSize: 13)),
+            if (coverUrl != null) ...[
+              const SizedBox(height: 12),
+              _NoticeCoverImage(url: coverUrl),
+            ],
             const SizedBox(height: 12),
             if (widget.item.summary != null && widget.item.summary!.isNotEmpty)
               Text(widget.item.summary!,
@@ -229,6 +260,10 @@ class _NoticeDetailContentState extends State<_NoticeDetailContent> {
                     style: TextStyle(
                         color: Theme.of(context).colorScheme.onSurfaceVariant,
                         fontSize: 13)),
+              if (coverUrl != null) ...[
+                const SizedBox(height: 12),
+                _NoticeCoverImage(url: coverUrl),
+              ],
               const SizedBox(height: 8),
               Text(detail.contentHtml.replaceAll(RegExp(r'<[^>]*>'), ''),
                   style: const TextStyle(fontSize: 15, height: 1.6)),
@@ -238,12 +273,61 @@ class _NoticeDetailContentState extends State<_NoticeDetailContent> {
       },
     );
   }
+
+  String? _resolveCover() {
+    final cover = widget.item.coverUrl;
+    if (cover == null || cover.isEmpty) return null;
+    if (cover.startsWith('http://') || cover.startsWith('https://')) return cover;
+    return widget.api.resolveMediaUrl(cover);
+  }
+}
+
+class _NoticeCoverImage extends StatelessWidget {
+  const _NoticeCoverImage({required this.url});
+
+  final String url;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(10),
+      child: AspectRatio(
+        aspectRatio: 16 / 9,
+        child: Image.network(
+          url,
+          fit: BoxFit.cover,
+          errorBuilder: (_, __, ___) => Container(
+            color: colorScheme.surfaceContainerHighest,
+            alignment: Alignment.center,
+            child: Icon(Icons.image_not_supported_outlined,
+                color: colorScheme.onSurfaceVariant),
+          ),
+          loadingBuilder: (_, child, progress) {
+            if (progress == null) return child;
+            return Container(
+              color: colorScheme.surfaceContainerHighest,
+              alignment: Alignment.center,
+              child: const SizedBox(
+                width: 26,
+                height: 26,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
 }
 
 class NoticeCard extends StatelessWidget {
-  const NoticeCard({super.key, required this.item});
+  const NoticeCard({super.key, required this.item, this.resolveUrl});
 
   final NoticeItem item;
+
+  /// 把相对路径封面（如校历 /admin/notices/1/image）解析为完整 URL。
+  final String? Function(String path)? resolveUrl;
 
   String get _title {
     return _noticeItemTitle(item);
@@ -255,12 +339,26 @@ class NoticeCard extends StatelessWidget {
     return value;
   }
 
+  String? get _coverUrl {
+    final cover = item.coverUrl;
+    if (cover == null || cover.isEmpty) return null;
+    if (cover.startsWith('http://') || cover.startsWith('https://')) return cover;
+    return resolveUrl?.call(cover);
+  }
+
+  IconData get _icon {
+    if (item.category.contains('公众号')) return Icons.campaign;
+    if (item.category.contains('校历')) return Icons.calendar_month;
+    return Icons.info_outline;
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
     final summary = _summary;
     final hasUrl = item.url != null && item.url!.isNotEmpty;
+    final coverUrl = _coverUrl;
 
     return Card(
       clipBehavior: Clip.antiAlias,
@@ -272,7 +370,7 @@ class NoticeCard extends StatelessWidget {
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const IconBadge(icon: Icons.info_outline, size: 32),
+                IconBadge(icon: _icon, size: 32),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Column(
@@ -317,6 +415,32 @@ class NoticeCard extends StatelessWidget {
                 style: TextStyle(color: colorScheme.onSurfaceVariant),
               ),
             ],
+            if (coverUrl != null) ...[
+              const SizedBox(height: 10),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: AspectRatio(
+                  aspectRatio: 16 / 9,
+                  child: Image.network(
+                    coverUrl,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => _coverPlaceholder(context),
+                    loadingBuilder: (_, child, progress) {
+                      if (progress == null) return child;
+                      return Container(
+                        color: colorScheme.surfaceContainerHighest,
+                        alignment: Alignment.center,
+                        child: const SizedBox(
+                          width: 22,
+                          height: 22,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ),
+            ],
             if (hasUrl) ...[
               const SizedBox(height: 12),
               Align(
@@ -331,6 +455,16 @@ class NoticeCard extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+
+  Widget _coverPlaceholder(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Container(
+      color: colorScheme.surfaceContainerHighest,
+      alignment: Alignment.center,
+      child: Icon(Icons.image_not_supported_outlined,
+          color: colorScheme.onSurfaceVariant),
     );
   }
 }

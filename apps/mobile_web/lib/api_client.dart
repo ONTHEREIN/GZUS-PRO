@@ -11,6 +11,7 @@ import 'package:encrypt/encrypt.dart' as encrypt;
 import 'package:pointycastle/asymmetric/api.dart';
 
 import 'auth_storage.dart';
+import 'models/schedule_settings.dart';
 import 'persistent_cache.dart';
 import 'schedule_utils.dart';
 
@@ -72,7 +73,9 @@ class DataSourceInfo {
     return '';
   }
 
-  bool get isStale => fromCache || fromLocalCache;
+  /// 联机时缓存优先并后台刷新属于正常路径，不视为过期；
+  /// 仅离线回退或更新失败（显示旧数据）时才需要横幅提示。
+  bool get isStale => fromCache || (fromLocalCache && isOffline);
 }
 
 class DataResult<T> {
@@ -234,6 +237,7 @@ class LoginResult {
     this.jwxtCookies,
     this.ehallCookies,
     this.ehallAuthToken,
+    this.isAdmin,
   });
 
   factory LoginResult.fromJson(Map<String, dynamic> json) => LoginResult(
@@ -249,6 +253,7 @@ class LoginResult {
             json['jwxtCookies'] as String? ?? json['cookies'] as String?,
         ehallCookies: json['ehallCookies'] as String?,
         ehallAuthToken: json['ehallAuthToken'] as String?,
+        isAdmin: json['isAdmin'] as bool?,
       );
 
   final String status;
@@ -270,6 +275,9 @@ class LoginResult {
   /// 办事大厅 WebView 登录态。
   final String? ehallCookies;
   final String? ehallAuthToken;
+
+  /// 管理后台标记：学号在 admin_users 白名单中时为 true（Worker 透传或后端直连）。
+  final bool? isAdmin;
 }
 
 class StudentInfo {
@@ -350,7 +358,22 @@ class ScheduleCourse {
         kcbmc = json['kcbmc'] as String?,
         raw = json['raw'] is Map<String, dynamic>
             ? json['raw'] as Map<String, dynamic>
-            : json;
+            : json,
+        isLocal = false;
+
+  /// 普通构造（本地调课新增/替换课程使用；[isLocal] 标记本地条目）。
+  ScheduleCourse({
+    required this.name,
+    this.teacher,
+    this.classroom,
+    this.weekday,
+    this.startSection,
+    this.endSection,
+    this.weeks,
+    this.kcbmc,
+    this.raw = const <String, dynamic>{},
+    this.isLocal = false,
+  });
 
   final String name;
   final String? teacher;
@@ -362,11 +385,53 @@ class ScheduleCourse {
   final String? kcbmc;
   final Map<String, dynamic> raw;
 
+  /// 是否本地调课条目（新增/替换），渲染层据此显示「调」徽标。
+  /// 仅存在于前端，不随 JSON 传输。
+  final bool isLocal;
+
   bool occursInWeek(int week) {
     final spec = weeks?.trim();
     if (spec == null || spec.isEmpty) return true;
     return _weekSpecContains(spec, week);
   }
+
+  ScheduleCourse copyWith({
+    String? name,
+    String? teacher,
+    String? classroom,
+    int? weekday,
+    int? startSection,
+    int? endSection,
+    String? weeks,
+    String? kcbmc,
+    Map<String, dynamic>? raw,
+    bool? isLocal,
+  }) {
+    return ScheduleCourse(
+      name: name ?? this.name,
+      teacher: teacher ?? this.teacher,
+      classroom: classroom ?? this.classroom,
+      weekday: weekday ?? this.weekday,
+      startSection: startSection ?? this.startSection,
+      endSection: endSection ?? this.endSection,
+      weeks: weeks ?? this.weeks,
+      kcbmc: kcbmc ?? this.kcbmc,
+      raw: raw ?? this.raw,
+      isLocal: isLocal ?? this.isLocal,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'name': name,
+        if (teacher != null) 'teacher': teacher,
+        if (classroom != null) 'classroom': classroom,
+        if (weekday != null) 'weekday': weekday,
+        if (startSection != null) 'startSection': startSection,
+        if (endSection != null) 'endSection': endSection,
+        if (weeks != null) 'weeks': weeks,
+        if (kcbmc != null) 'kcbmc': kcbmc,
+        if (raw.isNotEmpty) 'raw': raw,
+      };
 }
 
 int? _intValue(dynamic value) {
@@ -683,13 +748,15 @@ class NoticeItem {
         title = _noticeTitleFromJson(json),
         date = json['date'] as String?,
         url = json['url'] as String?,
-        summary = _noticeSummaryFromJson(json);
+        summary = _noticeSummaryFromJson(json),
+        coverUrl = _firstText(json, const ['coverUrl', 'cover_url', 'cover']);
 
   final String category;
   final String title;
   final String? date;
   final String? url;
   final String? summary;
+  final String? coverUrl;
 }
 
 String _noticeTitleFromJson(Map<String, dynamic> json) {
@@ -1195,7 +1262,9 @@ class EcardSummary {
                 ?.map((e) => e.toString())
                 .toList() ??
             ['power', 'cold_water', 'hot_water'],
-        updatedAt = json['updatedAt'] as String?;
+        updatedAt = json['updatedAt'] as String?,
+        stale = json['stale'] as bool? ?? false,
+        staleReason = json['staleReason'] as String?;
 
   final String status;
   final String? studentId;
@@ -1217,6 +1286,8 @@ class EcardSummary {
   final List<String> reminderTimes;
   final List<String> reminderItems;
   final String? updatedAt;
+  final bool stale;
+  final String? staleReason;
 
   bool get isBound => status == 'ok';
   bool get isLowPower =>
@@ -1985,6 +2056,40 @@ class ApiClient {
     }
   }
 
+  /// 拉取云端课表偏好（开学日期等，按学号绑定）。
+  /// 登录/会话恢复后 best-effort 调用：直接 HTTP 请求、失败返回 null，
+  /// 不触发 _withReloginRetry 的自动重登流程（与 fetchStudentInfo 同理，
+  /// 避免登录后瞬时 401 误触发 onReloginFailed）。
+  Future<ScheduleSettings?> fetchScheduleSettings() async {
+    try {
+      final url = _requireBaseUrl();
+      final response = await _http
+          .get(Uri.parse('$url/settings/schedule'), headers: _headers())
+          .timeout(_connectTimeout)
+          .timeout(_requestTimeout);
+      if (response.statusCode >= 400) return null;
+      return ScheduleSettings.fromJson(_decodeObject(response));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 保存云端课表偏好。
+  /// [firstWeeks] 为按学期合并（服务端保留其他学期），
+  /// [onboardingCompleted] 标记开学引导已完成。
+  Future<void> saveScheduleSettings({
+    Map<String, String>? firstWeeks,
+    bool? autoWeek,
+    bool? onboardingCompleted,
+  }) async {
+    await _put('/settings/schedule', {
+      if (firstWeeks != null) 'firstWeeks': firstWeeks,
+      if (autoWeek != null) 'autoWeek': autoWeek,
+      if (onboardingCompleted != null)
+        'onboardingCompleted': onboardingCompleted,
+    });
+  }
+
   SchoolDirectClient? _schoolDirectClient() {
     final cookies = _jwxtCookies;
     if (!_isSchoolDirectEnabled || cookies == null || cookies.isEmpty) {
@@ -2385,12 +2490,16 @@ class ApiClient {
       _cache.set('ecard_summary', data);
       await pcache.set('ecard_summary', data);
       return _enrichEcardSummaryDirect(EcardSummary.fromJson(data));
-    } catch (_) {
+    } catch (e) {
       final cached = _cachedObject(pcache, 'ecard_summary') ??
           _cache.get<Map<String, dynamic>>('ecard_summary');
       if (cached != null) {
+        // 刷新失败:不再静默吞掉,标记 stale 让页面提示当前为缓存数据
+        final staleData = Map<String, dynamic>.of(cached)
+          ..['stale'] = true
+          ..['staleReason'] = e is ApiException ? e.message : '刷新失败';
         final direct =
-            await _enrichEcardSummaryDirect(EcardSummary.fromJson(cached));
+            await _enrichEcardSummaryDirect(EcardSummary.fromJson(staleData));
         return direct;
       }
       rethrow;
@@ -2482,6 +2591,8 @@ class ApiClient {
         'reminderTimes': summary.reminderTimes,
         'reminderItems': summary.reminderItems,
         'updatedAt': summary.updatedAt,
+        'stale': summary.stale,
+        'staleReason': summary.staleReason,
       };
 
   String? _formatEcardValue(dynamic value, dynamic unit) {
@@ -2567,6 +2678,149 @@ class ApiClient {
     return data;
   }
 
+  // ─── 管理后台 ──────────────────────────────────────────────
+  // 所有 /admin/* 端点由 require_admin 鉴权（会话 is_admin 标记）。
+
+  /// 当前会话的管理员身份与角色（会话恢复后确认 isAdmin 用）。
+  Future<Map<String, dynamic>> adminMe() async => _get('/admin/me');
+
+  /// 总览统计（会话/推送/水电费/缓存/管理员数量）。
+  Future<Map<String, dynamic>> adminOverview() async => _get('/admin/overview');
+
+  /// 会话列表（按创建时间倒序）。
+  Future<Map<String, dynamic>> adminSessions(
+          {int limit = 50, int offset = 0}) async =>
+      _get('/admin/sessions?limit=$limit&offset=$offset');
+
+  /// 强制下线一个会话。
+  Future<Map<String, dynamic>> adminRevokeSession(String sessionId) async =>
+      _post('/admin/sessions/$sessionId/revoke', const {});
+
+  /// 管理员白名单列表。
+  Future<Map<String, dynamic>> adminUsers() async => _get('/admin/users');
+
+  /// 添加管理员（仅 owner）。
+  Future<Map<String, dynamic>> adminAddUser(
+          String studentId, String role) async =>
+      _post('/admin/users', {'studentId': studentId, 'role': role});
+
+  /// 删除管理员（仅 owner）。
+  Future<Map<String, dynamic>> adminRemoveUser(String studentId) async =>
+      _delete('/admin/users/$studentId');
+
+  /// 推送注册列表（Android 极光 + Web Push）。
+  Future<Map<String, dynamic>> adminPush({int limit = 50}) async =>
+      _get('/admin/push?limit=$limit');
+
+  /// 数据库缓存条目列表。
+  Future<Map<String, dynamic>> adminCache(
+          {int limit = 50, int offset = 0}) async =>
+      _get('/admin/cache?limit=$limit&offset=$offset');
+
+  /// 清空数据库缓存（可选按 resource 过滤）。
+  Future<Map<String, dynamic>> adminClearCache({String? resource}) async {
+    final query = resource != null ? '?resource=$resource' : '';
+    return _post('/admin/cache/clear$query', const {});
+  }
+
+  /// 水电费绑定列表与统计。
+  Future<Map<String, dynamic>> adminEcard(
+          {int limit = 50, int offset = 0}) async =>
+      _get('/admin/ecard?limit=$limit&offset=$offset');
+
+  /// 系统状态（脱敏）。
+  Future<Map<String, dynamic>> adminStatus() async => _get('/admin/status');
+
+  /// 敏感操作审计日志。
+  Future<Map<String, dynamic>> adminAuditLog({int limit = 50}) async =>
+      _get('/admin/audit-log?limit=$limit');
+
+  // ─── 管理后台 · 校历/通知上传 ─────────────────────────────
+
+  /// 校历/通知列表（管理员视角，含未发布）。
+  Future<Map<String, dynamic>> adminNotices(
+          {int limit = 50, int offset = 0}) async =>
+      _get('/admin/notices?limit=$limit&offset=$offset');
+
+  /// 上传校历/通知（imageData 为 base64，可带 data:image/...;base64 前缀）。
+  Future<Map<String, dynamic>> adminCreateNotice({
+    required String title,
+    String? description,
+    String? imageData,
+    String? imageMime,
+    bool isPinned = false,
+    bool published = true,
+  }) =>
+      _post('/admin/notices', {
+        'title': title,
+        'description': description,
+        'imageData': imageData,
+        'imageMime': imageMime,
+        'isPinned': isPinned,
+        'published': published,
+      });
+
+  /// 更新校历/通知。
+  Future<Map<String, dynamic>> adminUpdateNotice(
+    int noticeId, {
+    String? title,
+    String? description,
+    String? imageData,
+    String? imageMime,
+    bool? isPinned,
+    bool? published,
+  }) =>
+      _put('/admin/notices/$noticeId', {
+        'title': title,
+        'description': description,
+        'imageData': imageData,
+        'imageMime': imageMime,
+        'isPinned': isPinned,
+        'published': published,
+      });
+
+  /// 删除校历/通知。
+  Future<Map<String, dynamic>> adminDeleteNotice(int noticeId) async =>
+      _delete('/admin/notices/$noticeId');
+
+  // ─── 管理后台 · 公众号文章 ─────────────────────────────
+
+  /// 公众号同步通道状态（是否配置合集、上次同步时间）。
+  Future<Map<String, dynamic>> adminWechatStatus() async =>
+      _get('/admin/wechat/status');
+
+  /// 立即同步公众号文章。
+  Future<Map<String, dynamic>> adminWechatSync() async =>
+      _post('/admin/wechat/sync', const {});
+
+  /// 公众号文章列表（含隐藏）。
+  Future<Map<String, dynamic>> adminWechatArticles(
+          {int limit = 200, int offset = 0}) async =>
+      _get('/admin/wechat/articles?limit=$limit&offset=$offset');
+
+  /// 隐藏/取消隐藏公众号文章。
+  Future<Map<String, dynamic>> adminWechatSetHidden(
+          int articleId, bool hidden) async {
+    final action = hidden ? 'hide' : 'unhide';
+    return _post('/admin/wechat/articles/$articleId/$action', const {});
+  }
+
+  /// 删除公众号文章。
+  Future<Map<String, dynamic>> adminWechatDelete(int articleId) async =>
+      _delete('/admin/wechat/articles/$articleId');
+
+  /// 粘贴公众号文章链接导入。
+  Future<Map<String, dynamic>> adminWechatImport(String url) async =>
+      _post('/admin/wechat/import', {'url': url});
+
+  /// 把后端返回的相对路径（如校历图片 /admin/notices/1/image）拼成完整 URL。
+  String resolveMediaUrl(String path) {
+    if (path.startsWith('http://') || path.startsWith('https://')) return path;
+    final base = _currentBaseUrl.isNotEmpty ? _currentBaseUrl : baseUrl;
+    final trimmed = base.replaceAll(RegExp(r'/+$'), '');
+    return '$trimmed${path.startsWith('/') ? path : '/$path'}';
+  }
+
   static const Duration _requestTimeout = Duration(seconds: 30);
   static const Duration _connectTimeout = Duration(seconds: 10);
   static const int _maxRetries = 1;
@@ -2630,6 +2884,37 @@ class ApiClient {
               headers: _headers(),
               body: jsonEncode(body),
             )
+            .timeout(_connectTimeout)
+            .timeout(_requestTimeout);
+        return _decodeObject(response);
+      },
+    );
+  }
+
+  Future<Map<String, dynamic>> _put(
+      String path, Map<String, dynamic> body) async {
+    return _withReloginRetry(
+      () async {
+        final url = _requireBaseUrl();
+        final response = await _http
+            .put(
+              Uri.parse('$url$path'),
+              headers: _headers(),
+              body: jsonEncode(body),
+            )
+            .timeout(_connectTimeout)
+            .timeout(_requestTimeout);
+        return _decodeObject(response);
+      },
+    );
+  }
+
+  Future<Map<String, dynamic>> _delete(String path) async {
+    return _withReloginRetry(
+      () async {
+        final url = _requireBaseUrl();
+        final response = await _http
+            .delete(Uri.parse('$url$path'), headers: _headers())
             .timeout(_connectTimeout)
             .timeout(_requestTimeout);
         return _decodeObject(response);

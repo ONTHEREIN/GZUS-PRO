@@ -3,6 +3,8 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 
 import '../gzus_design.dart';
+import '../responsive/breakpoints.dart';
+import '../responsive/spacing.dart';
 
 Color accentFill(BuildContext context) =>
     Theme.of(context).colorScheme.primary.withValues(alpha: 0.12);
@@ -65,60 +67,61 @@ class PagePanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final compact = MediaQuery.sizeOf(context).width < 600;
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-    final content = Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        FrostedBanner(
-          padding: EdgeInsets.symmetric(
-            horizontal: compact ? 12 : 16,
-            vertical: compact ? 10 : 12,
-          ),
-          child: Row(
-            children: [
-              if (icon != null) ...[
-                Container(
-                  width: compact ? 34 : 42,
-                  height: compact ? 34 : 42,
-                  decoration: BoxDecoration(
-                    color: accentFill(context),
-                    borderRadius: BorderRadius.circular(12),
+    return GzusLayout(
+      builder: (context, breakpoint) {
+        final compact = breakpoint == GzusBreakpoint.compact;
+        final theme = Theme.of(context);
+        final colorScheme = theme.colorScheme;
+        final content = Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            FrostedBanner(
+              padding: GzusInsets.panelHeader(context),
+              child: Row(
+                children: [
+                  if (icon != null) ...[
+                    Container(
+                      width: compact ? 34 : 42,
+                      height: compact ? 34 : 42,
+                      decoration: BoxDecoration(
+                        color: accentFill(context),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Icon(icon!,
+                          size: compact ? 19 : 22, color: colorScheme.primary),
+                    ),
+                    SizedBox(width: compact ? 8 : 12),
+                  ],
+                  Expanded(
+                    child: Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: (compact
+                              ? theme.textTheme.titleLarge
+                              : theme.textTheme.headlineSmall)
+                          ?.copyWith(fontWeight: FontWeight.w800),
+                    ),
                   ),
-                  child: Icon(icon!,
-                      size: compact ? 19 : 22, color: colorScheme.primary),
-                ),
-                SizedBox(width: compact ? 8 : 12),
-              ],
-              Expanded(
-                child: Text(
-                  title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: (compact
-                          ? theme.textTheme.titleLarge
-                          : theme.textTheme.headlineSmall)
-                      ?.copyWith(fontWeight: FontWeight.w800),
-                ),
+                  if (trailing != null) ...[
+                    SizedBox(width: compact ? 8 : 12),
+                    trailing!,
+                  ],
+                ],
               ),
-              if (trailing != null) ...[
-                SizedBox(width: compact ? 8 : 12),
-                trailing!,
-              ],
-            ],
+            ),
+            SizedBox(height: compact ? 6 : 14),
+            if (expandChild) Expanded(child: child) else child,
+          ],
+        );
+        return Padding(
+          padding: EdgeInsets.symmetric(
+            horizontal: compact ? 4 : 8,
+            vertical: compact ? 4 : 8,
           ),
-        ),
-        SizedBox(height: compact ? 6 : 14),
-        if (expandChild) Expanded(child: child) else child,
-      ],
-    );
-    return Padding(
-      padding: EdgeInsets.symmetric(
-        horizontal: compact ? 4 : 8,
-        vertical: compact ? 4 : 8,
-      ),
-      child: content,
+          child: content,
+        );
+      },
     );
   }
 }

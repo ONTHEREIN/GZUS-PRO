@@ -12,6 +12,7 @@ import '../../widgets/badges.dart';
 import '../../widgets/empty_state.dart';
 import '../../widgets/icon_label.dart';
 import '../../widgets/page_panel.dart';
+import '../../widgets/page_silent_refresh.dart';
 import '../../widgets/progress.dart';
 
 class AttendancePage extends StatefulWidget {
@@ -31,7 +32,8 @@ class AttendancePage extends StatefulWidget {
   State<AttendancePage> createState() => _AttendancePageState();
 }
 
-class _AttendancePageState extends State<AttendancePage> {
+class _AttendancePageState extends State<AttendancePage>
+    with PageSilentRefresh<AttendancePage> {
   late Future<AttendanceResponse> _attendanceFuture;
   String _sortField = 'none';
   bool _sortDescending = true;
@@ -68,6 +70,12 @@ class _AttendancePageState extends State<AttendancePage> {
   Future<void> _refreshAttendance() async {
     setState(() => _attendanceFuture = _loadAttendance(forceRefresh: true));
     await _attendanceFuture;
+  }
+
+  @override
+  void silentRefresh() {
+    if (!mounted) return;
+    setState(() => _attendanceFuture = _loadAttendance());
   }
 
   String get _sortLabel {

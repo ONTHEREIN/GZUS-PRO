@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../../api_client.dart';
+import '../../responsive/breakpoints.dart';
+import '../../responsive/sizing.dart';
 import '../../widgets/async_panel.dart';
 import '../../widgets/info_tile.dart';
 import '../../widgets/page_panel.dart';
@@ -50,7 +52,17 @@ class _InfoPageState extends State<InfoPage> {
         onSessionExpired: widget.onSessionExpired,
         builder: (info) => LayoutBuilder(
           builder: (context, constraints) {
-            final wide = constraints.maxWidth >= 720;
+            final breakpoint = constraints.maxWidth.gzusBreakpoint;
+            final wide = breakpoint != GzusBreakpoint.compact;
+            final pane = GzusSizing.splitPaneAdaptive(
+              constraints.maxWidth,
+              breakpoint,
+              mediumRatio: 0.40,
+              expandedRatio: 0.34,
+              largeRatio: 0.30,
+              minSide: 260,
+              maxSide: 340,
+            );
             final tiles = [
               InfoTile(icon: Icons.person, label: '姓名', value: info.name),
               InfoTile(icon: Icons.badge, label: '学号', value: info.studentId),
@@ -114,7 +126,7 @@ class _InfoPageState extends State<InfoPage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   SizedBox(
-                    width: 300,
+                    width: pane.side,
                     child: PagePanel(
                       title: '个人信息',
                       icon: Icons.badge,

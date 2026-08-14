@@ -27,6 +27,7 @@ import 'web_pwa_cache.dart' deferred as web_pwa_cache;
 import 'push_service.dart' deferred as push_service;
 
 import 'models/nav_config.dart';
+import 'models/schedule_settings.dart';
 import 'pages/ftp/ftp_upload_page.dart';
 import 'pages/grades/grades_page.dart';
 import 'pages/home/home_page.dart';
@@ -45,6 +46,7 @@ import 'test_flags.dart';
 import 'widgets/icon_label.dart';
 import 'widgets/open_browser.dart';
 import 'widgets/page_panel.dart';
+import 'widgets/page_silent_refresh.dart';
 import 'widgets/web_unsupported.dart';
 
 export 'test_flags.dart';
@@ -101,11 +103,18 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
   DataSourceInfo _globalDataSource = const DataSourceInfo();
   bool get isOfflineMode => _globalDataSource.isStale;
 
+  /// 云端课表偏好（登录后拉取；登出时清空，避免多账号串数据）。
+  ScheduleSettings? _cloudScheduleSettings;
+
   /// 登录方式: "password" = 教务系统账密登录, "sso" = 办事大厅一键登录, null = 未登录
   String? loginMethod;
 
   /// 防止 _logout() 被并发调用
   bool _logoutInProgress = false;
+
+  /// 管理后台身份（best-effort 由 /admin/me 确认；登录响应 isAdmin 仅作快速初值）
+  bool _isAdmin = false;
+  bool _isOwner = false;
 
   /// 最近一次登录成功的时间，用于防止登录后立即因瞬态 401 被踢出
   DateTime? _lastLoginAt;
@@ -282,6 +291,13 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
       themeMode: themeMode,
       theme: _appTheme(Brightness.light, seedColor: seedColor),
       darkTheme: _appTheme(Brightness.dark, seedColor: seedColor),
+      builder: (context, child) {
+        return MediaQuery.withClampedTextScaling(
+          minScaleFactor: 0.8,
+          maxScaleFactor: 1.3,
+          child: child!,
+        );
+      },
       home: initializing
           ? const LoadingPage()
           : !loggedIn
@@ -311,6 +327,8 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
                             await SharedPreferences.getInstance();
                         await prefs.setBool(
                             'schedule_onboarding_completed', true);
+                        // 云端记录完成标记，换设备后不再要求选择
+                        unawaited(_markScheduleOnboardingCompleted());
                         if (!mounted) return;
                         setState(() {
                           _scheduleOnboardingCompleted = true;
@@ -423,20 +441,25 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
       api.setStudentId(savedStudentId);
     }
     final guideCompleted = prefs.getBool('background_guide_completed') ?? false;
-    final scheduleOnboardingCompleted =
+    final localOnboardingCompleted =
         prefs.getBool('schedule_onboarding_completed') ?? false;
+    // 优先使用云端完成标记（换设备/清缓存后不重复引导），失败回退本地
+    final cloud = await _fetchCloudScheduleSettings();
     if (!mounted) return;
     setState(() {
       initializing = false;
       loggedIn = true;
       studentName = prefs.getString('auth.studentName') ?? '软帮手';
       _backgroundGuideCompleted = guideCompleted;
-      _scheduleOnboardingCompleted = scheduleOnboardingCompleted;
+      _cloudScheduleSettings = cloud;
+      _scheduleOnboardingCompleted =
+          cloud?.onboardingCompleted ?? localOnboardingCompleted;
       _globalDataSource = const DataSourceInfo(fromLocalCache: true);
       loginMethod = prefs.getString('auth.loginMethod');
     });
 
     unawaited(_tryBackgroundRefresh(prefs));
+    unawaited(_checkAdminStatus());
     _initPushServices();
     _checkForUpdate();
   }
@@ -553,13 +576,21 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
 
   Future<void> _finishLogin(LoginResult result) async {
     await _persistLogin(result);
+    // 开学日期已云端持久化：登录后不再强制重选，以云端完成标记为准
+    // （拉取失败时回退本地标记，保证离线可用）。
+    final cloud = await _fetchCloudScheduleSettings();
+    final prefs = await SharedPreferences.getInstance();
+    final localCompleted =
+        prefs.getBool('schedule_onboarding_completed') ?? false;
     if (!mounted) return;
     setState(() {
       loggedIn = true;
       studentName = result.studentName;
       loginError = null;
       _backgroundGuideCompleted = false;
-      _scheduleOnboardingCompleted = false;
+      _cloudScheduleSettings = cloud;
+      _scheduleOnboardingCompleted =
+          cloud?.onboardingCompleted ?? localCompleted;
       loginMethod = result.loginMethod;
     });
 
@@ -569,6 +600,26 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
 
     _initPushServices();
     _checkForUpdate();
+  }
+
+  /// 拉取云端课表偏好（best-effort：失败或超时返回 null，不阻塞登录）。
+  Future<ScheduleSettings?> _fetchCloudScheduleSettings() async {
+    try {
+      return await api
+          .fetchScheduleSettings()
+          .timeout(const Duration(seconds: 4));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 云端标记开学引导已完成（best-effort，失败仅打印日志）。
+  Future<void> _markScheduleOnboardingCompleted() async {
+    try {
+      await api.saveScheduleSettings(onboardingCompleted: true);
+    } catch (error) {
+      debugPrint('同步开学引导完成标记到云端失败: error=${error.runtimeType}');
+    }
   }
 
   Future<void> _fetchStudentInfoAfterLogin() async {
@@ -582,6 +633,9 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
 
   Future<void> _persistLogin(LoginResult result) async {
     _lastLoginAt = DateTime.now();
+    _isAdmin = result.isAdmin ?? false;
+    // 登录响应只带 isAdmin 布尔；角色（owner/admin）以 /admin/me 为准
+    unawaited(_checkAdminStatus());
     final prefs = await SharedPreferences.getInstance();
     if (result.sessionId != null) {
       api.useSession(result.sessionId);
@@ -595,6 +649,35 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
     }
     if (result.loginMethod != null) {
       await prefs.setString('auth.loginMethod', result.loginMethod!);
+    }
+  }
+
+  /// 确认当前会话的管理员身份与角色（best-effort）。
+  ///
+  /// 非管理员会收到 403，网络失败/超时也静默忽略，不影响正常使用。
+  Future<void> _checkAdminStatus() async {
+    if (api.sessionId == null || api.sessionId!.isEmpty) return;
+    try {
+      final data =
+          await api.adminMe().timeout(const Duration(seconds: 4));
+      if (!mounted) return;
+      setState(() {
+        _isAdmin = data['isAdmin'] == true || data['role'] != null;
+        _isOwner = data['role'] == 'owner';
+      });
+    } on ApiException catch (e) {
+      if (e.statusCode == 403) {
+        // 非管理员会话：保持当前状态
+        if (mounted && _isAdmin) {
+          setState(() {
+            _isAdmin = false;
+            _isOwner = false;
+          });
+        }
+      }
+      // 其他错误（网络/超时）静默忽略
+    } catch (_) {
+      // 静默忽略
     }
   }
 
@@ -615,9 +698,12 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
       studentName = null;
       _backgroundGuideCompleted = false;
       _scheduleOnboardingCompleted = false;
+      _cloudScheduleSettings = null; // 清空云端偏好，防止多账号串数据
       _globalDataSource = const DataSourceInfo();
       loginMethod = null;
       loginError = null;
+      _isAdmin = false;
+      _isOwner = false;
     });
     _navigatorKey.currentState?.popUntil((route) => route.isFirst);
 
@@ -707,6 +793,10 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
       onSettingsPressed: _showBackgroundGuide,
       dataSource: _globalDataSource,
       loginMethod: loginMethod,
+      cloudFirstWeeks: _cloudScheduleSettings?.firstWeeks ?? const {},
+      cloudAutoWeek: _cloudScheduleSettings?.autoWeek,
+      isAdmin: _isAdmin,
+      isOwner: _isOwner,
     );
   }
 
@@ -1444,6 +1534,10 @@ class DashboardShell extends StatefulWidget {
     this.onSettingsPressed,
     this.dataSource = const DataSourceInfo(),
     this.loginMethod,
+    this.cloudFirstWeeks = const {},
+    this.cloudAutoWeek,
+    this.isAdmin = false,
+    this.isOwner = false,
   });
 
   final ApiClient api;
@@ -1458,6 +1552,16 @@ class DashboardShell extends StatefulWidget {
 
   /// 登录方式: "password" = 教务系统账密登录, "sso" = 办事大厅一键登录
   final String? loginMethod;
+
+  /// 云端同步的各学期开学日期（键 "{year}-{term}"），本地缺失时兜底
+  final Map<String, String> cloudFirstWeeks;
+
+  /// 云端同步的自动周次开关；null 表示未保存过
+  final bool? cloudAutoWeek;
+
+  /// 管理后台身份（由 /admin/me 确认后传入，用于「更多」页显示管理入口）
+  final bool isAdmin;
+  final bool isOwner;
 
   /// 账密登录时无法使用的功能 tabId 列表（依赖办事大厅 ehall 会话）
   bool get isPasswordLogin => loginMethod == 'password';
@@ -1583,12 +1687,15 @@ class CaptchaImage extends StatelessWidget {
 
 class _DashboardShellState extends State<DashboardShell> {
   int index = 0;
-  int year =
-      DateTime.now().month >= 9 ? DateTime.now().year : DateTime.now().year - 1;
-  int term = DateTime.now().month >= 9 || DateTime.now().month <= 1 ? 1 : 2;
+  late int year;
+  late int term;
   late DateTime firstWeekStart;
   late int currentWeek;
   bool autoWeek = true;
+  /// 用户是否手动切换过学期（切换后启动时的自动校正不再覆盖）。
+  bool _userPinnedPeriod = false;
+  /// 启动时的学期自动校正是否已执行过（只跑一次）。
+  bool _periodAutoCorrected = false;
   List<NavTabConfig> _navBarTabs = NavTabConfig.defaultTabs;
   String? _highlightCourse;
   String? _overrideTabId;
@@ -1599,9 +1706,24 @@ class _DashboardShellState extends State<DashboardShell> {
   bool _sidebarCollapsed = false;
   double _lastScrollOffset = 0;
 
+  /// 已访问页面的保活缓存：首次访问时构建，之后常驻 IndexedStack 不销毁，
+  /// 切换 Tab 只换 index，页面 State/滚动位置/选中项全部保留。
+  final Map<String, Widget> _pageCache = {};
+  final Map<String, GlobalKey> _pageKeys = {};
+  final Set<String> _visitedTabs = {};
+  final Map<String, DateTime> _lastSilentRefresh = {};
+  /// 页面参数代数：学年/学期/周次等参数变化时 +1，
+  /// 触发缓存页面重建 widget 实例（GlobalKey 保证 State 不销毁，走 didUpdateWidget）。
+  int _pageGeneration = 0;
+  final Map<String, int> _pageGen = {};
+  bool? _lastCompact;
+
   @override
   void initState() {
     super.initState();
+    final period = academicPeriodOf(DateTime.now());
+    year = period.$1;
+    term = period.$2;
     firstWeekStart = defaultFirstWeekStart(year, term);
     currentWeek = weekFromDate(firstWeekStart, DateTime.now(), clampToTerm: true);
     HomeWidgetBridge.setLaunchHandler(_handleWidgetLaunch);
@@ -1610,6 +1732,7 @@ class _DashboardShellState extends State<DashboardShell> {
     _loadNavConfig().then((_) => _consumeWidgetLaunch());
     _loadAutoHideSetting();
     _loadScheduleSettings();
+    _autoCorrectPeriodOnce();
   }
 
   @override
@@ -1627,6 +1750,7 @@ class _DashboardShellState extends State<DashboardShell> {
     if (oldWidget.loginMethod != widget.loginMethod) {
       _navBarTabs = _filterRestrictedTabs(_navBarTabs);
       if (index >= _navBarTabs.length) index = 0;
+      _pageGeneration++;
     }
   }
 
@@ -1654,22 +1778,25 @@ class _DashboardShellState extends State<DashboardShell> {
   @override
   Widget build(BuildContext context) {
     if (_navBarTabs.isNotEmpty && index >= _navBarTabs.length) index = 0;
-    final currentTabId = _overrideTabId ??
+    final activeTabId = _overrideTabId ??
         (_navBarTabs.isNotEmpty ? _navBarTabs[index].tabId : null);
-    final currentPage = currentTabId != null
-        ? _buildPage(currentTabId)
-        : const SizedBox.shrink();
 
     return PopScope(
       canPop: false,
       onPopInvoked: (didPop) {
         if (didPop) return;
         if (_overrideTabId != null) {
+          final backTabId =
+              _navBarTabs.isNotEmpty && index < _navBarTabs.length
+                  ? _navBarTabs[index].tabId
+                  : null;
           setState(() => _overrideTabId = null);
+          if (backTabId != null) _activateTab(backTabId);
           return;
         }
         if (index != 0) {
           setState(() => index = 0);
+          if (_navBarTabs.isNotEmpty) _activateTab(_navBarTabs[0].tabId);
           return;
         }
         final now = DateTime.now();
@@ -1691,10 +1818,13 @@ class _DashboardShellState extends State<DashboardShell> {
         body: LayoutBuilder(
           builder: (context, constraints) {
             final compact = constraints.maxWidth < _mobileBreakpoint;
+            // 断点翻转时重建缓存页面（如 more 页的移动/宽屏参数）
+            if (_lastCompact != null && _lastCompact != compact) {
+              _pageGeneration++;
+            }
+            _lastCompact = compact;
             final mobileTabs = _mobileNavTabs(_navBarTabs);
             final effectiveSelected = _overrideTabId != null ? -1 : index;
-            final activeTabId = _overrideTabId ??
-                (_navBarTabs.isNotEmpty ? _navBarTabs[index].tabId : null);
             final activeMobileIndex =
                 mobileTabs.indexWhere((t) => t.tabId == activeTabId);
             final moreMobileIndex =
@@ -1804,27 +1934,7 @@ class _DashboardShellState extends State<DashboardShell> {
                                           10),
                               child: _CenteredPage(
                                 maxWidth: 720,
-                                child: AnimatedSwitcher(
-                                  duration: const Duration(milliseconds: 250),
-                                  switchInCurve: Curves.easeOutCubic,
-                                  switchOutCurve: Curves.easeInCubic,
-                                  transitionBuilder: (child, animation) {
-                                    return FadeTransition(
-                                      opacity: animation,
-                                      child: SlideTransition(
-                                        position: Tween<Offset>(
-                                          begin: const Offset(0.04, 0),
-                                          end: Offset.zero,
-                                        ).animate(animation),
-                                        child: child,
-                                      ),
-                                    );
-                                  },
-                                  child: KeyedSubtree(
-                                    key: ValueKey(currentTabId),
-                                    child: currentPage,
-                                  ),
-                                ),
+                                child: _buildPageStack(activeTabId),
                               ),
                             ),
                           ),
@@ -1858,6 +1968,7 @@ class _DashboardShellState extends State<DashboardShell> {
                               final selectedTab = mobileTabs[value];
                               final fullIndex = _navBarTabs.indexWhere(
                                   (t) => t.tabId == selectedTab.tabId);
+                              _activateTab(selectedTab.tabId);
                               setState(() {
                                 index = fullIndex >= 0 ? fullIndex : index;
                                 _overrideTabId = null;
@@ -1889,6 +2000,7 @@ class _DashboardShellState extends State<DashboardShell> {
                       },
                       onChanged: (value) async {
                         _navBarVisible.value = true;
+                        _activateTab(_navBarTabs[value].tabId);
                         setState(() {
                           index = value;
                           _overrideTabId = null;
@@ -1909,28 +2021,7 @@ class _DashboardShellState extends State<DashboardShell> {
                                   onNotification: _onScrollNotification,
                                   child: _CenteredPage(
                                     maxWidth: 1280,
-                                    child: AnimatedSwitcher(
-                                      duration:
-                                          const Duration(milliseconds: 250),
-                                      switchInCurve: Curves.easeOutCubic,
-                                      switchOutCurve: Curves.easeInCubic,
-                                      transitionBuilder: (child, animation) {
-                                        return FadeTransition(
-                                          opacity: animation,
-                                          child: SlideTransition(
-                                            position: Tween<Offset>(
-                                              begin: const Offset(0.04, 0),
-                                              end: Offset.zero,
-                                            ).animate(animation),
-                                            child: child,
-                                          ),
-                                        );
-                                      },
-                                      child: KeyedSubtree(
-                                        key: ValueKey(currentTabId),
-                                        child: currentPage,
-                                      ),
-                                    ),
+                                    child: _buildPageStack(activeTabId),
                                   ),
                                 ),
                               ),
@@ -1971,6 +2062,7 @@ class _DashboardShellState extends State<DashboardShell> {
       }
     }
     if (mounted) {
+      _pageGeneration++;
       setState(() {
         _navBarTabs = _filterRestrictedTabs(tabs);
         final homeIdx = tabs.indexWhere((t) => t.tabId == 'home');
@@ -1987,6 +2079,71 @@ class _DashboardShellState extends State<DashboardShell> {
             !widget.isPasswordLogin ||
             !passwordRestrictedTabs.contains(t.tabId))
         .toList();
+  }
+
+  /// 惰性保活页面栈：页面首次激活时才构建，之后常驻 IndexedStack 不销毁；
+  /// 切换 Tab 只换 index，激活的子页淡入。
+  Widget _buildPageStack(String? activeTabId) {
+    final children = <Widget>[
+      for (final tab in _navBarTabs)
+        _pageSlot(tab.tabId, active: tab.tabId == activeTabId),
+    ];
+    var activeIndex = _navBarTabs.indexWhere((t) => t.tabId == activeTabId);
+    if (_overrideTabId != null &&
+        !_navBarTabs.any((t) => t.tabId == _overrideTabId)) {
+      children.add(_pageSlot(_overrideTabId!, active: true));
+      activeIndex = children.length - 1;
+    }
+    if (activeIndex < 0) activeIndex = 0;
+    return IndexedStack(index: activeIndex, children: children);
+  }
+
+  /// 单个页面的保活槽位：未访问时用占位符，访问后缓存页面实例；
+  /// GlobalKey 保证参数变化重建 widget 实例时 State 不销毁。
+  Widget _pageSlot(String tabId, {required bool active}) {
+    final key = _pageKeys.putIfAbsent(
+        tabId, () => GlobalKey(debugLabel: 'page-$tabId'));
+    final Widget child;
+    if (_visitedTabs.contains(tabId) || active) {
+      _visitedTabs.add(tabId);
+      child = _pageFor(tabId);
+    } else {
+      child = const SizedBox.shrink();
+    }
+    return KeyedSubtree(
+      key: key,
+      child: AnimatedOpacity(
+        opacity: active ? 1 : 0,
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeOutCubic,
+        child: child,
+      ),
+    );
+  }
+
+  /// 返回页面的缓存 widget 实例；参数代数变化时用当前参数重建（State 保留，
+  /// 变化通过各页已有的 didUpdateWidget 传播）。
+  Widget _pageFor(String tabId) {
+    final cached = _pageCache[tabId];
+    if (cached != null && _pageGen[tabId] == _pageGeneration) return cached;
+    final built = _buildPage(tabId);
+    _pageCache[tabId] = built;
+    _pageGen[tabId] = _pageGeneration;
+    return built;
+  }
+
+  /// Tab 激活：首次访问由 initState 自行拉取；再次访问且距上次超过 60 秒时
+  /// 触发页面静默刷新（显示旧数据、后台拉新）。
+  void _activateTab(String tabId) {
+    final firstVisit = !_visitedTabs.contains(tabId);
+    _visitedTabs.add(tabId);
+    if (firstVisit) return;
+    final last = _lastSilentRefresh[tabId];
+    final now = DateTime.now();
+    if (last != null && now.difference(last).inSeconds < 60) return;
+    _lastSilentRefresh[tabId] = now;
+    final state = _pageKeys[tabId]?.currentState;
+    if (state is PageSilentRefresh) state.silentRefresh();
   }
 
   Widget _buildPage(String tabId) {
@@ -2057,10 +2214,14 @@ class _DashboardShellState extends State<DashboardShell> {
             onNavigateToExam: (courseName) {
               setState(() {
                 _highlightCourse = courseName;
+                _pageGeneration++;
               });
               _navigateToTab('exams');
               Future.delayed(const Duration(seconds: 2), () {
-                if (mounted) setState(() => _highlightCourse = null);
+                if (mounted) {
+                  setState(() => _highlightCourse = null);
+                  _pageGeneration++;
+                }
               });
             });
       case 'credits':
@@ -2094,7 +2255,9 @@ class _DashboardShellState extends State<DashboardShell> {
               setState(() => _autoHideNavBar = v);
             },
             loginMethod: widget.loginMethod,
-            onShowBackgroundGuide: widget.onSettingsPressed);
+            onShowBackgroundGuide: widget.onSettingsPressed,
+            isAdmin: widget.isAdmin,
+            isOwner: widget.isOwner);
       default:
         return const SizedBox.shrink();
     }
@@ -2107,6 +2270,7 @@ class _DashboardShellState extends State<DashboardShell> {
         passwordRestrictedTabs.contains(tabId)) {
       return;
     }
+    _activateTab(tabId);
     final idx = _navBarTabs.indexWhere((t) => t.tabId == tabId);
     if (idx >= 0) {
       _navBarVisible.value = true;
@@ -2158,10 +2322,15 @@ class _DashboardShellState extends State<DashboardShell> {
     final prefs = await SharedPreferences.getInstance();
     final firstWeekText =
         prefs.getString(_settingsKey(loadYear, loadTerm, 'firstWeekStart'));
-    final savedAuto = prefs.getBool('schedule.autoWeek') ?? autoWeek;
+    // 本地缺失时回退云端（按学期），最后才用默认推导值
+    final cloudText = firstWeekText == null
+        ? widget.cloudFirstWeeks['$loadYear-$loadTerm']
+        : null;
+    final savedAuto =
+        prefs.getBool('schedule.autoWeek') ?? widget.cloudAutoWeek ?? autoWeek;
     final defaultStart = defaultFirstWeekStart(loadYear, loadTerm);
     final parsedStart =
-        firstWeekText == null ? null : DateTime.tryParse(firstWeekText);
+        DateTime.tryParse(firstWeekText ?? cloudText ?? '');
     final start = parsedStart ?? defaultStart;
     final savedWeek = prefs.getInt(_settingsKey(loadYear, loadTerm, 'week'));
     if (!mounted || loadYear != year || loadTerm != term) return;
@@ -2174,6 +2343,37 @@ class _DashboardShellState extends State<DashboardShell> {
     });
   }
 
+  /// 启动时用已保存的开学日期反推当前学期并自动校正一次（best-effort）。
+  /// 云端缺失时回退本地 SharedPreferences；用户手动切换过学期后不再校正。
+  Future<void> _autoCorrectPeriodOnce() async {
+    if (_periodAutoCorrected) return;
+    _periodAutoCorrected = true;
+    final firstWeeks = Map<String, String>.from(widget.cloudFirstWeeks);
+    if (firstWeeks.isEmpty) {
+      final prefs = await SharedPreferences.getInstance();
+      for (final key in prefs.getKeys()) {
+        const prefix = 'schedule.';
+        const suffix = '.firstWeekStart';
+        if (!key.startsWith(prefix) || !key.endsWith(suffix)) continue;
+        final value = prefs.getString(key);
+        if (value == null || value.isEmpty) continue;
+        final mid = key.substring(prefix.length, key.length - suffix.length);
+        firstWeeks[mid.replaceAll('.', '-')] = value;
+      }
+    }
+    final resolved = academicPeriodFromFirstWeeks(firstWeeks, DateTime.now());
+    if (resolved == null || resolved == (year, term)) return;
+    if (!mounted || _userPinnedPeriod) return;
+    setState(() {
+      year = resolved.$1;
+      term = resolved.$2;
+      firstWeekStart = defaultFirstWeekStart(year, term);
+      currentWeek = weekFromDate(firstWeekStart, DateTime.now(), clampToTerm: true);
+      _pageGeneration++;
+    });
+    _loadScheduleSettings();
+  }
+
   Future<void> _saveScheduleSettings() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(
@@ -2182,14 +2382,31 @@ class _DashboardShellState extends State<DashboardShell> {
     );
     await prefs.setInt(_settingsKey(year, term, 'week'), currentWeek);
     await prefs.setBool('schedule.autoWeek', autoWeek);
+    unawaited(_syncScheduleSettingsToCloud());
+  }
+
+  /// 把当前学期的开学日期合并进云端（best-effort，失败仅打印日志）。
+  Future<void> _syncScheduleSettingsToCloud() async {
+    try {
+      final merged = Map<String, String>.from(widget.cloudFirstWeeks)
+        ..['$year-$term'] = dateText(firstWeekStart);
+      await widget.api.saveScheduleSettings(
+        firstWeeks: merged,
+        autoWeek: autoWeek,
+      );
+    } catch (error) {
+      debugPrint('同步开学日期到云端失败: error=${error.runtimeType}');
+    }
   }
 
   void _setAcademicPeriod(int nextYear, int nextTerm) {
+    _userPinnedPeriod = true;
     setState(() {
       year = nextYear;
       term = nextTerm;
       firstWeekStart = defaultFirstWeekStart(nextYear, nextTerm);
       currentWeek = weekFromDate(firstWeekStart, DateTime.now(), clampToTerm: true);
+      _pageGeneration++;
     });
     _loadScheduleSettings();
   }
@@ -2200,6 +2417,7 @@ class _DashboardShellState extends State<DashboardShell> {
     setState(() {
       firstWeekStart = monday;
       if (autoWeek) currentWeek = weekFromDate(monday, DateTime.now(), clampToTerm: true);
+      _pageGeneration++;
     });
     _saveScheduleSettings();
   }
@@ -2208,6 +2426,7 @@ class _DashboardShellState extends State<DashboardShell> {
     setState(() {
       currentWeek = value.clamp(1, 30);
       autoWeek = false;
+      _pageGeneration++;
     });
     _saveScheduleSettings();
   }
@@ -2216,6 +2435,7 @@ class _DashboardShellState extends State<DashboardShell> {
     setState(() {
       autoWeek = value;
       if (value) currentWeek = weekFromDate(firstWeekStart, DateTime.now(), clampToTerm: true);
+      _pageGeneration++;
     });
     _saveScheduleSettings();
   }

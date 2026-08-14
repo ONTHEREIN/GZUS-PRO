@@ -54,7 +54,7 @@ import Bugly
       }
     case "setTag":
       if let tagArg = call.arguments as? [String: Any], let tagId = tagArg["tagId"] as? Int {
-        Bugly.setTag(tagId)
+        Bugly.setTag(UInt(tagId))
         result(true)
       } else {
         result(FlutterError(code: "INVALID_ARGUMENT", message: "tagId is required", details: nil))
@@ -73,14 +73,14 @@ import Bugly
          let exception = exceptionData["exception"] as? String,
          let stackTrace = exceptionData["stackTrace"] as? String {
         let userInfo = ["stackTrace": stackTrace]
-        Bugly.reportException(NSException(name: NSExceptionName(rawValue: "CustomException"), reason: exception, userInfo: userInfo))
+        Bugly.report(NSException(name: NSExceptionName(rawValue: "CustomException"), reason: exception, userInfo: userInfo))
         result(true)
       } else {
         result(FlutterError(code: "INVALID_ARGUMENT", message: "exception and stackTrace are required", details: nil))
       }
     case "testCrash":
-      Bugly.testCrash()
-      result(true)
+      // Bugly 2.6.1 移除了 testCrash API，仅 Android 端支持该测试功能
+      result(FlutterMethodNotImplemented)
     default:
       result(FlutterMethodNotImplemented)
     }

@@ -10,6 +10,7 @@ import 'package:gzus_pro_mobile_web/api_client.dart';
 import 'package:gzus_pro_mobile_web/live_activity_service.dart';
 import 'package:gzus_pro_mobile_web/pages/exams/exams_page.dart';
 import 'package:gzus_pro_mobile_web/reminder_service.dart';
+import 'package:gzus_pro_mobile_web/widgets/async_panel.dart';
 import 'package:gzus_pro_mobile_web/ws_service.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -792,6 +793,88 @@ void main() {
     }
   });
 
+  testWidgets('AsyncPanel keeps old data during silent refresh', (tester) async {
+    final first = Completer<String>();
+    final second = Completer<String>();
+    final failing = Completer<String>();
+
+    Widget build(Future<String> future) => MaterialApp(
+          home: Scaffold(
+            body: AsyncPanel<String>(
+              future: future,
+              builder: (data) => Text('data:$data'),
+            ),
+          ),
+        );
+
+    await tester.pumpWidget(build(first.future));
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+
+    first.complete('旧数据');
+    await tester.pumpAndSettle();
+    expect(find.text('data:旧数据'), findsOneWidget);
+
+    // future 更换但新数据未就绪：继续显示旧数据，不闪加载动画
+    await tester.pumpWidget(build(second.future));
+    await tester.pump();
+    expect(find.text('data:旧数据'), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+
+    second.complete('新数据');
+    await tester.pumpAndSettle();
+    expect(find.text('data:新数据'), findsOneWidget);
+
+    // 静默刷新失败：保留旧数据，不显示错误面板
+    await tester.pumpWidget(build(failing.future));
+    failing.completeError(ApiException('网络错误'));
+    await tester.pumpAndSettle();
+    expect(find.text('data:新数据'), findsOneWidget);
+    expect(find.text('网络错误'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('切走再切回不重新请求、不闪加载动画', (tester) async {
+    final requests = <String>[];
+    final api = _mockApi(onRequest: requests.add);
+    await _pumpDashboard(tester, const Size(390, 844), api: api);
+
+    // 首次进入课表页（无论是否命中 dashboard 种子缓存，记录当时的请求数）
+    await tester.tap(find.text('课表').last);
+    await tester.pumpAndSettle();
+    final requestsAfterFirstScheduleVisit = requests.length;
+
+    // 切回首页：页面保活 + 静默刷新命中缓存，不闪加载动画
+    await tester.tap(find.text('首页').last);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.byType(CircularProgressIndicator), findsNothing,
+        reason: '切回首页不应闪加载动画');
+    await tester.pumpAndSettle();
+    expect(find.text('下一节课'), findsOneWidget);
+
+    // 再次进入课表页：State 保活，不重新构建、不重新请求
+    await tester.tap(find.text('课表').last);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.byType(CircularProgressIndicator), findsNothing,
+        reason: '再次进入课表页不应闪加载动画');
+    await tester.pumpAndSettle();
+    expect(requests.length, requestsAfterFirstScheduleVisit,
+        reason: '已访问过的页面切换不应重新请求');
+
+    // 再次切回首页：同样不重新请求、不闪加载动画
+    await tester.tap(find.text('首页').last);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.byType(CircularProgressIndicator), findsNothing,
+        reason: '再次切回首页不应闪加载动画');
+    await tester.pumpAndSettle();
+    expect(requests.length, requestsAfterFirstScheduleVisit,
+        reason: '已访问过的首页切换不应重新请求');
+    expect(find.text('下一节课'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('home widget guide explains setup and examples', (tester) async {
     await _pumpDashboard(tester, const Size(1180, 820), hideEcard: true);
 
@@ -1000,6 +1083,7 @@ Future<void> _pumpDashboard(
   bool hideEcard = false,
   List<Map<String, Object?>>? scheduleItems,
   double textScaleFactor = 1,
+  ApiClient? api,
 }) async {
   LiveActivityController.instance.resetForTest();
   debugHideEcardForTests = hideEcard;
@@ -1017,7 +1101,7 @@ Future<void> _pumpDashboard(
   await tester.pumpWidget(
     MaterialApp(
       home: DashboardShell(
-        api: _mockApi(scheduleItems: scheduleItems),
+        api: api ?? _mockApi(scheduleItems: scheduleItems),
         studentName: '测试学生',
         themeMode: ThemeMode.light,
         onThemeChanged: (_) {},
@@ -1028,10 +1112,14 @@ Future<void> _pumpDashboard(
   await tester.pumpAndSettle();
 }
 
-ApiClient _mockApi({List<Map<String, Object?>>? scheduleItems}) {
+ApiClient _mockApi({
+  List<Map<String, Object?>>? scheduleItems,
+  void Function(String path)? onRequest,
+}) {
   final api = ApiClient(
     baseUrl: 'https://api.example.test',
     httpClient: MockClient((request) async {
+      onRequest?.call('${request.url.path}?${request.url.query}');
       final path = request.url.path;
       Object body;
       switch (path) {

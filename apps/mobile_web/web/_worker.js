@@ -984,7 +984,7 @@ function md5(input) {
 function corsHeaders(request) {
   return {
     'Access-Control-Allow-Origin': request.headers.get('Origin') || '*',
-    'Access-Control-Allow-Methods': 'GET,POST,PATCH,OPTIONS',
+    'Access-Control-Allow-Methods': 'GET,POST,PUT,PATCH,OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type,X-Session-Id,X-Client-Platform,X-GZUS-Trace-Id,User-Agent',
     'Access-Control-Max-Age': '86400',
   };
@@ -1198,7 +1198,7 @@ async function createPersistentSession(loginResult, account, env) {
     Date.now() + SESSION_KV_TTL * 1000
   );
   await saveSessionToKV(backendResult.sessionId, sessionData, env);
-  return backendResult.sessionId;
+  return { sessionId: backendResult.sessionId, isAdmin: backendResult.isAdmin === true };
 }
 
 async function validateCurrentAccountSession(sessionId, data, env, now) {
@@ -1768,9 +1768,9 @@ export default {
           return errorResponse(result.error, 401, request);
         }
 
-        let sessionId;
+        let sessionInfo;
         try {
-          sessionId = await createPersistentSession(result, account, env);
+          sessionInfo = await createPersistentSession(result, account, env);
         } catch (error) {
           console.error('[auto-login] 会话持久化失败', { error: error.message });
           return errorResponse(`会话创建失败: ${error.message}`, 503, request);
@@ -1778,7 +1778,8 @@ export default {
 
         return jsonResponse({
           status: 'ok',
-          sessionId,
+          sessionId: sessionInfo.sessionId,
+          isAdmin: sessionInfo.isAdmin === true,
           studentName: result.studentName,
           studentId: null,
           credentialToken: result.credentialToken,
@@ -1820,9 +1821,9 @@ export default {
           return errorResponse(result.error, 401, request);
         }
 
-        let sessionId;
+        let sessionInfo;
         try {
-          sessionId = await createPersistentSession(result, credentials.account, env);
+          sessionInfo = await createPersistentSession(result, credentials.account, env);
         } catch (error) {
           console.error('[relogin] 会话持久化失败', { error: error.message });
           return errorResponse(`会话创建失败: ${error.message}`, 503, request);
@@ -1830,7 +1831,8 @@ export default {
 
         return jsonResponse({
           status: 'ok',
-          sessionId,
+          sessionId: sessionInfo.sessionId,
+          isAdmin: sessionInfo.isAdmin === true,
           studentName: result.studentName,
           studentId: null,
           credentialToken: result.credentialToken || credentialToken,
@@ -3187,7 +3189,8 @@ async function createSessionOnBackend(loginResult, account, env) {
     });
     if (res.ok) {
       const data = await res.json();
-      return { sessionId: data.sessionId };
+      // isAdmin 由后端 create-session 按 admin_users 白名单判定，透传给前端登录响应
+      return { sessionId: data.sessionId, isAdmin: data.isAdmin === true };
     }
     // Log non-OK response for debugging
     const errorText = await res.text().catch(() => '');
@@ -3227,7 +3230,7 @@ async function proxyToVercel(request, env, url, hadLocalSession = true) {
 
   // 仅幂等请求（GET/HEAD/OPTIONS）在 5xx 时重试；POST/PATCH 等非幂等操作
   // 直接透传结果，避免消费/请假提交等被重复执行。
-  const isIdempotent = request.method === 'GET' || request.method === 'HEAD' || request.method === 'OPTIONS';
+  const isIdempotent = request.method === 'GET' || request.method === 'HEAD' || request.method === 'OPTIONS' || request.method === 'PUT';
   const maxRetries = isIdempotent ? 2 : 0;
   let lastError = null;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {

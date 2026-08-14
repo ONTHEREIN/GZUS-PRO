@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
 
 import '../../api_client.dart';
+import '../../responsive/breakpoints.dart';
+import '../../responsive/sizing.dart';
 import '../../widgets/async_panel.dart';
 import '../../widgets/badges.dart';
 import '../../widgets/data_table.dart';
 import '../../widgets/info_tile.dart';
 import '../../widgets/page_panel.dart';
+import '../../widgets/page_silent_refresh.dart';
 
 class CreditsPage extends StatefulWidget {
   const CreditsPage({super.key, required this.api, this.onSessionExpired});
@@ -17,7 +20,8 @@ class CreditsPage extends StatefulWidget {
   State<CreditsPage> createState() => _CreditsPageState();
 }
 
-class _CreditsPageState extends State<CreditsPage> {
+class _CreditsPageState extends State<CreditsPage>
+    with PageSilentRefresh<CreditsPage> {
   late Future<List<CreditItem>> _creditsFuture;
 
   @override
@@ -43,6 +47,12 @@ class _CreditsPageState extends State<CreditsPage> {
   }
 
   @override
+  void silentRefresh() {
+    if (!mounted) return;
+    setState(() => _creditsFuture = _loadCredits());
+  }
+
+  @override
   Widget build(BuildContext context) {
     return PageRefresh(
       onRefresh: _refreshCredits,
@@ -51,13 +61,23 @@ class _CreditsPageState extends State<CreditsPage> {
         onSessionExpired: widget.onSessionExpired,
         builder: (items) => LayoutBuilder(
           builder: (context, constraints) {
-            final wide = constraints.maxWidth >= 720;
+            final breakpoint = constraints.maxWidth.gzusBreakpoint;
+            final wide = breakpoint != GzusBreakpoint.compact;
+            final pane = GzusSizing.splitPaneAdaptive(
+              constraints.maxWidth,
+              breakpoint,
+              mediumRatio: 0.42,
+              expandedRatio: 0.36,
+              largeRatio: 0.32,
+              minSide: 260,
+              maxSide: 340,
+            );
             if (wide) {
               return Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   SizedBox(
-                    width: 300,
+                    width: pane.side,
                     child: PagePanel(
                       title: '学分概览',
                       icon: Icons.auto_stories,
