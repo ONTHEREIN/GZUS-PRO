@@ -8,6 +8,13 @@ DateTime mondayOf(DateTime date) {
   return day.subtract(Duration(days: day.weekday - DateTime.monday));
 }
 
+/// 根据学年和学期推导默认的第一周周一。
+/// 第 1 学期（秋）9 月 1 日起，第 2 学期（春）3 月 1 日起。
+DateTime defaultFirstWeekStart(int year, int term) {
+  final seed = term == 1 ? DateTime(year, 9, 1) : DateTime(year + 1, 3, 1);
+  return mondayOf(seed);
+}
+
 /// 计算 [date] 相对 [firstWeekStart]（学期第一周周一）的周次（1 起）。
 /// 传入 [clampToTerm] 时把结果限制在 1..30（学期最大周数）。
 int weekFromDate(DateTime firstWeekStart, DateTime date,
