@@ -8,6 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:gzus_pro_mobile_web/main.dart';
 import 'package:gzus_pro_mobile_web/api_client.dart';
 import 'package:gzus_pro_mobile_web/live_activity_service.dart';
+import 'package:gzus_pro_mobile_web/pages/exams/exams_page.dart';
 import 'package:gzus_pro_mobile_web/reminder_service.dart';
 import 'package:gzus_pro_mobile_web/ws_service.dart';
 import 'package:http/http.dart' as http;
