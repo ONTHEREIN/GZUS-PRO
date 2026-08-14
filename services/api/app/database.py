@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from datetime import datetime, timezone
 
 from sqlalchemy import Boolean, Column, DateTime, Float, Integer, String, Text, create_engine, event, inspect, text
+from sqlalchemy.engine import Engine
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -120,6 +122,7 @@ class AppSessionModel(Base):
     jwxt_cookies = Column(Text, nullable=True)
     ehall_cookies = Column(Text, nullable=True)
     ehall_auth_token = Column(Text, nullable=True)
+    # 仅保留旧数据库结构兼容；SessionStore 会清空该列且不再写入登录凭据。
     encrypted_credentials = Column(Text, nullable=True)
     revoked_at = Column(DateTime, nullable=True, index=True)
     revoked_reason = Column(String(100), nullable=True)
@@ -299,42 +302,36 @@ def init_db():
     _db_initialized = True
 
 
-def _ensure_columns(engine, table: str, columns: dict[str, str]) -> None:
+def _ensure_columns(engine: Engine, table: str, columns: Mapping[str, str]) -> None:
     """Add columns to an existing table if they don't already exist.
 
     This is a lightweight, idempotent migration helper for serverless
     deployments where a full migration framework is overkill.  Each
     call is safe to run on every cold start.
     """
-    import logging
-    _logger = logging.getLogger(__name__)
-    try:
-        existing_columns = {column["name"] for column in inspect(engine).get_columns(table)}
-        missing_columns = {
-            col_name: col_type
-            for col_name, col_type in columns.items()
-            if col_name not in existing_columns
-        }
-        if not missing_columns:
-            return
+    existing_columns = {column["name"] for column in inspect(engine).get_columns(table)}
+    missing_columns = {
+        column_name: column_type
+        for column_name, column_type in columns.items()
+        if column_name not in existing_columns
+    }
+    if not missing_columns:
+        return
 
-        with engine.connect() as conn:
-            if not _is_sqlite(engine):
-                conn.exec_driver_sql("SET lock_timeout = '2s'")
-                conn.exec_driver_sql("SET statement_timeout = '10s'")
-            for col_name, col_type in missing_columns.items():
-                try:
-                    conn.exec_driver_sql(
-                        f"ALTER TABLE {table} ADD COLUMN {col_name} {col_type}"
-                    )
-                    conn.commit()
-                    _logger.info("Migrated: added column %s to %s", col_name, table)
-                except Exception:
-                    # Column likely already exists — safe to ignore
-                    conn.rollback()
-    except Exception:
-        # Table might not exist yet (fresh DB created by create_all above)
-        pass
+    with engine.begin() as connection:
+        is_sqlite = _is_sqlite(engine)
+        if not is_sqlite:
+            connection.exec_driver_sql("SET LOCAL lock_timeout = '2s'")
+            connection.exec_driver_sql("SET LOCAL statement_timeout = '10s'")
+        for column_name, column_type in missing_columns.items():
+            if is_sqlite:
+                statement = f"ALTER TABLE {table} ADD COLUMN {column_name} {column_type}"
+            else:
+                statement = (
+                    f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS "
+                    f"{column_name} {column_type}"
+                )
+            connection.exec_driver_sql(statement)
 
 
 def reset_engine():

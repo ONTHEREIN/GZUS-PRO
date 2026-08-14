@@ -5,7 +5,7 @@ from app.config import get_settings
 from app.database import PushRegistration, WebPushSubscription, get_sync_session_factory
 from app.routes.deps import require_session
 from app.schemas import PushRegisterRequest, WebPushConfigResponse, WebPushSubscriptionRequest
-from app.sessions import AppSession
+from app.sessions import AppSession, student_id_of
 
 router = APIRouter(prefix="/push", tags=["push"])
 
@@ -42,15 +42,10 @@ def register_web_push(
     session: AppSession = Depends(require_session),
     user_agent: str | None = Header(None),
 ) -> dict[str, str]:
-    try:
-        info = session.client.get_info()
-    except Exception:
-        return {"status": "error", "message": "Cannot get student info"}
-    
-    student_id = str(info.get("studentId") or info.get("student_id") or info.get("sno") or "")
+    student_id = student_id_of(session)
     if not student_id:
         return {"status": "error", "message": "Student ID not found"}
-    
+
     expiration_time = None
     if payload.expiration_time:
         try:
@@ -92,12 +87,7 @@ def register_web_push(
 def unregister_web_push(
     session: AppSession = Depends(require_session),
 ) -> dict[str, str]:
-    try:
-        info = session.client.get_info()
-    except Exception:
-        return {"status": "error", "message": "Cannot get student info"}
-    
-    student_id = str(info.get("studentId") or info.get("student_id") or info.get("sno") or "")
+    student_id = student_id_of(session)
     if not student_id:
         return {"status": "error", "message": "Student ID not found"}
     
@@ -197,11 +187,7 @@ def poll_push(
 
 
 def _upsert_push_registration(session: AppSession, registration_id: str, platform: str) -> None:
-    try:
-        info = session.client.get_info()
-    except Exception:
-        return
-    student_id = str(info.get("studentId") or info.get("student_id") or info.get("sno") or "")
+    student_id = student_id_of(session)
     if not student_id:
         return
     factory = get_sync_session_factory()

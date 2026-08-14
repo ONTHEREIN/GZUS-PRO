@@ -1,5 +1,6 @@
 import pytest
-from sqlalchemy import event
+from sqlalchemy import event, inspect
+from sqlalchemy.exc import NoSuchTableError
 
 from app import database
 from app.config import get_settings
@@ -48,6 +49,26 @@ def test_ensure_columns_skips_existing_columns():
         event.remove(engine, "before_cursor_execute", _capture_statement)
 
     assert not any(statement.lstrip().upper().startswith("ALTER TABLE") for statement in statements)
+
+
+def test_ensure_columns_adds_missing_column():
+    database.init_db()
+    engine = database.get_sync_engine()
+    with engine.begin() as connection:
+        connection.exec_driver_sql("CREATE TABLE migration_probe (id INTEGER PRIMARY KEY)")
+
+    database._ensure_columns(engine, "migration_probe", {"label": "VARCHAR(20)"})
+
+    column_names = {column["name"] for column in inspect(engine).get_columns("migration_probe")}
+    assert column_names == {"id", "label"}
+
+
+def test_ensure_columns_raises_when_table_is_missing():
+    database.init_db()
+    engine = database.get_sync_engine()
+
+    with pytest.raises(NoSuchTableError):
+        database._ensure_columns(engine, "missing_table", {"label": "VARCHAR(20)"})
 
 
 def test_init_db_skips_schema_work_on_vercel(monkeypatch):

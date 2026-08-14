@@ -197,7 +197,13 @@ class SchoolSdkClient:
             # the Cloudflare Worker edge and Vercel (different IP) cannot
             # validate them.  Just set cookies and return; real validation
             # will happen on first actual API call.
-            self._client = school_client
+            method = getattr(school_client, "user_login_with_cookies", None)
+            if method is None:
+                raise AuthenticationError("当前 SDK 未提供 cookie 登录方法")
+            try:
+                self._client = method(cookie, account=account)
+            except Exception as exc:  # noqa: BLE001 - third-party SDK exceptions are not stable.
+                raise AuthenticationError("教务系统 cookie 初始化失败") from exc
             self._apply_cookie_pairs(cookie_pairs)
             self._install_worker_proxy()
             return None
@@ -656,7 +662,9 @@ class SchoolSdkClient:
             try:
                 cookie_jar = getattr(getattr(self._client, "_http", None), "cookies", None)
                 if cookie_jar is not None:
-                    for name, value in cookie_jar.items():
+                    for cookie in cookie_jar:
+                        name = cookie.name
+                        value = cookie.value
                         if name not in seen:
                             seen.add(name)
                             parts.append(f"{name}={value}")
@@ -851,7 +859,7 @@ class SchoolSdkClient:
                 "queryModel.sortOrder": "asc",
             },
         )
-        return data.get("items", []) if isinstance(data, dict) else []
+        return extract_credit_items(data)
 
     def _query_notices(self) -> list[dict]:
         news_page_url = urljoin(f"{self.base_url}/", "xtgl/index_cxNews.html")
@@ -1234,6 +1242,14 @@ class SchoolSdkClient:
         name = self._extract_student_name(result)
         if name:
             return name
+        get_info = getattr(result, "get_info", None)
+        if callable(get_info):
+            try:
+                name = self._extract_student_name(get_info())
+                if name:
+                    return name
+            except Exception:  # noqa: BLE001 - SDK result types are not stable.
+                pass
         # Try fetching the JWXT index page which contains the student name
         # This is much lighter than calling get_info() which downloads photos etc.
         try:
@@ -1328,8 +1344,8 @@ class SchoolSdkClient:
                 cookie_jar.set(key, value, domain=domain, path="/jwglxt")
 
     def _jwxt_cookie_domains(self) -> list[str]:
-        configured_host = urlparse(self.base_url).hostname or "jwxt.gzus.edu.cn"
-        domains = [configured_host, "jwxt.gzus.edu.cn", "jwxt.seig.edu.cn"]
+        parsed = urlparse(self.base_url)
+        domains = [parsed.hostname or "jwxt.gzus.edu.cn", "jwxt.seig.edu.cn", "jwxt.gzus.edu.cn"]
         return list(dict.fromkeys(domain for domain in domains if domain))
 
     def apply_cookie_header(self, cookie_header: str) -> None:
@@ -1449,6 +1465,32 @@ def ensure_grade_list(value: Any) -> list[Any]:
         if any(isinstance(item, dict) for item in value.values()):
             return list(value.values())
     return ensure_list(value)
+
+
+def extract_credit_items(value: Any) -> list[Any]:
+    if not isinstance(value, dict):
+        return ensure_list(value)
+    for key in ("items", "rows", "list", "data"):
+        nested = value.get(key)
+        if isinstance(nested, list):
+            return nested
+        if isinstance(nested, dict):
+            items = extract_credit_items(nested)
+            if items or credit_total_count(nested) == 0:
+                return items
+    if credit_total_count(value) == 0:
+        return []
+    return [value] if value else []
+
+
+def credit_total_count(value: dict) -> int | None:
+    try:
+        total_value = value.get("totalResult")
+        if total_value is None:
+            total_value = value.get("totalCount")
+        return int(total_value) if total_value is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 def as_dict(value: Any) -> dict:

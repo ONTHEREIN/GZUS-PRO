@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 
 from app.cache_service import load_and_get_cached_at, save_cache
 from app.routes.deps import require_session
-from app.notice_utils import is_valid_notice_item, normalize_notice_item, valid_notice_items
+from app.notice_utils import merge_notices, valid_notice_items
 from app.schemas import (
     AttendanceResponse,
     CreditItem,
@@ -329,16 +329,7 @@ async def notices(
                 ehall_items = ehall_client.get_notice_items()
             except Exception:
                 ehall_items = []
-            seen = {
-                (item.get("category") or "", item.get("title") or "", item.get("url") or "")
-                for item in items
-            }
-            for item in ehall_items:
-                item = normalize_notice_item(item)
-                key = (item.get("category") or "", item.get("title") or "", item.get("url") or "")
-                if is_valid_notice_item(item) and key not in seen:
-                    seen.add(key)
-                    items.append(item)
+            return merge_notices(items, ehall_items)
         return valid_notice_items(items)
 
     return await _run_with_cache_fallback("notices", student_id, call)

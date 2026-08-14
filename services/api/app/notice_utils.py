@@ -50,3 +50,24 @@ def valid_notice_items(items: list[dict]) -> list[dict]:
         for normalized in (normalize_notice_item(item) for item in items)
         if is_valid_notice_item(normalized)
     ]
+
+
+def notice_key(item: dict) -> str:
+    """通知去重键：类别|标题|链接。"""
+    title = str(item.get("title") or "").strip()
+    url = str(item.get("url") or "").strip()
+    category = str(item.get("category") or "").strip()
+    return "|".join([category, title, url])
+
+
+def merge_notices(jwxt_items: list[dict], ehall_items: list[dict]) -> list[dict]:
+    """合并 JWXT 与 ehall 通知：ehall 条目归一化后按去重键追加，整体过滤无效项。"""
+    items = list(jwxt_items)
+    seen = {notice_key(item) for item in items}
+    for item in ehall_items:
+        normalized = normalize_notice_item(item)
+        key = notice_key(normalized)
+        if is_valid_notice_item(normalized) and key not in seen:
+            seen.add(key)
+            items.append(normalized)
+    return valid_notice_items(items)

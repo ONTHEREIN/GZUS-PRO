@@ -43,7 +43,6 @@ class DecryptPasswordRequest(BaseModel):
 class CreateSessionRequest(BaseModel):
     account: str
     cookies: str
-    password: str | None = None  # for generating Fernet credential token server-side
     ehall_cookies: str | None = None
     ehall_auth_token: str | None = None
     student_name: str | None = None
@@ -142,22 +141,6 @@ def create_session_endpoint(
     except Exception as exc:
         logger.warning("login_with_cookies failed in create-session: %s", exc)
 
-    # Generate Fernet-encrypted credential token for server-side auto-relogin.
-    # This is separate from the AES-GCM token the Worker gives to the frontend.
-    # Vercel needs Fernet tokens for its own transparent session recovery.
-    encrypted_credentials = None
-    if payload.password:
-        try:
-            from app.sessions import encrypt_credentials
-            encrypted_credentials = encrypt_credentials(
-                payload.account,
-                payload.password,
-                settings.credential_encryption_key,
-            )
-            logger.debug("create-session: generated Fernet credential for account=%s", payload.account)
-        except Exception as exc:
-            logger.warning("Failed to encrypt credentials for session: %s", exc)
-
     # Create ehall client if ehall cookies are available
     ehall_client = None
     if payload.ehall_cookies:
@@ -177,7 +160,6 @@ def create_session_endpoint(
             client,
             student_name=student_name or payload.student_name,
             ehall_client=ehall_client,
-            encrypted_credentials=encrypted_credentials,
             student_account=payload.account,
         )
     except Exception as exc:
@@ -192,7 +174,7 @@ def create_session_endpoint(
         except Exception as exc:
             logger.warning("Failed to install Worker proxy on session %s: %s", session.id[:8], exc)
 
-    return {"sessionId": session.id, "credentialToken": encrypted_credentials}
+    return {"sessionId": session.id}
 
 
 # ─── Cron job endpoints (called by GitHub Actions scheduled workflow) ─────
@@ -210,9 +192,11 @@ def ecard_reminder_cron(request: Request, x_internal_key: str | None = Header(No
     if not get_settings().ecard_openid:
         return {"ok": True, "reason": "ecard not configured", "processed": 0}
 
-    import datetime as _dt
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
     from app.database import EcardBinding, PushRegistration, get_sync_session_factory
-    from app.jobs import ecard_reminder_message
+    from app.jobs import prepare_ecard_reminders
     from app.push import send_push, send_web_push_to_student
 
     factory = get_sync_session_factory()
@@ -225,7 +209,8 @@ def ecard_reminder_cron(request: Request, x_internal_key: str | None = Header(No
             .filter(EcardBinding.reminder_enabled.is_(True))
             .all()
         )
-        today_key = _dt.date.today().isoformat()
+        # 与 jobs 轮询保持一致，按上海时区跨天重置
+        today_key = datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
 
         for binding in bindings:
             if not binding.last_summary_json:
@@ -237,33 +222,11 @@ def ecard_reminder_cron(request: Request, x_internal_key: str | None = Header(No
             if not isinstance(summary, dict):
                 continue
 
-            enabled_items = (
-                json.loads(binding.reminder_items)
-                if binding.reminder_items
-                else ["power", "cold_water", "hot_water"]
-            )
-            messages = ecard_reminder_message(
-                summary,
-                power_threshold=binding.low_power_threshold,
-                cold_water_threshold=binding.low_cold_water_threshold,
-                hot_water_threshold=binding.low_hot_water_threshold,
-                enabled_items=enabled_items,
-            )
-            if not messages:
+            pending, _ = prepare_ecard_reminders(binding, summary, today_key)
+            if not pending:
                 continue
 
-            # Deduplicate: track per-day reminders
-            reminded_times = (
-                json.loads(binding.last_reminded_times)
-                if binding.last_reminded_times else {}
-            )
-            if binding.last_reminded_date != today_key:
-                reminded_times = {}
-                binding.last_reminded_date = today_key
-
-            for item_key, title, body in messages:
-                if reminded_times.get(item_key, 0) >= 2:
-                    continue
+            for item_key, title, body in pending:
                 live_payload = {
                     "id": f"ecard_cron:{binding.student_id}:{today_key}:{item_key}",
                     "type": "ecard_reminder",
@@ -290,10 +253,8 @@ def ecard_reminder_cron(request: Request, x_internal_key: str | None = Header(No
                     send_web_push_to_student(binding.student_id, title, body, live_payload)
                 except Exception:
                     pass
-                reminded_times[item_key] = reminded_times.get(item_key, 0) + 1
                 notified += 1
 
-            binding.last_reminded_times = json.dumps(reminded_times)
             processed += 1
 
         try:
@@ -302,4 +263,3 @@ def ecard_reminder_cron(request: Request, x_internal_key: str | None = Header(No
             logger.error("ecard cron: commit failed: %s", exc)
 
     return {"ok": True, "processed": processed, "notified": notified}
-    return {"ok": True, "processed": processed, "errors": errors}

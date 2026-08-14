@@ -10,7 +10,7 @@ ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
 
 class Settings(BaseSettings):
     jw_base_url: str = "https://jwxt.gzus.edu.cn/jwglxt"
-    jwxt_worker_proxy_origin: str = ""  # e.g. https://onegzus-onweb.pages.dev — route JWXT through Worker
+    jwxt_worker_proxy_origin: str = ""  # e.g. https://onegzus-onweb.pages.dev - route JWXT through Worker
     ehall_base_url: str = "https://ehall.gzus.edu.cn"
     ehall_staff_sync_url: str = ""
     ehall_staff_json_path: str = ""
@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     db_pool_recycle: int = 300
     ehall_session_ttl_hours: int = 24
     ecard_base_url: str = "https://ecarduser.gzus.edu.cn"
-    ecard_worker_proxy_origin: str = "https://onegzus.cc.cd"
+    ecard_worker_proxy_origin: str = ""
     ecard_openid: str = ""
     ecard_unionid: str = ""
     ecard_secret: str = ""

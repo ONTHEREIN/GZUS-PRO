@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import concurrent.futures
 import hashlib
 import json
 import logging
@@ -98,9 +97,9 @@ def room_display_name(room: dict[str, Any]) -> str:
     return " ".join(part for part in parts if part)
 
 
-def public_room(room: dict[str, Any]) -> dict[str, str]:
+def public_room(room: dict[str, Any], fallback_impl_type: str = "") -> dict[str, str]:
     ref = EcardRoomRef(
-        str(room.get("implType") or "CGCOMMON1111"),
+        str(room.get("implType") or fallback_impl_type),
         str(room.get("schoolAreaNo") or ""),
         str(room.get("buildingNo") or ""),
         str(room.get("roomNum") or ""),
@@ -206,6 +205,8 @@ class EcardClient:
         params: dict[str, Any] | None = None,
         *,
         token: str | None = None,
+        timeout: float | None = None,
+        proxy_origin: str | None = None,
     ) -> dict[str, Any]:
         payload = dict(params or {})
         payload.setdefault("from", "wxminiprogram")
@@ -229,12 +230,16 @@ class EcardClient:
 
         # If Worker proxy is configured, route through Cloudflare to reach
         # the ecard API from serverless regions where direct access is flaky.
-        if self._worker_proxy_origin:
-            return self._post_via_proxy(url, payload, headers)
+        effective_proxy_origin = proxy_origin or self._worker_proxy_origin
+        if effective_proxy_origin:
+            return self._post_via_proxy(url, payload, headers, effective_proxy_origin, timeout=timeout)
 
         try:
             client = self._get_http_client()
-            response = client.post(url, data=payload, headers=headers)
+            request_kwargs: dict[str, Any] = {}
+            if timeout is not None:
+                request_kwargs["timeout"] = timeout
+            response = client.post(url, data=payload, headers=headers, **request_kwargs)
             response.raise_for_status()
             data = response.json()
         except httpx.TimeoutException as exc:
@@ -251,11 +256,17 @@ class EcardClient:
         return data
 
     def _post_via_proxy(
-        self, url: str, payload: dict[str, Any], headers: dict[str, str],
+        self,
+        url: str,
+        payload: dict[str, Any],
+        headers: dict[str, str],
+        proxy_origin: str | None = None,
+        *,
+        timeout: float | None = None,
     ) -> dict[str, Any]:
         """Send the already-signed ecard request through Cloudflare Worker."""
-        proxy_origin = self._worker_proxy_origin.rstrip("/")
-        proxy_url = f"{proxy_origin}/_proxy"
+        effective_proxy_origin = proxy_origin or getattr(self, "_worker_proxy_origin", "")
+        proxy_url = f"{effective_proxy_origin.rstrip('/')}/_proxy"
         proxy_body = {
             "url": url,
             "method": "POST",
@@ -267,7 +278,7 @@ class EcardClient:
             response = client.post(
                 proxy_url,
                 json=proxy_body,
-                timeout=self.settings.request_timeout_seconds + 15,
+                timeout=timeout or self.settings.request_timeout_seconds + 15,
             )
             response.raise_for_status()
             upstream_status = int(response.headers.get("X-Proxy-Status", response.status_code))
@@ -285,6 +296,17 @@ class EcardClient:
         if not isinstance(data, dict):
             raise EcardApiError("一卡通服务响应异常")
         return data
+
+    def _room_proxy_origin(self) -> str:
+        worker_proxy_origin = getattr(self, "_worker_proxy_origin", "")
+        if worker_proxy_origin:
+            return worker_proxy_origin
+        settings = getattr(self, "settings", None)
+        frontend_origin = getattr(settings, "frontend_origin", "") if settings is not None else ""
+        debug = getattr(settings, "debug", True) if settings is not None else True
+        if not debug and frontend_origin.startswith("https://"):
+            return frontend_origin
+        return ""
 
     def login(self) -> str:
         if self._token:
@@ -329,16 +351,22 @@ class EcardClient:
         _delete_token_from_db()
         logger.info("ecard_client: token invalidated due to auth failure")
 
-    def _post_with_token_retry(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+    def _post_with_token_retry(
+        self,
+        path: str,
+        params: dict[str, Any] | None = None,
+        *,
+        timeout: float | None = None,
+    ) -> dict[str, Any]:
         """Post API call with automatic token refresh on auth failure (code=203)."""
         token = self.login()
-        data = self.post_api(path, params, token=token)
+        data = self.post_api(path, params, token=token, timeout=timeout)
         # Detect auth failure: code=203 or "未登录" in message
         if data.get("code") == 203 or "未登录" in str(data.get("msg", "")):
             logger.info("ecard_client: token expired (code=%s), refreshing...", data.get("code"))
             self._invalidate_token()
             token = self.login()
-            data = self.post_api(path, params, token=token)
+            data = self.post_api(path, params, token=token, timeout=timeout)
         return data
 
     def current_user(self) -> dict[str, Any]:
@@ -349,18 +377,35 @@ class EcardClient:
 
     def rooms(self) -> list[dict[str, str]]:
         token = self.login()
-        all_rooms: list[dict[str, Any]] = []
+        rooms_by_impl: dict[str, list[dict[str, Any]]] = {}
 
-        # Fetch from all 3 impl types in parallel (each call is ~0.8s →
-        # ~0.8s total instead of ~2.5s sequential)
+        # Fetch sequentially. The upstream ecard service is sensitive to
+        # concurrent requests from serverless regions and may reject all room
+        # sources when the same token is used in parallel.
         def _fetch_one(impl_type: str) -> list[dict[str, Any]]:
-            data = self.post_api("/powerfee/getRoomInfo", {"implType": impl_type}, token=token)
+            settings = getattr(self, "settings", None)
+            base_timeout = getattr(settings, "request_timeout_seconds", 6)
+            room_timeout = max(base_timeout + 39, 45)
+            room_proxy_origin = self._room_proxy_origin()
+            data = self.post_api(
+                "/powerfee/getRoomInfo",
+                {"implType": impl_type},
+                token=token,
+                timeout=room_timeout,
+                proxy_origin=room_proxy_origin,
+            )
             if not is_ok(data):
                 # Retry on auth failure
                 if data.get("code") == 203 or "未登录" in str(data.get("msg", "")):
                     self._invalidate_token()
                     token_fresh = self.login()
-                    data = self.post_api("/powerfee/getRoomInfo", {"implType": impl_type}, token=token_fresh)
+                    data = self.post_api(
+                        "/powerfee/getRoomInfo",
+                        {"implType": impl_type},
+                        token=token_fresh,
+                        timeout=room_timeout,
+                        proxy_origin=room_proxy_origin,
+                    )
                 if not is_ok(data):
                     message = data.get("msg") or data.get("message") or "获取宿舍列表失败"
                     raise EcardApiError(str(message))
@@ -368,24 +413,35 @@ class EcardClient:
             return obj if isinstance(obj, list) else [obj]
 
         errors: list[BaseException] = []
-        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
-            futures = [pool.submit(_fetch_one, t) for t in ROOM_IMPL_TYPES]
-            for future in concurrent.futures.as_completed(futures):
-                try:
-                    all_rooms.extend(future.result())
-                except Exception as exc:
-                    errors.append(exc)
+        for impl_type in ROOM_IMPL_TYPES:
+            try:
+                rooms_by_impl[impl_type] = _fetch_one(impl_type)
+            except Exception as exc:
+                logger.warning("ecard_client: getRoomInfo failed for implType=%s: %s", impl_type, exc)
+                errors.append(exc)
 
         seen: set[str] = set()
+        seen_physical: set[tuple[str, str, str]] = set()
         result: list[dict[str, str]] = []
-        for room in all_rooms:
-            if not isinstance(room, dict):
-                continue
-            item = public_room({k: v for k, v in room.items() if k not in SENSITIVE_ROOM_KEYS})
-            if item["id"] in seen or "||" in item["id"]:
-                continue
-            seen.add(item["id"])
-            result.append(item)
+        for impl_type in ROOM_IMPL_TYPES:
+            for room in rooms_by_impl.get(impl_type, []):
+                if not isinstance(room, dict):
+                    continue
+                public_source = {k: v for k, v in room.items() if k not in SENSITIVE_ROOM_KEYS}
+                item = public_room(public_source, fallback_impl_type=impl_type)
+                if item["id"] in seen or "||" in item["id"]:
+                    continue
+                physical_key = (
+                    str(room.get("schoolAreaNo") or ""),
+                    str(room.get("buildingNo") or ""),
+                    str(room.get("roomNum") or ""),
+                )
+                if all(physical_key) and physical_key in seen_physical:
+                    continue
+                seen.add(item["id"])
+                if all(physical_key):
+                    seen_physical.add(physical_key)
+                result.append(item)
         if not result and errors:
             raise EcardApiError("获取宿舍列表失败") from errors[0]
         result.sort(key=lambda item: (item["displayName"], item["id"]))
@@ -460,6 +516,7 @@ class EcardClient:
                 "pageNum": "1",
                 "pageSize": "31",
             },
+            timeout=5,
         )
         if data.get("status") == "ok" and isinstance(data.get("items"), list):
             return data

@@ -79,6 +79,7 @@ self.addEventListener('fetch', (event) => {
 
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
+  if (url.pathname === '/gzus_pwa_sw.js') return;
 
   if (NETWORK_FIRST_API_PATHS.some((path) => url.pathname.startsWith(path))) {
     event.respondWith(handleApiNetworkFirstRequest(request));

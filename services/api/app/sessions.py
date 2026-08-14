@@ -11,9 +11,17 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Protocol
 
 from cryptography.fernet import Fernet
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session as DbSession
 
 logger = logging.getLogger(__name__)
+
+_DB_CONNECTION_ATTEMPTS = 3
+_DB_RETRY_BASE_DELAY_SECONDS = 0.3
+
+
+class SessionStoreUnavailableError(RuntimeError):
+    """会话持久层暂时不可用。"""
 
 
 class AcademicClient(Protocol):
@@ -55,7 +63,6 @@ class AppSession:
     last_active_at: datetime = field(default_factory=datetime.now)
     push_registration_id: str | None = None
     push_platform: str = "android"
-    encrypted_credentials: str | None = None
     revoked_at: datetime | None = None
     revoked_reason: str | None = None
     student_account: str | None = None
@@ -65,6 +72,19 @@ def _get_fernet(key: str) -> Fernet:
     """Create a Fernet instance from a config key string."""
     raw = hashlib.sha256(key.encode("utf-8")).digest()
     return Fernet(base64.urlsafe_b64encode(raw))
+
+
+def student_id_of(session: "AppSession") -> str:
+    """获取学号：优先使用会话中已持久化的 student_account，
+    仅在缺失时回退到 client.get_info()（含学生照片下载的 JWXT 往返）。"""
+    account = getattr(session, "student_account", None)
+    if account:
+        return str(account)
+    try:
+        info = session.client.get_info()
+    except Exception:
+        return ""
+    return str(info.get("studentId") or info.get("student_id") or info.get("sno") or "")
 
 
 def encrypt_credentials(account: str, password: str, key: str) -> str:
@@ -149,6 +169,7 @@ class SessionStore:
         self._last_touch_at: dict[str, datetime] = {}
         self._memory_cache_ttl = timedelta(seconds=30)
         self._touch_write_interval = timedelta(seconds=60)
+        self._legacy_credentials_cleared = False
 
     def _get_db(self) -> DbSession:
         from sqlalchemy.orm import sessionmaker as SessionMaker
@@ -168,6 +189,63 @@ class SessionStore:
 
         return self._db_factory()
 
+    def _open_db(self, operation: str, session_id: str) -> DbSession:
+        """获取数据库会话，短暂故障时重试，失败后保留原始异常。"""
+        last_error: Exception | None = None
+        for attempt in range(1, _DB_CONNECTION_ATTEMPTS + 1):
+            try:
+                return self._get_db()
+            except Exception as exc:
+                last_error = exc
+                logger.warning(
+                    "Failed to acquire session database connection",
+                    extra={
+                        "operation": operation,
+                        "session_id": session_id[:8],
+                        "attempt": attempt,
+                        "max_attempts": _DB_CONNECTION_ATTEMPTS,
+                    },
+                    exc_info=attempt == _DB_CONNECTION_ATTEMPTS,
+                )
+                if attempt < _DB_CONNECTION_ATTEMPTS:
+                    time.sleep(_DB_RETRY_BASE_DELAY_SECONDS * attempt)
+
+        if last_error is None:
+            raise RuntimeError("数据库连接重试未执行")
+        raise SessionStoreUnavailableError(
+            f"会话数据库不可用：operation={operation}, session={session_id[:8]}"
+        ) from last_error
+
+    def _clear_legacy_credentials(self, db: DbSession) -> None:
+        """清除旧版本遗留但已不再使用的可解密登录凭据。"""
+        if self._legacy_credentials_cleared:
+            return
+        from app.database import AppSessionModel
+
+        cleared = (
+            db.query(AppSessionModel)
+            .filter(AppSessionModel.encrypted_credentials.is_not(None))
+            .update({"encrypted_credentials": None}, synchronize_session=False)
+        )
+        db.commit()
+        self._legacy_credentials_cleared = True
+        if cleared:
+            logger.info(
+                "Cleared legacy persisted login credentials",
+                extra={"cleared_count": cleared},
+            )
+
+    @staticmethod
+    def _persistence_error(
+        operation: str,
+        session_id: str,
+        error: SQLAlchemyError,
+    ) -> SessionStoreUnavailableError:
+        return SessionStoreUnavailableError(
+            f"会话数据库操作失败：operation={operation}, session={session_id[:8]}, "
+            f"error={type(error).__name__}"
+        )
+
     # ------------------------------------------------------------------
     # Public API (compatible with old memory-based interface)
     # ------------------------------------------------------------------
@@ -177,7 +255,6 @@ class SessionStore:
         client: Any,
         student_name: str | None = None,
         ehall_client: Any | None = None,
-        encrypted_credentials: str | None = None,
         student_account: str | None = None,
     ) -> AppSession:
         from app.database import AppSessionModel
@@ -215,29 +292,13 @@ class SessionStore:
             client=client,
             student_name=student_name,
             ehall_client=ehall_client,
-            encrypted_credentials=encrypted_credentials,
             student_account=resolved_student_account,
         )
 
-        # Retry DB connection (Neon cold-start may fail transiently)
-        db = None
-        for attempt in range(3):
-            try:
-                db = self._get_db()
-                break
-            except Exception:
-                logger.warning(
-                    "DB connection attempt %d/3 for create session %s failed",
-                    attempt + 1,
-                    session.id[:8],
-                    exc_info=False,
-                )
-                if attempt < 2:
-                    time.sleep(0.3 * (attempt + 1))
-        if db is None:
-            raise RuntimeError(f"Failed to acquire DB connection after 3 attempts for session {session.id[:8]}")
+        db = self._open_db("create", session.id)
 
         try:
+            self._clear_legacy_credentials(db)
             if resolved_student_account:
                 for existing in self._sessions.values():
                     if (
@@ -274,7 +335,6 @@ class SessionStore:
                 jwxt_cookies=jwxt_cookies or None,
                 ehall_cookies=ehall_cookies or None,
                 ehall_auth_token=ehall_auth_token or None,
-                encrypted_credentials=encrypted_credentials,
             )
             db.add(row)
             db.commit()
@@ -282,9 +342,9 @@ class SessionStore:
             self._session_checked_at[session.id] = datetime.now(timezone.utc).replace(tzinfo=None)
             self._last_touch_at[session.id] = session.last_active_at.replace(tzinfo=None)
             logger.debug("Session %s created in DB (jwxt_cookies=%d chars)", session.id[:8], len(jwxt_cookies))
-        except Exception:
+        except SQLAlchemyError as exc:
             db.rollback()
-            raise
+            raise self._persistence_error("create", session.id, exc) from exc
         finally:
             db.close()
 
@@ -315,30 +375,10 @@ class SessionStore:
                 self.touch(session_id)
             return cached
 
-        # Retry DB connection acquisition (Vercel cold starts may fail
-        # transiently, e.g. Neon compute waking from auto-suspend)
-        db = None
-        for attempt in range(3):
-            try:
-                db = self._get_db()
-                break
-            except Exception:
-                logger.warning(
-                    "DB connection attempt %d/3 for session %s failed",
-                    attempt + 1,
-                    session_id[:8] if session_id else "?",
-                    exc_info=False,
-                )
-                if attempt < 2:
-                    time.sleep(0.3 * (attempt + 1))
-        if db is None:
-            logger.error(
-                "All DB connection attempts failed for session %s",
-                session_id[:8] if session_id else "?",
-            )
-            return None
+        db = self._open_db("get", session_id)
 
         try:
+            self._clear_legacy_credentials(db)
             row = db.query(AppSessionModel).filter(AppSessionModel.id == session_id).first()
             if row is None:
                 # Neon PostgreSQL may have a slight read-after-write delay
@@ -404,7 +444,6 @@ class SessionStore:
                     else row.last_active_at,
                     push_registration_id=row.push_registration_id,
                     push_platform=row.push_platform or "android",
-                    encrypted_credentials=row.encrypted_credentials,
                     revoked_at=revoked_at,
                     revoked_reason=row.revoked_reason or "single_device_login",
                     student_account=row.student_account,
@@ -426,7 +465,6 @@ class SessionStore:
                     cached.created_at = row.created_at
                 cached.push_registration_id = row.push_registration_id
                 cached.push_platform = row.push_platform or "android"
-                cached.encrypted_credentials = row.encrypted_credentials
                 cached.student_account = row.student_account
                 self._session_checked_at[session_id] = datetime.now(timezone.utc).replace(tzinfo=None)
                 if touch:
@@ -476,7 +514,6 @@ class SessionStore:
                 last_active_at=last_active,
                 push_registration_id=row.push_registration_id,
                 push_platform=row.push_platform or "android",
-                encrypted_credentials=row.encrypted_credentials,
                 student_account=row.student_account,
             )
 
@@ -486,19 +523,15 @@ class SessionStore:
                 self.touch(session_id)
 
             return session
-        except Exception:
+        except SQLAlchemyError as exc:
             logger.error(
-                "Unexpected error retrieving session %s from database",
-                session_id[:8] if session_id else "?",
+                "Failed to retrieve session from database",
+                extra={"operation": "get", "session_id": session_id[:8]},
                 exc_info=True,
             )
-            return None
+            raise self._persistence_error("get", session_id, exc) from exc
         finally:
-            if db is not None:
-                try:
-                    db.close()
-                except Exception:
-                    pass
+            db.close()
 
     def touch(self, session_id: str) -> None:
         from app.database import AppSessionModel
@@ -512,12 +545,7 @@ class SessionStore:
         if last_touch is not None and now_naive - last_touch < self._touch_write_interval:
             return
 
-        db = None
-        try:
-            db = self._get_db()
-        except Exception:
-            logger.warning("Failed to acquire DB for touch session %s", session_id[:8])
-            return
+        db = self._open_db("touch", session_id)
         try:
             row = db.query(AppSessionModel).filter(AppSessionModel.id == session_id).first()
             if row is not None:
@@ -527,15 +555,11 @@ class SessionStore:
                 cached = self._sessions.get(session_id)
                 if cached is not None:
                     cached.last_active_at = row.last_active_at.replace(tzinfo=None)
-        except Exception:
+        except SQLAlchemyError as exc:
             db.rollback()
-            logger.warning("Failed to touch session %s", session_id[:8], exc_info=True)
+            raise self._persistence_error("touch", session_id, exc) from exc
         finally:
-            if db is not None:
-                try:
-                    db.close()
-                except Exception:
-                    pass
+            db.close()
 
     def update(self, session_id: str, **fields: Any) -> None:
         """Persist mutable session fields (e.g. push_registration_id) to DB."""
@@ -543,43 +567,29 @@ class SessionStore:
 
         allowed = {
             "push_registration_id", "push_platform",
-            "encrypted_credentials", "student_name",
+            "student_name",
             "jwxt_cookies", "ehall_cookies", "ehall_auth_token",
         }
         updates = {k: v for k, v in fields.items() if k in allowed}
         if not updates:
             return
 
-        db = None
-        try:
-            db = self._get_db()
-        except Exception:
-            logger.warning("Failed to acquire DB for update session %s", session_id[:8])
-            return
+        db = self._open_db("update", session_id)
         try:
             db.query(AppSessionModel).filter(AppSessionModel.id == session_id).update(
                 updates, synchronize_session=False
             )
             db.commit()
-        except Exception:
+        except SQLAlchemyError as exc:
             db.rollback()
-            logger.warning("Failed to update session %s", session_id[:8], exc_info=True)
+            raise self._persistence_error("update", session_id, exc) from exc
         finally:
-            if db is not None:
-                try:
-                    db.close()
-                except Exception:
-                    pass
+            db.close()
 
     def remove(self, session_id: str) -> None:
         from app.database import AppSessionModel
 
-        db = None
-        try:
-            db = self._get_db()
-        except Exception:
-            logger.warning("Failed to acquire DB for remove session %s", session_id[:8])
-            return
+        db = self._open_db("remove", session_id)
         try:
             row = db.query(AppSessionModel).filter(AppSessionModel.id == session_id).first()
             if row is not None:
@@ -588,15 +598,11 @@ class SessionStore:
             self._sessions.pop(session_id, None)
             self._session_checked_at.pop(session_id, None)
             self._last_touch_at.pop(session_id, None)
-        except Exception:
+        except SQLAlchemyError as exc:
             db.rollback()
-            logger.warning("Failed to remove session %s", session_id[:8], exc_info=True)
+            raise self._persistence_error("remove", session_id, exc) from exc
         finally:
-            if db is not None:
-                try:
-                    db.close()
-                except Exception:
-                    pass
+            db.close()
 
     # ------------------------------------------------------------------
     # Cleanup
@@ -638,7 +644,8 @@ class SessionStore:
                         self._session_checked_at.pop(session_id, None)
                         self._last_touch_at.pop(session_id, None)
                 logger.info("Purged %d expired sessions", deleted)
-        except Exception:
+        except SQLAlchemyError:
             db.rollback()
+            raise
         finally:
             db.close()

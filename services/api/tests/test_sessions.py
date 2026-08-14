@@ -3,10 +3,12 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 
 from app.database import AppSessionModel, get_sync_session_factory
+from app.main import create_app
 from app.routes.deps import SESSION_IDLE_STALE_THRESHOLD, require_session
-from app.sessions import SessionStore
+from app.sessions import SessionStore, SessionStoreUnavailableError
 
 
 class _Client:
@@ -107,6 +109,22 @@ def test_create_revokes_existing_session_for_same_account():
     assert second_row.revoked_at is None
 
 
+def test_create_clears_legacy_persisted_login_credentials():
+    first_store = SessionStore(ttl_seconds=7200)
+    first = first_store.create(_Client("20240001"), student_account="20240001")
+    factory = get_sync_session_factory()
+    with factory() as db:
+        row = db.query(AppSessionModel).filter(AppSessionModel.id == first.id).first()
+        assert row is not None
+        row.encrypted_credentials = "legacy-encrypted-password"
+        db.commit()
+
+    second_store = SessionStore(ttl_seconds=7200)
+    second_store.create(_Client("20240002"), student_account="20240002")
+
+    assert _get_row(first.id).encrypted_credentials is None
+
+
 def test_require_session_rejects_revoked_session_without_relogin_loop():
     store = SessionStore(ttl_seconds=7200)
     first = store.create(_Client("20240001"), "测试学生", student_account="20240001")
@@ -117,3 +135,36 @@ def test_require_session_rejects_revoked_session_without_relogin_loop():
 
     assert exc.value.status_code == 401
     assert exc.value.detail == "账号已在其他设备登录，请重新登录"
+
+
+def test_get_raises_when_session_database_is_unavailable(monkeypatch):
+    attempts = 0
+
+    def unavailable_factory():
+        nonlocal attempts
+        attempts += 1
+        raise ConnectionError("database offline")
+
+    monkeypatch.setattr("app.sessions.time.sleep", lambda _seconds: None)
+    store = SessionStore(ttl_seconds=7200, db_factory=unavailable_factory)
+
+    with pytest.raises(SessionStoreUnavailableError, match="operation=get") as exc:
+        store.get("session-id", touch=False)
+
+    assert attempts == 3
+    assert isinstance(exc.value.__cause__, ConnectionError)
+
+
+def test_session_database_failure_returns_503(monkeypatch):
+    def unavailable_factory():
+        raise ConnectionError("database offline")
+
+    monkeypatch.setattr("app.sessions.time.sleep", lambda _seconds: None)
+    app = create_app()
+    app.state.sessions = SessionStore(ttl_seconds=7200, db_factory=unavailable_factory)
+    client = TestClient(app)
+
+    response = client.get("/me", headers={"X-Session-Id": "session-id"})
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "会话服务暂时不可用，请稍后重试"}

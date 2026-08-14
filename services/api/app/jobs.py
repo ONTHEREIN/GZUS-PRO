@@ -8,8 +8,9 @@ from app.cache_service import ExamReminderCache, GradeUpdateCache, NoticeCache
 from app.config import get_settings
 from app.database import EcardBinding, PushRegistration, get_sync_session_factory
 from app.ecard_client import EcardApiError, EcardClient, EcardConfigurationError, EcardRoomRef, safe_float
-from app.notice_utils import is_valid_notice_item, normalize_notice_item, valid_notice_items
+from app.notice_utils import merge_notices, notice_key, valid_notice_items
 from app.push import send_push, send_web_push_to_student
+from app.sessions import student_id_of
 
 __all__ = [
     "ExamReminderCache",
@@ -26,18 +27,11 @@ logger = logging.getLogger(__name__)
 
 
 def _notice_key(item: dict) -> str:
-    title = str(item.get("title") or "").strip()
-    url = str(item.get("url") or "").strip()
-    category = str(item.get("category") or "").strip()
-    return "|".join([category, title, url])
+    return notice_key(item)
 
 
 def _session_student_id(session) -> str:
-    try:
-        info = session.client.get_info()
-    except Exception:
-        return ""
-    return str(info.get("studentId") or info.get("student_id") or info.get("sno") or "")
+    return student_id_of(session)
 
 
 def _grade_key(item: dict) -> str:
@@ -80,13 +74,7 @@ def _session_notices(session) -> list[dict]:
         ehall_items = ehall_client.get_notice_items()
     except Exception:
         return valid_notice_items(items)
-    seen = {_notice_key(item) for item in items}
-    for item in ehall_items:
-        item = normalize_notice_item(item)
-        if is_valid_notice_item(item) and _notice_key(item) not in seen:
-            seen.add(_notice_key(item))
-            items.append(item)
-    return valid_notice_items(items)
+    return merge_notices(items, ehall_items)
 
 
 async def run_notice_poller_once(app) -> None:
@@ -245,6 +233,49 @@ def _balance_progress(balance: float | None, threshold: float) -> int:
     return round(max(0, min(100, balance / threshold * 100)))
 
 
+#: 每个水电项每日最大提醒次数（jobs 轮询与 internal cron 共用）
+ECARD_DAILY_REMINDER_LIMIT = 2
+
+
+def prepare_ecard_reminders(
+    binding,
+    summary: dict,
+    today_key: str,
+) -> tuple[list[tuple[str, str, str]], list[str]]:
+    """计算绑定当前待发送的水电提醒，并就地更新每日去重计数。
+
+    返回 (待发送的 (item_key, title, body) 列表, 启用的提醒项)。
+    调用方负责推送与 db.commit()。
+    """
+    reminded_times = json.loads(binding.last_reminded_times or "{}")
+    if binding.last_reminded_date != today_key:
+        reminded_times = {}
+        binding.last_reminded_date = today_key
+
+    enabled_items = (
+        json.loads(binding.reminder_items)
+        if binding.reminder_items
+        else ["power", "cold_water", "hot_water"]
+    )
+    messages = ecard_reminder_message(
+        summary,
+        power_threshold=binding.low_power_threshold,
+        cold_water_threshold=binding.low_cold_water_threshold,
+        hot_water_threshold=binding.low_hot_water_threshold,
+        enabled_items=enabled_items,
+    )
+
+    pending: list[tuple[str, str, str]] = []
+    for item_key, title, body in messages:
+        count = reminded_times.get(item_key, 0)
+        if count >= ECARD_DAILY_REMINDER_LIMIT:
+            continue
+        reminded_times[item_key] = count + 1
+        pending.append((item_key, title, body))
+    binding.last_reminded_times = json.dumps(reminded_times)
+    return pending, enabled_items
+
+
 def _next_reminder_at(now: datetime, reminder_times: list[str] | None = None) -> datetime:
     tz = ZoneInfo("Asia/Shanghai")
     local_now = now.astimezone(tz)
@@ -302,25 +333,9 @@ async def run_ecard_reminder_once(app) -> None:
             binding.updated_at = datetime.now(timezone.utc)
 
             today = datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
-            # Reset reminded times if new day
-            reminded_times = json.loads(binding.last_reminded_times or "{}")
-            if binding.last_reminded_date != today:
-                reminded_times = {}
-                binding.last_reminded_date = today
+            pending, enabled_items = prepare_ecard_reminders(binding, summary, today)
 
-            enabled_items = json.loads(binding.reminder_items) if binding.reminder_items else ["power", "cold_water", "hot_water"]
-            messages = ecard_reminder_message(
-                summary,
-                power_threshold=binding.low_power_threshold,
-                cold_water_threshold=binding.low_cold_water_threshold,
-                hot_water_threshold=binding.low_hot_water_threshold,
-                enabled_items=enabled_items,
-            )
-
-            for item_key, title, body in messages:
-                count = reminded_times.get(item_key, 0)
-                if count >= 2:
-                    continue
+            for item_key, title, body in pending:
                 today_key = today
                 progress_current = ecard_progress_current(
                     summary,
@@ -363,9 +378,6 @@ async def run_ecard_reminder_once(app) -> None:
                     body,
                     live_payload,
                 )
-                reminded_times[item_key] = count + 1
-
-            binding.last_reminded_times = json.dumps(reminded_times)
         db.commit()
 
 
@@ -373,12 +385,9 @@ async def _send_ecard_ws(app, student_id: str, title: str, body: str, summary: d
     sessions = getattr(app.state.sessions, "_sessions", {})
     manager = app.state.ws_manager
     for session_id, session in list(sessions.items()):
-        try:
-            info = session.client.get_info()
-        except Exception:
-            continue
-        current_id = str(info.get("studentId") or info.get("student_id") or info.get("sno") or "")
-        if current_id == student_id:
+        # 直接使用会话持久化学号，避免每个会话一次含照片下载的 JWXT 往返
+        current_id = student_id_of(session)
+        if current_id and current_id == student_id:
             await manager.send_to_session(
                 session_id,
                 {

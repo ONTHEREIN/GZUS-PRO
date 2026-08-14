@@ -4,7 +4,7 @@ import hashlib
 import mimetypes
 import re
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
 from datetime import date
 from html import unescape
 from threading import Lock
@@ -84,6 +84,8 @@ class EhallClient:
         items: list[dict] = []
         seen: set[tuple[str, str, str]] = set()
         seen_lock = Lock()
+        request_timeout = min(self.timeout_seconds, 5)
+        overall_timeout = request_timeout * 2
 
         def fetch_category(args: tuple[str, str]) -> list[dict]:
             category, endpoint = args
@@ -93,6 +95,8 @@ class EhallClient:
                     payload = self._get_json(
                         endpoint,
                         {"pageNum": page_num, "pageSize": page_size},
+                        timeout_seconds=request_timeout,
+                        max_retries=0,
                     )
                 except EhallAuthenticationError:
                     raise
@@ -116,19 +120,26 @@ class EhallClient:
                     break
             return result
 
-        with ThreadPoolExecutor(max_workers=min(len(TASK_ENDPOINTS), 4)) as executor:
+        executor = ThreadPoolExecutor(max_workers=min(len(TASK_ENDPOINTS), 4))
+        try:
             futures = {
                 executor.submit(fetch_category, (cat, ep)): cat
                 for cat, ep in TASK_ENDPOINTS.items()
             }
-            for future in as_completed(futures, timeout=self.timeout_seconds * 2):
-                try:
-                    result = future.result(timeout=self.timeout_seconds)
-                    items.extend(result)
-                except EhallAuthenticationError:
-                    raise
-                except Exception:
-                    continue
+            try:
+                completed = as_completed(futures, timeout=overall_timeout)
+                for future in completed:
+                    try:
+                        result = future.result(timeout=request_timeout)
+                        items.extend(result)
+                    except EhallAuthenticationError:
+                        raise
+                    except Exception:
+                        continue
+            except TimeoutError:
+                pass
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
         return items
 
     def get_progress_items(self, page_size: int = 30) -> list[dict]:
@@ -139,11 +150,18 @@ class EhallClient:
         counts: dict[str, int] = {category: 0 for category in TASK_CATEGORIES}
         seen: set[tuple[str, str, str]] = set()
         seen_lock = Lock()
+        request_timeout = min(self.timeout_seconds, 5)
+        overall_timeout = request_timeout * 2
 
         def fetch_category(args: tuple[str, str]) -> tuple[str, list[dict], int]:
             category, endpoint = args
             try:
-                payload = self._get_json(endpoint, {"pageNum": 1, "pageSize": page_size})
+                payload = self._get_json(
+                    endpoint,
+                    {"pageNum": 1, "pageSize": page_size},
+                    timeout_seconds=request_timeout,
+                    max_retries=0,
+                )
             except EhallAuthenticationError:
                 raise
             except Exception:
@@ -163,20 +181,27 @@ class EhallClient:
                 result.append(item)
             return category, result, count
 
-        with ThreadPoolExecutor(max_workers=min(len(TASK_ENDPOINTS), 4)) as executor:
+        executor = ThreadPoolExecutor(max_workers=min(len(TASK_ENDPOINTS), 4))
+        try:
             futures = {
                 executor.submit(fetch_category, (cat, ep)): cat
                 for cat, ep in TASK_ENDPOINTS.items()
             }
-            for future in as_completed(futures, timeout=self.timeout_seconds * 2):
-                try:
-                    category, result, count = future.result(timeout=self.timeout_seconds)
-                    counts[category] = count
-                    items.extend(result)
-                except EhallAuthenticationError:
-                    raise
-                except Exception:
-                    continue
+            try:
+                completed = as_completed(futures, timeout=overall_timeout)
+                for future in completed:
+                    try:
+                        category, result, count = future.result(timeout=request_timeout)
+                        counts[category] = count
+                        items.extend(result)
+                    except EhallAuthenticationError:
+                        raise
+                    except Exception:
+                        continue
+            except TimeoutError:
+                pass
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
         items.sort(key=lambda item: item.get("date") or "", reverse=True)
         return {
             "categories": [
@@ -423,12 +448,20 @@ class EhallClient:
         client = self._get_http_client()
         retry_count = _EHALL_MAX_RETRIES if max_retries is None else max(0, max_retries)
         timeout = timeout_seconds if timeout_seconds is not None else self.timeout_seconds
+
+        def request_get():
+            if timeout_seconds is None:
+                return client.get(endpoint, params=query)
+            try:
+                return client.get(endpoint, params=query, timeout=timeout)
+            except TypeError as exc:
+                if "timeout" not in str(exc):
+                    raise
+                return client.get(endpoint, params=query)
+
         for attempt in range(retry_count + 1):
             try:
-                if timeout_seconds is None:
-                    response = client.get(endpoint, params=query)
-                else:
-                    response = client.get(endpoint, params=query, timeout=timeout)
+                response = request_get()
                 if _looks_like_login(response):
                     raise EhallAuthenticationError("办事大厅会话已失效，请重新登录")
                 response.raise_for_status()

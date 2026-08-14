@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
 
-from app.config import get_settings
+from app.config import Settings, get_settings
 from app.database import EcardBinding, get_sync_session_factory
 from app.ecard_client import EcardClient, EcardConfigurationError, EcardRoomRef, calc_sign
 from app.jobs import ecard_reminder_message
@@ -97,11 +97,17 @@ def test_authenticated_request_includes_unionid(monkeypatch):
     assert captured[0].get("token") == "tok-1"
 
 
+def test_ecard_worker_proxy_origin_defaults_to_direct_mode(monkeypatch):
+    monkeypatch.delenv("ECARD_WORKER_PROXY_ORIGIN", raising=False)
+
+    assert Settings(debug=True).ecard_worker_proxy_origin == ""
+
+
 def test_rooms_do_not_expose_balances(monkeypatch):
     client = object.__new__(EcardClient)
     client._token = "token"
 
-    def fake_post_api(path, params=None, *, token=None):
+    def fake_post_api(path, params=None, *, token=None, timeout=None, proxy_origin=None):
         return {
             "ret": True,
             "obj": [
@@ -132,11 +138,80 @@ def test_rooms_do_not_expose_balances(monkeypatch):
     assert "waterBalance" not in rooms[0]
 
 
+def test_rooms_fill_missing_impl_type_from_current_source_and_dedupe(monkeypatch):
+    client = object.__new__(EcardClient)
+    client._token = "token"
+
+    def fake_post_api(path, params=None, *, token=None, timeout=None, proxy_origin=None):
+        return {
+            "ret": True,
+            "obj": [
+                {
+                    "schoolAreaNo": "1",
+                    "buildingNo": "A2",
+                    "roomNum": "932",
+                    "schoolArea": "校本部",
+                    "building": "A2",
+                    "room": "A2#932",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(client, "post_api", fake_post_api)
+
+    rooms = client.rooms()
+
+    assert rooms == [
+        {
+            "id": "CGCOMMON1111|1|A2|932",
+            "schoolArea": "校本部",
+            "building": "A2",
+            "room": "A2-932",
+            "displayName": "校本部 A2 A2-932",
+        }
+    ]
+
+
+def test_rooms_fetch_all_impl_types(monkeypatch):
+    client = object.__new__(EcardClient)
+    client._token = "token"
+    calls = []
+
+    def fake_post_api(path, params=None, *, token=None, timeout=None, proxy_origin=None):
+        impl_type = params["implType"]
+        calls.append(impl_type)
+        return {
+            "ret": True,
+            "obj": [
+                {
+                    "implType": impl_type,
+                    "schoolAreaNo": "1",
+                    "buildingNo": "A2",
+                    "roomNum": impl_type[-4:],
+                    "schoolArea": "校本部",
+                    "building": "A2",
+                    "room": f"A2#{impl_type[-4:]}",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(client, "post_api", fake_post_api)
+
+    rooms = client.rooms()
+
+    assert set(calls) == {"CGCOMMON1111", "CGCOMMON2222", "CGCOMMON3333"}
+    assert [room["id"] for room in rooms] == [
+        "CGCOMMON1111|1|A2|1111",
+        "CGCOMMON2222|1|A2|2222",
+        "CGCOMMON3333|1|A2|3333",
+    ]
+
+
 def test_rooms_raise_when_all_fetches_fail(monkeypatch):
     client = object.__new__(EcardClient)
     client._token = "token"
 
-    def fake_post_api(path, params=None, *, token=None):
+    def fake_post_api(path, params=None, *, token=None, timeout=None, proxy_origin=None):
         raise RuntimeError("proxy failed")
 
     monkeypatch.setattr(client, "post_api", fake_post_api)
@@ -154,7 +229,7 @@ def test_rooms_raise_when_all_fetches_return_errors(monkeypatch):
     client = object.__new__(EcardClient)
     client._token = "token"
 
-    def fake_post_api(path, params=None, *, token=None):
+    def fake_post_api(path, params=None, *, token=None, timeout=None, proxy_origin=None):
         return {"ret": False, "code": 500, "msg": "upstream unavailable"}
 
     monkeypatch.setattr(client, "post_api", fake_post_api)
@@ -173,7 +248,7 @@ def test_power_consumption_uses_daily_details():
     client._token = "token"
     calls = []
 
-    def fake_post_api(path, params=None, *, token=None):
+    def fake_post_api(path, params=None, *, token=None, timeout=None, proxy_origin=None):
         calls.append((path, params, token))
         return {
             "ret": True,
@@ -220,6 +295,60 @@ def test_power_consumption_uses_daily_details():
             }
         ],
     }
+
+
+def test_balance_uses_room_ref_and_hot_water_student_fallback():
+    client = object.__new__(EcardClient)
+    client._token = "token"
+    calls = []
+
+    def fake_post_api(path, params=None, *, token=None, timeout=None, proxy_origin=None):
+        calls.append((path, params, token))
+        if path == "/powerfee/getBalance":
+            return {
+                "ret": True,
+                "obj": {
+                    "powerBalance": "116.41",
+                    "formatPowerBalanceStr": "116.41 度",
+                    "waterBalance": "9.99",
+                    "formatWaterBalanceStr": "9.99 吨",
+                },
+            }
+        if path == "/waterfee/memberInfo":
+            return {"ret": True, "obj": {"balance": 15.176}}
+        raise AssertionError(path)
+
+    client.post_api = fake_post_api
+
+    summary = client.balance(
+        EcardRoomRef("CGCOMMON2222", "82", "5328", "5611"),
+        "2540232101",
+    )
+
+    assert calls == [
+        (
+            "/powerfee/getBalance",
+            {
+                "implType": "CGCOMMON2222",
+                "schoolAreaNo": "82",
+                "buildingNo": "5328",
+                "roomNum": "5611",
+                "studentId": "2540232101",
+            },
+            "token",
+        ),
+        (
+            "/waterfee/memberInfo",
+            {"sno": "2540232101", "implType": "MINGHANBLUETOOTH"},
+            "token",
+        ),
+    ]
+    assert summary["powerBalance"] == "116.41"
+    assert summary["powerText"] == "116.41 度"
+    assert summary["coldWaterBalance"] == "9.99"
+    assert summary["coldWaterText"] == "9.99 吨"
+    assert summary["hotWaterBalance"] == 15.176
+    assert summary["hotWaterText"] == "15.176 元"
 
 
 def test_cloudflare_proxy_mode_requires_ecard_openid(monkeypatch):
@@ -338,6 +467,41 @@ def test_missing_ecard_openid_returns_503(monkeypatch):
     assert response.status_code == 503
 
 
+def test_rooms_route_filters_by_display_building_room_and_area(monkeypatch):
+    session = AppSession(id="rooms-filter", client=FakeSchoolClient(), student_name="测试用户")
+    monkeypatch.setattr(app.state.sessions, "get", lambda session_id, touch=True: session)
+    monkeypatch.setattr(app.state.sessions, "touch", lambda session_id: None)
+    monkeypatch.setattr(
+        ecard,
+        "_get_rooms_cached",
+        lambda: [
+            {
+                "id": "CGCOMMON1111|1|A2|932",
+                "schoolArea": "校本部",
+                "building": "A2",
+                "room": "A2-932",
+                "displayName": "校本部 A2 A2-932",
+            },
+            {
+                "id": "CGCOMMON1111|2|B1|101",
+                "schoolArea": "江门校区",
+                "building": "B1",
+                "room": "B1-101",
+                "displayName": "江门校区 B1 B1-101",
+            },
+        ],
+    )
+
+    with TestClient(app) as client:
+        for query in ("校本部 A2 A2-932", "A2", "932", "校本部"):
+            response = client.get(
+                f"/ecard/rooms?q={query}",
+                headers={"X-Session-Id": session.id},
+            )
+            assert response.status_code == 200
+            assert [item["id"] for item in response.json()] == ["CGCOMMON1111|1|A2|932"]
+
+
 def test_update_summary_cache_requires_session():
     with TestClient(app) as client:
         response = client.patch("/ecard/summary-cache", json={"powerBalance": 9})
@@ -427,6 +591,68 @@ def test_update_summary_cache_rejects_binding_fields(monkeypatch):
         )
 
     assert response.status_code == 422
+
+
+def test_refresh_returns_cached_summary_when_upstream_fails(monkeypatch):
+    session = AppSession(id="refresh-cache", client=FakeSchoolClient(), student_name="测试用户")
+    monkeypatch.setattr(app.state.sessions, "get", lambda session_id, touch=True: session)
+    monkeypatch.setattr(app.state.sessions, "touch", lambda session_id: None)
+
+    class FailingClient:
+        def balance(self, room_ref, student_id):
+            raise ecard.EcardApiError("一卡通服务请求失败")
+
+    monkeypatch.setattr(ecard, "_client", lambda: FailingClient())
+
+    factory = get_sync_session_factory()
+    with factory() as db:
+        db.add(
+            EcardBinding(
+                student_id="20240001",
+                room_id="CGCOMMON1111|1|A2|932",
+                room_display="校本部 A2 A2-932",
+                last_summary_json='{"powerBalance": 9, "powerText": "9 度"}',
+            )
+        )
+        db.commit()
+
+    with TestClient(app) as client:
+        response = client.post("/ecard/refresh", headers={"X-Session-Id": session.id})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["roomDisplay"] == "校本部 A2 A2-932"
+    assert data["powerBalance"] == 9
+    assert data["powerText"] == "9 度"
+
+
+def test_consumption_returns_limited_when_upstream_fails(monkeypatch):
+    session = AppSession(id="consumption-limited", client=FakeSchoolClient(), student_name="测试用户")
+    monkeypatch.setattr(app.state.sessions, "get", lambda session_id, touch=True: session)
+    monkeypatch.setattr(app.state.sessions, "touch", lambda session_id: None)
+
+    class FailingClient:
+        def consumption(self, room_ref, month):
+            raise ecard.EcardApiError("一卡通服务请求失败")
+
+    monkeypatch.setattr(ecard, "_client", lambda: FailingClient())
+
+    factory = get_sync_session_factory()
+    with factory() as db:
+        db.add(
+            EcardBinding(
+                student_id="20240001",
+                room_id="CGCOMMON1111|1|A2|932",
+                room_display="校本部 A2 A2-932",
+            )
+        )
+        db.commit()
+
+    with TestClient(app) as client:
+        response = client.get("/ecard/consumption", headers={"X-Session-Id": session.id})
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "limited", "message": "消费记录暂时不可用", "items": []}
 
 
 def test_ecard_reminder_message_levels():

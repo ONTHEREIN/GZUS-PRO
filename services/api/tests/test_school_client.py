@@ -8,6 +8,7 @@ from app.school_client import (
     SchoolSdkClient,
     default_academic_period,
     ensure_grade_list,
+    extract_credit_items,
     extract_notice_detail,
     extract_notice_sections,
     normalize_attendance_item,
@@ -244,6 +245,18 @@ def test_attendance_and_credits_use_proxy_request():
     assert attendance[0]["normal"] == 8
     assert credits[0]["totalCredit"] == "120"
     assert len(user.calls) == 2
+
+
+def test_extract_credit_items_accepts_wrapped_and_single_object():
+    rows = extract_credit_items({"data": {"rows": [{"xh": "20240001", "zdxf": "120"}]}})
+    single = extract_credit_items({"xh": "20240002", "zdxf": "160"})
+    empty = extract_credit_items({"totalResult": 0})
+    nested_empty = extract_credit_items({"data": {"totalResult": 0}})
+
+    assert rows[0]["zdxf"] == "120"
+    assert single[0]["xh"] == "20240002"
+    assert empty == []
+    assert nested_empty == []
 
 
 def test_notices_use_index_and_more_page_proxy_request():

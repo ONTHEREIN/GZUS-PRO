@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
-
-import 'package:js/js.dart';
+import 'dart:js_interop';
 
 import 'web_push_service.dart';
 
@@ -12,10 +11,10 @@ external void gzusWebPushInit();
 external bool gzusWebPushIsSupported();
 
 @JS()
-external void gzusWebPushIsSubscribed(Function callback);
+external void gzusWebPushIsSubscribed(JSFunction callback);
 
 @JS()
-external void gzusWebPushRequestPermission(Function callback);
+external void gzusWebPushRequestPermission(JSFunction callback);
 
 @JS()
 external String gzusWebPushGetPermissionStatus();
@@ -25,21 +24,21 @@ external void gzusWebPushSubscribe(
   String publicKey,
   String apiBaseUrl,
   String sessionId,
-  Function callback,
+  JSFunction callback,
 );
 
 @JS()
 external void gzusWebPushUnsubscribe(
   String apiBaseUrl,
   String sessionId,
-  Function callback,
+  JSFunction callback,
 );
 
 @JS()
 external void gzusWebPushClearCache();
 
 @JS()
-external void gzusWebPushSetOnTap(Function callback);
+external void gzusWebPushSetOnTap(JSFunction callback);
 
 class WebPushServiceImpl implements WebPushService {
   OnPushClick? _onTap;
@@ -52,7 +51,7 @@ class WebPushServiceImpl implements WebPushService {
     _processUrlParams();
     try {
       gzusWebPushInit();
-      gzusWebPushSetOnTap((extras) => _handlePushClick(extras));
+      gzusWebPushSetOnTap(((JSAny? extras) => _handlePushClick(extras)).toJS);
     } catch (_) {}
     if (!_initCompleter.isCompleted) {
       _initCompleter.complete();
@@ -102,7 +101,7 @@ class WebPushServiceImpl implements WebPushService {
     await _initCompleter.future;
     try {
       // 权限检查场景用较短超时（5s），订阅场景在 subscribe() 中用较长超时
-      return await _callbackBool(gzusWebPushIsSubscribed,
+      return await _callbackBool((callback) => gzusWebPushIsSubscribed(callback),
           timeout: const Duration(seconds: 5));
     } catch (_) {
       return false;
@@ -113,7 +112,8 @@ class WebPushServiceImpl implements WebPushService {
   Future<bool> requestPermission() async {
     await _initCompleter.future;
     try {
-      return await _callbackBool(gzusWebPushRequestPermission,
+      return await _callbackBool(
+          (callback) => gzusWebPushRequestPermission(callback),
           timeout: const Duration(seconds: 8));
     } catch (_) {
       return false;
@@ -181,13 +181,13 @@ class WebPushServiceImpl implements WebPushService {
 
 WebPushService createWebPushService() => WebPushServiceImpl();
 
-Future<bool> _callbackBool(void Function(Function callback) invoke,
+Future<bool> _callbackBool(void Function(JSFunction callback) invoke,
     {Duration timeout = const Duration(seconds: 20)}) {
   final completer = Completer<bool>();
-  invoke((value) {
+  invoke(((bool value) {
     if (!completer.isCompleted) {
       completer.complete(value == true);
     }
-  });
+  }).toJS);
   return completer.future.timeout(timeout, onTimeout: () => false);
 }

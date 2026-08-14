@@ -176,6 +176,7 @@ function initStartupLoading() {
   let slowTimer = null;
   let fallbackTimer = null;
   let recoveryTimer = null;
+  let flutterViewTimer = null;
 
   const setText = (nextTitle, nextHint) => {
     if (title) title.textContent = nextTitle;
@@ -198,6 +199,20 @@ function initStartupLoading() {
       window.sessionStorage?.removeItem('gzus_startup_recovered');
     } catch (_) {}
   };
+  const finishLoading = () => {
+    if (firstFrameArrived) return;
+    firstFrameArrived = true;
+    window.clearTimeout(slowTimer);
+    window.clearTimeout(fallbackTimer);
+    window.clearTimeout(recoveryTimer);
+    window.clearInterval(flutterViewTimer);
+    clearRecoveredFlag();
+    container.classList.add('fade-out');
+    window.setTimeout(() => container.remove(), 300);
+  };
+  const hasFlutterView = () => Boolean(document.querySelector(
+    'flutter-view, flt-glass-pane, flt-scene-host, flt-semantics-host'
+  ));
 
   setText(`${appName}加载中...`, '正在准备校园服务');
   applyStartupTitle(appName);
@@ -244,15 +259,13 @@ function initStartupLoading() {
     });
   }
 
-  window.addEventListener('flutter-first-frame', () => {
-    firstFrameArrived = true;
-    window.clearTimeout(slowTimer);
-    window.clearTimeout(fallbackTimer);
-    window.clearTimeout(recoveryTimer);
-    clearRecoveredFlag();
-    container.classList.add('fade-out');
-    window.setTimeout(() => container.remove(), 300);
-  });
+  window.addEventListener('flutter-first-frame', finishLoading, { once: true });
+
+  flutterViewTimer = window.setInterval(() => {
+    if (hasFlutterView()) {
+      window.setTimeout(finishLoading, 400);
+    }
+  }, 250);
 
   window.addEventListener('error', () => {
     if (firstFrameArrived) return;

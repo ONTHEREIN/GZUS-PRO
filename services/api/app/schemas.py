@@ -1,11 +1,14 @@
 from typing import Any, Literal
 from datetime import date
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 
 class LoginRequest(BaseModel):
-    account: str = Field(min_length=1)
+    account: str = Field(
+        min_length=1,
+        validation_alias=AliasChoices("account", "studentId", "student_id", "username"),
+    )
     password: str | None = Field(default=None, min_length=1)
     encrypted_password: str | None = Field(default=None, alias="encryptedPassword")
     key_id: str | None = Field(default=None, alias="keyId")
@@ -373,12 +376,18 @@ class ErrorResponse(BaseModel):
 
 
 class EhallLoginRequest(BaseModel):
-    account: str = Field(min_length=1)
+    account: str = Field(
+        min_length=1,
+        validation_alias=AliasChoices("account", "studentId", "student_id", "username"),
+    )
     password: str = Field(min_length=1)
 
 
 class AutoLoginRequest(BaseModel):
-    account: str = Field(min_length=1)
+    account: str = Field(
+        min_length=1,
+        validation_alias=AliasChoices("account", "studentId", "student_id", "username"),
+    )
     password: str | None = Field(default=None, min_length=1)
     encrypted_password: str | None = Field(default=None, alias="encryptedPassword")
     key_id: str | None = Field(default=None, alias="keyId")

@@ -82,17 +82,26 @@ def _message_extras(message: dict) -> dict:
 
 @ws_router.websocket("/ws/notifications")
 async def websocket_notifications(websocket: WebSocket, sessionId: str | None = None) -> None:
-    await websocket.accept()
     if not sessionId:
         await websocket.close(code=4001, reason="会话无效")
         return
     sessions = websocket.app.state.sessions
-    session = sessions.get(sessionId)
+    session = sessions.get(sessionId, touch=False)
     if session is None:
+        logger.warning("websocket_notifications: session %s not found", sessionId[:8])
         await websocket.close(code=4001, reason="会话已过期")
         return
+    if session.revoked_at is not None:
+        logger.info(
+            "websocket_notifications: session %s revoked (reason=%s)",
+            session.id[:8],
+            session.revoked_reason,
+        )
+        await websocket.close(code=4001, reason="账号已在其他设备登录，请重新登录")
+        return
     manager: ConnectionManager = websocket.app.state.ws_manager
-    manager.active[session.id] = websocket
+    await manager.connect(websocket, session.id)
+    sessions.touch(session.id)
     try:
         while True:
             try:

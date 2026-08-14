@@ -198,8 +198,8 @@ def ly_sso_complete(payload: SsoCompleteRequest, request: Request) -> dict:
         with httpx.Client(follow_redirects=True, timeout=settings.cas_login_timeout_seconds) as http_client:
             response = http_client.get(redirect_url)
             response.raise_for_status()
-            # Extract cookies for the configured JWXT domain, including parent-domain cookies.
-            jwxt_host = urlparse(settings.jwxt_sso_service_url).hostname or "jwxt.gzus.edu.cn"
+            # Extract cookies for the configured JWXT domain
+            jwxt_host = (urlparse(settings.jwxt_sso_service_url).hostname or "jwxt.gzus.edu.cn").lower()
             cookie_parts = []
             seen_keys = set()
             for cookie in http_client.cookies.jar:
@@ -294,16 +294,9 @@ def relogin(payload: ReloginRequest, request: Request) -> dict:
             timeout_seconds=settings.request_timeout_seconds,
         )
 
-    # Generate a fresh Fernet credential token for server-side auto-relogin.
-    # The frontend's credential_token may be AES-GCM (from Worker), which
-    # Vercel cannot decrypt.  We need our own Fernet token stored in the session.
-    from app.sessions import encrypt_credentials as _encrypt_creds
-    fernet_token = _encrypt_creds(account, password, settings.credential_encryption_key)
-
     session = sessions.create(
         client, student_name=student_name,
         ehall_client=ehall_client,
-        encrypted_credentials=fernet_token,
         student_account=account,
     )
 
@@ -386,7 +379,6 @@ def auto_login(payload: AutoLoginRequest, request: Request) -> dict:
     session = sessions.create(
         client, student_name,
         ehall_client=ehall_client,
-        encrypted_credentials=cred_token,
         student_account=payload.account,
     )
 

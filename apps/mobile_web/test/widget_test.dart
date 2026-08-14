@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gzus_pro_mobile_web/main.dart';
 import 'package:gzus_pro_mobile_web/api_client.dart';
@@ -14,6 +15,10 @@ import 'package:http/testing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  setUp(() {
+    FlutterSecureStorage.setMockInitialValues({});
+  });
+
   test('course reminders include start and end slots', () {
     final course = ScheduleCourse.fromJson({
       'name': '高等数学',
@@ -515,16 +520,49 @@ void main() {
       return http.Response('not found', 404);
     }));
 
-    await api.savePasswordCredentials(
-      '2024000000',
-      'sample-password',
-      remember: true,
-    );
+    await api.rememberAccount('2024000000');
     final prefs = await SharedPreferences.getInstance();
 
     expect(prefs.getBool('auth.rememberPassword'), isTrue);
     expect(prefs.getString('auth.account'), '2024000000');
     expect(prefs.getString('auth.password'), isNull);
+  });
+
+  test('api stores auto-login credential in secure storage', () async {
+    SharedPreferences.setMockInitialValues({});
+    final api = ApiClient(httpClient: MockClient((request) async {
+      return http.Response('not found', 404);
+    }));
+
+    await api.saveCredentialToken('secure-credential');
+    final prefs = await SharedPreferences.getInstance();
+    const secureStorage = FlutterSecureStorage();
+
+    expect(prefs.getString('auth.credentialToken'), isNull);
+    expect(
+      await secureStorage.read(key: 'auth.credentialToken'),
+      'secure-credential',
+    );
+  });
+
+  test('session cleanup keeps the active session id after local clear', () async {
+    SharedPreferences.setMockInitialValues({});
+    final requestedPaths = <String>[];
+    final api = ApiClient(
+      baseUrl: 'https://api.example.test',
+      httpClient: MockClient((request) async {
+        requestedPaths.add(request.url.path);
+        expect(request.headers['X-Session-Id'], 'active-session');
+        return http.Response(jsonEncode({'status': 'ok'}), 200);
+      }),
+    );
+    api.useSession('active-session');
+    api.clearCredentials();
+
+    await api.unregisterPushForSession('active-session');
+    await api.revokeSession('active-session');
+
+    expect(requestedPaths, ['/push/unregister', '/auth/logout']);
   });
 
   test('native academic reads prefer direct school endpoint', () async {
@@ -563,7 +601,7 @@ void main() {
         return http.Response('unexpected api call', 500);
       }),
     )..setJwxtCookies('JSESSIONID=direct');
-    await api.savePasswordCredentials('2024000000', 'secret', remember: false);
+    await api.rememberAccount('2024000000');
 
     final result = await api.schedule(year: 2026, term: 2, forceRefresh: true);
 
@@ -600,7 +638,7 @@ void main() {
         );
       }),
     )..setJwxtCookies('JSESSIONID=direct');
-    await api.savePasswordCredentials('2024000000', 'secret', remember: false);
+    await api.rememberAccount('2024000000');
 
     final result = await api.grades(year: 2026, term: 2, forceRefresh: true);
 

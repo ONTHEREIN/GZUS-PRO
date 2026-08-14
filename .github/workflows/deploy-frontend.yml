@@ -53,10 +53,13 @@ jobs:
         run: |
           set -x
           test -f apps/mobile_web/build/web/main.dart.js
+          test -f apps/mobile_web/build/web/gzus_pwa.js
+          test -f apps/mobile_web/build/web/gzus_pwa_sw.js
           test -f apps/mobile_web/build/web/canvaskit/canvaskit.js
           test -f apps/mobile_web/build/web/canvaskit/canvaskit.wasm
           test -f apps/mobile_web/build/web/canvaskit/chromium/canvaskit.js
           test -f apps/mobile_web/build/web/canvaskit/chromium/canvaskit.wasm
+          test -f apps/mobile_web/build/web/assets/fonts/MaterialIcons-Regular.otf
           test -n "$(find apps/mobile_web/build/web -maxdepth 1 -name 'main.dart.js_*.part.js' -print -quit)"
           test -f apps/mobile_web/build/web/icons/icon-192x192.png
           test -f apps/mobile_web/build/web/icons/icon-512x512.png
@@ -79,31 +82,43 @@ jobs:
       - name: Verify live static assets
         run: |
           set -euo pipefail
+          part_asset="$(find apps/mobile_web/build/web -maxdepth 1 -name 'main.dart.js_*.part.js' -printf '%f\n' | sort -V | head -n 1)"
+          test -n "$part_asset"
           check_asset() {
             local base_url="$1"
             local path="$2"
             local expected="$3"
+            local attempt
             local headers
-            headers="$(mktemp)"
-            curl -fsSL -D "$headers" -o /tmp/onegzus-asset "$base_url$path"
             local content_type
-            content_type="$(grep -i '^content-type:' "$headers" | tail -1 | tr -d '\r' | cut -d: -f2- | xargs)"
-            echo "$base_url$path -> $content_type ($(wc -c < /tmp/onegzus-asset) bytes)"
-            if echo "$content_type" | grep -qi 'text/html'; then
-              echo "::error::$base_url$path returned HTML instead of $expected"
-              exit 1
-            fi
-            if ! echo "$content_type" | grep -qi "$expected"; then
-              echo "::error::$base_url$path returned unexpected content type: $content_type"
-              exit 1
-            fi
+            for attempt in 1 2 3 4 5; do
+              headers="$(mktemp)"
+              if curl -fsSL -D "$headers" -o /tmp/onegzus-asset "$base_url$path"; then
+                content_type="$(grep -i '^content-type:' "$headers" | tail -1 | tr -d '\r' | cut -d: -f2- | xargs)"
+                echo "$base_url$path -> $content_type ($(wc -c < /tmp/onegzus-asset) bytes)"
+                if echo "$content_type" | grep -qi 'text/html'; then
+                  echo "$base_url$path returned HTML instead of $expected; retrying ($attempt/5)"
+                elif echo "$content_type" | grep -qi "$expected"; then
+                  return 0
+                else
+                  echo "$base_url$path returned unexpected content type: $content_type; retrying ($attempt/5)"
+                fi
+              else
+                echo "$base_url$path is not available yet; retrying ($attempt/5)"
+              fi
+              sleep 6
+            done
+            echo "::error::$base_url$path did not become available as $expected"
+            exit 1
           }
           for base in "https://onegzus.cc.cd" "https://onegzus-onweb.pages.dev"; do
             check_asset "$base" "/main.dart.js" "javascript"
-            check_asset "$base" "/main.dart.js_1.part.js" "javascript"
+            check_asset "$base" "/$part_asset" "javascript"
             check_asset "$base" "/flutter_bootstrap.js" "javascript"
+            check_asset "$base" "/gzus_pwa.js" "javascript"
             check_asset "$base" "/gzus_pwa_sw.js" "javascript"
             check_asset "$base" "/manifest.json" "json"
+            check_asset "$base" "/assets/fonts/MaterialIcons-Regular.otf" "font\\|octet-stream"
             check_asset "$base" "/canvaskit/canvaskit.js" "javascript"
             check_asset "$base" "/canvaskit/canvaskit.wasm" "wasm"
             check_asset "$base" "/canvaskit/chromium/canvaskit.js" "javascript"

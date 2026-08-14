@@ -2,7 +2,6 @@
 天气代理端点 — 将 wttr.in API 封装到后端，提供统一的天气数据接口。
 """
 
-import asyncio
 import time
 from datetime import datetime
 from typing import Any
@@ -116,8 +115,6 @@ def _transform_wttr(data: dict[str, Any]) -> dict[str, Any]:
 
     area_name = _first_value(nearest.get("areaName", []), "value")
     region = _first_value(nearest.get("region", []), "value")
-    country = _first_value(nearest.get("country", []), "value")
-
     province = region or "广东"
     city = area_name or "广州"
     district = area_name if area_name else "广州"
@@ -224,7 +221,7 @@ async def get_weather(
             # wttr.in 超时但缓存仍在，返回过期缓存
             return JSONResponse(content=stale[0])
         raise
-    except httpx.HTTPStatusError as e:
+    except httpx.HTTPStatusError:
         # wttr.in 服务端错误
         stale = _cache.get(key)
         if stale is not None:

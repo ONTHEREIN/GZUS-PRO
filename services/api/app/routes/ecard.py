@@ -10,7 +10,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.config import get_settings
-from app.database import EcardBinding, get_sync_session_factory
+from app.database import DataCache, EcardBinding, get_sync_session_factory
 from app.ecard_client import EcardApiError, EcardClient, EcardConfigurationError, EcardRoomRef
 from app.routes.deps import require_session
 from app.schemas import (
@@ -37,6 +37,8 @@ _rooms_cache_lock = threading.Lock()
 _rooms_cache: list[dict[str, str]] = []
 _rooms_cache_at: float = 0.0
 _ROOMS_CACHE_TTL = 3600  # seconds
+_ROOMS_PERSISTENT_CACHE_KEY = "ecard_rooms_all"
+_ROOMS_PERSISTENT_TTL = 24 * 3600
 _SUMMARY_CACHE_FIELDS = {
     "powerBalance",
     "powerUnit",
@@ -51,6 +53,54 @@ _SUMMARY_CACHE_FIELDS = {
 }
 
 
+def _load_rooms_persistent(max_age: int | None = None) -> list[dict[str, str]]:
+    try:
+        factory = get_sync_session_factory()
+        with factory() as db:
+            row = db.query(DataCache).filter(
+                DataCache.cache_key == _ROOMS_PERSISTENT_CACHE_KEY
+            ).first()
+            if row is None:
+                return []
+            if max_age is not None and row.cached_at is not None:
+                cached_at = row.cached_at
+                if cached_at.tzinfo is None:
+                    cached_at = cached_at.replace(tzinfo=timezone.utc)
+                age = (datetime.now(timezone.utc) - cached_at).total_seconds()
+                if age > max_age:
+                    return []
+            data = json.loads(row.response_json)
+            if not isinstance(data, list):
+                return []
+            return [item for item in data if isinstance(item, dict)]
+    except Exception as exc:
+        logger.warning("ecard: load persistent rooms cache failed: %s", exc)
+        return []
+
+
+def _save_rooms_persistent(rooms: list[dict[str, str]]) -> None:
+    try:
+        factory = get_sync_session_factory()
+        with factory() as db:
+            row = db.query(DataCache).filter(
+                DataCache.cache_key == _ROOMS_PERSISTENT_CACHE_KEY
+            ).first()
+            payload = json.dumps(rooms, ensure_ascii=False)
+            if row is None:
+                db.add(DataCache(
+                    cache_key=_ROOMS_PERSISTENT_CACHE_KEY,
+                    student_id="",
+                    resource="ecard_rooms",
+                    response_json=payload,
+                ))
+            else:
+                row.response_json = payload
+                row.cached_at = datetime.now(timezone.utc)
+            db.commit()
+    except Exception as exc:
+        logger.warning("ecard: save persistent rooms cache failed: %s", exc)
+
+
 def _get_rooms_cached() -> list[dict[str, str]]:
     """Return the cached room list, refreshing if stale."""
     global _rooms_cache, _rooms_cache_at
@@ -61,6 +111,13 @@ def _get_rooms_cached() -> list[dict[str, str]]:
         if _rooms_cache and now - _rooms_cache_at < _ROOMS_CACHE_TTL:
             return _rooms_cache
 
+    persistent = _load_rooms_persistent(max_age=_ROOMS_PERSISTENT_TTL)
+    if persistent:
+        with _rooms_cache_lock:
+            _rooms_cache = persistent
+            _rooms_cache_at = now
+        return persistent
+
     # Cache miss – fetch from ecard API (outside lock to avoid blocking)
     try:
         fresh = _client().rooms()
@@ -70,17 +127,27 @@ def _get_rooms_cached() -> list[dict[str, str]]:
             if _rooms_cache:
                 logger.warning("ecard: rooms fetch failed, serving stale cache")
                 return _rooms_cache
+        persistent = _load_rooms_persistent()
+        if persistent:
+            logger.warning("ecard: rooms fetch failed, serving persistent cache")
+            with _rooms_cache_lock:
+                _rooms_cache = persistent
+                _rooms_cache_at = now
+            return persistent
         raise
 
     with _rooms_cache_lock:
         _rooms_cache = fresh
         _rooms_cache_at = now
+    _save_rooms_persistent(fresh)
     return fresh
 
 
 def _student_info(session: AppSession) -> tuple[str, str]:
-    # 优先从 session 缓存中获取学号，避免每次都请求教务系统
-    student_id = getattr(session.client, "_account", None) if session.client else None
+    # 优先使用会话持久化学号，其次客户端内存账号，避免每次都请求教务系统
+    student_id = session.student_account or (
+        getattr(session.client, "_account", None) if session.client else None
+    )
     if student_id:
         student_id = str(student_id)
     name = session.student_name or ""
@@ -344,8 +411,13 @@ def refresh(session: AppSession = Depends(require_session)) -> dict[str, Any]:
         except EcardConfigurationError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         except EcardApiError as exc:
-            logger.error("ecard: refresh failed for student=%s: %s", student_id, exc, exc_info=True)
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
+            logger.warning(
+                "ecard: refresh failed for student=%s, serving cached binding summary: %s",
+                student_id,
+                exc,
+                exc_info=True,
+            )
+            return _summary_from_binding(binding, student_id)
         db.commit()
         db.refresh(binding)
         return _summary_from_binding(binding, student_id)
@@ -427,11 +499,11 @@ def consumption(
     except EcardConfigurationError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except EcardApiError as exc:
-        logger.error(
-            "ecard: consumption failed for student=%s month=%s: %s",
+        logger.warning(
+            "ecard: consumption unavailable for student=%s month=%s: %s",
             student_id,
             query_month,
             exc,
             exc_info=True,
         )
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        return {"status": "limited", "message": "消费记录暂时不可用", "items": []}

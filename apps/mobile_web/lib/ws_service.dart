@@ -32,6 +32,10 @@ class WsService {
           '[WsService] Cannot connect: baseUrl=${_baseUrl ?? "unset"}, hasSession=${_sessionId != null}');
       return;
     }
+    if (kIsWeb) {
+      debugPrint('[WsService] Skipping connect on web; polling is enabled');
+      return;
+    }
     if (_isPaused) {
       debugPrint('[WsService] Skipping connect: app is paused');
       return;
