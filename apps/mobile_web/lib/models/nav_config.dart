@@ -3,6 +3,14 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../test_flags.dart';
 
+/// 账密登录时禁止导航到的 tab（这些功能依赖 ehall 一站式会话）。
+const passwordRestrictedTabs = {
+  'notices',
+  'business',
+  'applications',
+  'leave',
+};
+
 class NavTabConfig {
   const NavTabConfig({
     required this.tabId,
