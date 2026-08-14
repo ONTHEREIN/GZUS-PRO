@@ -1152,6 +1152,26 @@ function requireSessionsKV(env) {
   return env.SESSIONS_KV;
 }
 
+// 按会话 ID 查找 JWXT cookies：内存优先，KV 兜底并写回内存缓存。
+// 供 JWXT 代理、_proxy、getLocalSession 复用，避免三处重复查找逻辑。
+async function lookupSessionCookies(sessionId, env) {
+  const localData = localSessions.get(sessionId);
+  if (localData && localData.cookies) return localData.cookies;
+  try {
+    if (env && env.SESSIONS_KV) {
+      const raw = await env.SESSIONS_KV.get(`session:${sessionId}`);
+      if (raw) {
+        const data = JSON.parse(raw);
+        localSessions.set(sessionId, data); // cache for subsequent requests
+        return data.cookies;
+      }
+    }
+  } catch (e) {
+    console.warn(`[kv] 查找会话 cookies 失败 ${sessionId.slice(0, 8)}: ${e.message}`);
+  }
+  return null;
+}
+
 async function createPersistentSession(loginResult, account, env) {
   requireSessionsKV(env);
   let backendResult = null;
@@ -1494,23 +1514,7 @@ export default {
     // Worker's edge IP (JWXT cookies are IP-bounded).
     const jwxtSessionId = request.headers.get('X-Jwxt-Session-Id');
     if (jwxtSessionId && (url.pathname.startsWith('/jwglxt/') || url.pathname.startsWith('/xtgl/'))) {
-      let jwxtCookies = null;
-      // Look up cookies in memory first, then KV
-      const localData = localSessions.get(jwxtSessionId);
-      if (localData && localData.cookies) {
-        jwxtCookies = localData.cookies;
-      } else {
-        try {
-          if (env && env.SESSIONS_KV) {
-            const raw = await env.SESSIONS_KV.get(`session:${jwxtSessionId}`);
-            if (raw) {
-              const data = JSON.parse(raw);
-              jwxtCookies = data.cookies;
-              localSessions.set(jwxtSessionId, data); // cache
-            }
-          }
-        } catch (e) {}
-      }
+      const jwxtCookies = await lookupSessionCookies(jwxtSessionId, env);
       if (!jwxtCookies) {
         return new Response('JWXT session not found', { status: 502 });
       }
@@ -1602,19 +1606,7 @@ export default {
         let cookies = null;
         const parsedTarget = new URL(targetUrl);
         if (session_id) {
-          const localData = localSessions.get(session_id);
-          if (localData && localData.cookies) {
-            cookies = localData.cookies;
-          } else if (env && env.SESSIONS_KV) {
-            try {
-              const raw = await env.SESSIONS_KV.get(`session:${session_id}`);
-              if (raw) {
-                const data = JSON.parse(raw);
-                cookies = data.cookies;
-                localSessions.set(session_id, data);
-              }
-            } catch (e) {}
-          }
+          cookies = await lookupSessionCookies(session_id, env);
           if (!cookies) {
             return new Response('JWXT session cookies not found', { status: 502 });
           }
