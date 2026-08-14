@@ -133,14 +133,37 @@ ruff check .
 
 | File | Purpose |
 |---|---|
-| `main.dart` | Main app — all page UI (very large single file) |
+| `main.dart` | App shell — 入口、`OneGzusApp`、`DashboardShell`(导航壳/登录/加载/侧栏/底部导航)。页面 UI 已拆到 `pages/`。 |
 | `api_client.dart` | API client — all API calls, session management |
 | `gzus_design.dart` | Design theme / UI components |
-| `schedule_utils.dart` | 课表/日期共享工具 (`mondayOf`/`weekFromDate`/`dateText`/`scheduleTimes`) |
+| `schedule_utils.dart` | 课表/日期共享工具 (`mondayOf`/`weekFromDate`/`dateText`/`scheduleTimes`/`defaultFirstWeekStart`) |
 | `services_deferred.dart` | Deferred loading service module config |
 | `ws_service.dart` | WebSocket client |
 | `push_service.dart` | Push notification registration |
 | `web_push_service.dart` | Web Push (with `_web.dart` / `_stub.dart` variants) |
+| `test_flags.dart` | 测试开关 (`debugHideEcardForTests` / `hideEcardOnCurrentPlatform`)，main.dart 通过 `export` 保持兼容 |
+
+#### 页面模块 (`lib/pages/`)
+| 目录 | 页面 |
+|---|---|
+| `home/` | `HomePage` + 首页卡片组 + `HomeWidgetBridge`/`NotificationOpenBridge` |
+| `schedule/` | `SchedulePage` + `TimetableView` 等课表组件 |
+| `ecard/` | `EcardPage` 一卡通/水电费 |
+| `grades/` | `GradesPage` 成绩 |
+| `exams/` | `ExamsPage` 考试 |
+| `attendance/` | `AttendancePage` 考勤 |
+| `credits/` | `CreditsPage` 学分 |
+| `notices/` | `NoticesPage` 通知 |
+| `applications/` | `ApplicationsPage` 应用 |
+| `business/` | `BusinessPage` 业务 |
+| `info/` | `InfoPage` 个人信息 |
+| `leave/` | `AutoLeavePage` 自动请假 |
+| `ftp/` | `FtpUploadPage` 作业上传 |
+| `more/` | `MorePage` + 关于/桌面组件引导页 |
+
+#### 共享层 (`lib/widgets/` 与 `lib/models/`)
+- `widgets/`：`PagePanel`/`AsyncPanel`/`PageRefresh`、`EmptyState`、`StatusPill`/`IconBadge`/`MetricPill`、`SimpleTable`/`MobileRecordCard`、`ProgressCategoryStrip` 等跨页组件
+- `models/`：`NavTabConfig`/`NavPreferences`、`HomeModuleConfig`/`HomePreferences`、`GradeAttempt`/`GradeGroup` 及成绩考试共享 helper (`courseKey`/`compareExamsByTime` 等)
 
 ### API route modules (`services/api/app/routes/`)
 
