@@ -4,41 +4,25 @@ import logging
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+from app.cache_service import ExamReminderCache, GradeUpdateCache, NoticeCache
 from app.config import get_settings
 from app.database import EcardBinding, PushRegistration, get_sync_session_factory
 from app.ecard_client import EcardApiError, EcardClient, EcardConfigurationError, EcardRoomRef, safe_float
 from app.notice_utils import is_valid_notice_item, normalize_notice_item, valid_notice_items
 from app.push import send_push, send_web_push_to_student
 
+__all__ = [
+    "ExamReminderCache",
+    "GradeUpdateCache",
+    "NoticeCache",
+    "run_ecard_reminder_once",
+    "run_ecard_reminder_poller",
+    "run_exam_reminder_poller",
+    "run_grade_update_poller",
+    "run_notice_poller",
+]
+
 logger = logging.getLogger(__name__)
-
-
-class NoticeCache:
-    def __init__(self) -> None:
-        self._titles_by_session: dict[str, set[str]] = {}
-
-    def get_cached_titles(self, session_id: str) -> set[str]:
-        return set(self._titles_by_session.get(session_id, set()))
-
-    def update(self, session_id: str, titles: set[str]) -> None:
-        self._titles_by_session[session_id] = set(titles)
-
-    def remove(self, session_id: str) -> None:
-        self._titles_by_session.pop(session_id, None)
-
-
-class GradeUpdateCache:
-    def __init__(self) -> None:
-        self._grades_by_student: dict[str, dict[str, str]] = {}
-
-    def get(self, student_id: str) -> dict[str, str]:
-        return dict(self._grades_by_student.get(student_id, {}))
-
-    def update(self, student_id: str, grades: dict[str, str]) -> None:
-        self._grades_by_student[student_id] = dict(grades)
-
-    def remove(self, student_id: str) -> None:
-        self._grades_by_student.pop(student_id, None)
 
 
 def _notice_key(item: dict) -> str:
@@ -426,22 +410,6 @@ async def run_ecard_reminder_poller(app) -> None:
         next_at = _next_reminder_at(now, list(all_times) if all_times else None)
         await asyncio.sleep(max(1, (next_at - now).total_seconds()))
         await run_ecard_reminder_once(app)
-
-
-class ExamReminderCache:
-    def __init__(self) -> None:
-        self._reminded: dict[str, set[str]] = {}
-
-    def is_reminded(self, session_id: str, exam_key: str) -> bool:
-        return exam_key in self._reminded.get(session_id, set())
-
-    def mark_reminded(self, session_id: str, exam_key: str) -> None:
-        if session_id not in self._reminded:
-            self._reminded[session_id] = set()
-        self._reminded[session_id].add(exam_key)
-
-    def remove(self, session_id: str) -> None:
-        self._reminded.pop(session_id, None)
 
 
 def _exam_key(item: dict) -> str:

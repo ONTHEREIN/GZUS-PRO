@@ -3,20 +3,20 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
+from app.cache_service import ExamReminderCache, GradeUpdateCache, NoticeCache
 from app.config import get_settings
 from app.database import get_sync_session_factory, init_db
-from app.jobs import ExamReminderCache, GradeUpdateCache, NoticeCache, run_ecard_reminder_poller, run_exam_reminder_poller, run_grade_update_poller, run_notice_poller
 from app.rate_limit import limiter
 from app.routes import academic, auth, ecard, ehall, push, weather
 from app.rsa_keys import rsa_key_manager
-from app.sessions import SessionStore
+from app.sessions import SessionStore, SessionStoreUnavailableError
 from app.ws import ConnectionManager, ws_router
 
 IS_VERCEL = os.environ.get("VERCEL") == "1"
@@ -38,6 +38,13 @@ def _security_headers(settings) -> dict[str, str]:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     if not IS_VERCEL:
+        # 轮询器仅本地开发运行；延迟导入避免 Vercel 冷启动加载 jobs 依赖链
+        from app.jobs import (
+            run_ecard_reminder_poller,
+            run_exam_reminder_poller,
+            run_grade_update_poller,
+            run_notice_poller,
+        )
         init_db()
         poller_task = asyncio.create_task(run_notice_poller(app))
         ecard_task = asyncio.create_task(run_ecard_reminder_poller(app))
@@ -126,6 +133,26 @@ def create_app() -> FastAPI:
         return JSONResponse(
             status_code=500,
             content={"detail": "服务器内部错误，请稍后重试"},
+        )
+
+    @app.exception_handler(SessionStoreUnavailableError)
+    async def session_store_exception_handler(
+        request: Request,
+        exc: SessionStoreUnavailableError,
+    ) -> JSONResponse:
+        logger = logging.getLogger("app.main")
+        logger.error(
+            "Session storage unavailable",
+            extra={
+                "method": request.method,
+                "path": request.url.path,
+                "error_type": type(exc).__name__,
+            },
+            exc_info=True,
+        )
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={"detail": "会话服务暂时不可用，请稍后重试"},
         )
 
     app.include_router(auth.router)
