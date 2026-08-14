@@ -36,10 +36,22 @@ import 'update_service.dart' deferred as update_service;
 import 'web_pwa_cache.dart' deferred as web_pwa_cache;
 import 'push_service.dart' deferred as push_service;
 
-@visibleForTesting
-bool debugHideEcardForTests = false;
+import 'models/grade_models.dart';
+import 'models/home_config.dart';
+import 'models/nav_config.dart';
+import 'test_flags.dart';
+import 'widgets/async_panel.dart';
+import 'widgets/badges.dart';
+import 'widgets/data_table.dart';
+import 'widgets/empty_state.dart';
+import 'widgets/info_tile.dart';
+import 'widgets/meta_text.dart';
+import 'widgets/open_browser.dart';
+import 'widgets/page_panel.dart';
+import 'widgets/scale_tap.dart';
+import 'widgets/web_unsupported.dart';
 
-bool get _hideEcardOnCurrentPlatform => debugHideEcardForTests;
+export 'test_flags.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -865,7 +877,7 @@ class _LoginPageState extends State<LoginPage>
                                       width: compact ? 44 : 48,
                                       height: compact ? 44 : 48,
                                       decoration: BoxDecoration(
-                                        color: _accentFill(context),
+                                        color: accentFill(context),
                                         borderRadius: BorderRadius.circular(14),
                                       ),
                                       child: Center(
@@ -938,7 +950,7 @@ class _LoginPageState extends State<LoginPage>
                                           const SizedBox(width: 8),
                                           Expanded(
                                             child: Text(
-                                              _hideEcardOnCurrentPlatform
+                                              hideEcardOnCurrentPlatform
                                                   ? '登录后自动同步课表、考勤、成绩与通知'
                                                   : '登录后自动同步课表、考勤、成绩、通知与生活缴费',
                                               style: Theme.of(context)
@@ -1776,7 +1788,7 @@ class _DashboardShellState extends State<DashboardShell> {
                           padding: const EdgeInsets.fromLTRB(14, 4, 14, 6),
                           child: Column(
                             children: [
-                              _FrostedBanner(
+                              FrostedBanner(
                                 padding:
                                     const EdgeInsets.fromLTRB(14, 2, 14, 2),
                                 child: Row(
@@ -1820,7 +1832,7 @@ class _DashboardShellState extends State<DashboardShell> {
                               ),
                               if (_mobileHeaderToolsVisible) ...[
                                 const SizedBox(height: 8),
-                                _FrostedBanner(
+                                FrostedBanner(
                                   padding: const EdgeInsets.symmetric(
                                       horizontal: 10, vertical: 6),
                                   child: Row(
@@ -2043,7 +2055,7 @@ class _DashboardShellState extends State<DashboardShell> {
   /// 账密登录时过滤掉依赖办事大厅的功能标签
   List<NavTabConfig> _filterRestrictedTabs(List<NavTabConfig> tabs) {
     return tabs
-        .where((t) => !_hideEcardOnCurrentPlatform || t.tabId != 'ecard')
+        .where((t) => !hideEcardOnCurrentPlatform || t.tabId != 'ecard')
         .where((t) =>
             !widget.isPasswordLogin ||
             !DashboardShell.passwordRestrictedTabs.contains(t.tabId))
@@ -2091,8 +2103,8 @@ class _DashboardShellState extends State<DashboardShell> {
             term: term,
             onSessionExpired: widget.onLogout);
       case 'leave':
-        if (_hideEcardOnCurrentPlatform) {
-          return const _WebUnsupportedPage(
+        if (hideEcardOnCurrentPlatform) {
+          return const WebUnsupportedPage(
             title: '自动请假',
             icon: Icons.fact_check,
             message: '自动请假功能需要在手机 App 中使用，Web 端暂不支持自动填写表单。',
@@ -2162,7 +2174,7 @@ class _DashboardShellState extends State<DashboardShell> {
   }
 
   void _navigateToTab(String tabId) {
-    if (_hideEcardOnCurrentPlatform && tabId == 'ecard') return;
+    if (hideEcardOnCurrentPlatform && tabId == 'ecard') return;
     // 账密登录时阻止导航到受限功能
     if (widget.isPasswordLogin &&
         DashboardShell.passwordRestrictedTabs.contains(tabId)) {
@@ -2203,7 +2215,7 @@ class _DashboardShellState extends State<DashboardShell> {
     }
     final url = event.url;
     if (url != null && url.isNotEmpty) {
-      unawaited(_openInAppBrowser(context, url));
+      unawaited(openInAppBrowser(context, url));
     }
   }
 
@@ -2370,7 +2382,7 @@ class AppSidebar extends StatelessWidget {
                       width: 44,
                       height: 44,
                       decoration: BoxDecoration(
-                        color: _accentFill(context),
+                        color: accentFill(context),
                         borderRadius: BorderRadius.circular(14),
                       ),
                       child: const Center(
@@ -2431,7 +2443,7 @@ class AppSidebar extends StatelessWidget {
                       vertical: 10,
                     ),
                     decoration: BoxDecoration(
-                      color: active ? _accentFill(context) : Colors.transparent,
+                      color: active ? accentFill(context) : Colors.transparent,
                       borderRadius: BorderRadius.circular(GzusRadii.sm),
                     ),
                     child: Row(
@@ -2548,7 +2560,7 @@ class MobileNavBar extends StatelessWidget {
                           height: double.infinity,
                           decoration: BoxDecoration(
                             color: i == selected
-                                ? _accentFill(context)
+                                ? accentFill(context)
                                 : Colors.transparent,
                             borderRadius: BorderRadius.circular(20),
                           ),
@@ -2603,311 +2615,6 @@ List<NavTabConfig> _mobileNavTabs(List<NavTabConfig> tabs) {
   return result;
 }
 
-class NavTabConfig {
-  const NavTabConfig({
-    required this.tabId,
-    required this.icon,
-    required this.label,
-    this.shortLabel = '',
-    this.isFixed = false,
-  });
-
-  final String tabId;
-  final IconData icon;
-  final String label;
-  final String shortLabel;
-  final bool isFixed;
-
-  static const all = [
-    NavTabConfig(
-        tabId: 'home',
-        icon: Icons.home,
-        label: '首页',
-        shortLabel: '首页',
-        isFixed: true),
-    NavTabConfig(
-        tabId: 'info',
-        icon: Icons.badge,
-        label: '个人信息',
-        shortLabel: '信息',
-        isFixed: true),
-    NavTabConfig(
-        tabId: 'notices',
-        icon: Icons.notifications,
-        label: '通知',
-        shortLabel: '通知'),
-    NavTabConfig(
-        tabId: 'business', icon: Icons.apps, label: '业务', shortLabel: '业务'),
-    NavTabConfig(
-        tabId: 'applications',
-        icon: Icons.dashboard_customize,
-        label: '应用',
-        shortLabel: '应用'),
-    NavTabConfig(
-        tabId: 'schedule',
-        icon: Icons.calendar_month,
-        label: '课表',
-        shortLabel: '课表',
-        isFixed: true),
-    NavTabConfig(
-        tabId: 'leave',
-        icon: Icons.fact_check,
-        label: '自动请假',
-        shortLabel: '请假'),
-    NavTabConfig(
-        tabId: 'attendance',
-        icon: Icons.schedule,
-        label: '考勤',
-        shortLabel: '考勤'),
-    NavTabConfig(
-        tabId: 'exams', icon: Icons.assignment, label: '考试', shortLabel: '考试'),
-    NavTabConfig(
-        tabId: 'grades', icon: Icons.school, label: '成绩', shortLabel: '成绩'),
-    NavTabConfig(
-        tabId: 'credits',
-        icon: Icons.auto_stories,
-        label: '学分',
-        shortLabel: '学分'),
-    NavTabConfig(
-        tabId: 'ecard',
-        icon: Icons.water_drop,
-        label: '生活缴费',
-        shortLabel: '缴费'),
-    NavTabConfig(
-        tabId: 'ftpUpload',
-        icon: Icons.upload_file,
-        label: '作业上传',
-        shortLabel: '上传'),
-  ];
-
-  static List<NavTabConfig> get available => _hideEcardOnCurrentPlatform
-      ? all.where((tab) => tab.tabId != 'ecard').toList()
-      : all;
-
-  static const moreTab = NavTabConfig(
-      tabId: 'more',
-      icon: Icons.more_horiz,
-      label: '更多',
-      shortLabel: '更多',
-      isFixed: true);
-
-  static List<String> get defaultNavBar {
-    final ids = [
-      'home',
-      'info',
-      'applications',
-      'schedule',
-      'leave',
-      'attendance',
-      'exams',
-      'grades',
-      'credits',
-      if (!_hideEcardOnCurrentPlatform) 'ecard',
-      'more',
-    ];
-    return ids;
-  }
-
-  static List<NavTabConfig> get defaultTabs => defaultNavBar
-      .map((id) => id == 'more'
-          ? moreTab
-          : available.firstWhere((tab) => tab.tabId == id))
-      .toList();
-
-  Map<String, dynamic> toJson() => {
-        'tabId': tabId,
-        'icon': icon.codePoint,
-        'label': label,
-        'shortLabel': shortLabel,
-        'isFixed': isFixed,
-      };
-}
-
-class NavPreferences {
-  static const _key = 'nav_bar_config';
-  static const _autoHideKey = 'auto_hide_nav_bar';
-
-  static Future<List<String>> load() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getStringList(_key) ?? NavTabConfig.defaultNavBar;
-  }
-
-  static Future<void> save(List<String> tabIds) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setStringList(_key, tabIds);
-  }
-
-  static Future<void> reset() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_key);
-  }
-
-  static Future<bool> loadAutoHideNavBar() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool(_autoHideKey) ?? true;
-  }
-
-  static Future<void> saveAutoHideNavBar(bool value) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_autoHideKey, value);
-  }
-}
-
-class AsyncPanel<T> extends StatelessWidget {
-  const AsyncPanel({
-    super.key,
-    required this.future,
-    required this.builder,
-    this.emptyMessage = '暂无数据',
-    this.onSessionExpired,
-  });
-
-  final Future<T> future;
-  final Widget Function(T data) builder;
-  final String emptyMessage;
-  final VoidCallback? onSessionExpired;
-
-  @override
-  Widget build(BuildContext context) {
-    return FutureBuilder<T>(
-      future: future,
-      builder: (context, snapshot) {
-        if (snapshot.connectionState != ConnectionState.done) {
-          return const Center(child: CircularProgressIndicator());
-        }
-        if (snapshot.hasError) {
-          final error = snapshot.error;
-          // 不再在 401 时触发 onSessionExpired，_withFallback 已处理 relogin
-          return Center(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.error_outline,
-                      size: 48, color: Theme.of(context).colorScheme.error),
-                  const SizedBox(height: 12),
-                  Text(
-                    error is ApiException ? error.message : error.toString(),
-                    textAlign: TextAlign.center,
-                    style:
-                        TextStyle(color: Theme.of(context).colorScheme.error),
-                  ),
-                ],
-              ),
-            ),
-          );
-        }
-        final data = snapshot.data;
-        if (data is List && data.isEmpty) {
-          return ListView(
-            physics: const AlwaysScrollableScrollPhysics(),
-            children: [
-              SizedBox(
-                height: MediaQuery.sizeOf(context).height * 0.45,
-                child: EmptyState(message: emptyMessage),
-              ),
-            ],
-          );
-        }
-        return builder(data as T);
-      },
-    );
-  }
-}
-
-class PageRefresh extends StatelessWidget {
-  const PageRefresh({super.key, required this.onRefresh, required this.child});
-
-  final Future<void> Function() onRefresh;
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    return RefreshIndicator(
-      notificationPredicate: (notification) =>
-          notification.metrics.axis == Axis.vertical,
-      onRefresh: onRefresh,
-      child: child,
-    );
-  }
-}
-
-class HomeModuleConfig {
-  const HomeModuleConfig(this.id, this.label, this.icon);
-
-  final String id;
-  final String label;
-  final IconData icon;
-}
-
-class HomePreferences {
-  static const orderKey = 'home.moduleOrder';
-  static const hiddenKey = 'home.hiddenModules';
-  static const defaultModules = [
-    HomeModuleConfig('nextClass', '下一节课', Icons.watch_later),
-    HomeModuleConfig('todayTimeline', '今日时间线', Icons.view_timeline),
-    HomeModuleConfig('weekGrid', '周课表', Icons.grid_view),
-    HomeModuleConfig('dailyCourses', '今日课程', Icons.format_list_bulleted),
-    HomeModuleConfig('grades', '本学期成绩', Icons.school),
-    HomeModuleConfig('utilities', '水电余额', Icons.water_drop),
-    HomeModuleConfig('progress', '业务进度', Icons.route),
-    HomeModuleConfig('notifications', '通知摘要', Icons.notifications_active),
-    HomeModuleConfig('attendance', '考勤统计', Icons.fact_check),
-    HomeModuleConfig('credits', '学分进度', Icons.workspace_premium),
-    HomeModuleConfig('profile', '个人资料', Icons.badge),
-    HomeModuleConfig('apps', '常用服务', Icons.apps),
-  ];
-
-  static List<HomeModuleConfig> get availableModules =>
-      _hideEcardOnCurrentPlatform
-          ? defaultModules.where((item) => item.id != 'utilities').toList()
-          : defaultModules;
-
-  static List<String> get defaultModuleIds =>
-      availableModules.map((item) => item.id).toList();
-
-  static Future<List<String>> loadOrder() async {
-    final prefs = await SharedPreferences.getInstance();
-    final saved = prefs.getStringList(orderKey) ?? const [];
-    return _normalizeOrder(saved);
-  }
-
-  static Future<Set<String>> loadHidden() async {
-    final prefs = await SharedPreferences.getInstance();
-    return (prefs.getStringList(hiddenKey) ?? const []).toSet();
-  }
-
-  static Future<void> save({
-    required List<String> order,
-    required Set<String> hidden,
-  }) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setStringList(orderKey, _normalizeOrder(order));
-    await prefs.setStringList(hiddenKey, hidden.toList());
-  }
-
-  static Future<void> reset() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(orderKey);
-    await prefs.remove(hiddenKey);
-  }
-
-  static List<String> _normalizeOrder(List<String> value) {
-    final validIds = availableModules.map((item) => item.id).toSet();
-    final result = <String>[];
-    for (final id in value) {
-      if (validIds.contains(id) && !result.contains(id)) result.add(id);
-    }
-    for (final config in availableModules) {
-      if (!result.contains(config.id)) result.add(config.id);
-    }
-    return result;
-  }
-
-  static HomeModuleConfig configFor(String id) =>
-      availableModules.firstWhere((item) => item.id == id);
-}
 
 class _HomeDashboardData {
   const _HomeDashboardData({
@@ -3562,7 +3269,7 @@ class _HomePageState extends State<HomePage> {
           },
         );
       case 'utilities':
-        if (_hideEcardOnCurrentPlatform) return const SizedBox.shrink();
+        if (hideEcardOnCurrentPlatform) return const SizedBox.shrink();
         return _AsyncModuleCard<EcardSummary>(
           future: _ecardFuture,
           title: '水电余额',
@@ -4044,53 +3751,6 @@ class _StaggeredAppearState extends State<_StaggeredAppear>
   }
 }
 
-class _ScaleTap extends StatefulWidget {
-  const _ScaleTap(
-      {required this.onTap, required this.child, this.borderRadius});
-  final VoidCallback? onTap;
-  final Widget child;
-  final BorderRadius? borderRadius;
-
-  @override
-  State<_ScaleTap> createState() => _ScaleTapState();
-}
-
-class _ScaleTapState extends State<_ScaleTap>
-    with SingleTickerProviderStateMixin {
-  late final _controller = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 120),
-    lowerBound: 0.0,
-    upperBound: 1.0,
-  );
-  late final _scaleAnim = Tween<double>(begin: 1.0, end: 0.96).animate(
-    CurvedAnimation(parent: _controller, curve: Curves.easeInOut),
-  );
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  void _onTapDown(TapDownDetails _) => _controller.forward();
-  void _onTapUp(TapUpDetails _) => _controller.reverse();
-  void _onTapCancel() => _controller.reverse();
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTapDown: widget.onTap != null ? _onTapDown : null,
-      onTapUp: widget.onTap != null ? _onTapUp : null,
-      onTapCancel: widget.onTap != null ? _onTapCancel : null,
-      onTap: widget.onTap,
-      child: ScaleTransition(
-        scale: _scaleAnim,
-        child: widget.child,
-      ),
-    );
-  }
-}
 
 class _HomeCard extends StatelessWidget {
   const _HomeCard({
@@ -4134,7 +3794,7 @@ class _HomeCard extends StatelessWidget {
                     width: 34,
                     height: 34,
                     decoration: BoxDecoration(
-                      color: _accentFill(context),
+                      color: accentFill(context),
                       borderRadius: BorderRadius.circular(12),
                     ),
                     child: Icon(icon, size: 19, color: cs.primary),
@@ -4153,7 +3813,7 @@ class _HomeCard extends StatelessWidget {
                       padding: const EdgeInsets.symmetric(
                           horizontal: 8, vertical: 3),
                       decoration: BoxDecoration(
-                        color: _accentFill(context),
+                        color: accentFill(context),
                         borderRadius: BorderRadius.circular(999),
                       ),
                       child: Text(
@@ -4173,7 +3833,7 @@ class _HomeCard extends StatelessWidget {
           ),
         );
         if (onTap == null) return content;
-        return _ScaleTap(
+        return ScaleTap(
           onTap: onTap,
           borderRadius: BorderRadius.circular(GzusRadii.lg),
           child: content,
@@ -4183,52 +3843,6 @@ class _HomeCard extends StatelessWidget {
   }
 }
 
-class _WebUnsupportedPage extends StatelessWidget {
-  const _WebUnsupportedPage({
-    required this.title,
-    required this.icon,
-    required this.message,
-  });
-
-  final String title;
-  final IconData icon;
-  final String message;
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return PagePanel(
-      title: title,
-      icon: icon,
-      child: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(32),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.phone_android, size: 64, color: cs.onSurfaceVariant),
-              const SizedBox(height: 16),
-              Text(
-                '请使用手机 App',
-                style: Theme.of(context).textTheme.titleLarge,
-              ),
-              const SizedBox(height: 8),
-              Text(
-                message,
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: cs.onSurfaceVariant,
-                  fontSize: 14,
-                  height: 1.5,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
 
 class _TimedCourse {
   const _TimedCourse({
@@ -4640,7 +4254,7 @@ class _CompactCourseRow extends StatelessWidget {
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(fontWeight: FontWeight.w700)),
           ),
-          _StatusPill(
+          StatusPill(
             label: course.isOngoing ? '进行中' : '待开始',
             color: course.isOngoing ? cs.primary : cs.tertiary,
           ),
@@ -4936,7 +4550,7 @@ class _ProgressMiniRow extends StatelessWidget {
                 child: Align(
                   alignment: Alignment.centerRight,
                   child:
-                      _StatusPill(label: item.statusLabel, color: cs.primary),
+                      StatusPill(label: item.statusLabel, color: cs.primary),
                 ),
               ),
             ],
@@ -4990,7 +4604,7 @@ class _NoticeMiniRow extends StatelessWidget {
       padding: const EdgeInsets.only(bottom: 12),
       child: Row(
         children: [
-          const _IconBadge(icon: Icons.campaign, size: 34),
+          const IconBadge(icon: Icons.campaign, size: 34),
           const SizedBox(width: 10),
           Expanded(
             child: Column(
@@ -5188,7 +4802,7 @@ class _AppsHomeCard extends StatelessWidget {
                     width: 72,
                     child: Column(
                       children: [
-                        const _IconBadge(icon: Icons.dashboard_customize),
+                        const IconBadge(icon: Icons.dashboard_customize),
                         const SizedBox(height: 6),
                         Text(app.title,
                             maxLines: 2,
@@ -5745,28 +5359,6 @@ class _HomeMeta extends StatelessWidget {
   }
 }
 
-class _StatusPill extends StatelessWidget {
-  const _StatusPill({required this.label, required this.color});
-
-  final String label;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Text(label,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: TextStyle(
-              color: color, fontSize: 11, fontWeight: FontWeight.w800)),
-    );
-  }
-}
 
 class _StaticProgressBar extends StatelessWidget {
   const _StaticProgressBar({required this.value});
@@ -6328,7 +5920,7 @@ class _BusinessProgressSectionState extends State<_BusinessProgressSection> {
                     children: [
                       for (final item in filtered.take(5))
                         InkWell(
-                          onTap: () => _openInAppBrowser(context, item.url),
+                          onTap: () => openInAppBrowser(context, item.url),
                           child: _ProgressMiniRow(item: item),
                         ),
                     ],
@@ -8157,7 +7749,7 @@ class _BusinessItemTile extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const _IconBadge(icon: Icons.apps, size: 32),
+          const IconBadge(icon: Icons.apps, size: 32),
           const SizedBox(width: 10),
           Expanded(
             child: Column(
@@ -8177,10 +7769,10 @@ class _BusinessItemTile extends StatelessWidget {
                   runSpacing: 4,
                   children: [
                     if (item.department != null && item.department!.isNotEmpty)
-                      _MetaText(item.department!),
+                      MetaText(item.department!),
                     if (item.type != null && item.type!.isNotEmpty)
-                      _MetaText(item.type!),
-                    for (final tag in item.tags.take(2)) _MetaText(tag),
+                      MetaText(item.type!),
+                    for (final tag in item.tags.take(2)) MetaText(tag),
                   ],
                 ),
                 if (item.summary != null && item.summary!.isNotEmpty) ...[
@@ -8200,25 +7792,14 @@ class _BusinessItemTile extends StatelessWidget {
         ],
       ),
     );
-    return _ScaleTap(
-      onTap: () => _openInAppBrowser(context, item.url),
+    return ScaleTap(
+      onTap: () => openInAppBrowser(context, item.url),
       borderRadius: BorderRadius.circular(8),
       child: inner,
     );
   }
 }
 
-Future<void> _openInAppBrowser(BuildContext context, String? url) async {
-  if (url == null || url.isEmpty) return;
-  await mobile_sso.loadLibrary();
-  if (!context.mounted) return;
-  final opened = await mobile_sso.openAuthenticatedEhallUrl(context, url);
-  if (!opened && context.mounted) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('无法打开链接')),
-    );
-  }
-}
 
 class ApplicationsPage extends StatefulWidget {
   const ApplicationsPage({super.key, required this.api, this.onSessionExpired});
@@ -8497,7 +8078,7 @@ class _ApplicationItemTile extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const _IconBadge(icon: Icons.dashboard_customize, size: 32),
+          const IconBadge(icon: Icons.dashboard_customize, size: 32),
           const SizedBox(width: 10),
           Expanded(
             child: Column(
@@ -8517,10 +8098,10 @@ class _ApplicationItemTile extends StatelessWidget {
                   runSpacing: 4,
                   children: [
                     if (item.department != null && item.department!.isNotEmpty)
-                      _MetaText(item.department!),
+                      MetaText(item.department!),
                     if (item.type != null && item.type!.isNotEmpty)
-                      _MetaText(item.type!),
-                    for (final tag in item.tags.take(2)) _MetaText(tag),
+                      MetaText(item.type!),
+                    for (final tag in item.tags.take(2)) MetaText(tag),
                   ],
                 ),
                 if (item.summary != null && item.summary!.isNotEmpty) ...[
@@ -8540,8 +8121,8 @@ class _ApplicationItemTile extends StatelessWidget {
         ],
       ),
     );
-    return _ScaleTap(
-      onTap: () => _openInAppBrowser(context, item.url),
+    return ScaleTap(
+      onTap: () => openInAppBrowser(context, item.url),
       borderRadius: BorderRadius.circular(8),
       child: inner,
     );
@@ -8813,7 +8394,7 @@ class NoticeCard extends StatelessWidget {
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const _IconBadge(icon: Icons.info_outline, size: 32),
+                const IconBadge(icon: Icons.info_outline, size: 32),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Column(
@@ -8840,8 +8421,8 @@ class NoticeCard extends StatelessWidget {
                         spacing: 8,
                         runSpacing: 4,
                         children: [
-                          _MetaText(item.category),
-                          if (item.date != null) _MetaText(item.date!),
+                          MetaText(item.category),
+                          if (item.date != null) MetaText(item.date!),
                         ],
                       ),
                     ],
@@ -8863,7 +8444,7 @@ class NoticeCard extends StatelessWidget {
               Align(
                 alignment: Alignment.centerRight,
                 child: FilledButton.tonalIcon(
-                  onPressed: () => _openInAppBrowser(context, item.url),
+                  onPressed: () => openInAppBrowser(context, item.url),
                   icon: const Icon(Icons.open_in_new, size: 18),
                   label: const Text('打开通知'),
                 ),
@@ -8876,24 +8457,6 @@ class NoticeCard extends StatelessWidget {
   }
 }
 
-class _MetaText extends StatelessWidget {
-  const _MetaText(this.value);
-
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    return Text(
-      value,
-      maxLines: 1,
-      overflow: TextOverflow.ellipsis,
-      style: TextStyle(
-        fontSize: 12,
-        color: Theme.of(context).colorScheme.onSurfaceVariant,
-      ),
-    );
-  }
-}
 
 /// 课表开始界面 — 让刚登录的用户选择第一周开始日期
 class ScheduleOnboardingPage extends StatefulWidget {
@@ -9533,7 +9096,7 @@ class _SchedulePageState extends State<SchedulePage> {
                           width: 34,
                           height: 34,
                           decoration: BoxDecoration(
-                            color: _accentFill(context),
+                            color: accentFill(context),
                             borderRadius: BorderRadius.circular(10),
                           ),
                           child: Icon(Icons.tune,
@@ -10056,22 +9619,22 @@ class _ScheduleSummaryPanel extends StatelessWidget {
             spacing: 8,
             runSpacing: 8,
             children: [
-              _MetricPill(
+              MetricPill(
                   icon: Icons.today,
                   label: '今日',
                   value: '$todayCount节',
                   dense: true),
-              _MetricPill(
+              MetricPill(
                   icon: Icons.view_week,
                   label: '本周',
                   value: '$weekCount节',
                   dense: true),
-              _MetricPill(
+              MetricPill(
                   icon: Icons.list,
                   label: '全部',
                   value: '$totalCount门',
                   dense: true),
-              _MetricPill(
+              MetricPill(
                 icon: Icons.access_time,
                 label: '首周',
                 value: dateText(firstWeekStart),
@@ -11163,25 +10726,6 @@ class JsonPanel extends StatelessWidget {
   }
 }
 
-class GradeAttempt {
-  const GradeAttempt(this.period, this.grade);
-
-  final AcademicPeriod period;
-  final GradeItem grade;
-}
-
-class GradeGroup {
-  GradeGroup(GradeAttempt first) : attempts = [first];
-
-  final List<GradeAttempt> attempts;
-
-  GradeAttempt get first => attempts.first;
-  GradeAttempt get latest => attempts.last;
-  bool get hasRetake => attempts.length > 1;
-  String get displayName => hasRetake && !first.grade.courseName.contains('补')
-      ? '${first.grade.courseName}（补）'
-      : first.grade.courseName;
-}
 
 String _courseKey(String value) => value
     .replaceAll(RegExp(r'\s+'), '')
@@ -11191,8 +10735,6 @@ String _courseKey(String value) => value
 
 bool _hasRetakeText(String? value) => value?.contains('补') ?? false;
 
-Color _accentFill(BuildContext context) =>
-    Theme.of(context).colorScheme.primary.withValues(alpha: 0.12);
 
 Color _retakeFill(int index) {
   final alpha = (0.10 + index * 0.04).clamp(0.12, 0.26).toDouble();
@@ -11873,7 +11415,7 @@ class _AttendanceCard extends StatelessWidget {
                   ),
                 ),
               ),
-              _StatusPill(
+              StatusPill(
                 label: abnormal > 0 ? '异常 $abnormal' : '正常',
                 color: focusColor,
               ),
@@ -12543,7 +12085,7 @@ class ExamTable extends StatelessWidget {
           return Column(
             children: [
               for (final item in items)
-                _MobileRecordCard(
+                MobileRecordCard(
                   icon: item.isRetake ? Icons.warning : Icons.assignment,
                   title: item.displayName,
                   subtitle: '${item.period.label} · ${item.examKind}',
@@ -12897,7 +12439,7 @@ class GradeGroupList extends StatelessWidget {
           borderRadius: BorderRadius.circular(8),
           child: Column(
             children: [
-              _TableRow(
+              SimpleTableRow(
                 values: const ['课程', '成绩', '学分', '绩点'],
                 strong: true,
                 border: border,
@@ -12927,7 +12469,7 @@ class GradeMobileCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final latest = group.latest;
-    return _MobileRecordCard(
+    return MobileRecordCard(
       icon: group.hasRetake ? Icons.warning : Icons.school,
       title: group.displayName,
       subtitle: latest.period.label,
@@ -12939,7 +12481,7 @@ class GradeMobileCard extends StatelessWidget {
         if (group.hasRetake) (Icons.list, '记录', '${group.attempts.length} 次'),
       ],
       trailing: onExamTap != null
-          ? _ScaleTap(
+          ? ScaleTap(
               onTap: onExamTap,
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
@@ -13016,7 +12558,7 @@ class GradeGroupRow extends StatelessWidget {
       latest.grade.gradePoint ?? '-',
     ];
     if (!group.hasRetake) {
-      if (examTag == null) return _TableRow(values: values, border: border);
+      if (examTag == null) return SimpleTableRow(values: values, border: border);
       return Container(
         decoration: BoxDecoration(
           border: Border(bottom: border),
@@ -13047,11 +12589,11 @@ class GradeGroupRow extends StatelessWidget {
     }
     return Container(
       decoration: BoxDecoration(
-        color: _accentFill(context),
+        color: accentFill(context),
         border: Border(bottom: border),
       ),
       child: ExpansionTile(
-        title: _TableRowContent(
+        title: SimpleTableRowContent(
           values: values,
           color: Theme.of(context).colorScheme.primary,
           strong: true,
@@ -13280,7 +12822,7 @@ class CreditCard extends StatelessWidget {
           children: [
             Row(
               children: [
-                const _IconBadge(icon: Icons.auto_stories, size: 36),
+                const IconBadge(icon: Icons.auto_stories, size: 36),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
@@ -13369,86 +12911,6 @@ class _IconLabel extends StatelessWidget {
   }
 }
 
-class _IconBadge extends StatelessWidget {
-  const _IconBadge({required this.icon, this.size = 40});
-
-  final IconData icon;
-  final double size;
-
-  @override
-  Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-    return Container(
-      width: size,
-      height: size,
-      decoration: BoxDecoration(
-        color: colorScheme.primaryContainer,
-        borderRadius: BorderRadius.circular(size >= 38 ? 16 : 12),
-      ),
-      child:
-          Icon(icon, size: size * 0.48, color: colorScheme.onPrimaryContainer),
-    );
-  }
-}
-
-class _MetricPill extends StatelessWidget {
-  const _MetricPill({
-    required this.icon,
-    required this.label,
-    required this.value,
-    this.width,
-    this.dense = false,
-  });
-
-  final IconData icon;
-  final String label;
-  final String value;
-  final double? width;
-  final bool dense;
-
-  @override
-  Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-    final content = Container(
-      padding: EdgeInsets.symmetric(
-        horizontal: dense ? 8 : 12,
-        vertical: dense ? 6 : 9,
-      ),
-      decoration: BoxDecoration(
-        color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.62),
-        borderRadius: BorderRadius.circular(dense ? 12 : 16),
-      ),
-      child: Row(
-        mainAxisSize: width == null ? MainAxisSize.min : MainAxisSize.max,
-        children: [
-          Icon(icon, size: dense ? 13 : 15, color: colorScheme.primary),
-          SizedBox(width: dense ? 4 : 6),
-          Flexible(
-            child: Text(
-              dense ? '$label$value' : '$label $value',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontSize: dense ? 12 : null,
-                color: colorScheme.onSurface,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-    if (width != null) return SizedBox(width: width, child: content);
-    return ConstrainedBox(
-      constraints: BoxConstraints(
-        maxWidth: (MediaQuery.sizeOf(context).width - 56)
-            .clamp(136.0, 420.0)
-            .toDouble(),
-      ),
-      child: content,
-    );
-  }
-}
 
 class EcardPage extends StatefulWidget {
   const EcardPage({super.key, required this.api, this.onSessionExpired});
@@ -14440,549 +13902,6 @@ class _EcardConsumptionPanelState extends State<_EcardConsumptionPanel> {
   }
 }
 
-class _FrostedBanner extends StatelessWidget {
-  const _FrostedBanner({
-    required this.child,
-    this.padding = const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-  });
-
-  final Widget child;
-  final EdgeInsetsGeometry padding;
-
-  @override
-  Widget build(BuildContext context) {
-    final dark = Theme.of(context).brightness == Brightness.dark;
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(GzusRadii.lg),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-        child: Container(
-          padding: padding,
-          decoration: BoxDecoration(
-            color: gzusSurface(context).withValues(alpha: dark ? 0.62 : 0.72),
-            borderRadius: BorderRadius.circular(GzusRadii.lg),
-            border: Border.all(
-              color: Colors.white.withValues(alpha: dark ? 0.10 : 0.55),
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: dark ? 0.18 : 0.045),
-                blurRadius: 22,
-                offset: const Offset(0, 12),
-              ),
-            ],
-          ),
-          child: child,
-        ),
-      ),
-    );
-  }
-}
-
-class PagePanel extends StatelessWidget {
-  const PagePanel({
-    super.key,
-    required this.title,
-    required this.child,
-    this.expandChild = false,
-    this.icon,
-    this.trailing,
-  });
-
-  final String title;
-  final Widget child;
-  final bool expandChild;
-  final IconData? icon;
-  final Widget? trailing;
-
-  @override
-  Widget build(BuildContext context) {
-    final compact = MediaQuery.sizeOf(context).width < 600;
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-    final content = Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        _FrostedBanner(
-          padding: EdgeInsets.symmetric(
-            horizontal: compact ? 12 : 16,
-            vertical: compact ? 10 : 12,
-          ),
-          child: Row(
-            children: [
-              if (icon != null) ...[
-                Container(
-                  width: compact ? 34 : 42,
-                  height: compact ? 34 : 42,
-                  decoration: BoxDecoration(
-                    color: _accentFill(context),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Icon(icon!,
-                      size: compact ? 19 : 22, color: colorScheme.primary),
-                ),
-                SizedBox(width: compact ? 8 : 12),
-              ],
-              Expanded(
-                child: Text(
-                  title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: (compact
-                          ? theme.textTheme.titleLarge
-                          : theme.textTheme.headlineSmall)
-                      ?.copyWith(fontWeight: FontWeight.w800),
-                ),
-              ),
-              if (trailing != null) ...[
-                SizedBox(width: compact ? 8 : 12),
-                trailing!,
-              ],
-            ],
-          ),
-        ),
-        SizedBox(height: compact ? 6 : 14),
-        if (expandChild) Expanded(child: child) else child,
-      ],
-    );
-    return Padding(
-      padding: EdgeInsets.symmetric(
-        horizontal: compact ? 4 : 8,
-        vertical: compact ? 4 : 8,
-      ),
-      child: content,
-    );
-  }
-}
-
-class InfoTile extends StatelessWidget {
-  const InfoTile({
-    super.key,
-    required this.label,
-    required this.value,
-    this.icon,
-  });
-
-  final String label;
-  final String value;
-  final IconData? icon;
-
-  @override
-  Widget build(BuildContext context) {
-    final screenWidth = MediaQuery.sizeOf(context).width;
-    final compact = screenWidth < 600;
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-    final tileWidth = compact
-        ? ((screenWidth - 30) / 2).clamp(136.0, 220.0).toDouble()
-        : 220.0;
-    return SizedBox(
-      width: tileWidth,
-      height: compact ? 88 : 100,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 180),
-        padding: EdgeInsets.all(compact ? 10 : 14),
-        decoration: BoxDecoration(
-          color: gzusSurface(context),
-          borderRadius: BorderRadius.circular(compact ? 16 : 20),
-          border: Border.all(color: gzusBorder(context)),
-        ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (icon != null) ...[
-              Icon(icon, size: compact ? 18 : 22, color: colorScheme.primary),
-              SizedBox(width: compact ? 8 : 10),
-            ],
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    label,
-                    style: theme.textTheme.labelMedium?.copyWith(
-                      color: colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                  const SizedBox(height: 3),
-                  Text(
-                    value,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: (compact
-                            ? theme.textTheme.bodyMedium
-                            : theme.textTheme.titleMedium)
-                        ?.copyWith(fontWeight: FontWeight.w800),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class AccentPanel extends StatelessWidget {
-  const AccentPanel({super.key, required this.child});
-
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    final compact = MediaQuery.sizeOf(context).width < 600;
-    return Container(
-      padding: EdgeInsets.all(compact ? 12 : 16),
-      decoration: BoxDecoration(
-        color: gzusSurfaceSoft(context),
-        borderRadius: BorderRadius.circular(compact ? 16 : 20),
-        border: Border.all(color: gzusBorder(context)),
-      ),
-      child: child,
-    );
-  }
-}
-
-class _MobileRecordCard extends StatelessWidget {
-  const _MobileRecordCard({
-    required this.icon,
-    required this.title,
-    this.subtitle,
-    required this.rows,
-    this.highlight = false,
-    this.extraRows,
-    this.trailing,
-    this.highlighted = false,
-  });
-
-  final IconData icon;
-  final String title;
-  final String? subtitle;
-  final List<(IconData, String, String)> rows;
-  final bool highlight;
-  final List<Widget>? extraRows;
-  final Widget? trailing;
-  final bool highlighted;
-
-  @override
-  Widget build(BuildContext context) {
-    final compact = MediaQuery.sizeOf(context).width < 600;
-    final colorScheme = Theme.of(context).colorScheme;
-    final cardColor = highlighted
-        ? colorScheme.primaryContainer.withValues(alpha: 0.55)
-        : highlight
-            ? colorScheme.secondaryContainer.withValues(alpha: 0.5)
-            : null;
-    return Container(
-      margin: const EdgeInsets.symmetric(vertical: 6),
-      decoration: BoxDecoration(
-        color: cardColor ?? gzusSurface(context),
-        borderRadius: BorderRadius.circular(compact ? 16 : 20),
-        border: Border.all(color: gzusBorder(context)),
-      ),
-      child: Padding(
-        padding: EdgeInsets.all(compact ? 12 : 16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _IconBadge(icon: icon, size: compact ? 32 : 40),
-                SizedBox(width: compact ? 10 : 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              title,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                fontSize: compact ? 15 : 16,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                          ),
-                          if (trailing != null) ...[
-                            const SizedBox(width: 8),
-                            trailing!,
-                          ],
-                        ],
-                      ),
-                      if (subtitle != null) ...[
-                        const SizedBox(height: 4),
-                        Text(
-                          subtitle!,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: colorScheme.onSurfaceVariant,
-                            fontSize: compact ? 12 : 13,
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-              ],
-            ),
-            if (rows.isNotEmpty) ...[
-              SizedBox(height: compact ? 10 : 14),
-              LayoutBuilder(
-                builder: (context, constraints) {
-                  final itemWidth = compact
-                      ? ((constraints.maxWidth - 8) / 2).clamp(118.0, 220.0)
-                      : null;
-                  return Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      for (final row in rows)
-                        _MetricPill(
-                          icon: row.$1,
-                          label: row.$2,
-                          value: row.$3,
-                          width: itemWidth?.toDouble(),
-                          dense: compact,
-                        ),
-                    ],
-                  );
-                },
-              ),
-            ],
-            if (extraRows != null && extraRows!.isNotEmpty) ...[
-              SizedBox(height: compact ? 10 : 14),
-              ...extraRows!,
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class SimpleTable extends StatelessWidget {
-  const SimpleTable({
-    super.key,
-    required this.headers,
-    required this.rows,
-    this.highlightedRows = const {},
-    this.rowHighlightColors = const {},
-    this.rowTextColors = const {},
-    this.columnFlexs = const [],
-  });
-
-  final List<String> headers;
-  final List<List<String>> rows;
-  final Set<int> highlightedRows;
-  final Map<int, Color> rowHighlightColors;
-  final Map<int, Color> rowTextColors;
-  final List<int> columnFlexs;
-
-  @override
-  Widget build(BuildContext context) {
-    final border = BorderSide(color: gzusBorder(context));
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final minWidth = headers.length * 104.0;
-        final tableWidth = constraints.maxWidth.isFinite
-            ? constraints.maxWidth.clamp(minWidth, double.infinity).toDouble()
-            : minWidth;
-        return SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: SizedBox(
-            width: tableWidth,
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(16),
-              child: Column(
-                children: [
-                  _TableRow(
-                      values: headers,
-                      strong: true,
-                      border: border,
-                      columnFlexs: columnFlexs),
-                  for (var i = 0; i < rows.length; i++)
-                    _TableRow(
-                      values: rows[i],
-                      border: border,
-                      highlighted: highlightedRows.contains(i),
-                      highlightColor: rowHighlightColors[i],
-                      textColor: rowTextColors[i],
-                      columnFlexs: columnFlexs,
-                    ),
-                ],
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-}
-
-class _TableRow extends StatelessWidget {
-  const _TableRow(
-      {required this.values,
-      required this.border,
-      this.strong = false,
-      this.highlighted = false,
-      this.highlightColor,
-      this.textColor,
-      this.columnFlexs = const []});
-
-  final List<String> values;
-  final BorderSide border;
-  final bool strong;
-  final bool highlighted;
-  final Color? highlightColor;
-  final Color? textColor;
-  final List<int> columnFlexs;
-
-  @override
-  Widget build(BuildContext context) {
-    final accent = Theme.of(context).colorScheme.primary;
-    return Container(
-      decoration: BoxDecoration(
-        color: highlighted
-            ? highlightColor ?? _accentFill(context)
-            : strong
-                ? gzusSurfaceSoft(context)
-                : gzusSurface(context),
-        border: Border(bottom: border),
-      ),
-      child: _TableRowContent(
-        values: values,
-        color: highlighted ? textColor ?? accent : null,
-        strong: strong || highlighted,
-        columnFlexs: columnFlexs,
-      ),
-    );
-  }
-}
-
-class _TableRowContent extends StatelessWidget {
-  const _TableRowContent(
-      {required this.values,
-      this.color,
-      this.strong = false,
-      this.columnFlexs = const []});
-
-  final List<String> values;
-  final Color? color;
-  final bool strong;
-  final List<int> columnFlexs;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        for (var i = 0; i < values.length; i++)
-          Expanded(
-            flex: i < columnFlexs.length ? columnFlexs[i] : 1,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-              child: _AutoScrollText(
-                text: values[i],
-                style: TextStyle(
-                  color: color,
-                  fontWeight: strong ? FontWeight.w600 : FontWeight.normal,
-                ),
-              ),
-            ),
-          ),
-      ],
-    );
-  }
-}
-
-class _AutoScrollText extends StatefulWidget {
-  const _AutoScrollText({required this.text, this.style});
-
-  final String text;
-  final TextStyle? style;
-
-  @override
-  State<_AutoScrollText> createState() => _AutoScrollTextState();
-}
-
-class _AutoScrollTextState extends State<_AutoScrollText> {
-  final _controller = ScrollController();
-  bool _needsScroll = false;
-  bool _scrollForward = true;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller.addListener(_onScrollChanged);
-    WidgetsBinding.instance.addPostFrameCallback((_) => _checkOverflow());
-  }
-
-  @override
-  void didUpdateWidget(covariant _AutoScrollText oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.text != widget.text || oldWidget.style != widget.style) {
-      _needsScroll = false;
-      WidgetsBinding.instance.addPostFrameCallback((_) => _checkOverflow());
-    }
-  }
-
-  void _checkOverflow() {
-    if (!_controller.hasClients) return;
-    final max = _controller.position.maxScrollExtent;
-    final needs = max > 0;
-    if (needs != _needsScroll) {
-      setState(() => _needsScroll = needs);
-      if (needs) _autoScroll();
-    }
-  }
-
-  void _onScrollChanged() {
-    if (!_controller.hasClients || !_needsScroll) return;
-    final pos = _controller.position.pixels;
-    final max = _controller.position.maxScrollExtent;
-    if (_scrollForward && pos >= max) {
-      _scrollForward = false;
-      Future.delayed(const Duration(seconds: 2), _autoScroll);
-    } else if (!_scrollForward && pos <= 0) {
-      _scrollForward = true;
-      Future.delayed(const Duration(seconds: 2), _autoScroll);
-    }
-  }
-
-  void _autoScroll() {
-    if (!_controller.hasClients || !_needsScroll || !mounted) return;
-    final max = _controller.position.maxScrollExtent;
-    _controller.animateTo(
-      _scrollForward ? max : 0,
-      duration: Duration(milliseconds: (max * 15).round().clamp(800, 3000)),
-      curve: Curves.easeInOut,
-    );
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      controller: _controller,
-      child: Text(
-        widget.text,
-        softWrap: false,
-        style: widget.style,
-      ),
-    );
-  }
-}
 
 class MorePage extends StatefulWidget {
   const MorePage({
@@ -15460,7 +14379,7 @@ class HomeWidgetGuidePage extends StatelessWidget {
         example: '今日 4 节课，按时间列出前几节',
         detail: '适合需要完整确认当天课程顺序时使用。',
       ),
-      if (!_hideEcardOnCurrentPlatform)
+      if (!hideEcardOnCurrentPlatform)
         const _WidgetGuideItem(
           icon: Icons.water_drop,
           title: '生活缴费',
@@ -15661,7 +14580,7 @@ class _MoreGridItem extends StatelessWidget {
       ),
     );
     if (editing) return inner;
-    return _ScaleTap(
+    return ScaleTap(
       onTap: onTap,
       borderRadius: BorderRadius.circular(16),
       child: inner,
@@ -16045,53 +14964,6 @@ class _InfoRow extends StatelessWidget {
   }
 }
 
-class EmptyState extends StatelessWidget {
-  const EmptyState({super.key, required this.message});
-
-  final String message;
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(28),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 24),
-          decoration: BoxDecoration(
-            color: gzusSurface(context),
-            borderRadius: BorderRadius.circular(GzusRadii.lg),
-            border: Border.all(color: gzusBorder(context)),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 44,
-                height: 44,
-                decoration: BoxDecoration(
-                  color: gzusSurfaceSoft(context),
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                child: Icon(
-                  Icons.inbox_outlined,
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
-              ),
-              const SizedBox(height: 12),
-              Text(
-                message,
-                textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
-                    ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
 
 class MarqueeText extends StatefulWidget {
   const MarqueeText({
