@@ -15,6 +15,24 @@ logger = logging.getLogger(__name__)
 # Avoids creating a new Session for every single cache read/write.
 _session_factory = None
 
+# 兜底缓存的最大存活时间：超过则视为过期，避免故障时返回数月前的旧数据。
+# 仅用于「失败兜底」场景（成功路径不主动读缓存），因此取较宽松的默认值。
+DEFAULT_CACHE_MAX_AGE_SECONDS = 7 * 24 * 3600
+
+
+def _is_stale(cached_at: datetime | None, max_age_seconds: int | None) -> bool:
+    if max_age_seconds is None:
+        max_age_seconds = DEFAULT_CACHE_MAX_AGE_SECONDS
+    if max_age_seconds <= 0:
+        return False
+    if cached_at is None:
+        return True
+    # SQLite 读回的 datetime 为 naive（丢失时区），按 UTC 归一化后比较
+    if cached_at.tzinfo is None:
+        cached_at = cached_at.replace(tzinfo=timezone.utc)
+    age = (datetime.now(timezone.utc) - cached_at).total_seconds()
+    return age > max_age_seconds
+
 
 def _get_factory():
     global _session_factory
@@ -71,7 +89,12 @@ def save_cache(student_id: str, resource: str, data, params: dict | None = None)
         session.commit()
 
 
-def load_cache(student_id: str, resource: str, params: dict | None = None):
+def load_cache(
+    student_id: str,
+    resource: str,
+    params: dict | None = None,
+    max_age_seconds: int | None = None,
+):
     params_hash = _compute_params_hash(params)
     cache_key = _make_cache_key(student_id, resource, params_hash)
     Session = _get_factory()
@@ -80,6 +103,8 @@ def load_cache(student_id: str, resource: str, params: dict | None = None):
             select(DataCache).where(DataCache.cache_key == cache_key)
         ).scalar_one_or_none()
         if entry is None:
+            return None
+        if _is_stale(entry.cached_at, max_age_seconds):
             return None
         try:
             data = json.loads(entry.response_json)
@@ -104,7 +129,10 @@ def get_cached_at(student_id: str, resource: str, params: dict | None = None) ->
 
 
 def load_and_get_cached_at(
-    student_id: str, resource: str, params: dict | None = None,
+    student_id: str,
+    resource: str,
+    params: dict | None = None,
+    max_age_seconds: int | None = None,
 ) -> tuple[dict | list | None, datetime | None]:
     """Load cache data and cached_at timestamp in a single DB round-trip."""
     params_hash = _compute_params_hash(params)
@@ -115,6 +143,8 @@ def load_and_get_cached_at(
             select(DataCache).where(DataCache.cache_key == cache_key)
         ).scalar_one_or_none()
         if entry is None:
+            return None, None
+        if _is_stale(entry.cached_at, max_age_seconds):
             return None, None
         try:
             data = json.loads(entry.response_json)

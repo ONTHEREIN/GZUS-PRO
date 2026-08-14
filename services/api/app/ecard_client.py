@@ -6,6 +6,7 @@ import logging
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlencode
 
@@ -147,7 +148,8 @@ def _save_token_to_db(token: str, unionid: str | None) -> None:
                 ))
             else:
                 row.response_json = payload
-                row.cached_at = None  # trigger default
+                # UPDATE 不触发 column default，须显式刷新缓存时间戳
+                row.cached_at = datetime.now(timezone.utc)
             db.commit()
     except Exception as exc:
         logger.warning("ecard_client: save token to DB failed: %s", exc)

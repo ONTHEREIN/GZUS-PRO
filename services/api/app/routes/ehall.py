@@ -44,6 +44,34 @@ def _schedule_cache_params(year: int, term: int) -> dict[str, str]:
     return {"year": str(year), "term": str(term)}
 
 
+def _with_cache_fallback(resource: str, student_id: str, call):
+    """成功时保存缓存并返回结果；失败（非认证错误）时兜底返回上次缓存。
+
+    认证错误不兜底（缓存里的旧会话数据无意义），由调用方自行处理。
+    """
+    try:
+        result = call()
+    except EhallAuthenticationError:
+        raise
+    except Exception:
+        try:
+            cached, cached_at = load_and_get_cached_at(student_id, resource)
+        except Exception:
+            logger.warning("Failed to load cache for resource=%s", resource, exc_info=True)
+            cached, cached_at = None, None
+        if cached is not None:
+            logger.info(
+                "Serving cached ehall data for resource=%s, cached_at=%s", resource, cached_at
+            )
+            return cached
+        raise
+    try:
+        save_cache(student_id, resource, result)
+    except Exception:
+        logger.warning("Failed to save cache for resource=%s", resource, exc_info=True)
+    return result
+
+
 def _load_leave_courses(payload: LeavePreviewRequest, session: AppSession) -> list[dict]:
     if payload.courses:
         return payload.courses
@@ -108,11 +136,15 @@ def affairs(session: AppSession = Depends(require_session)) -> list[dict]:
             detail="办事大厅会话不可用，请重新登录",
         )
     try:
-        return ehall_client.get_affairs(
-            page_size=100,
-            max_pages=1,
-            request_timeout_seconds=5,
-            max_retries=0,
+        return _with_cache_fallback(
+            "ehall_affairs",
+            _get_student_id(session),
+            lambda: ehall_client.get_affairs(
+                page_size=100,
+                max_pages=1,
+                request_timeout_seconds=5,
+                max_retries=0,
+            ),
         )
     except EhallAuthenticationError as exc:
         logger.warning("ehall affairs auth error: %s", exc)
@@ -137,10 +169,14 @@ def applications(session: AppSession = Depends(require_session)) -> list[dict]:
             detail="办事大厅会话不可用，请重新登录",
         )
     try:
-        return ehall_client.get_applications(
-            page_size=80,
-            max_pages=1,
-            request_timeout_seconds=5,
+        return _with_cache_fallback(
+            "ehall_applications",
+            _get_student_id(session),
+            lambda: ehall_client.get_applications(
+                page_size=80,
+                max_pages=1,
+                request_timeout_seconds=5,
+            ),
         )
     except EhallAuthenticationError as exc:
         logger.warning("ehall applications auth error: %s", exc)

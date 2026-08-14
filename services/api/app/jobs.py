@@ -310,10 +310,8 @@ def _next_reminder_at(now: datetime, reminder_times: list[str] | None = None) ->
 
 async def run_ecard_reminder_once(app) -> None:
     try:
-        settings = get_settings()
-        client = EcardClient(
-            worker_proxy_origin=settings.frontend_base_url or "https://onegzus-onweb.pages.dev",
-        )
+        # 与 routes/ecard.py 保持一致：统一走 ecard_worker_proxy_origin
+        client = EcardClient()
     except EcardConfigurationError:
         logger.info("ECARD_OPENID not configured, skipping ecard reminders")
         return
@@ -565,7 +563,7 @@ async def run_exam_reminder_once(app) -> None:
 async def run_exam_reminder_poller(app) -> None:
     while True:
         await run_exam_reminder_once(app)
-        await asyncio.sleep(30 * 60)
+        await asyncio.sleep(get_settings().push_poll_interval_seconds)
 
 
 async def run_grade_update_once(app) -> None:

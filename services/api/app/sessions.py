@@ -4,6 +4,7 @@ import asyncio
 import base64
 import hashlib
 import logging
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -18,6 +19,8 @@ logger = logging.getLogger(__name__)
 
 _DB_CONNECTION_ATTEMPTS = 3
 _DB_RETRY_BASE_DELAY_SECONDS = 0.3
+# Neon 跨实例写后读延迟时的重试次数
+_DB_READ_AFTER_WRITE_RETRIES = 3
 
 
 class SessionStoreUnavailableError(RuntimeError):
@@ -170,6 +173,7 @@ class SessionStore:
         self._memory_cache_ttl = timedelta(seconds=30)
         self._touch_write_interval = timedelta(seconds=60)
         self._legacy_credentials_cleared = False
+        self._lock = threading.Lock()
 
     def _get_db(self) -> DbSession:
         from sqlalchemy.orm import sessionmaker as SessionMaker
@@ -300,13 +304,15 @@ class SessionStore:
         try:
             self._clear_legacy_credentials(db)
             if resolved_student_account:
-                for existing in self._sessions.values():
-                    if (
-                        existing.student_account == resolved_student_account
-                        and existing.revoked_at is None
-                    ):
-                        existing.revoked_at = datetime.now(timezone.utc).replace(tzinfo=None)
-                        existing.revoked_reason = "single_device_login"
+                # 内存撤销段加锁，避免并发登录同一账号时重复写入未撤销会话
+                with self._lock:
+                    for existing in self._sessions.values():
+                        if (
+                            existing.student_account == resolved_student_account
+                            and existing.revoked_at is None
+                        ):
+                            existing.revoked_at = datetime.now(timezone.utc).replace(tzinfo=None)
+                            existing.revoked_reason = "single_device_login"
                 revoked_at = datetime.now(timezone.utc)
                 revoked = (
                     db.query(AppSessionModel)
@@ -338,9 +344,10 @@ class SessionStore:
             )
             db.add(row)
             db.commit()
-            self._sessions[session.id] = session
-            self._session_checked_at[session.id] = datetime.now(timezone.utc).replace(tzinfo=None)
-            self._last_touch_at[session.id] = session.last_active_at.replace(tzinfo=None)
+            with self._lock:
+                self._sessions[session.id] = session
+                self._session_checked_at[session.id] = datetime.now(timezone.utc).replace(tzinfo=None)
+                self._last_touch_at[session.id] = session.last_active_at.replace(tzinfo=None)
             logger.debug("Session %s created in DB (jwxt_cookies=%d chars)", session.id[:8], len(jwxt_cookies))
         except SQLAlchemyError as exc:
             db.rollback()
@@ -383,13 +390,14 @@ class SessionStore:
             if row is None:
                 # Neon PostgreSQL may have a slight read-after-write delay
                 # after a session is created on a different serverless
-                # instance.  Retry up to 3 times with increasing backoff.
-                for attempt in range(3):
-                    delay = 0.3 * (attempt + 1)
+                # instance.  Retry with increasing backoff.
+                for attempt in range(_DB_READ_AFTER_WRITE_RETRIES):
+                    delay = _DB_RETRY_BASE_DELAY_SECONDS * (attempt + 1)
                     logger.debug(
-                        "Session %s not found on attempt %d/3, retrying after %.1fs",
+                        "Session %s not found on attempt %d/%d, retrying after %.1fs",
                         session_id[:8],
                         attempt + 1,
+                        _DB_READ_AFTER_WRITE_RETRIES,
                         delay,
                     )
                     time.sleep(delay)
@@ -401,7 +409,7 @@ class SessionStore:
                     logger.warning(
                         "Session %s not found after %d retries (read-after-write lag?)",
                         session_id[:8],
-                        3,
+                        _DB_READ_AFTER_WRITE_RETRIES,
                     )
                     return None
 
@@ -595,9 +603,10 @@ class SessionStore:
             if row is not None:
                 db.delete(row)
                 db.commit()
-            self._sessions.pop(session_id, None)
-            self._session_checked_at.pop(session_id, None)
-            self._last_touch_at.pop(session_id, None)
+            with self._lock:
+                self._sessions.pop(session_id, None)
+                self._session_checked_at.pop(session_id, None)
+                self._last_touch_at.pop(session_id, None)
         except SQLAlchemyError as exc:
             db.rollback()
             raise self._persistence_error("remove", session_id, exc) from exc
@@ -638,11 +647,12 @@ class SessionStore:
             db.commit()
             if deleted:
                 cutoff_naive = cutoff.replace(tzinfo=None)
-                for session_id, session in list(self._sessions.items()):
-                    if session.last_active_at < cutoff_naive:
-                        self._sessions.pop(session_id, None)
-                        self._session_checked_at.pop(session_id, None)
-                        self._last_touch_at.pop(session_id, None)
+                with self._lock:
+                    for session_id, session in list(self._sessions.items()):
+                        if session.last_active_at < cutoff_naive:
+                            self._sessions.pop(session_id, None)
+                            self._session_checked_at.pop(session_id, None)
+                            self._last_touch_at.pop(session_id, None)
                 logger.info("Purged %d expired sessions", deleted)
         except SQLAlchemyError:
             db.rollback()
