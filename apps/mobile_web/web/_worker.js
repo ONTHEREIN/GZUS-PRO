@@ -45,6 +45,8 @@ const JWXT_REFERER = `${JWXT_BASE}/xtgl/index_initMenu.html`;
 const CANONICAL_APP_ORIGIN = 'https://onegzus.cc.cd';
 const STATIC_ASSET_PATH_RE = /(?:^\/(?:assets|canvaskit|icons)\/|^\/(?:flutter_bootstrap|flutter|main\.dart|gzus_pwa|gzus_pwa_sw)\.js$|^\/manifest\.json$|^\/version\.json$|^\/favicon\.png$|\.(?:js|mjs|wasm|json|otf|ttf|woff2?|png|jpg|jpeg|webp|gif|svg|ico|css|map)$)/i;
 const DASHBOARD_DIRECT_TIMEOUT_MS = 9000;
+// 学分接口响应慢：专用更短超时，让 Worker 在 Flutter 等待前返回（缓存或错误）
+const CREDITS_DIRECT_TIMEOUT_MS = 4500;
 const DASHBOARD_BACKEND_TIMEOUT_MS = 12000;
 const DASHBOARD_MODULE_TIMEOUT_MS = 13000;
 const DASHBOARD_TOTAL_TIMEOUT_MS = 20000;
@@ -2579,6 +2581,10 @@ export default {
     async function fetchDashboardAcademic(module, session, year, term) {
       const config = academicRequestConfig(module, year, term, session.account);
       if (!config) return module === 'attendance' ? { status: 'empty', items: [] } : [];
+      // 学分接口专用更短超时：响应慢时提前返回，避免 Worker 整体超时
+      const directTimeoutMs = module === 'credits'
+        ? CREDITS_DIRECT_TIMEOUT_MS
+        : DASHBOARD_DIRECT_TIMEOUT_MS;
       const [jwxtRes, data] = await fetchGbkJson(config.url, {
         method: 'POST',
         headers: {
@@ -2588,11 +2594,15 @@ export default {
           'Referer': JWXT_REFERER,
         },
         body: config.body.toString(),
-        signal: AbortSignal.timeout(DASHBOARD_DIRECT_TIMEOUT_MS),
+        signal: AbortSignal.timeout(directTimeoutMs),
       });
       if (!jwxtRes || !jwxtRes.ok || !data) {
         if (module === 'schedule' && jwxtRes && jwxtRes.ok) {
           return [];
+        }
+        if (module === 'credits') {
+          // 学分服务响应较慢，请稍后下拉刷新
+          throw new Error('学分服务响应较慢，请稍后下拉刷新');
         }
         throw new Error(`JWXT ${module} returned ${jwxtRes ? jwxtRes.status : 'null'}`);
       }

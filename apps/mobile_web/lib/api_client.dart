@@ -2511,7 +2511,8 @@ class ApiClient {
     }
   }
 
-  Future<EcardSummary> _enrichEcardSummaryDirect(EcardSummary summary) async {
+  Future<EcardSummary> _enrichEcardSummaryDirect(EcardSummary summary,
+      {bool requireLive = false}) async {
     if (!_isNativeMobile) return summary;
     if (!summary.isBound || summary.roomId == null || summary.roomId!.isEmpty) {
       return summary;
@@ -2519,7 +2520,10 @@ class ApiClient {
     try {
       final balance = await _createEcardDirectClient()
           .getBalance(summary.roomId!, studentId: summary.studentId);
-      if (balance == null) return summary;
+      if (balance == null) {
+        if (requireLive) throw ApiException('水电余额刷新失败，请稍后重试');
+        return summary;
+      }
       final data = _ecardSummaryToJson(summary);
       data.addAll({
         'powerBalance': balance['powerBalance'],
@@ -2552,6 +2556,7 @@ class ApiClient {
       await _updateEcardSummaryCache(data);
       return EcardSummary.fromJson(data);
     } catch (_) {
+      if (requireLive) rethrow;
       return summary;
     }
   }
