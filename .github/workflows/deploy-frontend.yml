@@ -25,6 +25,11 @@ jobs:
           cd apps/mobile_web
           flutter pub get
 
+      - name: Test Cloudflare Worker
+        run: |
+          cd apps/mobile_web
+          node --test worker_tests/*_test.mjs
+
       - name: Build Web
         env:
           API_BASE_URL: ${{ vars.API_BASE_URL || secrets.API_BASE_URL || 'https://onegzus.cc.cd/api,https://onegzus-onweb.pages.dev/api' }}

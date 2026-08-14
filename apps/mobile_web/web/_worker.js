@@ -207,18 +207,6 @@ class CookieJar {
     return parts.join('; ');
   }
 
-  getCookiesForDomain(keyword) {
-    const parts = [];
-    for (const [domain, nameMap] of this.cookies) {
-      if (domain.includes(keyword)) {
-        for (const [name, value] of nameMap) {
-          parts.push(`${name}=${value}`);
-        }
-      }
-    }
-    return parts.join('; ');
-  }
-
   getEhallCookies() {
     const parts = [];
     for (const [domain, nameMap] of this.cookies) {
@@ -654,11 +642,11 @@ async function fetchStudentName(jar, timeout) {
 async function ocrRecognize(imageBytes, env) {
   // Use the Vercel backend's OCR endpoint if available,
   // or fall back to a simple base64 submission
-  const vercelOrigin = (env.API_ORIGIN || 'https://api-one-zeta-dc0jrazxzq.vercel.app').replace(/\/$/, '');
+  const origin = vercelOrigin(env);
 
   try {
     const b64 = uint8ArrayToBase64(imageBytes);
-    const res = await fetch(`${vercelOrigin}/internal/ocr`, {
+    const res = await fetch(`${origin}/internal/ocr`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -803,10 +791,6 @@ function decodeResponse(response) {
     }
   });
 }
-function decodeGbkResponse(response) {
-  // Legacy alias — kept for backward compatibility, delegates to smart decoder
-  return decodeResponse(response);
-}
 async function fetchGbkJson(url, options) {
   const res = await fetch(url, options);
   if (!res.ok) return [res, null];
@@ -845,6 +829,19 @@ function uint8ArrayToBase64(bytes) {
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// Vercel 后端源地址：去掉尾部斜杠，供代理与内部桥接统一使用
+function vercelOrigin(env) {
+  return (env.API_ORIGIN || 'https://api-one-zeta-dc0jrazxzq.vercel.app').replace(/\/$/, '');
+}
+
+// 诊断端点（jwxt-test/kv-test）鉴权：未配置 INTERNAL_API_KEY 或 key 不匹配时拒绝访问
+function authorizeDiagnostics(request, env) {
+  const expected = env && env.INTERNAL_API_KEY;
+  if (!expected) return false;
+  const provided = request.headers.get('X-Internal-Key');
+  return provided === expected;
 }
 
 function shouldReturnJwxtCookies(request) {
@@ -1662,6 +1659,7 @@ export default {
 
     // ─── JWXT direct proxy test ──────────────────────────────
     if (path === 'jwxt-test') {
+      if (!authorizeDiagnostics(request, env)) return errorResponse('Not found', 404, request);
       const sessionId = request.headers.get('X-Session-Id');
       if (!sessionId) return errorResponse('Missing X-Session-Id', 400, request);
       const session = await getLocalSession(request, env);
@@ -1701,6 +1699,7 @@ export default {
 
     // ─── KV diagnostic ────────────────────────────────────────
     if (path === 'kv-test') {
+      if (!authorizeDiagnostics(request, env)) return errorResponse('Not found', 404, request);
       const hasKV = !!(env && env.SESSIONS_KV);
       let kvWrite = 'not attempted';
       let kvRead = 'not attempted';
@@ -2693,7 +2692,7 @@ export default {
     }
 
     async function fetchDashboardBackend(path, request, session, timeoutMs) {
-      const origin = (env.API_ORIGIN || 'https://api-one-zeta-dc0jrazxzq.vercel.app').replace(/\/$/, '');
+      const origin = vercelOrigin(env);
       const headers = buildVercelProxyHeaders(request);
       if (session.cookies) headers.set('Cookie', session.cookies);
       if (session.ehallCookies) headers.set('X-Ehall-Cookies', session.ehallCookies);
@@ -3089,7 +3088,7 @@ export default {
               const ehallItemsPromise = (async () => {
                 if (!session.ehallCookies) return [];
                 try {
-                  const origin = (env.API_ORIGIN || 'https://api-one-zeta-dc0jrazxzq.vercel.app').replace(/\/$/, '');
+                  const origin = vercelOrigin(env);
                   const headers = new Headers(request.headers);
                   headers.set('Cookie', session.cookies);
                   headers.set('X-Ehall-Cookies', session.ehallCookies);
@@ -3149,10 +3148,10 @@ export default {
 
 // ─── Decrypt password via Vercel (fast, < 1s) ──────────────────────
 async function decryptPasswordOnVercel(encryptedPassword, keyId, env) {
-  const vercelOrigin = (env.API_ORIGIN || 'https://api-one-zeta-dc0jrazxzq.vercel.app').replace(/\/$/, '');
+  const origin = vercelOrigin(env);
 
   try {
-    const res = await fetch(`${vercelOrigin}/internal/decrypt-password`, {
+    const res = await fetch(`${origin}/internal/decrypt-password`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -3176,10 +3175,10 @@ async function decryptPasswordOnVercel(encryptedPassword, keyId, env) {
 // ─── Create session on Vercel backend ──────────────────────────────
 // Returns { sessionId: string } on success, or { error: string, status: number } on failure.
 async function createSessionOnBackend(loginResult, account, env) {
-  const vercelOrigin = (env.API_ORIGIN || 'https://api-one-zeta-dc0jrazxzq.vercel.app').replace(/\/$/, '');
+  const origin = vercelOrigin(env);
 
   try {
-    const res = await fetch(`${vercelOrigin}/internal/create-session`, {
+    const res = await fetch(`${origin}/internal/create-session`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -3210,7 +3209,7 @@ async function createSessionOnBackend(loginResult, account, env) {
 
 // ─── Proxy to Vercel ───────────────────────────────────────────────
 async function proxyToVercel(request, env, url, hadLocalSession = true) {
-  const origin = (env.API_ORIGIN || 'https://api-one-zeta-dc0jrazxzq.vercel.app').replace(/\/$/, '');
+  const origin = vercelOrigin(env);
   // Strip /api/ prefix for Vercel backend compatibility
   let upstreamPath = url.pathname;
   if (upstreamPath.startsWith('/api/')) {
@@ -3234,8 +3233,10 @@ async function proxyToVercel(request, env, url, hadLocalSession = true) {
     }
   } catch {}
 
-  // Retry on 5xx from Vercel (up to 2 retries with exponential backoff)
-  const maxRetries = 2;
+  // 仅幂等请求（GET/HEAD/OPTIONS）在 5xx 时重试；POST/PATCH 等非幂等操作
+  // 直接透传结果，避免消费/请假提交等被重复执行。
+  const isIdempotent = request.method === 'GET' || request.method === 'HEAD' || request.method === 'OPTIONS';
+  const maxRetries = isIdempotent ? 2 : 0;
   let lastError = null;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
