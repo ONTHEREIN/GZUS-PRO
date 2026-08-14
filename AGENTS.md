@@ -110,21 +110,23 @@ ruff check .
 |---|---|
 | `main.py` | App entry — creates FastAPI, registers middleware, routes, lifespan. Lazy-imports `routes/internal.py` inside `create_app()`. Background pollers only start when `not IS_VERCEL`. |
 | `config.py` | Pydantic Settings, all env vars. `@lru_cache get_settings()`. |
-| `database.py` | SQLAlchemy models, engine management, `_ensure_columns()` migrations. Both sync and async engines. |
+| `database.py` | SQLAlchemy models, engine management, `_ensure_columns()` migrations. Sync engine only. |
 | `schemas.py` | Pydantic request/response models (LoginRequest, etc.) |
 | `routes/deps.py` | Dependency injection (Worker cookie injection via `X-Worker-Auth`, session recovery, auth) |
-| `school_client.py` | School portal client (JWXT 教务系统) — largest file |
+| `school_client.py` | School portal client (JWXT 教务系统) — HTTP client + login/session. Normalizers/notice parsing split out below. |
+| `jwxt/normalizers.py` | JWXT 数据归一化纯函数 (课表/成绩/考勤/学分) — split from `school_client.py` |
+| `jwxt/notice_parser.py` | 自研 HTML 节点 + 通知条目/详情提取 — split from `school_client.py` |
 | `ehall_client.py` | ehall (一站式服务) client |
 | `ecard_client.py` | 一卡通 client |
 | `leave_service.py` | Leave/请假 business logic (section times, date ranges) |
 | `staff_service.py` | Staff member lookup/sync from ehall |
-| `jobs.py` | Background pollers (notifications, exam reminders, grade updates, utility reminders) |
+| `jobs.py` | Background pollers (notifications, exam reminders, grade updates, utility reminders). Poller cache classes moved to `cache_service.py`; pollers lazy-imported in `main.py` lifespan. |
 | `push.py` | Web push notifications |
-| `sessions.py` | Session store (create/recover/cleanup), credential encryption (Fernet) |
+| `sessions.py` | Session store (create/recover/cleanup), credential encryption (Fernet). `student_id_of()` resolves account without `get_info()`. |
 | `rsa_keys.py` | RSA key manager for password decryption (Worker→API bridge) |
 | `captcha_ocr.py` | Captcha OCR (ddddocr) for CAS login |
-| `cache_service.py` | In-memory caches (used by jobs) |
-| `notice_utils.py` | Notification formatting utilities |
+| `cache_service.py` | DB-backed cache (TTL-aware) + poller in-memory caches (NoticeCache/GradeUpdateCache/ExamReminderCache) |
+| `notice_utils.py` | Notification formatting utilities + `merge_notices()` (JWXT+ehall 合并去重) |
 | `rate_limit.py` | SlowAPI rate limiter configuration |
 
 ### Frontend (`apps/mobile_web/lib/`)
@@ -134,6 +136,7 @@ ruff check .
 | `main.dart` | Main app — all page UI (very large single file) |
 | `api_client.dart` | API client — all API calls, session management |
 | `gzus_design.dart` | Design theme / UI components |
+| `schedule_utils.dart` | 课表/日期共享工具 (`mondayOf`/`weekFromDate`/`dateText`/`scheduleTimes`) |
 | `services_deferred.dart` | Deferred loading service module config |
 | `ws_service.dart` | WebSocket client |
 | `push_service.dart` | Push notification registration |
