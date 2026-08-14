@@ -75,6 +75,7 @@ ruff check .
 | `deploy-api.yml` | `services/api/**` changed | `npx vercel --prod` |
 | `deploy-cloudflare-pages.yml` | any push | Deploys `website/` to `intro-onegzus` |
 | `deploy-edgeone-pages.yml` | `workflow_dispatch` only | Deploys `apps/mobile_web/web/` to EdgeOne (`onegzus-overseas`) for overseas access |
+| `cron-wechat-sync.yml` | 每 6 小时 | 调 `/internal/cron/wechat-sync` 同步公众号文章（`X-Internal-Key` 鉴权） |
 
 - Frontend CI removes `.symbols`, CanvasKit variants, and `NOTICES` from build output before deploying.
 - Vercel entry point: `app/main.py` (`vercel.json`). Sets `DEBUG=false`, `JWXT_WORKER_PROXY_ORIGIN=https://onegzus.cc.cd`, `ECARD_WORKER_PROXY_ORIGIN=https://onegzus.cc.cd` in production env.
@@ -85,6 +86,7 @@ ruff check .
 - `CREDENTIAL_ENCRYPTION_KEY` **must** be set in production (random 32-byte string). Generate: `python -c "import secrets; print(secrets.token_urlsafe(32))"`. API refuses to start without it when `DEBUG=false`.
 - `PUBLIC_API_BASE_URL` and `FRONTEND_BASE_URL` must use HTTPS in production (validated in `config.py`).
 - `JWXT_WORKER_PROXY_ORIGIN` and `ECARD_WORKER_PROXY_ORIGIN` — routes school API calls through Worker (keeping edge IP binding). Set in Vercel env, not local dev.
+- `ADMIN_SEED_OWNER` — 管理后台首个 owner 学号（逗号分隔）。启动时幂等写入 `admin_users` 表；之后可在后台动态增删管理员。未配置则后台无管理员。
 - `analysis_options.yaml` enforces `prefer_const_constructors` via `flutter_lints` package.
 - No `.env` in repo (gitignored). Use `.env.example` as template.
 
@@ -94,6 +96,7 @@ ruff check .
 |---|---|
 | Add a new API endpoint | `services/api/app/routes/` (add route), `routes/deps.py` (auth), `main.py` (register router) |
 | Modify login flow | `apps/mobile_web/web/_worker.js` (edge), `services/api/app/routes/auth.py` (backend), `services/api/app/cas_auto_login.py` |
+| 管理后台（Admin） | `services/api/app/routes/admin.py`（`/admin/*`，`require_admin` 鉴权）、`admin_users`/`admin_audit_log` 表、`ADMIN_SEED_OWNER` 种子、`apps/mobile_web/lib/pages/admin/`、Worker `isAdmin` 透传 |
 | Change DB schema | `services/api/app/database.py` (add model + `_ensure_columns` migration) |
 | Flutter UI theme | `apps/mobile_web/lib/gzus_design.dart` |
 | Push notifications | `services/api/app/push.py`, `services/api/app/jobs.py`, `apps/mobile_web/lib/push_service.dart` |
@@ -112,7 +115,9 @@ ruff check .
 | `config.py` | Pydantic Settings, all env vars. `@lru_cache get_settings()`. |
 | `database.py` | SQLAlchemy models, engine management, `_ensure_columns()` migrations. Sync engine only. |
 | `schemas.py` | Pydantic request/response models (LoginRequest, etc.) |
-| `routes/deps.py` | Dependency injection (Worker cookie injection via `X-Worker-Auth`, session recovery, auth) |
+| `routes/deps.py` | Dependency injection (Worker cookie injection via `X-Worker-Auth`, session recovery, auth, `require_admin`) |
+| `routes/admin.py` | 管理后台 `/admin/*`（总览/会话踢下线/管理员管理/推送/缓存/水电费/系统状态/审计日志 + 校历/通知上传 + 公众号文章管理）。鉴权：`Depends(require_admin)`（`session.is_admin`），owner 才能增删管理员。敏感操作写 `admin_audit_log`。`admin_role_of()` 供 `/internal/create-session` 标记 is_admin。`list_published_admin_notices()` 供 `/academic/notices` 并入「校历」类通知 |
+| `wechat_service.py` | 公众号文章同步：微信公开「合集」接口（appmsgalbum，匿名/免凭据）抓取文章列表（标题/封面/链接/发布时间）+ `fetch_article_meta()`（og 元数据，粘贴链接兜底）+ `sync_articles()`/`should_sync()` 惰性同步。`WxArticle`/`WechatSyncState` 表。可插拔 `WechatFetcher` 抽象 |
 | `school_client.py` | School portal client (JWXT 教务系统) — HTTP client + login/session. Normalizers/notice parsing split out below. |
 | `jwxt/normalizers.py` | JWXT 数据归一化纯函数 (课表/成绩/考勤/学分) — split from `school_client.py` |
 | `jwxt/notice_parser.py` | 自研 HTML 节点 + 通知条目/详情提取 — split from `school_client.py` |
@@ -160,6 +165,7 @@ ruff check .
 | `leave/` | `AutoLeavePage` 自动请假 |
 | `ftp/` | `FtpUploadPage` 作业上传 |
 | `more/` | `MorePage` + 关于/桌面组件引导页 |
+| `admin/` | `AdminPage` 管理后台（总览/会话/管理员/数据统计/系统 + `notices_tab.dart` 校历上传 + `wechat_tab.dart` 公众号文章管理） |
 
 #### 共享层 (`lib/widgets/` 与 `lib/models/`)
 - `widgets/`：`PagePanel`/`AsyncPanel`/`PageRefresh`、`EmptyState`、`StatusPill`/`IconBadge`/`MetricPill`、`SimpleTable`/`MobileRecordCard`、`ProgressCategoryStrip` 等跨页组件
@@ -175,7 +181,8 @@ ruff check .
 | `ecard.py` | `/ecard` | 一卡通/水电费 |
 | `push.py` | `/push` | Push notification registration |
 | `weather.py` | `/weather` | Weather proxy (wttr.in) |
-| `internal.py` | `/internal` | Worker→API bridge (OCR, decrypt, session) |
+| `internal.py` | `/internal` | Worker→API bridge (OCR, decrypt, session). `create-session` 查 `admin_users` 标记 `is_admin` 并返回 `isAdmin`。cron 端点：`/internal/cron/ecard-reminder`、`/internal/cron/wechat-sync`（GitHub Actions 定时调用，`X-Internal-Key` 鉴权） |
+| `admin.py` | `/admin` | 管理后台（会话/管理员/统计/系统状态 + 校历上传 `/admin/notices` + 公众号管理 `/admin/wechat/*`） |
 
 ## Conventions & quirks
 
