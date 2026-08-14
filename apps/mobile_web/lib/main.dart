@@ -403,6 +403,7 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
 
   Future<void> _restoreSession() async {
     final prefs = await SharedPreferences.getInstance();
+    await api.loadSavedCredentials();
     final savedSession = prefs.getString('auth.sessionId');
     if (savedSession == null || savedSession.isEmpty) {
       if (!mounted) return;
@@ -414,16 +415,6 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
     if (savedStudentId != null && savedStudentId.isNotEmpty) {
       api.setStudentId(savedStudentId);
     }
-    // 恢复 ehall 凭证到 ApiClient
-    final savedEhallCookies = prefs.getString('auth.ehallCookies');
-    if (savedEhallCookies != null && savedEhallCookies.isNotEmpty) {
-      api.setEhallCookies(savedEhallCookies);
-    }
-    final savedEhallAuthToken = prefs.getString('auth.ehallAuthToken');
-    if (savedEhallAuthToken != null && savedEhallAuthToken.isNotEmpty) {
-      api.setEhallAuthToken(savedEhallAuthToken);
-    }
-
     final guideCompleted = prefs.getBool('background_guide_completed') ?? false;
     final scheduleOnboardingCompleted =
         prefs.getBool('schedule_onboarding_completed') ?? false;
@@ -598,26 +589,18 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
     if (result.loginMethod != null) {
       await prefs.setString('auth.loginMethod', result.loginMethod!);
     }
-    if (result.ehallCookies != null && result.ehallCookies!.isNotEmpty) {
-      await prefs.setString('auth.ehallCookies', result.ehallCookies!);
-    } else {
-      await prefs.remove('auth.ehallCookies');
-    }
-    if (result.ehallAuthToken != null && result.ehallAuthToken!.isNotEmpty) {
-      await prefs.setString('auth.ehallAuthToken', result.ehallAuthToken!);
-    } else {
-      await prefs.remove('auth.ehallAuthToken');
-    }
   }
 
   Future<void> _logout() async {
     if (_logoutInProgress || !loggedIn) return;
     _logoutInProgress = true;
+    final activeSessionId = api.sessionId;
+    final activeStudentId = api.studentId;
     api.clearCredentials();
     LoginRequiredServices.disconnect();
 
     if (!mounted) {
-      _logoutInProgress = false;
+      unawaited(_performLogoutCleanup(activeSessionId, activeStudentId));
       return;
     }
     setState(() {
@@ -631,35 +614,60 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
     });
     _navigatorKey.currentState?.popUntil((route) => route.isFirst);
 
-    unawaited(_performLogoutCleanup());
+    unawaited(_performLogoutCleanup(activeSessionId, activeStudentId));
   }
 
-  Future<void> _performLogoutCleanup() async {
+  Future<void> _performLogoutCleanup(
+    String? activeSessionId,
+    String? activeStudentId,
+  ) async {
     try {
+      if (activeSessionId != null && activeSessionId.isNotEmpty) {
+        try {
+          await api.unregisterPushForSession(activeSessionId);
+        } catch (error) {
+          debugPrint('注销推送绑定失败: error=${error.runtimeType}');
+        }
+        if (kIsWeb) {
+          try {
+            await LoginRequiredServices.unsubscribeWebPush(
+              api.baseUrl,
+              activeSessionId,
+            );
+          } catch (error) {
+            debugPrint('注销 Web Push 订阅失败: error=${error.runtimeType}');
+          }
+        }
+        try {
+          await api.revokeSession(activeSessionId);
+        } catch (error) {
+          debugPrint('撤销服务端会话失败: error=${error.runtimeType}');
+        }
+      }
+
       try {
-        await api.unregisterPush();
-      } catch (_) {}
-      if (kIsWeb && (api.sessionId?.isNotEmpty ?? false)) {
-        await LoginRequiredServices.unsubscribeWebPush(
-            api.baseUrl, api.sessionId!);
+        await _clearSavedSession();
+      } catch (error) {
+        debugPrint('清除本地登录状态失败: error=${error.runtimeType}');
+      }
+      if (activeStudentId != null && activeStudentId.isNotEmpty) {
+        try {
+          await persistent_cache.loadLibrary();
+          await persistent_cache.PersistentCache.clearForStudent(activeStudentId);
+        } catch (error) {
+          debugPrint('清除账号缓存失败: error=${error.runtimeType}');
+        }
       }
       try {
-        await api.logout();
-      } catch (_) {}
-
-      api.useSession(null);
-
-      try {
-        final studentId = api.studentId;
-        if (studentId != null && studentId.isNotEmpty) {
-          await persistent_cache.loadLibrary();
-          await persistent_cache.PersistentCache.clearForStudent(studentId);
-        }
-
         await LoginRequiredServices.disableBackgroundService();
+      } catch (error) {
+        debugPrint('关闭后台服务失败: error=${error.runtimeType}');
+      }
+      try {
         LoginRequiredServices.cancelCourseReminders();
-        await _clearSavedSession();
-      } catch (_) {}
+      } catch (error) {
+        debugPrint('取消课程提醒失败: error=${error.runtimeType}');
+      }
     } finally {
       _logoutInProgress = false;
     }
@@ -667,21 +675,14 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
 
   Future<void> _clearSavedSession() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('auth.sessionId');
-    await prefs.remove('auth.studentName');
-    await prefs.remove('auth.studentId');
-    await prefs.remove('auth.ehallCookies');
-    await prefs.remove('auth.ehallAuthToken');
-    await prefs.remove('auth.loginMethod');
-    await prefs.remove('auth.credentialToken');
-    await prefs.remove('auth.account');
-    await prefs.remove('auth.password');
-    await prefs.remove('auth.rememberPassword');
+    await api.clearSavedAuthState();
     await prefs.remove('background_guide_completed');
     try {
       await web_pwa_cache.loadLibrary();
       web_pwa_cache.clearPwaApiCache();
-    } catch (_) {}
+    } catch (error) {
+      debugPrint('清除 PWA API 缓存失败: error=${error.runtimeType}');
+    }
     api.useSession(null);
   }
 
@@ -999,7 +1000,7 @@ class _LoginPageState extends State<LoginPage>
                                                   rememberPassword =
                                                       value ?? true),
                                         ),
-                                        const Text('记住学号'),
+                                        const Text('记住学号并自动登录'),
                                       ],
                                     ),
                                   ),
@@ -1188,15 +1189,17 @@ class _LoginPageState extends State<LoginPage>
         password,
       );
       TextInput.finishAutofillContext(shouldSave: false);
-      // Save credential token for auto-relogin
-      if (result.credentialToken != null) {
-        await widget.api.saveCredentialToken(result.credentialToken);
+      if (rememberPassword) {
+        await widget.api.rememberAccount(account);
+        if (result.credentialToken != null) {
+          await widget.api.saveCredentialToken(result.credentialToken);
+        } else {
+          await widget.api.clearSavedCredentialToken();
+        }
+      } else {
+        await widget.api.forgetRememberedAccount();
+        await widget.api.clearSavedCredentialToken();
       }
-      await widget.api.savePasswordCredentials(
-        account,
-        password,
-        remember: rememberPassword,
-      );
       unawaited(_saveAgreementState());
       widget.onLoggedIn(LoginResult(
         status: result.status,
@@ -1328,7 +1331,7 @@ class _AgreementContent extends StatelessWidget {
 信息仅用于展示课表、成绩、考勤、水电费等校内教务服务，遵循最小必要原则。
 
 三、信息存储
-密码不在任何位置持久化存储。学校系统Cookie仅保存在服务端内存中，会话关闭后自动清除。前端本地仅保存sessionId和展示用学生姓名，退出登录时清除。
+密码不会以明文持久化存储。用户选择“记住学号并自动登录”后，前端安全存储会保存限时加密的自动登录凭据；学校系统Cookie保存在限时服务端会话和前端系统安全存储中，并在退出登录时清除。服务端不保存可还原的账号密码。
 
 四、信息安全
 所有通信使用HTTPS/TLS加密。日志不输出密码、Cookie等敏感信息。每位用户只能访问自己的教务数据。
@@ -9338,6 +9341,7 @@ class _SchedulePageState extends State<SchedulePage> {
   int courseEndReminderMinutes = 5;
   bool _exporting = false;
   String? manageError;
+  String? _lastNativeReminderSignature;
 
   @override
   void initState() {
@@ -9356,14 +9360,41 @@ class _SchedulePageState extends State<SchedulePage> {
     }
   }
 
-  Future<ScheduleResult> _loadSchedule({bool forceRefresh = false}) =>
-      widget.api
-          .schedule(
-            year: widget.year,
-            term: widget.term,
-            forceRefresh: forceRefresh,
-          )
-          .then((r) => r.data);
+  Future<ScheduleResult> _loadSchedule({bool forceRefresh = false}) async {
+    final result = await widget.api.schedule(
+      year: widget.year,
+      term: widget.term,
+      forceRefresh: forceRefresh,
+    );
+    // 课表数据到位后统一配置提醒（内部均有签名守卫，重复调用无开销）
+    unawaited(_applyCourseReminders(result.data.items));
+    return result.data;
+  }
+
+  /// 应用课程提醒配置：本地通知（reminder_service）+ 原生后台同步。
+  /// 只在课表数据或提醒设置变化时实际执行，避免 build 内重复触发。
+  Future<void> _applyCourseReminders(List<ScheduleCourse> courses) async {
+    try {
+      await reminder_service.loadLibrary();
+      reminder_service.ReminderService.configureCourseReminders(
+        courses: courses,
+        firstWeekStart: widget.firstWeekStart,
+        settings: reminder_service.CourseReminderSettings(
+          enabled: courseRemindersEnabled,
+          beforeStartMinutes: courseStartReminderMinutes,
+          beforeEndMinutes: courseEndReminderMinutes,
+        ),
+      );
+      await _syncCourseRemindersToNative(
+        courses,
+        courseStartReminderMinutes,
+        courseEndReminderMinutes,
+        widget.firstWeekStart,
+      );
+    } catch (e) {
+      debugPrint('课程提醒配置失败: $e');
+    }
+  }
 
   Future<void> _refreshSchedule() async {
     setState(() => _scheduleFuture = _loadSchedule(forceRefresh: true));
@@ -9394,6 +9425,10 @@ class _SchedulePageState extends State<SchedulePage> {
     final coursesJson = jsonEncode(coursesList);
     final firstWeekStr =
         '${firstWeekStart.year.toString().padLeft(4, '0')}-${firstWeekStart.month.toString().padLeft(2, '0')}-${firstWeekStart.day.toString().padLeft(2, '0')}';
+    // 签名守卫：内容未变化时不重复向原生层全量推送
+    final signature =
+        '$coursesJson|$beforeStartMinutes|$beforeEndMinutes|$firstWeekStr';
+    if (signature == _lastNativeReminderSignature) return;
     await background_service.loadLibrary();
     await background_service.BackgroundService.updateCourseReminders(
       coursesJson: coursesJson,
@@ -9401,6 +9436,7 @@ class _SchedulePageState extends State<SchedulePage> {
       beforeEndMinutes: beforeEndMinutes,
       firstWeekStart: firstWeekStr,
     );
+    _lastNativeReminderSignature = signature;
   }
 
   @override
@@ -9420,24 +9456,6 @@ class _SchedulePageState extends State<SchedulePage> {
             ..sort(_compareScheduleCourses);
           final displayItems =
               _viewMode == ScheduleViewMode.all ? result.items : weekItems;
-          reminder_service.loadLibrary().then((_) {
-            reminder_service.ReminderService.configureCourseReminders(
-              courses: result.items,
-              firstWeekStart: widget.firstWeekStart,
-              settings: reminder_service.CourseReminderSettings(
-                enabled: courseRemindersEnabled,
-                beforeStartMinutes: courseStartReminderMinutes,
-                beforeEndMinutes: courseEndReminderMinutes,
-              ),
-            );
-          });
-          // Sync course data to native Android layer for background reminders
-          unawaited(_syncCourseRemindersToNative(
-            result.items,
-            courseStartReminderMinutes,
-            courseEndReminderMinutes,
-            widget.firstWeekStart,
-          ));
           return PagePanel(
             title: '课表',
             icon: Icons.calendar_month,
@@ -9800,6 +9818,8 @@ class _SchedulePageState extends State<SchedulePage> {
       courseEndReminderMinutes =
           prefs.getInt('schedule.courseEndReminderMinutes') ?? 5;
     });
+    // 设置加载完成后按最新配置应用一次提醒
+    unawaited(_scheduleFuture.then((r) => _applyCourseReminders(r.items)));
   }
 
   Future<void> _setCourseRemindersEnabled(bool value) async {
@@ -9810,6 +9830,9 @@ class _SchedulePageState extends State<SchedulePage> {
       reminder_service.loadLibrary().then((_) {
         reminder_service.ReminderService.cancelCourseReminders();
       });
+    } else {
+      // 开启时按当前课表立即配置
+      unawaited(_scheduleFuture.then((r) => _applyCourseReminders(r.items)));
     }
   }
 }

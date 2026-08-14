@@ -10,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:encrypt/encrypt.dart' as encrypt;
 import 'package:pointycastle/asymmetric/api.dart';
 
+import 'auth_storage.dart';
 import 'persistent_cache.dart';
 
 const apiBaseUrl = String.fromEnvironment(
@@ -1328,6 +1329,7 @@ class ApiClient {
   }
 
   final http.Client _http;
+  static const AuthStorage _authStorage = AuthStorage();
   late final String baseUrl;
   late final List<String> _candidates;
   final RequestCache _cache;
@@ -1759,26 +1761,15 @@ class ApiClient {
     return false;
   }
 
-  Future<void> logout() async {
-    try {
-      final url = _resolveBaseUrl();
-      await _http
-          .post(Uri.parse('$url/auth/logout'),
-              headers: _headers(), body: jsonEncode({}))
-          .timeout(const Duration(seconds: 10));
-    } catch (_) {
-      // Logout should proceed even if the server request fails.
-    }
-    sessionId = null;
-    _credentialToken = null;
-    _ehallCookies = null;
-    _ehallAuthToken = null;
-    _cache.clear();
+  Future<void> revokeSession(String activeSessionId) async {
+    await _postSessionCleanup('/auth/logout', activeSessionId);
   }
 
   /// 立即清除凭证，防止后续请求触发 relogin 重试
   void clearCredentials() {
     sessionId = null;
+    _account = null;
+    setStudentId(null);
     _credentialToken = null;
     _jwxtCookies = null;
     _ehallCookies = null;
@@ -1788,14 +1779,12 @@ class ApiClient {
 
   Future<void> clearSavedAuthState() async {
     clearCredentials();
+    await _authStorage.clear();
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('auth.sessionId');
     await prefs.remove('auth.studentName');
     await prefs.remove('auth.studentId');
-    await prefs.remove('auth.ehallCookies');
-    await prefs.remove('auth.ehallAuthToken');
     await prefs.remove('auth.loginMethod');
-    await prefs.remove('auth.credentialToken');
     await prefs.remove('auth.account');
     await prefs.remove('auth.password');
     await prefs.remove('auth.rememberPassword');
@@ -1838,31 +1827,29 @@ class ApiClient {
 
   Future<void> saveCredentialToken(String? credentialToken) async {
     if (credentialToken == null || credentialToken.isEmpty) return;
+    await _authStorage.saveCredentialToken(credentialToken);
     _credentialToken = credentialToken;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('auth.credentialToken', credentialToken);
   }
 
   Future<void> clearSavedCredentialToken() async {
     _credentialToken = null;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('auth.credentialToken');
+    await _authStorage.clearCredentialToken();
   }
 
-  Future<void> savePasswordCredentials(
-    String account,
-    String password, {
-    required bool remember,
-  }) async {
+  Future<void> rememberAccount(String account) async {
     _account = account;
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('auth.rememberPassword', remember);
+    await prefs.setBool('auth.rememberPassword', true);
     await prefs.remove('auth.password');
-    if (!remember) {
-      await prefs.remove('auth.account');
-      return;
-    }
     await prefs.setString('auth.account', account);
+  }
+
+  Future<void> forgetRememberedAccount() async {
+    _account = null;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('auth.rememberPassword', false);
+    await prefs.remove('auth.account');
+    await prefs.remove('auth.password');
   }
 
   Future<void> _saveEhallAuth(LoginResult result) async {
@@ -1870,24 +1857,19 @@ class ApiClient {
     if (result.sessionId != null && result.sessionId!.isNotEmpty) {
       await prefs.setString('auth.sessionId', result.sessionId!);
     }
-    if (result.ehallCookies != null && result.ehallCookies!.isNotEmpty) {
-      await prefs.setString('auth.ehallCookies', result.ehallCookies!);
-    } else {
-      await prefs.remove('auth.ehallCookies');
-    }
-    if (result.ehallAuthToken != null && result.ehallAuthToken!.isNotEmpty) {
-      await prefs.setString('auth.ehallAuthToken', result.ehallAuthToken!);
-    } else {
-      await prefs.remove('auth.ehallAuthToken');
-    }
+    await _authStorage.saveEhallAuth(
+      result.ehallCookies,
+      result.ehallAuthToken,
+    );
   }
 
   Future<void> loadSavedCredentials() async {
     final prefs = await SharedPreferences.getInstance();
+    final sensitiveAuth = await _authStorage.load();
     _account = prefs.getString('auth.account');
-    _credentialToken = prefs.getString('auth.credentialToken');
-    _ehallCookies = prefs.getString('auth.ehallCookies');
-    _ehallAuthToken = prefs.getString('auth.ehallAuthToken');
+    _credentialToken = sensitiveAuth.credentialToken;
+    _ehallCookies = sensitiveAuth.ehallCookies;
+    _ehallAuthToken = sensitiveAuth.ehallAuthToken;
     await prefs.remove('auth.password');
   }
 
@@ -2133,16 +2115,49 @@ class ApiClient {
     required int term,
     required int week,
     bool forceRefresh = false,
-  }) =>
-      _cacheFirstObject<DashboardSnapshot>(
-        cacheKey: 'dashboard_${year}_${term}_$week',
-        fetch: () => _getDashboardObject(
-          '/dashboard?year=$year&term=$term&week=$week',
-        ),
-        fromJson: (json) => DashboardSnapshot.fromJson(json),
-        forceRefresh: forceRefresh,
-        memoryTtl: const Duration(minutes: 2),
-      );
+  }) async {
+    final result = await _cacheFirstObject<DashboardSnapshot>(
+      cacheKey: 'dashboard_${year}_${term}_$week',
+      fetch: () => _getDashboardObject(
+        '/dashboard?year=$year&term=$term&week=$week',
+      ),
+      fromJson: (json) => DashboardSnapshot.fromJson(json),
+      forceRefresh: forceRefresh,
+      memoryTtl: const Duration(minutes: 2),
+    );
+    _seedModuleCachesFromDashboard(result.data, year, term);
+    return result;
+  }
+
+  /// 将 dashboard 各模块数据写入与独立端点相同的内存缓存 key，
+  /// 使详情页首次进入直接命中缓存，省掉一次重复的网络往返。
+  void _seedModuleCachesFromDashboard(
+    DashboardSnapshot snapshot,
+    int year,
+    int term,
+  ) {
+    void seedList(String module, String cacheKey) {
+      final mod = snapshot.module(module);
+      if (!mod.hasUsableData) return;
+      final items = mod.listData();
+      if (items.isEmpty) return;
+      _cache.set(cacheKey, items);
+    }
+
+    void seedObject(String module, String cacheKey) {
+      final mod = snapshot.module(module);
+      if (!mod.hasUsableData) return;
+      final obj = mod.objectData();
+      if (obj == null) return;
+      _cache.set(cacheKey, obj);
+    }
+
+    seedList('schedule', 'schedule_${year}_$term');
+    seedList('grades', 'grades_${year}_$term');
+    seedList('exams', 'exams_${year}_$term');
+    seedObject('attendance', 'attendance_${year}_$term');
+    seedList('credits', 'credits');
+  }
 
   String _weatherPath(double? lat, double? lon) {
     if (lat != null && lon != null) {
@@ -2502,17 +2517,27 @@ class ApiClient {
   }
 
   Future<EcardConsumptionResponse> ecardConsumption(
-          {String? month, bool forceRefresh = false}) async =>
-      (await _cacheFirstObject<EcardConsumptionResponse>(
+      {String? month, bool forceRefresh = false}) async {
+    try {
+      return (await _cacheFirstObject<EcardConsumptionResponse>(
         cacheKey:
             month == null ? 'ecard_consumption' : 'ecard_consumption_$month',
         fetch: () => _get(month == null
-            ? '/ecard/consumption'
-            : '/ecard/consumption?month=$month'),
+                ? '/ecard/consumption'
+                : '/ecard/consumption?month=$month')
+            .timeout(const Duration(seconds: 12)),
         fromJson: (json) => EcardConsumptionResponse.fromJson(json),
         forceRefresh: forceRefresh,
       ))
           .data;
+    } on TimeoutException {
+      return EcardConsumptionResponse.fromJson({
+        'status': 'limited',
+        'message': '消费记录加载超时，请稍后重试',
+        'items': const [],
+      });
+    }
+  }
 
   Future<void> registerPush(String registrationId,
       {String platform = 'android'}) async {
@@ -2522,16 +2547,8 @@ class ApiClient {
     });
   }
 
-  Future<void> unregisterPush() async {
-    try {
-      final url = _resolveBaseUrl();
-      await _http
-          .post(Uri.parse('$url/push/unregister'),
-              headers: _headers(), body: jsonEncode({}))
-          .timeout(const Duration(seconds: 10));
-    } catch (_) {
-      // Unregister should not block logout even if it fails.
-    }
+  Future<void> unregisterPushForSession(String activeSessionId) async {
+    await _postSessionCleanup('/push/unregister', activeSessionId);
   }
 
   Future<List<Map<String, dynamic>>> pollPushMessages() async {
@@ -2624,7 +2641,18 @@ class ApiClient {
     final response = await _http
         .get(Uri.parse('$url$path'), headers: _headers())
         .timeout(const Duration(seconds: 12));
-    return _decodeObject(response);
+    if (response.statusCode >= 400) {
+      // 错误响应通常很小，直接走统一错误语义
+      return _decodeObject(response);
+    }
+    // dashboard 聚合响应较大（全学期课表/成绩/考试/考勤），
+    // JSON 解码放到后台 isolate，避免主 isolate 掉帧
+    final body = utf8.decode(response.bodyBytes);
+    final dynamic decoded = await compute(_decodeJsonString, body);
+    if (decoded is! Map<String, dynamic>) {
+      throw ApiException('服务器返回了意外的数据格式');
+    }
+    return decoded;
   }
 
   String _resolveBaseUrl() {
@@ -2857,6 +2885,51 @@ class ApiClient {
         if (sessionId != null) 'X-Session-Id': sessionId!,
       };
 
+  Map<String, String> _headersForSession(String activeSessionId) => {
+        'Content-Type': 'application/json',
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 16) GZUS-PRO/1.0',
+        'X-Client-Platform': kIsWeb ? 'web' : defaultTargetPlatform.name,
+        'X-GZUS-Trace-Id': _newTraceId(),
+        'X-Session-Id': activeSessionId,
+      };
+
+  Future<void> _postSessionCleanup(
+    String path,
+    String activeSessionId,
+  ) async {
+    final url = _resolveBaseUrl();
+    Object? lastError;
+    StackTrace? lastStackTrace;
+    for (var attempt = 1; attempt <= 2; attempt++) {
+      try {
+        final response = await _http
+            .post(
+              Uri.parse('$url$path'),
+              headers: _headersForSession(activeSessionId),
+              body: jsonEncode({}),
+            )
+            .timeout(const Duration(seconds: 10));
+        _decodeObject(response);
+        return;
+      } catch (error, stackTrace) {
+        lastError = error;
+        lastStackTrace = stackTrace;
+        final sessionPrefix = activeSessionId.length <= 8
+            ? activeSessionId
+            : activeSessionId.substring(0, 8);
+        debugPrint(
+          '会话清理请求失败: path=$path, attempt=$attempt, '
+          'session=$sessionPrefix, '
+          'error=${error.runtimeType}',
+        );
+        if (attempt < 2) {
+          await Future<void>.delayed(const Duration(milliseconds: 300));
+        }
+      }
+    }
+    Error.throwWithStackTrace(lastError!, lastStackTrace!);
+  }
+
   String _newTraceId() {
     final now = DateTime.now().microsecondsSinceEpoch.toRadixString(36);
     final ns = namespace.hashCode.toUnsigned(20).toRadixString(36);
@@ -2896,6 +2969,9 @@ class ApiClient {
 
 String _dateOnly(DateTime date) =>
     '${date.year.toString().padLeft(4, '0')}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+
+/// 顶层函数：供 compute() 在后台 isolate 中执行 JSON 解码
+dynamic _decodeJsonString(String body) => jsonDecode(body);
 
 const icsScheduleTimes = [
   ('09:00', '09:40'),
@@ -3170,6 +3246,7 @@ class SchoolDirectClient {
     );
     final list = _extractList(data);
     if (list.isNotEmpty) return _normalizeList(list, 'credits');
+    if (_isEmptyResult(data)) return const [];
     if (data.isNotEmpty) return [_normalizeCreditItem(data)];
     return const [];
   }
@@ -3402,6 +3479,8 @@ class SchoolDirectClient {
   String? _stringOrNull(dynamic value) => value == null ? null : '$value';
   int _intDirect(dynamic value) => int.tryParse('${value ?? 0}') ?? 0;
   double _doubleDirect(dynamic value) => double.tryParse('${value ?? 0}') ?? 0;
+  bool _isEmptyResult(Map<String, dynamic> data) =>
+      int.tryParse('${data['totalResult'] ?? data['totalCount'] ?? -1}') == 0;
 }
 
 // ============================================================
