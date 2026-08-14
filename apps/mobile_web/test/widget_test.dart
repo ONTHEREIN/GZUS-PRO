@@ -133,6 +133,79 @@ void main() {
     expect(result.data.hotWaterText, '6.8 元');
   });
 
+  test('native ecard refresh skips stale local summary cache', () async {
+    SharedPreferences.setMockInitialValues({
+      'pcache_2024000000_ecard_summary': jsonEncode({
+        'status': 'ok',
+        'studentId': '2024000000',
+        'roomId': 'CGCOMMON1111|1|A2|932',
+        'roomDisplay': '校本部 A2 A2-932',
+        'powerBalance': 1.0,
+        'powerText': '1.0 度',
+      }),
+      'pcache_2024000000_ecard_summary_at':
+          DateTime(2026, 1, 1).toIso8601String(),
+    });
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    debugDisableEcardDirectForTests = false;
+    debugEcardDirectClientFactoryForTests = () => _FakeEcardDirectClient(
+          balance: {
+            'powerBalance': 22.0,
+            'du': '度',
+            'formatPowerBalanceStr': '22.0 度',
+            'coldWaterBalance': 4.5,
+            'dun': '吨',
+            'hotWaterBalance': 8.0,
+          },
+        );
+    addTearDown(() {
+      debugDefaultTargetPlatformOverride = null;
+      debugDisableEcardDirectForTests = false;
+      debugEcardDirectClientFactoryForTests = null;
+    });
+
+    var summaryRequests = 0;
+    final api = ApiClient(
+      baseUrl: 'https://api.example.test',
+      httpClient: MockClient((request) async {
+        if (request.method == 'GET' && request.url.path == '/ecard/summary') {
+          summaryRequests++;
+          return http.Response(
+            jsonEncode({
+              'status': 'ok',
+              'studentId': '2024000000',
+              'roomId': 'CGCOMMON1111|1|A2|932',
+              'roomDisplay': '校本部 A2 A2-932',
+              'powerBalance': 1.0,
+              'powerText': '1.0 度',
+            }),
+            200,
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        if (request.method == 'PATCH' &&
+            request.url.path == '/ecard/summary-cache') {
+          return http.Response(
+            jsonEncode({'status': 'ok'}),
+            200,
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        return http.Response('not found', 404);
+      }),
+    );
+    api.useSession('test-session');
+    api.setStudentId('2024000000');
+
+    final summary = await api.refreshEcard();
+
+    expect(summaryRequests, 0);
+    expect(summary.powerBalance, 22.0);
+    expect(summary.powerText, '22.0 度');
+    expect(summary.coldWaterBalance, 4.5);
+    expect(summary.hotWaterBalance, 8.0);
+  });
+
   test('live activity maps notification messages to targets', () {
     final exam = LiveActivityEvent.fromMessage({
       'id': 'exam-1',

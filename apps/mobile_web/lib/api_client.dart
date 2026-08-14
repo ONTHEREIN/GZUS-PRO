@@ -2479,11 +2479,16 @@ class ApiClient {
       final cached = _cachedObject(pcache, 'ecard_summary') ??
           _cache.get<Map<String, dynamic>>('ecard_summary');
       if (cached != null) {
-        return _enrichEcardSummaryDirect(EcardSummary.fromJson(cached));
+        final cachedSummary = EcardSummary.fromJson(cached);
+        if (cachedSummary.isBound &&
+            cachedSummary.roomId != null &&
+            cachedSummary.roomId!.isNotEmpty) {
+          return _enrichEcardSummaryDirect(cachedSummary, requireLive: true);
+        }
       }
       final summary =
           await ecardSummary(forceRefresh: true).then((r) => r.data);
-      return _enrichEcardSummaryDirect(summary);
+      return _enrichEcardSummaryDirect(summary, requireLive: true);
     }
     try {
       final data = await _post('/ecard/refresh', {});
