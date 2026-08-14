@@ -142,9 +142,6 @@ class EhallClient:
             executor.shutdown(wait=False, cancel_futures=True)
         return items
 
-    def get_progress_items(self, page_size: int = 30) -> list[dict]:
-        return self.get_progress_overview(page_size=page_size)["items"]
-
     def get_progress_overview(self, page_size: int = 30) -> dict:
         items: list[dict] = []
         counts: dict[str, int] = {category: 0 for category in TASK_CATEGORIES}

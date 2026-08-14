@@ -371,12 +371,6 @@ class EcardClient:
             data = self.post_api(path, params, token=token, timeout=timeout)
         return data
 
-    def current_user(self) -> dict[str, Any]:
-        data = self._post_with_token_retry("/user/routine/getCurrentUser")
-        if not is_ok(data):
-            raise EcardApiError(str(data.get("msg") or "获取一卡通用户失败"))
-        return data.get("obj") or {}
-
     def rooms(self) -> list[dict[str, str]]:
         token = self.login()
         rooms_by_impl: dict[str, list[dict[str, Any]]] = {}

@@ -6,7 +6,6 @@ from datetime import datetime, timezone
 
 from sqlalchemy import Boolean, Column, DateTime, Float, Integer, String, Text, create_engine, event, inspect, text
 from sqlalchemy.engine import Engine
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -15,17 +14,6 @@ from app.config import get_settings
 
 class Base(DeclarativeBase):
     pass
-
-
-class EhallSession(Base):
-    __tablename__ = "ehall_sessions"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    account = Column(String(100), nullable=False, index=True)
-    cookies_json = Column(Text, nullable=False)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-    expires_at = Column(DateTime, nullable=False, index=True)
-    last_used_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 class EcardBinding(Base):
@@ -129,9 +117,7 @@ class AppSessionModel(Base):
 
 
 _engine = None
-_async_engine = None
 _session_factory = None
-_async_session_factory = None
 _db_initialized = False
 
 
@@ -142,16 +128,6 @@ def _resolve_sync_url(raw_url: str) -> str:
         return raw_url.replace("sqlite+aiosqlite://", "sqlite://", 1)
     if raw_url.startswith("postgresql+asyncpg://"):
         return raw_url.replace("postgresql+asyncpg://", "postgresql://", 1)
-    return raw_url
-
-
-def _resolve_async_url(raw_url: str) -> str:
-    if raw_url.startswith("postgres://"):
-        return raw_url.replace("postgres://", "postgresql+asyncpg://", 1)
-    if raw_url.startswith("postgresql://"):
-        return raw_url.replace("postgresql://", "postgresql+asyncpg://", 1)
-    if raw_url.startswith("sqlite://") and "aiosqlite" not in raw_url:
-        return raw_url.replace("sqlite://", "sqlite+aiosqlite://", 1)
     return raw_url
 
 
@@ -204,51 +180,12 @@ def get_sync_engine():
     return _engine
 
 
-def get_async_engine():
-    global _async_engine
-    if _async_engine is None:
-        settings = get_settings()
-        _validate_database_url(settings.database_url)
-        database_url = _resolve_async_url(settings.database_url)
-        if database_url.startswith("postgresql"):
-            _async_engine = create_async_engine(
-                database_url,
-                pool_size=settings.db_pool_size,
-                max_overflow=settings.db_max_overflow,
-                pool_recycle=settings.db_pool_recycle,
-                pool_pre_ping=True,
-                pool_timeout=settings.db_pool_timeout,
-            )
-        elif ":memory:" in database_url:
-            _async_engine = create_async_engine(
-                database_url,
-                poolclass=StaticPool,
-                connect_args={"check_same_thread": False},
-            )
-        else:
-            _async_engine = create_async_engine(
-                database_url,
-                connect_args={"check_same_thread": False},
-                pool_pre_ping=True,
-            )
-    return _async_engine
-
-
 def get_sync_session_factory() -> sessionmaker[Session]:
     global _session_factory
     if _session_factory is None:
         init_db()
         _session_factory = sessionmaker(bind=get_sync_engine(), expire_on_commit=False)
     return _session_factory
-
-
-def get_async_session_factory() -> async_sessionmaker[AsyncSession]:
-    global _async_session_factory
-    if _async_session_factory is None:
-        _async_session_factory = async_sessionmaker(
-            bind=get_async_engine(), expire_on_commit=False
-        )
-    return _async_session_factory
 
 
 def _is_sqlite(engine) -> bool:
@@ -335,9 +272,7 @@ def _ensure_columns(engine: Engine, table: str, columns: Mapping[str, str]) -> N
 
 
 def reset_engine():
-    global _engine, _async_engine, _session_factory, _async_session_factory, _db_initialized
+    global _engine, _session_factory, _db_initialized
     _engine = None
-    _async_engine = None
     _session_factory = None
-    _async_session_factory = None
     _db_initialized = False

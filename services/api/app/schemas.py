@@ -371,52 +371,8 @@ class LeaveFillResponse(BaseModel):
     attachment_uploaded: bool = Field(default=False, alias="attachmentUploaded")
 
 
-class ErrorResponse(BaseModel):
-    detail: str
-
-
-class EhallLoginRequest(BaseModel):
-    account: str = Field(
-        min_length=1,
-        validation_alias=AliasChoices("account", "studentId", "student_id", "username"),
-    )
-    password: str = Field(min_length=1)
-
-
-class AutoLoginRequest(BaseModel):
-    account: str = Field(
-        min_length=1,
-        validation_alias=AliasChoices("account", "studentId", "student_id", "username"),
-    )
-    password: str | None = Field(default=None, min_length=1)
-    encrypted_password: str | None = Field(default=None, alias="encryptedPassword")
-    key_id: str | None = Field(default=None, alias="keyId")
-
-    def resolve_password(self) -> str:
-        """Return the plaintext password, decrypting encrypted_password if needed."""
-        if self.encrypted_password is not None:
-            from app.rsa_keys import rsa_key_manager
-
-            try:
-                return rsa_key_manager.decrypt(self.encrypted_password)
-            except Exception:
-                raise ValueError("密码解密失败，请重新登录")
-        if self.password is not None:
-            return self.password
-        raise ValueError("必须提供 password 或 encryptedPassword")
-
-
-class EhallLoginResponse(BaseModel):
-    status: Literal["ok", "error"]
-    message: str | None = None
-    session_id: int | None = Field(default=None, alias="sessionId")
-
-
-class EhallSessionStatus(BaseModel):
-    status: Literal["valid", "expired", "not_found"]
-    account: str | None = None
-    expires_at: str | None = Field(default=None, alias="expiresAt")
-    last_used_at: str | None = Field(default=None, alias="lastUsedAt")
+class AutoLoginRequest(LoginRequest):
+    """自动登录请求与账密登录字段一致，复用 LoginRequest 的字段与解密逻辑。"""
 
 
 class WebPushKeys(BaseModel):

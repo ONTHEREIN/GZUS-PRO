@@ -117,17 +117,6 @@ def load_cache(
         return data
 
 
-def get_cached_at(student_id: str, resource: str, params: dict | None = None) -> datetime | None:
-    params_hash = _compute_params_hash(params)
-    cache_key = _make_cache_key(student_id, resource, params_hash)
-    Session = _get_factory()
-    with Session() as session:
-        entry = session.execute(
-            select(DataCache).where(DataCache.cache_key == cache_key)
-        ).scalar_one_or_none()
-        return entry.cached_at if entry else None
-
-
 def load_and_get_cached_at(
     student_id: str,
     resource: str,
@@ -155,14 +144,6 @@ def load_and_get_cached_at(
             logger.warning("Corrupt cache entry for key=%s (type=%s), discarding", cache_key, type(data).__name__)
             return None, None
         return data, entry.cached_at
-
-
-def clear_cache_for_student(student_id: str) -> int:
-    Session = _get_factory()
-    with Session() as session:
-        count = session.query(DataCache).filter(DataCache.student_id == student_id).delete()
-        session.commit()
-        return count
 
 
 # ─── 轮询器内存缓存 ─────────────────────────────────

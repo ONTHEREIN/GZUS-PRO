@@ -6,7 +6,7 @@ import re
 import time
 from json import JSONDecodeError
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 from html.parser import HTMLParser
 from typing import Any
 from urllib.parse import urljoin, urlparse
@@ -25,7 +25,6 @@ EXAM_URL = "/jwglxt/kwgl/kscx_cxXsksxxIndex.html"
 EXAM_GNMKDM = "N358105"
 
 SCHEDULE_URL = "/jwglxt/kbcx/xskbcx_cxXsKb.html"
-SCHEDULE_GNMKDM = "N2151"
 
 ATTENDANCE_URL = "/jwglxt/jxdmgl/jxdmqkcx_cxJxdmqkcxIndex.html"
 ATTENDANCE_GNMKDM = "N254315"
@@ -38,7 +37,6 @@ CREDIT_GNMKDM = "N255022"
 PHOTO_URL = "/jwglxt/xtgl/photo_cxXszp4.html"
 INFO_URL = "/jwglxt/xsxxxggl/xsgrxxwh_cxXsgrxx.html"
 INFO_GNMKDM = "N100801"
-INDEX_URL = "/jwglxt/xtgl/index_initMenu.html"
 NEWS_URL = "/jwglxt/xtgl/index_cxNews.html"
 NOTICE_MORE_URL = "/jwglxt/xtgl/xwck_cxMoreXwList.html"
 DBSY_URL = "/jwglxt/xtgl/index_cxDbsy.html"
@@ -48,26 +46,6 @@ RANGE_PATTERN = re.compile(r'(\d+)\s*-\s*(\d+)')
 NUMBER_PATTERN = re.compile(r'\d+')
 NOTICE_PREFIX_PATTERNS = [re.compile(p) for p in [r'【[^】]*】', r'\d{4}[-/.年]\d{1,2}[-/.月]\d{1,2}日?']]
 HTML_URL_PATTERN = re.compile(r"['\"]([^'\"]+\.html(?:\?[^'\"]*)?)['\"]")
-
-CACHE_TTL = timedelta(minutes=10)
-
-
-def simple_cache(ttl: timedelta):
-    def decorator(func):
-        cache = {}
-        
-        def wrapper(*args, **kwargs):
-            key = (args, frozenset(kwargs.items()))
-            now = datetime.now()
-            if key in cache:
-                cached_value, expiry = cache[key]
-                if now < expiry:
-                    return cached_value
-            result = func(*args, **kwargs)
-            cache[key] = (result, now + ttl)
-            return result
-        return wrapper
-    return decorator
 
 
 class AuthenticationError(RuntimeError):
@@ -405,19 +383,6 @@ class SchoolSdkClient:
             logger.debug("_fetch_info_page_html: proxy failed: %s", exc)
 
         return None
-
-    def _extract_photo_url_from_sdk(self) -> str | None:
-        """Extract the encoded photo URL from the SDK's cached raw HTML."""
-        if self._client is None:
-            return None
-        info_obj = getattr(self._client, "info", None)
-        if info_obj is None:
-            return None
-        raw_html = getattr(info_obj, "raw_info", None)
-        if raw_html is None or not isinstance(raw_html, (str, bytes)):
-            return None
-        html_text = raw_html if isinstance(raw_html, str) else raw_html.decode("utf-8", errors="replace")
-        return _extract_encoded_photo_url(html_text)
 
     def _query_info_via_proxy(self) -> dict | None:
         """Fetch student info via proxy POST to the JWXT info API endpoint."""
