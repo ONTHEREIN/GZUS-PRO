@@ -60,6 +60,17 @@ class Settings(BaseSettings):
     app_min_supported_build: str = "1"
     app_download_url: str = ""
     app_release_notes: str = "Dev"
+    # 管理后台首个 owner 学号（逗号分隔，可多个）；启动时幂等写入 admin_users 表
+    admin_seed_owner: str = ""
+    # 微信公众号「合集」链接（含 __biz 与 album_id）；空=同步通道关闭。
+    # 通过公开合集接口匿名拉取文章列表（标题/封面/链接/发布时间），无需 AppID/Secret。
+    wechat_album_url: str = ""
+    # hiai.ink 公众号 API 通道（可选，配置后优先于合集通道）：
+    # 第三方按次计费接口，任意公众号均可拉取全量历史文章。
+    hiai_api_token: str = ""
+    hiai_username: str = ""  # 公众号 ghid 或用户名（从任意一篇该号文章链接经 /getghid 解析）
+    # 公众号文章自动同步间隔（小时）；cron 定时 + 读通知时的惰性兜底都遵循此间隔
+    wechat_sync_interval_hours: int = 6
 
     model_config = SettingsConfigDict(env_file=ENV_FILE, env_file_encoding="utf-8")
 

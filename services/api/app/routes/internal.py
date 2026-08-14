@@ -156,11 +156,17 @@ def create_session_endpoint(
 
     session = None
     try:
+        # 管理后台：学号在 admin_users 白名单中则标记 is_admin。
+        # 延迟 import 避免与 routes.admin 的模块初始化相互依赖。
+        from app.routes.admin import admin_role_of
+
+        role = admin_role_of(payload.account)
         session = sessions.create(
             client,
             student_name=student_name or payload.student_name,
             ehall_client=ehall_client,
             student_account=payload.account,
+            is_admin=role is not None,
         )
     except Exception as exc:
         logger.error("Failed to create session in DB: %s", exc, exc_info=True)
@@ -174,10 +180,26 @@ def create_session_endpoint(
         except Exception as exc:
             logger.warning("Failed to install Worker proxy on session %s: %s", session.id[:8], exc)
 
-    return {"sessionId": session.id}
+    return {"sessionId": session.id, "isAdmin": bool(session.is_admin)}
 
 
 # ─── Cron job endpoints (called by GitHub Actions scheduled workflow) ─────
+
+@router.get("/cron/wechat-sync")
+def wechat_sync_cron(request: Request, x_internal_key: str | None = Header(None)) -> dict:
+    """同步公众号文章（由 GitHub Actions 定时调用；调用微信公开合集接口）。
+
+    与 ecard-reminder 一样走 internal key 鉴权；未配置合集链接时直接跳过。
+    """
+    _verify_internal_key(x_internal_key)
+
+    if not get_settings().wechat_album_url:
+        return {"ok": True, "reason": "wechat album not configured", "added": 0}
+
+    from app.wechat_service import sync_articles
+
+    return {"ok": True, **sync_articles()}
+
 
 @router.get("/cron/ecard-reminder")
 def ecard_reminder_cron(request: Request, x_internal_key: str | None = Header(None)) -> dict:

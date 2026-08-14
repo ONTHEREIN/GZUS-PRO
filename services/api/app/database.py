@@ -103,6 +103,8 @@ class AppSessionModel(Base):
     id = Column(String(64), primary_key=True)
     student_name = Column(String(100), nullable=True)
     student_account = Column(String(100), nullable=True)
+    # 管理后台标记：登录时查 admin_users 表写入，require_admin 依赖据此鉴权。
+    is_admin = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
     last_active_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
     push_registration_id = Column(String(300), nullable=True)
@@ -114,6 +116,107 @@ class AppSessionModel(Base):
     encrypted_credentials = Column(Text, nullable=True)
     revoked_at = Column(DateTime, nullable=True, index=True)
     revoked_reason = Column(String(100), nullable=True)
+
+
+class UserSettings(Base):
+    """按用户绑定的偏好设置（云端同步，登录后拉取）。
+
+    目前存放课表偏好：各学期第一周开始日期、自动周次、开学引导完成标记。
+    first_weeks_json 为 JSON 对象，键为 "{year}-{term}"（如 "2026-1"），
+    值为 yyyy-MM-dd 字符串（已归一化为周一）。
+    """
+
+    __tablename__ = "user_settings"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    student_id = Column(String(100), nullable=False, unique=True, index=True)
+    first_weeks_json = Column(Text, nullable=True)
+    auto_week = Column(Boolean, default=True, nullable=False)
+    onboarding_completed = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
+class AdminUser(Base):
+    """管理后台白名单：学号在表中的在校学生即管理员（复用 CAS SSO 登录）。
+
+    role 取值 "owner"（可管理管理员/踢任意会话）或 "admin"（可查看统计/踢学生会话）。
+    """
+
+    __tablename__ = "admin_users"
+
+    student_id = Column(String(100), primary_key=True)
+    role = Column(String(20), default="admin", nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
+class AdminAuditLog(Base):
+    """管理后台敏感操作审计日志（踢下线/增删管理员/清缓存）。"""
+
+    __tablename__ = "admin_audit_log"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    operator_id = Column(String(100), nullable=False, index=True)
+    action = Column(String(50), nullable=False)
+    target_type = Column(String(50), nullable=True)
+    target_id = Column(String(100), nullable=True)
+    detail = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+
+
+class WxArticle(Base):
+    """公众号文章（从微信公开「合集」接口同步，标题/封面/简介/链接）。
+
+    source 标记数据来源（album=合集同步 / paste=管理员粘贴链接）；
+    hidden 为隐藏状态，隐藏后不再出现在通知列表（但不物理删除）。
+    """
+
+    __tablename__ = "wx_articles"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    title = Column(String(500), nullable=False)
+    summary = Column(Text, nullable=True)
+    cover_url = Column(String(1000), nullable=True)
+    article_url = Column(String(1000), nullable=False, unique=True, index=True)
+    author = Column(String(200), nullable=True)
+    publish_time = Column(String(50), nullable=True)
+    source = Column(String(20), default="album", nullable=False)
+    hidden = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
+class WechatSyncState(Base):
+    """公众号同步状态：记录最近一次同步时间，供惰性同步判断过期。"""
+
+    __tablename__ = "wechat_sync_state"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    key = Column(String(50), nullable=False, unique=True)
+    last_synced_at = Column(DateTime, nullable=True)
+    last_error = Column(Text, nullable=True)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
+class AdminNotice(Base):
+    """管理员上传的通知/校历（图片为主，存 Postgres bytea）。
+
+    is_pinned 置顶（通知列表优先展示）；published 为发布开关。
+    image_data 存单张图片（≤3MB），经 /admin/notices/{id}/image 二进制返回。
+    """
+
+    __tablename__ = "admin_notices"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    title = Column(String(300), nullable=False)
+    description = Column(Text, nullable=True)
+    image_data = Column(Text, nullable=True)  # base64 编码的图片数据（≤3MB）
+    image_mime = Column(String(100), nullable=True)
+    is_pinned = Column(Boolean, default=False, nullable=False)
+    published = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
 _engine = None
@@ -225,6 +328,7 @@ def init_db():
     # exist in the database yet (e.g., added after initial deployment).
     _ensure_columns(engine, "app_sessions", {
         "student_account": "VARCHAR(100)",
+        "is_admin": "BOOLEAN",
         "revoked_at": "TIMESTAMP",
         "revoked_reason": "VARCHAR(100)",
     })

@@ -234,7 +234,20 @@ class EcardClient:
         # the ecard API from serverless regions where direct access is flaky.
         effective_proxy_origin = proxy_origin or self._worker_proxy_origin
         if effective_proxy_origin:
-            return self._post_via_proxy(url, payload, headers, effective_proxy_origin, timeout=timeout)
+            try:
+                return self._post_via_proxy(
+                    url, payload, headers, effective_proxy_origin, timeout=timeout
+                )
+            except EcardApiError as exc:
+                # CF Worker → 学校服务器链路可能整体不可达（如 HTTP 522/超时，
+                # 见 4ec5708 记录）。直连学校通常正常，回退直连避免缴费查询
+                # 全线不可用；下一次请求仍会优先尝试代理。
+                logger.warning(
+                    "ecard_client: proxy %s failed for %s (%s); falling back to direct",
+                    effective_proxy_origin,
+                    path,
+                    exc,
+                )
 
         try:
             client = self._get_http_client()
@@ -300,15 +313,12 @@ class EcardClient:
         return data
 
     def _room_proxy_origin(self) -> str:
-        worker_proxy_origin = getattr(self, "_worker_proxy_origin", "")
-        if worker_proxy_origin:
-            return worker_proxy_origin
-        settings = getattr(self, "settings", None)
-        frontend_origin = getattr(settings, "frontend_origin", "") if settings is not None else ""
-        debug = getattr(settings, "debug", True) if settings is not None else True
-        if not debug and frontend_origin.startswith("https://"):
-            return frontend_origin
-        return ""
+        # 仅当显式配置 ECARD_WORKER_PROXY_ORIGIN 时才走代理。此前曾把
+        # 前端域名（FRONTEND_BASE_URL）当作代理源——生产环境 debug=False
+        # 且 frontend 为 https 时宿舍列表会经前端域名 Worker 转发，而该
+        # Worker 与学校服务器链路可能整体不可达（HTTP 522），导致宿舍
+        # 查询全线失败。宿舍列表与 login/balance 应统一使用同一代理配置。
+        return getattr(self, "_worker_proxy_origin", "")
 
     def login(self) -> str:
         if self._token:

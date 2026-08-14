@@ -6,6 +6,7 @@ from collections import OrderedDict
 from datetime import date, time, timedelta
 from typing import Any
 
+from app.academic_period import default_first_week_start  # noqa: F401 向后兼容 re-export
 from app.school_client import pick
 
 
@@ -27,11 +28,6 @@ SECTION_TIMES = [
     (time(20, 30), time(21, 10)),
     (time(21, 10), time(21, 50)),
 ]
-
-
-def default_first_week_start(year: int, term: int) -> date:
-    seed = date(year, 9, 1) if term == 1 else date(year + 1, 3, 1)
-    return seed - timedelta(days=seed.weekday())
 
 
 def build_leave_preview(

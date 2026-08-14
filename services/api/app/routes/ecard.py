@@ -9,6 +9,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
+from app.academic_period import now_shanghai
 from app.config import get_settings
 from app.database import DataCache, EcardBinding, get_sync_session_factory
 from app.ecard_client import EcardApiError, EcardClient, EcardConfigurationError, EcardRoomRef
@@ -417,7 +418,10 @@ def refresh(session: AppSession = Depends(require_session)) -> dict[str, Any]:
                 exc,
                 exc_info=True,
             )
-            return _summary_from_binding(binding, student_id)
+            summary = _summary_from_binding(binding, student_id)
+            summary["stale"] = True
+            summary["staleReason"] = str(exc)
+            return summary
         db.commit()
         db.refresh(binding)
         return _summary_from_binding(binding, student_id)
@@ -491,7 +495,7 @@ def consumption(
     binding = _binding_for(student_id)
     if binding is None:
         return {"status": "limited", "message": "请先绑定宿舍。", "items": []}
-    query_month = month or datetime.now().strftime("%Y-%m")
+    query_month = month or now_shanghai().strftime("%Y-%m")
     if not re.fullmatch(r"\d{4}-\d{2}", query_month):
         raise HTTPException(status_code=400, detail="月份格式应为 yyyy-mm")
     try:

@@ -1,0 +1,18 @@
+name: WeChat Sync Cron
+
+on:
+  schedule:
+    # 每 6 小时同步一次公众号文章（UTC 0/6/12/18 → 北京 8/14/20/次日2 点）
+    - cron: '20 */6 * * *'
+  workflow_dispatch:
+
+jobs:
+  trigger-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger wechat article sync
+        run: |
+          curl -sS -o /dev/null -w 'HTTP %{http_code} in %{time_total}s\n' \
+            --max-time 90 \
+            -H "X-Internal-Key: ${{ secrets.INTERNAL_API_KEY }}" \
+            "https://onegzus.cc.cd/internal/cron/wechat-sync"

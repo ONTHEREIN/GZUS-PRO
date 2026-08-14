@@ -103,6 +103,9 @@ class EcardSummary(BaseModel):
         default=["power", "cold_water", "hot_water"], alias="reminderItems"
     )
     updated_at: str | None = Field(default=None, alias="updatedAt")
+    # 刷新失败时后端以旧缓存兜底返回，stale=true 供前端提示"当前为缓存数据"
+    stale: bool = False
+    stale_reason: str | None = Field(default=None, alias="staleReason")
 
 
 class EcardConsumptionItem(BaseModel):
@@ -128,6 +131,8 @@ class AuthResponse(BaseModel):
     jwxt_cookies: str | None = Field(default=None, alias="jwxtCookies")
     ehall_cookies: str | None = Field(default=None, alias="ehallCookies")
     ehall_auth_token: str | None = Field(default=None, alias="ehallAuthToken")
+    # 管理后台标记：学号在 admin_users 白名单中时为 True（由登录链路填充）
+    is_admin: bool | None = Field(default=None, alias="isAdmin")
 
 
 class ReloginRequest(BaseModel):
@@ -242,6 +247,7 @@ class NoticeItem(BaseModel):
     url: str | None = None
     summary: str | None = None
     content_summary: str | None = None
+    cover_url: str | None = Field(default=None, alias="coverUrl")
 
 
 class NoticeDetail(BaseModel):
@@ -389,3 +395,26 @@ class WebPushSubscriptionRequest(BaseModel):
 class WebPushConfigResponse(BaseModel):
     enabled: bool
     publicKey: str | None = None
+
+
+class ScheduleSettingsUpdate(BaseModel):
+    """课表偏好设置更新（部分字段可选，未传字段保持不变）。
+
+    firstWeeks 为合并语义：键 "{year}-{term}"（如 "2026-1"），值 yyyy-MM-dd。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    first_weeks: dict[str, str] | None = Field(default=None, alias="firstWeeks")
+    auto_week: bool | None = Field(default=None, alias="autoWeek")
+    onboarding_completed: bool | None = Field(default=None, alias="onboardingCompleted")
+
+
+class ScheduleSettings(BaseModel):
+    """按用户绑定的课表偏好设置（开学日期等，云端同步）。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    first_weeks: dict[str, str] = Field(default_factory=dict, alias="firstWeeks")
+    auto_week: bool = Field(default=True, alias="autoWeek")
+    onboarding_completed: bool = Field(default=False, alias="onboardingCompleted")

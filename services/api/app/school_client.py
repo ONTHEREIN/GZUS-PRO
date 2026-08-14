@@ -6,10 +6,11 @@ import re
 import time
 from json import JSONDecodeError
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
+# 学年/学期判定已抽到 academic_period.py（上海时区），此处保留 re-export 兼容旧调用。
+from app.academic_period import default_academic_period  # noqa: F401
 from app.jwxt.normalizers import (
     ensure_grade_list,
     ensure_list,
@@ -1431,15 +1432,6 @@ def _extract_encoded_photo_url(html: str) -> str | None:
         url = url.replace("&amp;", "&")
         return url
     return None
-
-
-def default_academic_period(year: str | int | None, term: str | int | None) -> tuple[int, int]:
-    if year not in (None, "") and term not in (None, ""):
-        return int(year), int(term)
-    now = datetime.now()
-    academic_year = now.year if now.month >= 9 else now.year - 1
-    academic_term = 1 if now.month >= 9 or now.month <= 1 else 2
-    return int(year or academic_year), int(term or academic_term)
 
 
 def prefixed_url_endpoints(prefix: str) -> dict:

@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime, timedelta, timezone
 
-from fastapi import Header, HTTPException, Request, status
+from fastapi import Depends, Header, HTTPException, Request, status
 
 from app.sessions import AppSession
 
@@ -233,4 +233,25 @@ def require_session(
 
     # Touch and return
     request.app.state.sessions.touch(session.id)
+    return session
+
+
+def require_admin(
+    session: AppSession = Depends(require_session),
+) -> AppSession:
+    """FastAPI dependency: require an admin session (学号在 admin_users 白名单).
+
+    会话的 is_admin 标记在登录时（/internal/create-session）写入，
+    非管理员会话一律 403，避免泄露后台统计与敏感操作能力。
+    """
+    if not session.is_admin:
+        logger.warning(
+            "require_admin: session %s (account=%s) is not an admin",
+            session.id[:8],
+            session.student_account or "(none)",
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="无管理权限",
+        )
     return session

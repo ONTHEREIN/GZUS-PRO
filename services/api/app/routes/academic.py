@@ -2,15 +2,15 @@ import asyncio
 import logging
 import time
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TypeVar
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 
 from app.cache_service import load_and_get_cached_at, save_cache
-from app.routes.deps import require_session
 from app.notice_utils import merge_notices, valid_notice_items
+from app.routes.deps import require_session
 from app.schemas import (
     AttendanceResponse,
     CreditItem,
@@ -242,7 +242,7 @@ async def dashboard(
         modules = {
             "me": _dashboard_module(
                 "me",
-                session.client.get_info if session.client else lambda: {},
+                session.client.get_info if session.client else dict,
                 empty={},
             ),
             "schedule": _dashboard_module(
@@ -252,7 +252,10 @@ async def dashboard(
             ),
             "notices": _dashboard_module(
                 "notices",
-                session.client.get_notices if session.client else lambda: [],
+                lambda: _merged_public_notices(
+                    session.client.get_notices() if session.client else [],
+                    getattr(session, "ehall_client", None),
+                ),
                 empty=[],
             ),
             "attendance": _dashboard_module(
@@ -267,7 +270,7 @@ async def dashboard(
             ),
             "credits": _dashboard_module(
                 "credits",
-                session.client.get_credits if session.client else lambda: [],
+                session.client.get_credits if session.client else list,
                 empty=[],
             ),
             "grades": _dashboard_module(
@@ -308,10 +311,34 @@ async def dashboard(
     modules = await loop.run_in_executor(None, build)
     return {
         "status": "ok",
-        "generatedAt": datetime.now(timezone.utc).isoformat(),
+        "generatedAt": datetime.now(UTC).isoformat(),
         "traceId": trace_id,
         "modules": modules,
     }
+
+
+def _merged_public_notices(jwxt_items: list, ehall_client) -> list[dict]:
+    """合并 JWXT + ehall + 校历 + 公众号 四路公开通知（供通知页与首页 dashboard 复用）。"""
+    items = jwxt_items
+    if ehall_client is not None:
+        try:
+            ehall_items = ehall_client.get_notice_items()
+            items = merge_notices(items, ehall_items)
+        except Exception:
+            logger.exception("ehall notices merge failed")
+    try:
+        from app.routes.admin import list_published_admin_notices
+
+        items.extend(list_published_admin_notices())
+    except Exception:
+        logger.exception("admin notices merge failed")
+    try:
+        from app.wechat_service import list_visible_articles
+
+        items.extend(list_visible_articles())
+    except Exception:
+        logger.exception("wechat articles merge failed")
+    return valid_notice_items(items)
 
 
 @router.get("/notices", response_model=list[NoticeItem])
@@ -322,15 +349,17 @@ async def notices(
     student_id = _get_student_id(session)
 
     def call():
-        items = session.client.get_notices()
-        ehall_client = getattr(session, "ehall_client", None)
-        if ehall_client is not None:
-            try:
-                ehall_items = ehall_client.get_notice_items()
-            except Exception:
-                ehall_items = []
-            return merge_notices(items, ehall_items)
-        return valid_notice_items(items)
+        # 惰性同步兜底：公众号通道配置过且超时未同步时，后台触发一次（不阻塞响应）
+        try:
+            from app.wechat_service import trigger_lazy_sync
+
+            trigger_lazy_sync()
+        except Exception:
+            pass
+        return _merged_public_notices(
+            session.client.get_notices(),
+            getattr(session, "ehall_client", None),
+        )
 
     return await _run_with_cache_fallback("notices", student_id, call)
 

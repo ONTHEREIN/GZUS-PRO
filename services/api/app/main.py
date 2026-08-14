@@ -14,7 +14,7 @@ from app.cache_service import ExamReminderCache, GradeUpdateCache, NoticeCache
 from app.config import get_settings
 from app.database import get_sync_session_factory, init_db
 from app.rate_limit import limiter
-from app.routes import academic, auth, ecard, ehall, push, weather
+from app.routes import academic, admin, auth, ecard, ehall, push, settings, weather
 from app.rsa_keys import rsa_key_manager
 from app.sessions import SessionStore, SessionStoreUnavailableError
 from app.ws import ConnectionManager, ws_router
@@ -61,9 +61,10 @@ async def lifespan(app: FastAPI):
 
 
 def create_app() -> FastAPI:
-    settings = get_settings()
+    # 注意：局部变量用 cfg 而非 settings，避免遮蔽 app.routes.settings 模块
+    cfg = get_settings()
     app = FastAPI(title="软帮手 Dev API", version="0.1.1-Dev", lifespan=lifespan)
-    app.state.sessions = SessionStore(settings.session_ttl_seconds, db_factory=get_sync_session_factory)
+    app.state.sessions = SessionStore(cfg.session_ttl_seconds, db_factory=get_sync_session_factory)
     app.state.pending_captcha = {}
     app.state.ly_sso_states = {}
     app.state.ws_manager = ConnectionManager()
@@ -72,7 +73,7 @@ def create_app() -> FastAPI:
     app.state.grade_update_cache = GradeUpdateCache()
     app.state.rsa_key_manager = rsa_key_manager
 
-    security_headers = _security_headers(settings)
+    security_headers = _security_headers(cfg)
 
     @app.middleware("http")
     async def security_and_body_limits(request: Request, call_next):
@@ -106,10 +107,10 @@ def create_app() -> FastAPI:
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=settings.cors_origin_list,
-        allow_origin_regex=settings.cors_origin_regex_value,
+        allow_origins=cfg.cors_origin_list,
+        allow_origin_regex=cfg.cors_origin_regex_value,
         allow_credentials=False,
-        allow_methods=["GET", "POST", "PATCH"],
+        allow_methods=["GET", "POST", "PUT", "PATCH"],
         allow_headers=[
             "X-Session-Id",
             "X-Client-Platform",
@@ -157,10 +158,12 @@ def create_app() -> FastAPI:
 
     app.include_router(auth.router)
     app.include_router(academic.router)
+    app.include_router(admin.router)
     app.include_router(ehall.router)
     app.include_router(ecard.router)
     app.include_router(push.router)
     app.include_router(weather.router)
+    app.include_router(settings.router)
     app.include_router(ws_router)
 
     # Internal endpoints for Cloudflare Worker

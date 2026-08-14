@@ -62,13 +62,18 @@ class AppSession:
     client: Any
     student_name: str | None = None
     ehall_client: Any | None = None
-    created_at: datetime = field(default_factory=datetime.now)
-    last_active_at: datetime = field(default_factory=datetime.now)
+    # 内存态约定为 naive UTC（见 touch()/get() 的 now_naive 用法）：naive 本地时间
+    # 会被当 UTC 用，让会话早 8 小时过期（Vercel 运行时为 UTC 时区）。
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
+    last_active_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
     push_registration_id: str | None = None
     push_platform: str = "android"
     revoked_at: datetime | None = None
     revoked_reason: str | None = None
     student_account: str | None = None
+    # 管理后台标记：登录时查 admin_users 表写入（sessions.create 参数），
+    # 与 DB 列 AppSessionModel.is_admin 保持一致。
+    is_admin: bool = False
 
 
 def _get_fernet(key: str) -> Fernet:
@@ -260,6 +265,7 @@ class SessionStore:
         student_name: str | None = None,
         ehall_client: Any | None = None,
         student_account: str | None = None,
+        is_admin: bool = False,
     ) -> AppSession:
         from app.database import AppSessionModel
 
@@ -297,6 +303,7 @@ class SessionStore:
             student_name=student_name,
             ehall_client=ehall_client,
             student_account=resolved_student_account,
+            is_admin=is_admin,
         )
 
         db = self._open_db("create", session.id)
@@ -336,6 +343,7 @@ class SessionStore:
                 id=session.id,
                 student_name=student_name,
                 student_account=resolved_student_account,
+                is_admin=is_admin,
                 created_at=session.created_at.replace(tzinfo=timezone.utc) if session.created_at.tzinfo is None else session.created_at,
                 last_active_at=session.last_active_at.replace(tzinfo=timezone.utc) if session.last_active_at.tzinfo is None else session.last_active_at,
                 jwxt_cookies=jwxt_cookies or None,
@@ -356,6 +364,48 @@ class SessionStore:
             db.close()
 
         return session
+
+    def revoke(self, session_id: str, reason: str = "admin_kick") -> bool:
+        """强制下线一个会话（管理后台踢下线用）。
+
+        同时更新 DB 行与内存态；已下线会话返回 False。
+        """
+        from app.database import AppSessionModel
+
+        db = self._open_db("revoke", session_id)
+        try:
+            revoked_at = datetime.now(timezone.utc)
+            revoked_at_naive = revoked_at.replace(tzinfo=None)
+            with self._lock:
+                cached = self._sessions.get(session_id)
+                if cached is not None:
+                    cached.revoked_at = revoked_at_naive
+                    cached.revoked_reason = reason
+            revoked = (
+                db.query(AppSessionModel)
+                .filter(AppSessionModel.id == session_id)
+                .filter(AppSessionModel.revoked_at.is_(None))
+                .update(
+                    {
+                        "revoked_at": revoked_at,
+                        "revoked_reason": reason,
+                    },
+                    synchronize_session=False,
+                )
+            )
+            db.commit()
+            if revoked:
+                logger.info(
+                    "Revoked session %s (reason=%s)",
+                    session_id[:8],
+                    reason,
+                )
+            return revoked > 0
+        except SQLAlchemyError as exc:
+            db.rollback()
+            raise self._persistence_error("revoke", session_id, exc) from exc
+        finally:
+            db.close()
 
     def get(
         self,
@@ -455,6 +505,7 @@ class SessionStore:
                     revoked_at=revoked_at,
                     revoked_reason=row.revoked_reason or "single_device_login",
                     student_account=row.student_account,
+                    is_admin=bool(getattr(row, "is_admin", False)),
                 )
 
             # Compute created_utc for AppSession construction below
@@ -474,6 +525,7 @@ class SessionStore:
                 cached.push_registration_id = row.push_registration_id
                 cached.push_platform = row.push_platform or "android"
                 cached.student_account = row.student_account
+                cached.is_admin = bool(getattr(row, "is_admin", False))
                 self._session_checked_at[session_id] = datetime.now(timezone.utc).replace(tzinfo=None)
                 if touch:
                     self.touch(session_id)
@@ -523,6 +575,7 @@ class SessionStore:
                 push_registration_id=row.push_registration_id,
                 push_platform=row.push_platform or "android",
                 student_account=row.student_account,
+                is_admin=bool(getattr(row, "is_admin", False)),
             )
 
             self._sessions[session.id] = session
