@@ -9,11 +9,9 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  cupertino_icons: ^1.0.8
   http: ^1.2.2
   shared_preferences: ^2.3.2
   web: ^1.1.1
-  js: ^0.6.7
   webview_flutter: ^4.8.0
   share_plus: ^10.1.4
   url_launcher: ^6.3.1

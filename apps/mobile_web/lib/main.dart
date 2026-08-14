@@ -25,8 +25,6 @@ import 'leave_attachment.dart';
 import 'persistent_cache.dart' deferred as persistent_cache;
 import 'ws_service.dart' deferred as ws_service;
 import 'mobile_sso.dart' deferred as mobile_sso;
-import 'permission_service.dart' deferred as permission_service;
-import 'location_service.dart' deferred as location_service;
 import 'avatar_open.dart' deferred as avatar_open;
 import 'background_service.dart' deferred as background_service;
 import 'reminder_service.dart' deferred as reminder_service;
@@ -3116,19 +3114,6 @@ class _HomePageState extends State<HomePage> {
         exams: const [],
       );
 
-  Future<WeatherData?> _loadWeather({bool forceRefresh = false}) async {
-    final loc = await _safeLoad(_getLocationWithPermission(), null);
-    final weather = await _safeLoad(
-      widget.api
-          .weather(forceRefresh: forceRefresh, lat: loc?.lat, lon: loc?.lon)
-          .then((r) => r.data),
-      null,
-    );
-    final WeatherData? effectiveWeather = weather ?? await _loadLocalWeather();
-    if (weather != null) _saveLocalWeather(weather);
-    return effectiveWeather;
-  }
-
   @override
   void didUpdateWidget(covariant HomePage oldWidget) {
     super.didUpdateWidget(oldWidget);
@@ -3407,24 +3392,6 @@ class _HomePageState extends State<HomePage> {
       },
     ];
     return defaults.map((e) => ExamItem.fromJson(e)).toList();
-  }
-
-  Future<({double lat, double lon})?> _getLocationWithPermission() async {
-    try {
-      await permission_service.loadLibrary();
-      final hasPermission =
-          await permission_service.PermissionService.checkLocationPermission();
-      if (!hasPermission) {
-        await permission_service.PermissionService.requestLocationPermission();
-        await Future.delayed(const Duration(milliseconds: 500));
-      }
-    } catch (_) {}
-    try {
-      await location_service.loadLibrary();
-      return location_service.LocationService.getCoarseLocation();
-    } catch (_) {
-      return null;
-    }
   }
 
   @override
