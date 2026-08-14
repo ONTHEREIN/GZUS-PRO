@@ -31,7 +31,7 @@ test('CORS preflight is handled without reaching an upstream service', async () 
   assert.equal(response.status, 204);
   assert.equal(
     response.headers.get('access-control-allow-methods'),
-    'GET,POST,PATCH,OPTIONS',
+    'GET,POST,PUT,PATCH,OPTIONS',
   );
 });
 
