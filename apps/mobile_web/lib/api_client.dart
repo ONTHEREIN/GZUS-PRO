@@ -12,6 +12,7 @@ import 'package:pointycastle/asymmetric/api.dart';
 
 import 'auth_storage.dart';
 import 'persistent_cache.dart';
+import 'schedule_utils.dart';
 
 const apiBaseUrl = String.fromEnvironment(
   'API_BASE_URL',
@@ -2210,9 +2211,9 @@ class ApiClient {
     final data = await _post('/ehall/leave/preview', {
       'year': year,
       'term': term,
-      'startDate': _dateOnly(startDate),
-      'endDate': _dateOnly(endDate),
-      'firstWeekStart': _dateOnly(firstWeekStart),
+      'startDate': dateText(startDate),
+      'endDate': dateText(endDate),
+      'firstWeekStart': dateText(firstWeekStart),
       if (courses.isNotEmpty) 'courses': courses,
     });
     return LeavePreviewResponse.fromJson(data);
@@ -2233,9 +2234,9 @@ class ApiClient {
     final data = await _post('/ehall/leave/fill', {
       'year': year,
       'term': term,
-      'startDate': _dateOnly(startDate),
-      'endDate': _dateOnly(endDate),
-      'firstWeekStart': _dateOnly(firstWeekStart),
+      'startDate': dateText(startDate),
+      'endDate': dateText(endDate),
+      'firstWeekStart': dateText(firstWeekStart),
       'reason': reason,
       'attachmentName': attachmentName,
       'attachmentContentBase64': base64Encode(attachmentBytes),
@@ -2967,30 +2968,8 @@ class ApiClient {
   }
 }
 
-String _dateOnly(DateTime date) =>
-    '${date.year.toString().padLeft(4, '0')}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
-
 /// 顶层函数：供 compute() 在后台 isolate 中执行 JSON 解码
 dynamic _decodeJsonString(String body) => jsonDecode(body);
-
-const icsScheduleTimes = [
-  ('09:00', '09:40'),
-  ('09:40', '10:20'),
-  ('10:40', '11:20'),
-  ('11:20', '12:00'),
-  ('12:30', '13:10'),
-  ('13:10', '13:50'),
-  ('14:00', '14:40'),
-  ('14:40', '15:20'),
-  ('15:30', '16:10'),
-  ('16:10', '16:50'),
-  ('17:00', '17:40'),
-  ('17:40', '18:20'),
-  ('19:00', '19:40'),
-  ('19:40', '20:20'),
-  ('20:30', '21:10'),
-  ('21:10', '21:50'),
-];
 
 List<int> parseWeeks(String? weeks) {
   if (weeks == null || weeks.trim().isEmpty) return [];
@@ -3050,8 +3029,8 @@ String generateIcs({
       continue;
     }
     final weeks = parseWeeks(course.weeks);
-    final startTime = icsScheduleTimes[course.startSection! - 1].$1;
-    final endTime = icsScheduleTimes[course.endSection! - 1].$2;
+    final startTime = scheduleTimes[course.startSection! - 1].$1;
+    final endTime = scheduleTimes[course.endSection! - 1].$2;
     for (final week in weeks) {
       // 对齐到第一周所在周的周一，确保非周一日期也能正确生成 ICS
       final mondayOfFirstWeek = firstWeekStart

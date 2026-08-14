@@ -14,6 +14,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:share_plus/share_plus.dart';
 import 'api_client.dart';
 import 'gzus_design.dart';
+import 'schedule_utils.dart';
 import 'services_deferred.dart';
 
 import 'background_guide_page.dart';
@@ -1663,7 +1664,7 @@ class _DashboardShellState extends State<DashboardShell> {
   void initState() {
     super.initState();
     firstWeekStart = _defaultFirstWeekStart(year, term);
-    currentWeek = _weekFromDate(firstWeekStart, DateTime.now());
+    currentWeek = weekFromDate(firstWeekStart, DateTime.now(), clampToTerm: true);
     _HomeWidgetBridge.setLaunchHandler(_handleWidgetLaunch);
     _NotificationOpenBridge.setOpenTabHandler(_navigateToTab);
     LiveActivityController.instance.onOpen = _handleLiveActivityOpen;
@@ -2229,8 +2230,8 @@ class _DashboardShellState extends State<DashboardShell> {
       firstWeekStart = start;
       autoWeek = savedAuto;
       currentWeek = savedAuto
-          ? _weekFromDate(start, DateTime.now())
-          : (savedWeek ?? _weekFromDate(start, DateTime.now()));
+          ? weekFromDate(start, DateTime.now(), clampToTerm: true)
+          : (savedWeek ?? weekFromDate(start, DateTime.now(), clampToTerm: true));
     });
   }
 
@@ -2238,7 +2239,7 @@ class _DashboardShellState extends State<DashboardShell> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(
       _settingsKey(year, term, 'firstWeekStart'),
-      _dateText(firstWeekStart),
+      dateText(firstWeekStart),
     );
     await prefs.setInt(_settingsKey(year, term, 'week'), currentWeek);
     await prefs.setBool('schedule.autoWeek', autoWeek);
@@ -2249,17 +2250,17 @@ class _DashboardShellState extends State<DashboardShell> {
       year = nextYear;
       term = nextTerm;
       firstWeekStart = _defaultFirstWeekStart(nextYear, nextTerm);
-      currentWeek = _weekFromDate(firstWeekStart, DateTime.now());
+      currentWeek = weekFromDate(firstWeekStart, DateTime.now(), clampToTerm: true);
     });
     _loadScheduleSettings();
   }
 
   void _setFirstWeekStart(DateTime value) {
     // 兜底归一化：确保首周开始日期始终为周一
-    final monday = _mondayOf(value);
+    final monday = mondayOf(value);
     setState(() {
       firstWeekStart = monday;
-      if (autoWeek) currentWeek = _weekFromDate(monday, DateTime.now());
+      if (autoWeek) currentWeek = weekFromDate(monday, DateTime.now(), clampToTerm: true);
     });
     _saveScheduleSettings();
   }
@@ -2275,7 +2276,7 @@ class _DashboardShellState extends State<DashboardShell> {
   void _setAutoWeek(bool value) {
     setState(() {
       autoWeek = value;
-      if (value) currentWeek = _weekFromDate(firstWeekStart, DateTime.now());
+      if (value) currentWeek = weekFromDate(firstWeekStart, DateTime.now(), clampToTerm: true);
     });
     _saveScheduleSettings();
   }
@@ -2312,22 +2313,8 @@ String _settingsKey(int year, int term, String name) =>
 
 DateTime _defaultFirstWeekStart(int year, int term) {
   final seed = term == 1 ? DateTime(year, 9, 1) : DateTime(year + 1, 3, 1);
-  return _mondayOf(seed);
+  return mondayOf(seed);
 }
-
-DateTime _mondayOf(DateTime date) {
-  final day = DateTime(date.year, date.month, date.day);
-  return day.subtract(Duration(days: day.weekday - DateTime.monday));
-}
-
-int _weekFromDate(DateTime firstWeekStart, DateTime date) {
-  final start = _mondayOf(firstWeekStart);
-  final current = _mondayOf(date);
-  return (current.difference(start).inDays ~/ 7 + 1).clamp(1, 30);
-}
-
-String _dateText(DateTime date) =>
-    '${date.year.toString().padLeft(4, '0')}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
 
 class AppSidebar extends StatelessWidget {
   const AppSidebar({
@@ -4279,15 +4266,15 @@ List<_TimedCourse> _homeTimedCourses(
         weekday > 7 ||
         startSection < 1 ||
         endSection < 1 ||
-        startSection > icsScheduleTimes.length ||
-        endSection > icsScheduleTimes.length ||
+        startSection > scheduleTimes.length ||
+        endSection > scheduleTimes.length ||
         !course.occursInWeek(currentWeek)) {
       continue;
     }
     final day =
         firstWeekStart.add(Duration(days: (currentWeek - 1) * 7 + weekday - 1));
-    final startTime = _timeParts(icsScheduleTimes[startSection - 1].$1);
-    final endTime = _timeParts(icsScheduleTimes[endSection - 1].$2);
+    final startTime = _timeParts(scheduleTimes[startSection - 1].$1);
+    final endTime = _timeParts(scheduleTimes[endSection - 1].$2);
     result.add(_TimedCourse(
       course: course,
       start: DateTime(day.year, day.month, day.day, startTime.$1, startTime.$2),
@@ -7631,7 +7618,7 @@ class _AutoLeavePageState extends State<AutoLeavePage> {
   @override
   void initState() {
     super.initState();
-    final today = _dateText(DateTime.now());
+    final today = dateText(DateTime.now());
     _startController = TextEditingController(text: today);
     _endController = TextEditingController(text: today);
     _startController.addListener(_refreshLeaveFormState);
@@ -7812,7 +7799,7 @@ class _AutoLeavePageState extends State<AutoLeavePage> {
         term: widget.term,
         startDate: range.$1,
         endDate: range.$2,
-        firstWeekStart: _mondayOf(widget.firstWeekStart),
+        firstWeekStart: mondayOf(widget.firstWeekStart),
         courses: courses,
       );
       if (mounted) {
@@ -7855,7 +7842,7 @@ class _AutoLeavePageState extends State<AutoLeavePage> {
         term: widget.term,
         startDate: range.$1,
         endDate: range.$2,
-        firstWeekStart: _mondayOf(widget.firstWeekStart),
+        firstWeekStart: mondayOf(widget.firstWeekStart),
         reason: _reasonController.text.trim(),
         attachmentName: attachment.name,
         attachmentBytes: attachment.bytes,
@@ -7935,7 +7922,7 @@ class _DatePickerField extends StatelessWidget {
       firstDate: firstDate,
       lastDate: lastDate,
     );
-    if (picked != null) controller.text = _dateText(picked);
+    if (picked != null) controller.text = dateText(picked);
   }
 
   DateTime _boundedDate(DateTime value, DateTime firstDate, DateTime lastDate) {
@@ -8963,12 +8950,12 @@ class _ScheduleOnboardingPageState extends State<ScheduleOnboardingPage> {
     );
     if (picked == null || !mounted) return;
     // 自动对齐到所选日期所在周的周一
-    final monday = _mondayOf(picked);
+    final monday = mondayOf(picked);
     setState(() => _selected = monday);
     if (monday != picked) {
       ScaffoldMessenger.maybeOf(context)?.showSnackBar(
         SnackBar(
-          content: Text('已自动对齐到所在周的周一：${_dateText(monday)}'),
+          content: Text('已自动对齐到所在周的周一：${dateText(monday)}'),
           duration: const Duration(seconds: 2),
         ),
       );
@@ -8982,11 +8969,11 @@ class _ScheduleOnboardingPageState extends State<ScheduleOnboardingPage> {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(
         'schedule.$_year.$_term.firstWeekStart',
-        _dateText(_selected),
+        dateText(_selected),
       );
       await prefs.setInt(
         'schedule.$_year.$_term.week',
-        _weekFromDate(_selected, DateTime.now()),
+        weekFromDate(_selected, DateTime.now(), clampToTerm: true),
       );
       if (!mounted) return;
       widget.onComplete();
@@ -9000,7 +8987,7 @@ class _ScheduleOnboardingPageState extends State<ScheduleOnboardingPage> {
     final colorScheme = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
     final compact = MediaQuery.sizeOf(context).width < 600;
-    final currentWeek = _weekFromDate(_selected, DateTime.now());
+    final currentWeek = weekFromDate(_selected, DateTime.now(), clampToTerm: true);
     final weekdayName = _weekdayName(_selected.weekday);
     return Scaffold(
       appBar: AppBar(
@@ -9150,7 +9137,7 @@ class _ScheduleOnboardingPageState extends State<ScheduleOnboardingPage> {
                               ),
                             ),
                             child: Text(
-                              '${_dateText(_selected)}（$weekdayName）',
+                              '${dateText(_selected)}（$weekdayName）',
                               style: textTheme.titleMedium?.copyWith(
                                 fontWeight: FontWeight.w700,
                               ),
@@ -9886,11 +9873,11 @@ class ScheduleInlineManage extends StatelessWidget {
     );
     if (picked == null) return;
     // 自动对齐到所选日期所在周的周一
-    final monday = _mondayOf(picked);
+    final monday = mondayOf(picked);
     if (monday != picked) {
       messenger?.showSnackBar(
         SnackBar(
-          content: Text('已自动对齐到所在周的周一：${_dateText(monday)}'),
+          content: Text('已自动对齐到所在周的周一：${dateText(monday)}'),
           duration: const Duration(seconds: 2),
         ),
       );
@@ -9900,7 +9887,7 @@ class ScheduleInlineManage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final autoWeekValue = _weekFromDate(firstWeekStart, DateTime.now());
+    final autoWeekValue = weekFromDate(firstWeekStart, DateTime.now(), clampToTerm: true);
     final compact = MediaQuery.sizeOf(context).width < 600;
     final colorScheme = Theme.of(context).colorScheme;
     return Container(
@@ -9929,7 +9916,7 @@ class ScheduleInlineManage extends StatelessWidget {
                 suffixIcon: Icon(Icons.arrow_drop_down),
               ),
               child: Text(
-                _dateText(firstWeekStart),
+                dateText(firstWeekStart),
                 style: Theme.of(context).textTheme.bodyLarge,
               ),
             ),
@@ -10087,7 +10074,7 @@ class _ScheduleSummaryPanel extends StatelessWidget {
               _MetricPill(
                 icon: Icons.access_time,
                 label: '首周',
-                value: _dateText(firstWeekStart),
+                value: dateText(firstWeekStart),
                 dense: true,
               ),
             ],
@@ -11041,10 +11028,10 @@ ScheduleCourse? _nextScheduleCourse(List<ScheduleCourse> items) {
 
 DateTime? _scheduleCourseEnd(ScheduleCourse course, DateTime date) {
   final section = course.endSection ?? course.startSection;
-  if (section == null || section < 1 || section > icsScheduleTimes.length) {
+  if (section == null || section < 1 || section > scheduleTimes.length) {
     return null;
   }
-  return _dateWithScheduleTime(date, icsScheduleTimes[section - 1].$2);
+  return _dateWithScheduleTime(date, scheduleTimes[section - 1].$2);
 }
 
 DateTime _dateWithScheduleTime(DateTime date, String time) {
@@ -11061,13 +11048,13 @@ DateTime _dateWithScheduleTime(DateTime date, String time) {
 String _scheduleTimeText(ScheduleCourse course) {
   final start = course.startSection;
   final end = course.endSection ?? start;
-  if (start == null || start < 1 || start > icsScheduleTimes.length) {
+  if (start == null || start < 1 || start > scheduleTimes.length) {
     return '时间待定';
   }
-  final startText = icsScheduleTimes[start - 1].$1;
-  final endText = end != null && end >= 1 && end <= icsScheduleTimes.length
-      ? icsScheduleTimes[end - 1].$2
-      : icsScheduleTimes[start - 1].$2;
+  final startText = scheduleTimes[start - 1].$1;
+  final endText = end != null && end >= 1 && end <= scheduleTimes.length
+      ? scheduleTimes[end - 1].$2
+      : scheduleTimes[start - 1].$2;
   return '$startText-$endText';
 }
 
@@ -11435,7 +11422,7 @@ class _AttendancePageState extends State<AttendancePage> {
           icon: const Icon(Icons.calendar_today, size: 16),
           label: Text(_selectedAttendanceDate == null
               ? '按天查询'
-              : _dateText(_selectedAttendanceDate!)),
+              : dateText(_selectedAttendanceDate!)),
         ),
         if (_selectedAttendanceDate != null)
           IconButton(
@@ -11627,7 +11614,7 @@ List<_AttendanceChange> _attendanceAbnormalIncrements(
 
 List<_AttendanceDayRecord> _recordsForDate(
     List<AttendanceItem> items, DateTime date) {
-  final target = _dateText(date);
+  final target = dateText(date);
   final records = <_AttendanceDayRecord>[];
   for (final item in items) {
     for (final record in item.records) {
