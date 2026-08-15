@@ -60,14 +60,6 @@ int weekFromDate(DateTime firstWeekStart, DateTime date,
 String dateText(DateTime date) =>
     '${date.year.toString().padLeft(4, '0')}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
 
-/// 生成 [year] 年 [month] 月的日历网格：6 行 × 7 列共 42 天，
-/// 周一开头，首尾用相邻月的日期补位（如 2026-09 → 首日 8/31、末日 10/11）。
-List<DateTime> calendarMonthDays(int year, int month) {
-  final first = DateTime(year, month, 1);
-  final gridStart = mondayOf(first);
-  return List.generate(42, (index) => gridStart.add(Duration(days: index)));
-}
-
 /// 16 节课的起止时间（record 形式，`$1`=开始、`$2`=结束）。
 const scheduleTimes = <(String, String)>[
   ('09:00', '09:40'),

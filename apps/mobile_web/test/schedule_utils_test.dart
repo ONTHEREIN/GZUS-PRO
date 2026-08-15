@@ -95,29 +95,17 @@ void main() {
     });
   });
 
-  group('calendarMonthDays 日历网格', () {
-    test('恒为 42 天且周一开头', () {
-      final days = calendarMonthDays(2026, 9);
-      expect(days, hasLength(42));
-      expect(days.first.weekday, DateTime.monday);
+  group('mondayOf 周一归位', () {
+    test('周一本身保持不变', () {
+      expect(mondayOf(DateTime(2026, 8, 31)), DateTime(2026, 8, 31));
     });
 
-    test('2026-09 首日为 8/31（周一补位），末日为 10/11', () {
-      final days = calendarMonthDays(2026, 9);
-      expect(days.first, DateTime(2026, 8, 31));
-      expect(days.last, DateTime(2026, 10, 11));
-      expect(days[31], DateTime(2026, 10, 1));
+    test('周日归位到本周周一', () {
+      expect(mondayOf(DateTime(2026, 9, 6)), DateTime(2026, 8, 31));
     });
 
-    test('连续日期逐天递增', () {
-      final days = calendarMonthDays(2026, 2);
-      for (var i = 1; i < days.length; i++) {
-        expect(
-          days[i].difference(days[i - 1]).inDays,
-          1,
-          reason: '第 $i 天应紧邻前一天',
-        );
-      }
+    test('月首（9月1日周二）归位到上月末周一', () {
+      expect(mondayOf(DateTime(2026, 9, 1)), DateTime(2026, 8, 31));
     });
   });
 }

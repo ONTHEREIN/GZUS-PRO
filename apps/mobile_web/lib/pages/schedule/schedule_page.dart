@@ -1634,6 +1634,9 @@ class _AllReadableSchedule extends StatelessWidget {
 /// 顶部可翻月/回本月，并标注当月覆盖的周次范围；
 /// 点击日期格子空白处弹出当日课程面板，点击课程块直接看详情。
 /// 课程过滤复用周视图逻辑：星期 + 周次（clamp 到 1..30）+ 本地停课。
+/// 日历周视图（WakeUp 风格）：一屏横排一周 7 天，横向滑动翻周。
+/// 顶部显示当前周日期范围（含月），左右按钮/滑动手势切换周次，
+/// 当天格高亮，点击日期弹出当日课程面板，点击课程块直接看详情。
 class _CalendarScheduleView extends StatefulWidget {
   const _CalendarScheduleView({
     required this.items,
@@ -1656,25 +1659,27 @@ class _CalendarScheduleView extends StatefulWidget {
 }
 
 class _CalendarScheduleViewState extends State<_CalendarScheduleView> {
-  static const weekdays = ['一', '二', '三', '四', '五', '六', '日'];
-
-  /// 当前显示的月份（1 日，翻月只改年月）。
-  late DateTime _month;
+  late final PageController _pageController;
+  late int _weekIndex;
 
   @override
   void initState() {
     super.initState();
-    final now = DateTime.now();
-    _month = DateTime(now.year, now.month, 1);
+    _weekIndex = widget.currentWeek;
+    _pageController = PageController(initialPage: widget.currentWeek);
   }
 
-  void _shiftMonth(int delta) {
-    setState(() => _month = DateTime(_month.year, _month.month + delta, 1));
+  @override
+  void dispose() {
+    _pageController.dispose();
+    super.dispose();
   }
 
-  void _goToCurrentMonth() {
-    final now = DateTime.now();
-    setState(() => _month = DateTime(now.year, now.month, 1));
+  void _goToWeek(int week) {
+    final target = week.clamp(1, 30);
+    if (target == _weekIndex) return;
+    _weekIndex = target;
+    _pageController.jumpToPage(target);
   }
 
   /// [date] 当天应显示的课程：星期匹配 + 周次匹配（学期外周次无课）
@@ -1692,14 +1697,32 @@ class _CalendarScheduleViewState extends State<_CalendarScheduleView> {
     ]..sort(_compareScheduleCourses);
   }
 
-  /// 当月首日/末日所在周次（不 clamp，用于「学期外」判断与范围标注）。
-  (int, int) _weekRange() {
-    final firstDay = _month;
-    final lastDay = DateTime(_month.year, _month.month + 1, 0);
-    return (
-      weekFromDate(widget.firstWeekStart, firstDay),
-      weekFromDate(widget.firstWeekStart, lastDay),
-    );
+  /// 第 [week] 周应显示的课程（整周，供节次网格定位）：星期匹配 + 周次匹配
+  /// + 本地停课过滤；按节次排序。
+  List<ScheduleCourse> _weekCourses(int week) {
+    if (week < 1 || week > 30) return const [];
+    final seen = <String>{};
+    return [
+      for (final course in widget.items)
+        if (course.weekday != null &&
+            course.weekday! >= 1 &&
+            course.weekday! <= 7 &&
+            course.occursInWeek(week) &&
+            !isHiddenByOverrides(course, widget.overrides, currentWeek: week) &&
+            seen.add(
+                '${course.weekday}-${course.startSection}-${course.name}'))
+          course,
+    ]..sort(_compareScheduleCourses);
+  }
+
+  /// 本周课程的最大结束节次（网格行数），至少 8 节。
+  int _maxSectionFor(List<ScheduleCourse> courses) {
+    var max = 8;
+    for (final course in courses) {
+      final end = course.endSection ?? course.startSection ?? 0;
+      if (end > max) max = end;
+    }
+    return max.clamp(8, 16);
   }
 
   void _showDayCourses(BuildContext context, DateTime date) {
@@ -1765,21 +1788,106 @@ class _CalendarScheduleViewState extends State<_CalendarScheduleView> {
     );
   }
 
+  /// 第 [week] 周的周一（从学期第一周周一顺延）。
+  DateTime _mondayOfWeek(int week) =>
+      widget.firstWeekStart.add(Duration(days: (week - 1) * 7));
+
+  /// 第 [week] 周的完整 7 天。
+  List<DateTime> _daysOfWeek(int week) => [
+        for (var i = 0; i < 7; i++)
+          _mondayOfWeek(week).add(Duration(days: i)),
+      ];
+
+  /// 某周的日期范围文案，如「9月14日-20日 · 第2周」。
+  /// 跨月时格式化为「8月31日-9月6日」，学期外（第 0/31 周边界页）显示「该周不在本学期」。
+  String _weekRangeText(int week) {
+    if (week < 1 || week > 30) return '该周不在本学期';
+    final start = _mondayOfWeek(week);
+    final end = start.add(const Duration(days: 6));
+    final rangeText = start.month == end.month
+        ? '${start.month}月${start.day}日-${end.day}日'
+        : '${start.month}月${start.day}日-${end.month}月${end.day}日';
+    return '$rangeText · 第$week周';
+  }
+
+  /// 某周的短日期范围（周次选择器格子里用），如「8/31-9/6」。
+  String _weekShortRange(int week) {
+    final start = _mondayOfWeek(week);
+    final end = start.add(const Duration(days: 6));
+    return '${start.month}/${start.day}-${end.month}/${end.day}';
+  }
+
+  /// 点击顶部周次标题弹出的底部周次选择器：
+  /// 1-30 周快速跳转，标记当前日期所在周（「本周」）。
+  void _showWeekPicker(BuildContext context) {
+    final theme = Theme.of(context);
+    final current = widget.currentWeek;
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '跳转周次',
+                      style: theme.textTheme.titleMedium
+                          ?.copyWith(fontWeight: FontWeight.w900),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () {
+                      Navigator.pop(sheetContext);
+                      _goToWeek(current);
+                    },
+                    child: const Text('回到本周'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Flexible(
+                child: GridView.count(
+                  shrinkWrap: true,
+                  physics: const ClampingScrollPhysics(),
+                  crossAxisCount: 5,
+                  mainAxisSpacing: 10,
+                  crossAxisSpacing: 10,
+                  childAspectRatio: 1.55,
+                  children: [
+                    for (var week = 1; week <= 30; week++)
+                      _WeekPickerCell(
+                        week: week,
+                        rangeText: _weekShortRange(week),
+                        isCurrentWeek: week == current,
+                        isSelected: week == _weekIndex,
+                        onTap: () {
+                          Navigator.pop(sheetContext);
+                          _goToWeek(week);
+                        },
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
-    final todayWeek = weekFromDate(widget.firstWeekStart, today);
-    final days = calendarMonthDays(_month.year, _month.month);
-    final (firstWeek, lastWeek) = _weekRange();
-    final inTerm = firstWeek <= 30 && lastWeek >= 1;
-    final weekRangeText = !inTerm
-        ? '该月不在本学期'
-        : '覆盖第${firstWeek.clamp(1, 30)}-${lastWeek.clamp(1, 30)}周';
-    final compact = MediaQuery.sizeOf(context).width < 600;
-    final cellHeight = compact ? 88.0 : 100.0;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1789,100 +1897,148 @@ class _CalendarScheduleViewState extends State<_CalendarScheduleView> {
           child: Row(
             children: [
               IconButton(
-                tooltip: '上一月',
-                onPressed: () => _shiftMonth(-1),
+                tooltip: '上一周',
+                onPressed: () =>
+                    _pageController.previousPage(
+                  duration: const Duration(milliseconds: 220),
+                  curve: Curves.easeOutCubic,
+                ),
                 icon: const Icon(Icons.chevron_left),
               ),
               Expanded(
                 child: Center(
-                  child: Text(
-                    '${_month.year}年${_month.month}月',
-                    style: theme.textTheme.titleLarge
-                        ?.copyWith(fontWeight: FontWeight.w900),
+                  child: InkWell(
+                    onTap: () => _showWeekPicker(context),
+                    borderRadius: BorderRadius.circular(10),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 4),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Flexible(
+                            child: Text(
+                              _weekRangeText(_weekIndex),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: theme.textTheme.titleLarge
+                                  ?.copyWith(fontWeight: FontWeight.w900),
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          Icon(Icons.expand_more,
+                              size: 20, color: colorScheme.onSurfaceVariant),
+                        ],
+                      ),
+                    ),
                   ),
                 ),
               ),
               IconButton(
-                tooltip: '下一月',
-                onPressed: () => _shiftMonth(1),
+                tooltip: '下一周',
+                onPressed: () => _pageController.nextPage(
+                  duration: const Duration(milliseconds: 220),
+                  curve: Curves.easeOutCubic,
+                ),
                 icon: const Icon(Icons.chevron_right),
               ),
               const SizedBox(width: 4),
               TextButton(
-                onPressed: _goToCurrentMonth,
-                child: const Text('本月'),
+                onPressed: () => _goToWeek(widget.currentWeek),
+                child: const Text('本周'),
               ),
             ],
           ),
         ),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          child: Row(
-            children: [
-              Icon(Icons.info_outline,
-                  size: 13, color: colorScheme.onSurfaceVariant),
-              const SizedBox(width: 4),
-              Text(weekRangeText, style: theme.textTheme.bodySmall),
-            ],
-          ),
-        ),
-        const SizedBox(height: 8),
-        Container(
-          padding: const EdgeInsets.symmetric(vertical: 6),
-          decoration: BoxDecoration(
-            color: colorScheme.surfaceContainer,
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Row(
-            children: [
-              for (final label in weekdays)
-                Expanded(
-                  child: Center(
-                    child: Text(
-                      '周$label',
-                      style: theme.textTheme.bodySmall
-                          ?.copyWith(fontWeight: FontWeight.w800),
-                    ),
-                  ),
-                ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 6),
+        const SizedBox(height: 4),
         Expanded(
-          child: SingleChildScrollView(
-            physics: const AlwaysScrollableScrollPhysics(),
-            child: Column(
-              children: [
-                for (var row = 0; row < 6; row++)
-                  SizedBox(
-                    height: cellHeight,
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        for (var col = 0; col < 7; col++)
-                          Expanded(
-                            child: _CalendarDayCell(
-                              date: days[row * 7 + col],
-                              inMonth:
-                                  days[row * 7 + col].month == _month.month,
-                              isToday: days[row * 7 + col] == today,
-                              isCurrentWeek:
-                                  weekFromDate(widget.firstWeekStart,
-                                      days[row * 7 + col]) ==
-                                  todayWeek,
-                              courses: _coursesOn(days[row * 7 + col]),
-                              onTap: () =>
-                                  _showDayCourses(context, days[row * 7 + col]),
-                              onAdjustCourse: widget.onAdjustCourse,
-                              onMoveToDay: widget.onMoveToDay,
-                            ),
+          child: PageView.builder(
+            controller: _pageController,
+            onPageChanged: (page) => setState(() => _weekIndex = page),
+            itemBuilder: (context, index) {
+              final week = index;
+              final days = _daysOfWeek(week);
+              final inTerm = week >= 1 && week <= 30;
+              final weekItems =
+                  inTerm ? _weekCourses(week) : const <ScheduleCourse>[];
+              final compact = MediaQuery.sizeOf(context).width < 600;
+              final timeColWidth = compact ? 40.0 : 48.0;
+              final rowHeight = compact ? 46.0 : 54.0;
+              final maxSection = _maxSectionFor(weekItems);
+              if (!inTerm) {
+                return Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 3),
+                  child: _OutOfTermCell(week: week),
+                );
+              }
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // 星期 + 日期表头（左侧时间列宽占位，与网格列对齐）
+                  Row(
+                    children: [
+                      SizedBox(width: timeColWidth),
+                      for (final day in days)
+                        Expanded(
+                          child: Column(
+                            children: [
+                              Text(
+                                _scheduleWeekdayText(day.weekday),
+                                style: theme.textTheme.bodySmall
+                                    ?.copyWith(fontWeight: FontWeight.w800),
+                              ),
+                              const SizedBox(height: 2),
+                              Container(
+                                width: 32,
+                                height: 32,
+                                alignment: Alignment.center,
+                                decoration: day == today
+                                    ? BoxDecoration(
+                                        color: colorScheme.primary,
+                                        shape: BoxShape.circle)
+                                    : null,
+                                child: Text(
+                                  '${day.day}',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: day == today
+                                        ? FontWeight.w800
+                                        : FontWeight.w600,
+                                    color: day == today
+                                        ? colorScheme.onPrimary
+                                        : colorScheme.onSurface,
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
-                      ],
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Expanded(
+                    child: SingleChildScrollView(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      child: SizedBox(
+                        height: maxSection * rowHeight,
+                        child: _WeekTimeGrid(
+                          days: days,
+                          items: weekItems,
+                          maxSection: maxSection,
+                          timeColWidth: timeColWidth,
+                          rowHeight: rowHeight,
+                          today: today,
+                          onEmptyDayTap: (day) =>
+                              _showDayCourses(context, day),
+                          onAdjustCourse: widget.onAdjustCourse,
+                          onMoveToDay: widget.onMoveToDay,
+                        ),
+                      ),
                     ),
                   ),
-              ],
-            ),
+                ],
+              );
+            },
           ),
         ),
       ],
@@ -1890,111 +2046,90 @@ class _CalendarScheduleViewState extends State<_CalendarScheduleView> {
   }
 }
 
-/// 日历网格中的单个日期格：日期数字 + 最多 2 个课程块（超出显示「+N」）。
-class _CalendarDayCell extends StatelessWidget {
-  const _CalendarDayCell({
-    required this.date,
-    required this.inMonth,
-    required this.isToday,
+/// 周次选择器中的单个周格：本周用主题色描边 + 「本周」标记。
+class _WeekPickerCell extends StatelessWidget {
+  const _WeekPickerCell({
+    required this.week,
+    required this.rangeText,
     required this.isCurrentWeek,
-    required this.courses,
+    required this.isSelected,
     required this.onTap,
-    this.onAdjustCourse,
-    this.onMoveToDay,
   });
 
-  final DateTime date;
-  final bool inMonth;
-  final bool isToday;
+  final int week;
+  final String rangeText;
   final bool isCurrentWeek;
-  final List<ScheduleCourse> courses;
+  final bool isSelected;
   final VoidCallback onTap;
-  final void Function(ScheduleCourse course)? onAdjustCourse;
-  final void Function(ScheduleCourse course)? onMoveToDay;
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-    final muted = !inMonth;
-    final visibleCourses = inMonth ? courses : const <ScheduleCourse>[];
-
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: inMonth ? onTap : null,
+    final colorScheme = Theme.of(context).colorScheme;
+    final selected = isSelected || isCurrentWeek;
+    return InkWell(
+      borderRadius: BorderRadius.circular(12),
+      onTap: onTap,
       child: Container(
-        margin: const EdgeInsets.all(2),
-        padding: const EdgeInsets.all(4),
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
         decoration: BoxDecoration(
-          color: isCurrentWeek && inMonth
-              ? colorScheme.primaryContainer.withValues(alpha: 0.28)
+          color: selected
+              ? colorScheme.primaryContainer.withValues(alpha: 0.55)
               : colorScheme.surfaceContainerLow,
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: BorderRadius.circular(12),
           border: Border.all(
-            color: isToday && inMonth
+            color: isCurrentWeek
                 ? colorScheme.primary
-                : colorScheme.outlineVariant.withValues(alpha: 0.5),
-            width: isToday && inMonth ? 1.4 : 1,
+                : colorScheme.outlineVariant,
+            width: isCurrentWeek ? 1.4 : 1,
           ),
         ),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Center(
-              child: Container(
-                width: 24,
-                height: 24,
-                alignment: Alignment.center,
-                decoration: isToday && inMonth
-                    ? BoxDecoration(
-                        color: colorScheme.primary, shape: BoxShape.circle)
-                    : null,
-                child: Text(
-                  '${date.day}',
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  '第$week周',
                   style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: isToday && inMonth
-                        ? FontWeight.w800
-                        : FontWeight.w600,
-                    color: muted
-                        ? colorScheme.onSurfaceVariant.withValues(alpha: 0.4)
-                        : isToday && inMonth
-                            ? colorScheme.onPrimary
-                            : colorScheme.onSurface,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                    color: selected
+                        ? colorScheme.onPrimaryContainer
+                        : colorScheme.onSurface,
                   ),
                 ),
-              ),
+                if (isCurrentWeek) ...[
+                  const SizedBox(width: 4),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 4, vertical: 1),
+                    decoration: BoxDecoration(
+                      color: colorScheme.primary,
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: const Text(
+                      '本周',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 9,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                ],
+              ],
             ),
             const SizedBox(height: 2),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  for (final course in visibleCourses.take(2))
-                    Expanded(
-                      child: Padding(
-                        padding: const EdgeInsets.only(bottom: 2),
-                        child: _CalendarCourseChip(
-                          course: course,
-                          onTap: () => _showReadableScheduleDetails(context,
-                              course, onAdjustCourse, onMoveToDay),
-                        ),
-                      ),
-                    ),
-                  if (visibleCourses.length > 2)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 2),
-                      child: Text(
-                        '+${visibleCourses.length - 2}',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.w700,
-                          color: colorScheme.onSurfaceVariant,
-                        ),
-                      ),
-                    ),
-                ],
+            Text(
+              rangeText,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 10,
+                color: selected
+                    ? colorScheme.onPrimaryContainer.withValues(alpha: 0.75)
+                    : colorScheme.onSurfaceVariant,
               ),
             ),
           ],
@@ -2004,7 +2139,150 @@ class _CalendarDayCell extends StatelessWidget {
   }
 }
 
-/// 日历格子内的课程块：调色板色底 + 白字，本地课程加白边（与周视图一致）。
+/// 学期外周页（第 0 / 31 周边界）：整屏占位提示。
+class _OutOfTermCell extends StatelessWidget {
+  const _OutOfTermCell({required this.week});
+
+  final int week;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(10),
+        border:
+            Border.all(color: theme.colorScheme.outlineVariant, width: 1),
+      ),
+      child: Center(
+        child: Text(
+          week < 1 ? '假期' : '已结课',
+          style: theme.textTheme.bodySmall
+              ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+        ),
+      ),
+    );
+  }
+}
+
+/// 拾光风格周网格：左侧节次时间轴 + 7 天列，水平线分隔节次行，
+/// 课程块按开始节次纵向定位（块高 = 节数跨度），点击空白处弹当日课程面板。
+class _WeekTimeGrid extends StatelessWidget {
+  const _WeekTimeGrid({
+    required this.days,
+    required this.items,
+    required this.maxSection,
+    required this.timeColWidth,
+    required this.rowHeight,
+    required this.today,
+    required this.onEmptyDayTap,
+    this.onAdjustCourse,
+    this.onMoveToDay,
+  });
+
+  final List<DateTime> days;
+  final List<ScheduleCourse> items;
+  final int maxSection;
+  final double timeColWidth;
+  final double rowHeight;
+  final DateTime today;
+  final void Function(DateTime day) onEmptyDayTap;
+  final void Function(ScheduleCourse course)? onAdjustCourse;
+  final void Function(ScheduleCourse course)? onMoveToDay;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final lineColor = colorScheme.outlineVariant.withValues(alpha: 0.45);
+    final gridWidth = MediaQuery.sizeOf(context).width;
+    final colWidth = (gridWidth - timeColWidth) / 7;
+    final totalHeight = maxSection * rowHeight;
+
+    return Stack(
+      children: [
+        // 7 天列背景（今天高亮），点击空白处弹当日课程面板
+        for (var day = 0; day < 7; day++)
+          Positioned(
+            left: timeColWidth + colWidth * day,
+            top: 0,
+            width: colWidth,
+            height: totalHeight,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => onEmptyDayTap(days[day]),
+              child: Container(
+                color: days[day] == today
+                    ? colorScheme.primaryContainer.withValues(alpha: 0.25)
+                    : colorScheme.surfaceContainerLow,
+                decoration: BoxDecoration(
+                  border: Border(
+                    left: BorderSide(color: lineColor),
+                    right: BorderSide(color: lineColor),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        // 水平分隔线（节次行边界）
+        for (var row = 0; row <= maxSection; row++)
+          Positioned(
+            left: 0,
+            top: row * rowHeight,
+            width: gridWidth,
+            height: 1,
+            child: Container(color: lineColor),
+          ),
+        // 左侧节次时间轴
+        for (var row = 0; row < maxSection; row++)
+          Positioned(
+            left: 0,
+            top: row * rowHeight,
+            width: timeColWidth,
+            height: rowHeight,
+            child: Center(
+              child: Text(
+                row < scheduleTimes.length ? scheduleTimes[row].$1 : '',
+                style: TextStyle(
+                  fontSize: 9,
+                  fontWeight: FontWeight.w600,
+                  color: colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ),
+          ),
+        // 课程块（按节次定位，块高 = 节数跨度）
+        for (final course in items)
+          if (course.weekday != null && course.startSection != null)
+            _buildCourseBlock(context, course, colWidth),
+      ],
+    );
+  }
+
+  Widget _buildCourseBlock(
+      BuildContext context, ScheduleCourse course, double colWidth) {
+    final weekday = course.weekday!;
+    final start = course.startSection!;
+    final end = course.endSection ?? start;
+    final span = end >= start ? end - start + 1 : 1;
+    const gap = 2.0;
+    return Positioned(
+      left: timeColWidth + (weekday - 1) * colWidth + gap,
+      top: (start - 1) * rowHeight + gap,
+      width: colWidth - gap * 2,
+      height: span * rowHeight - gap * 2,
+      child: _CalendarCourseChip(
+        course: course,
+        onTap: () => _showReadableScheduleDetails(context, course,
+            onAdjustCourse, onMoveToDay),
+      ),
+    );
+  }
+}
+
+/// 周网格中的课程块（拾光风格）：按节次定位，块内自上而下为
+/// 时间 → 课程名 → 教室；调色板色底 + 白字，本地课程加白边。
 class _CalendarCourseChip extends StatelessWidget {
   const _CalendarCourseChip({required this.course, required this.onTap});
 
@@ -2013,33 +2291,38 @@ class _CalendarCourseChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final start = course.startSection;
-    final end = course.endSection ?? start;
-    final sectionText = start != null && end != null
-        ? '$start-${end >= start ? end : start}节'
-        : null;
+    final classroom = _cleanScheduleText(course.classroom);
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 4),
-        alignment: Alignment.centerLeft,
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
         decoration: BoxDecoration(
           color: _scheduleCourseColor(course.name),
-          borderRadius: BorderRadius.circular(6),
+          borderRadius: BorderRadius.circular(8),
           border: course.isLocal
               ? Border.all(color: Colors.white, width: 1.2)
               : Border.all(color: Colors.white.withValues(alpha: 0.35)),
         ),
         child: FittedBox(
           fit: BoxFit.scaleDown,
-          alignment: Alignment.centerLeft,
+          alignment: Alignment.topLeft,
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                course.name,
+                _scheduleTimeText(course),
                 maxLines: 1,
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.9),
+                  fontSize: 8,
+                  height: 1.15,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              Text(
+                course.name,
+                maxLines: 2,
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
                   color: Colors.white,
@@ -2048,14 +2331,14 @@ class _CalendarCourseChip extends StatelessWidget {
                   fontWeight: FontWeight.w700,
                 ),
               ),
-              if (sectionText != null)
+              if (classroom != null)
                 Text(
-                  sectionText,
+                  classroom,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     color: Colors.white.withValues(alpha: 0.85),
-                    fontSize: 9,
+                    fontSize: 8,
                     height: 1.15,
                   ),
                 ),
