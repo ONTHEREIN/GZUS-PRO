@@ -184,11 +184,13 @@ class EcardClient:
 
     def _get_http_client(self) -> httpx.Client:
         if self._http_client is None or self._http_client.is_closed:
-            # Use 8s timeout for direct mode (fits within Vercel's 10s limit
-            # while allowing for US→China network latency).
+            # 直连模式超时压到 3s:Vercel 函数执行上限 10s,冷启动还需
+            # 数秒,海外→学校链路响应不稳。3s 超时保证 login+getBalance
+            # 能在上限内返回(成功或 stale 兜底),避免请求被 Vercel 静默
+            # 杀掉后前端 30s 超时显示"请求超时"。学校实际响应约 1-2s。
             timeout = self.settings.request_timeout_seconds
             if not self._worker_proxy_origin:
-                timeout = max(timeout, 8)
+                timeout = 3
             self._http_client = httpx.Client(
                 timeout=timeout,
                 verify=self.settings.ecard_verify_tls,
@@ -363,24 +365,6 @@ class EcardClient:
         _delete_token_from_db()
         logger.info("ecard_client: token invalidated due to auth failure")
 
-    def _post_with_token_retry(
-        self,
-        path: str,
-        params: dict[str, Any] | None = None,
-        *,
-        timeout: float | None = None,
-    ) -> dict[str, Any]:
-        """Post API call with automatic token refresh on auth failure (code=203)."""
-        token = self.login()
-        data = self.post_api(path, params, token=token, timeout=timeout)
-        # Detect auth failure: code=203 or "未登录" in message
-        if data.get("code") == 203 or "未登录" in str(data.get("msg", "")):
-            logger.info("ecard_client: token expired (code=%s), refreshing...", data.get("code"))
-            self._invalidate_token()
-            token = self.login()
-            data = self.post_api(path, params, token=token, timeout=timeout)
-        return data
-
     def rooms(self) -> list[dict[str, str]]:
         token = self.login()
         rooms_by_impl: dict[str, list[dict[str, Any]]] = {}
@@ -466,21 +450,16 @@ class EcardClient:
             },
             token=token,
         )
-        # Retry on auth failure
+        # 注意:这里不做 203 重试。重试链 login+getBalance 会叠加到 10s+
+        # 触发 Vercel 函数上限(请求被静默杀掉,前端 30s 超时)。token 有
+        # 50min 全局缓存,203 属低频;遇到时置为无效并抛错,由上层走 stale
+        # 兜底,下一次请求会自动重新登录。
         if power_data.get("code") == 203 or "未登录" in str(power_data.get("msg", "")):
-            self._invalidate_token()
-            token = self.login()
-            power_data = self.post_api(
-                "/powerfee/getBalance",
-                {
-                    "implType": room_ref.impl_type,
-                    "schoolAreaNo": room_ref.school_area_no,
-                    "buildingNo": room_ref.building_no,
-                    "roomNum": room_ref.room_num,
-                    "studentId": student_id,
-                },
-                token=token,
+            logger.warning(
+                "ecard_client: getBalance token expired (code=%s), invalidating; no retry to stay within Vercel limit",
+                power_data.get("code"),
             )
+            self._invalidate_token()
         if not is_ok(power_data):
             logger.error("ecard_client: getBalance failed, code=%s msg=%s", power_data.get("code") or power_data.get("resCode"), power_data.get("msg"))
             raise EcardApiError(str(power_data.get("msg") or "获取水电费失败"))
@@ -511,7 +490,10 @@ class EcardClient:
         }
 
     def consumption(self, room_ref: EcardRoomRef, month: str) -> dict[str, Any]:
-        data = self._post_with_token_retry(
+        # 单次请求,不做 203 重试:与 balance() 同理,避免 login+业务请求
+        # 叠加超 Vercel 函数上限。token 全局缓存 50min,203 属低频。
+        token = self.login()
+        data = self.post_api(
             "/powerfee/getDailyDetails",
             {
                 "roomNum": room_ref.room_num,
@@ -522,8 +504,15 @@ class EcardClient:
                 "pageNum": "1",
                 "pageSize": "31",
             },
-            timeout=5,
+            token=token,
+            timeout=3,
         )
+        if data.get("code") == 203 or "未登录" in str(data.get("msg", "")):
+            logger.warning(
+                "ecard_client: getDailyDetails token expired (code=%s), invalidating; no retry",
+                data.get("code"),
+            )
+            self._invalidate_token()
         if data.get("status") == "ok" and isinstance(data.get("items"), list):
             return data
         if is_ok(data):
