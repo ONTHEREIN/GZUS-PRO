@@ -259,7 +259,14 @@ def _summary_from_binding(binding: EcardBinding, student_id: str | None = None) 
 
 def refresh_binding(
     binding: EcardBinding, student_id: str, client: EcardClient | None = None
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], bool, str | None]:
+    """刷新宿舍水电余额。
+
+    返回 (summary, stale, stale_reason):
+    - stale=False 表示成功从学校拿到新数据
+    - stale=True 表示上游失败、返回的是缓存兜底数据,stale_reason 记录原因。
+      此时不更新 last_checked_at,避免前端误以为数据已刷新。
+    """
     room_ref = EcardRoomRef.from_id(binding.room_id)
     logger.info("ecard: refreshing balance for student=%s room=%s", student_id, binding.room_id)
     summary = None
@@ -280,6 +287,7 @@ def refresh_binding(
             student_id, exc, exc_info=True
         )
 
+    stale = False
     if summary is None:
         # API 调用失败，尝试从缓存恢复
         if binding.hot_water_balance_cache is not None:
@@ -300,11 +308,13 @@ def refresh_binding(
                 "hotWaterUnit": "元",
                 "hotWaterText": f"{binding.hot_water_balance_cache:.2f}元",
             }
+            stale = True
         else:
             # 无缓存，抛出原始错误
             if api_error:
                 raise api_error
             summary = {}
+            stale = True
 
     # 更新缓存（如果成功获取了热水余额）
     hot_balance = summary.get("hotWaterBalance")
@@ -313,9 +323,13 @@ def refresh_binding(
         binding.hot_water_cache_at = datetime.now(timezone.utc)
 
     binding.last_summary_json = json.dumps(summary, ensure_ascii=False)
-    binding.last_checked_at = datetime.now(timezone.utc)
+    # 仅在真正拿到学校新数据时刷新"更新时间"；缓存兜底时保留原时间戳，
+    # 前端才能看出数据是旧的（避免把失败伪装成成功）。
+    if not stale:
+        binding.last_checked_at = datetime.now(timezone.utc)
     binding.updated_at = datetime.now(timezone.utc)
-    return summary
+    stale_reason = str(api_error) if api_error is not None else ("上游服务不可用" if stale else None)
+    return summary, stale, stale_reason
 
 
 @router.get("/rooms", response_model=list[EcardRoomItem])
@@ -408,7 +422,15 @@ def refresh(session: AppSession = Depends(require_session)) -> dict[str, Any]:
             logger.info("ecard: refresh skipped, no binding for student=%s", student_id)
             return {"status": "not_bound"}
         try:
-            refresh_binding(binding, student_id)
+            summary, stale, stale_reason = refresh_binding(binding, student_id)
+            db.commit()
+            db.refresh(binding)
+            result = _summary_from_binding(binding, student_id)
+            # 上游失败、返回缓存兜底时明确标记 stale,前端提示"刷新失败"
+            if stale:
+                result["stale"] = True
+                result["staleReason"] = stale_reason or "一卡通服务暂时不可用"
+            return result
         except EcardConfigurationError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         except EcardApiError as exc:
@@ -422,9 +444,6 @@ def refresh(session: AppSession = Depends(require_session)) -> dict[str, Any]:
             summary["stale"] = True
             summary["staleReason"] = str(exc)
             return summary
-        db.commit()
-        db.refresh(binding)
-        return _summary_from_binding(binding, student_id)
 
 
 @router.patch("/summary-cache", response_model=EcardSummary)
