@@ -35,6 +35,28 @@ def _redact_url(url: str) -> str:
     ]
     return urlunparse(parsed._replace(query=urlencode(query)))
 
+
+def _sanitize_response_body(body: str, limit: int = 500) -> str:
+    """截断并脱敏 CAS 响应体后再写日志，防止 ticket/TGT 等凭证字段落入日志。
+
+    同时处理 JSON（"ticket": "..."）与表单/URL（ticket=...）两种形态。
+    """
+    text = body[:limit]
+    for key in ("ticket", "tgt", "execution", "password", "token"):
+        text = re.sub(
+            rf'"{key}"\s*:\s*"[^"]*"',
+            f'"{key}": "[REDACTED]"',
+            text,
+            flags=re.IGNORECASE,
+        )
+        text = re.sub(
+            rf"(?<![A-Za-z0-9_]){key}=[^&\s\"']+",
+            f"{key}=[REDACTED]",
+            text,
+            flags=re.IGNORECASE,
+        )
+    return text
+
 # RSA public key components extracted from CAS frontend JS
 _RSA_PUBLIC_EXPONENT = 0x010001
 _RSA_MODULUS = int(
@@ -376,9 +398,11 @@ class CasAutoLogin:
             "Content-Type": "application/x-www-form-urlencoded",
         }
 
-        logger.info("POST %s (uid=%s, code=%s)", tickets_url, kaptcha_uid, captcha_code)
+        logger.info("POST %s (uid=%s)", tickets_url, kaptcha_uid)
         response = client.post(tickets_url, data=form_data, headers=headers)
-        logger.info("Login response: status=%d, body=%s", response.status_code, response.text[:300])
+        # 只记录状态码，不记录响应体：成功响应体含 ticket/TGT 会话凭证，
+        # 写入日志等于把学校会话泄露给运维日志（此前曾直接记录 text[:300]）。
+        logger.info("Login response: status=%d", response.status_code)
 
         if response.status_code in (200, 201):
             try:
@@ -411,7 +435,7 @@ class CasAutoLogin:
         logger.warning(
             "Login request returned status %d: %s",
             response.status_code,
-            response.text[:500],
+            _sanitize_response_body(response.text),
         )
         return CasLoginResult(
             account=account,

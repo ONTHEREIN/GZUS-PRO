@@ -1,0 +1,46 @@
+name: Deploy API to Tencent Production
+
+# services/api/** 变更推送后，自动同步后端代码到腾讯云生产服务器并重启
+# （onegzus.onrein.top / 106.55.2.248，systemd 服务 onegzus-api）
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'services/api/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy to Tencent (rsync + restart)
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          echo "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          export SSH_CMD="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no"
+
+          # 同步后端代码（排除本地 venv 与缓存）
+          rsync -avz --delete -e "$SSH_CMD" \
+            --exclude '.venv' --exclude '__pycache__' --exclude '.pytest_cache' \
+            --exclude '.ruff_cache' --exclude 'test_api.py' --exclude 'test_login.py' \
+            services/api/ "$DEPLOY_USER@$DEPLOY_HOST:/opt/onegzus/api/"
+
+          # 安装依赖（若 requirements 未变，pip 走缓存很快）+ 重启 + 健康检查
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "cd /opt/onegzus/api && .venv/bin/pip install -q -r requirements.txt && chown -R onegzus:onegzus /opt/onegzus/api && systemctl restart onegzus-api && sleep 4 && curl -fsS http://127.0.0.1:8000/health || { journalctl -u onegzus-api -n 30 --no-pager; exit 1; }"
+          echo "=== API 部署完成 ==="

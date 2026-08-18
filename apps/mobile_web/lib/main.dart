@@ -466,16 +466,27 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
 
   Future<void> _tryBackgroundRefresh(SharedPreferences prefs) async {
     try {
-      final result = await api.me();
+      // forceRefresh: 会话恢复后主动拉取最新个人信息，避免命中 me 的
+      // 本地缓存而一直显示旧姓名/学号（此前未强制刷新且优先用本地旧值）。
+      final result = await api.me(forceRefresh: true);
       if (!mounted) return;
+      final freshName = result.data.name.isNotEmpty
+          ? result.data.name
+          : (prefs.getString('auth.studentName') ?? '软帮手');
+      final freshId = result.data.studentId.isNotEmpty
+          ? result.data.studentId
+          : (prefs.getString('auth.studentId') ?? '');
       setState(() {
         _globalDataSource = result.source;
-        studentName = prefs.getString('auth.studentName') ?? result.data.name;
+        studentName = freshName;
       });
-      final studentId =
-          prefs.getString('auth.studentId') ?? result.data.studentId;
-      if (studentId.isNotEmpty) {
-        api.setStudentId(studentId);
+      if (freshId.isNotEmpty) {
+        api.setStudentId(freshId);
+      }
+      // 用 API 返回的最新身份回写本地缓存，保证下次冷启动显示一致
+      await prefs.setString('auth.studentName', freshName);
+      if (freshId.isNotEmpty) {
+        await prefs.setString('auth.studentId', freshId);
       }
       _initPushServices();
     } on ApiException {
@@ -628,6 +639,15 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
     final studentId = info.studentId;
     if (studentId.isNotEmpty) {
       api.setStudentId(studentId);
+    }
+    // 姓名也以 API 返回的最新值为准并回写本地，避免首页/桌面组件一直
+    // 显示登录响应里的旧姓名。
+    if (info.name.isNotEmpty && info.name != studentName) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('auth.studentName', info.name);
+      if (mounted) {
+        setState(() => studentName = info.name);
+      }
     }
   }
 
@@ -2158,6 +2178,8 @@ class _DashboardShellState extends State<DashboardShell> {
           onNavigate: _navigateToTab,
           onSessionExpired: widget.onLogout,
           loginMethod: widget.loginMethod,
+          studentName: widget.studentName,
+          studentId: widget.api.studentId,
         );
       case 'info':
         return InfoPage(api: widget.api, onSessionExpired: widget.onLogout);

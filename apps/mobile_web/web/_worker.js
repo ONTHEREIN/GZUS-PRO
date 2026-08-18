@@ -1605,12 +1605,18 @@ export default {
         // Two proxy modes:
         // 1. With session_id: JWXT proxy (injects cookies for IP-bounded JWXT access)
         // 2. Without session_id: ecard proxy (transparent forward to ecard API)
+        // 两种模式都只放行白名单内的 https 目标，防止 _proxy 被当作任意
+        // URL 的开放代理（SSRF/内网探测/地域绕过）。
         let cookies = null;
         const parsedTarget = new URL(targetUrl);
         if (session_id) {
           cookies = await lookupSessionCookies(session_id, env);
           if (!cookies) {
             return new Response('JWXT session cookies not found', { status: 502 });
+          }
+          const allowedOrigins = [JWXT_ORIGIN, JWXT_LEGACY_ORIGIN];
+          if (parsedTarget.protocol !== 'https:' || !allowedOrigins.includes(parsedTarget.origin)) {
+            return errorResponse('Unsupported proxy target', 403, request);
           }
         } else if (
           parsedTarget.protocol !== 'https:' ||

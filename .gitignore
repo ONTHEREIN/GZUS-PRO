@@ -103,3 +103,6 @@ Desktop.ini
 .env
 .edgeone/*
 .tef_dist/*
+
+# 工具目录
+.zcode/

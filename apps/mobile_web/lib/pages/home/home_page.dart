@@ -61,6 +61,8 @@ class HomePage extends StatefulWidget {
     required this.onNavigate,
     this.onSessionExpired,
     this.loginMethod,
+    this.studentName,
+    this.studentId,
   });
 
   final ApiClient api;
@@ -71,6 +73,10 @@ class HomePage extends StatefulWidget {
   final ValueChanged<String> onNavigate;
   final VoidCallback? onSessionExpired;
   final String? loginMethod;
+  /// 登录态已知的姓名/学号，用于 me 模块缺失或失败时兜底展示，
+  /// 保证首页个人信息始终与当前登录账号一致（而非空/占位）。
+  final String? studentName;
+  final String? studentId;
 
   bool get isPasswordLogin => loginMethod == 'password';
 
@@ -176,9 +182,9 @@ class _HomePageState extends State<HomePage>
     if (parsedExams.isNotEmpty) unawaited(_saveLocalExams(parsedExams));
 
     return HomeDashboardData(
-      info: info != null
+      info: info != null && (info['name'] as String? ?? '').isNotEmpty
           ? StudentInfo.fromJson(info)
-          : StudentInfo(studentId: '', name: '软帮手'),
+          : _fallbackStudentInfo(),
       courses: schedule.map((e) => ScheduleCourse.fromJson(e)).toList(),
       notices: notices.map((e) => NoticeItem.fromJson(e)).toList(),
       attendance: attendance != null
@@ -205,7 +211,7 @@ class _HomePageState extends State<HomePage>
   }
 
   HomeDashboardData _emptyDashboardData() => HomeDashboardData(
-        info: StudentInfo(studentId: '', name: '软帮手'),
+        info: _fallbackStudentInfo(),
         courses: const [],
         notices: const [],
         attendance:
@@ -218,6 +224,13 @@ class _HomePageState extends State<HomePage>
         weather: null,
         grades: const [],
         exams: const [],
+      );
+
+  /// me 模块缺失/失败时的兜底身份：优先用当前登录账号的姓名/学号，
+  /// 而不是硬编码占位，避免个人信息与实际账号不一致。
+  StudentInfo _fallbackStudentInfo() => StudentInfo(
+        studentId: widget.studentId ?? '',
+        name: widget.studentName ?? '软帮手',
       );
 
   @override
@@ -252,8 +265,10 @@ class _HomePageState extends State<HomePage>
   }
 
   static const _weatherKey = 'local.weather';
-  static const _gradesKey = 'local.grades';
-  static const _examsKey = 'local.exams';
+  // v2：旧版本曾把伪造的示例成绩/考试写入 local.grades/local.exams，
+  // 升级键名以丢弃这些假数据，避免老用户继续看到与真实成绩不符的内容。
+  static const _gradesKey = 'local.grades.v2';
+  static const _examsKey = 'local.exams.v2';
 
   Future<WeatherData?> _loadLocalWeather() async {
     try {
@@ -341,9 +356,8 @@ class _HomePageState extends State<HomePage>
             .toList();
       }
     } catch (_) {}
-    final def = _defaultGrades();
-    _saveLocalGrades(def);
-    return def;
+    // 无本地真实成绩时返回空列表，绝不展示/落盘伪造的示例成绩。
+    return const [];
   }
 
   Future<void> _saveLocalGrades(List<GradeItem> data) async {
@@ -362,68 +376,6 @@ class _HomePageState extends State<HomePage>
     } catch (_) {}
   }
 
-  List<GradeItem> _defaultGrades() {
-    const defaults = [
-      {
-        'courseName': '数据结构与算法',
-        'score': '92',
-        'credit': '4.0',
-        'gradePoint': '4.0',
-        'term': ''
-      },
-      {
-        'courseName': '操作系统原理',
-        'score': '88',
-        'credit': '3.5',
-        'gradePoint': '3.7',
-        'term': ''
-      },
-      {
-        'courseName': '计算机网络',
-        'score': '85',
-        'credit': '3.0',
-        'gradePoint': '3.7',
-        'term': ''
-      },
-      {
-        'courseName': '数据库系统概论',
-        'score': '90',
-        'credit': '3.0',
-        'gradePoint': '4.0',
-        'term': ''
-      },
-      {
-        'courseName': '软件工程',
-        'score': '87',
-        'credit': '2.5',
-        'gradePoint': '3.7',
-        'term': ''
-      },
-      {
-        'courseName': '人工智能导论',
-        'score': '94',
-        'credit': '2.0',
-        'gradePoint': '4.0',
-        'term': ''
-      },
-      {
-        'courseName': '编译原理',
-        'score': '78',
-        'credit': '3.0',
-        'gradePoint': '3.0',
-        'term': ''
-      },
-      {
-        'courseName': '计算机图形学',
-        'score': '82',
-        'credit': '2.0',
-        'gradePoint': '3.3',
-        'term': ''
-      },
-    ];
-    return defaults.map((e) => GradeItem.fromJson(e)).toList();
-  }
-
   Future<List<ExamItem>> _loadLocalExams() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -436,9 +388,8 @@ class _HomePageState extends State<HomePage>
             .toList();
       }
     } catch (_) {}
-    final def = _defaultExams();
-    _saveLocalExams(def);
-    return def;
+    // 无本地真实考试数据时返回空列表，绝不展示/落盘伪造的示例考试。
+    return const [];
   }
 
   Future<void> _saveLocalExams(List<ExamItem> data) async {
@@ -455,49 +406,6 @@ class _HomePageState extends State<HomePage>
           .toList();
       await prefs.setString(_examsKey, jsonEncode(list));
     } catch (_) {}
-  }
-
-  List<ExamItem> _defaultExams() {
-    final now = DateTime.now();
-    final y = now.year;
-    final defaults = [
-      {
-        'name': '数据结构与算法',
-        'date': '$y-06-15',
-        'time': '09:00-11:00',
-        'weekday': '周日',
-        'location': '教学楼 A-302',
-      },
-      {
-        'name': '操作系统原理',
-        'date': '$y-06-18',
-        'time': '14:00-16:00',
-        'weekday': '周三',
-        'location': '实验楼 B-105',
-      },
-      {
-        'name': '计算机网络',
-        'date': '$y-06-22',
-        'time': '09:00-11:00',
-        'weekday': '周日',
-        'location': '教学楼 C-201',
-      },
-      {
-        'name': '数据库系统概论',
-        'date': '$y-06-25',
-        'time': '14:00-16:00',
-        'weekday': '周三',
-        'location': '教学楼 A-401',
-      },
-      {
-        'name': '软件工程',
-        'date': '$y-06-28',
-        'time': '09:00-11:00',
-        'weekday': '周六',
-        'location': '教学楼 B-203',
-      },
-    ];
-    return defaults.map((e) => ExamItem.fromJson(e)).toList();
   }
 
   @override
@@ -592,8 +500,7 @@ class _HomePageState extends State<HomePage>
         _examsFuture,
       ]).catchError((_) => List.filled(11, null));
       final data = HomeDashboardData(
-        info: results[0] as StudentInfo? ??
-            StudentInfo(studentId: '', name: '软帮手'),
+        info: results[0] as StudentInfo? ?? _fallbackStudentInfo(),
         courses: (results[1] as ScheduleResult?)?.items ?? const [],
         notices: results[2] as List<NoticeItem>? ?? const [],
         attendance: results[3] as AttendanceResponse? ??

@@ -763,21 +763,24 @@ def list_published_admin_notices() -> list[dict]:
         ]
 
 
-# ─── 公众号文章管理（同步通道：微信公开合集接口） ──────────────────
+# ─── 公众号文章管理（同步通道：RSS > 微信公开合集，可插拔） ──────
 
 
 @router.get("/wechat/status")
 def wechat_status(
     session: AppSession = Depends(require_admin),
 ) -> dict[str, Any]:
-    """公众号同步通道配置与最近同步状态。"""
+    """公众号同步通道配置与最近同步状态（RSS 源的 token 一律脱敏，不写入响应）。"""
     settings = get_settings()
-    from app.wechat_service import _parse_album_config, last_sync_at
+    from app.wechat_service import _mask_url, active_channel, last_sync_at
 
-    cfg = _parse_album_config(settings.wechat_album_url)
+    channel = active_channel()
     last = last_sync_at()
     return {
-        "configured": cfg is not None,
+        "channel": channel,
+        "configured": channel != "none",
+        # 只回传脱敏后的 URL（query token 仅保留前 4/后 4 位），避免私人 token 泄露
+        "rssUrl": _mask_url(settings.wechat_rss_url) if settings.wechat_rss_url else None,
         "albumUrl": settings.wechat_album_url or None,
         "syncIntervalHours": settings.wechat_sync_interval_hours,
         "lastSyncedAt": last.isoformat() if last else None,

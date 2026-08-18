@@ -20,6 +20,24 @@ def test_localhost_random_port_preflight_is_allowed():
     assert response.headers["access-control-allow-origin"] == "http://localhost:19231"
 
 
+def test_preflight_allows_admin_delete_method():
+    """管理后台的 DELETE 端点（/admin/users/{id} 等）需通过 CORS 预检。"""
+    client = TestClient(create_app())
+
+    response = client.options(
+        "/admin/users/123",
+        headers={
+            "Origin": "http://localhost:19231",
+            "Access-Control-Request-Method": "DELETE",
+            "Access-Control-Request-Headers": "content-type, x-session-id",
+        },
+    )
+
+    assert response.status_code == 200
+    allow_methods = response.headers.get("access-control-allow-methods", "")
+    assert "DELETE" in allow_methods
+
+
 def test_security_headers_are_set():
     client = TestClient(create_app())
 

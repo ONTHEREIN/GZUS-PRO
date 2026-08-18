@@ -117,7 +117,7 @@ ruff check .
 | `schemas.py` | Pydantic request/response models (LoginRequest, etc.) |
 | `routes/deps.py` | Dependency injection (Worker cookie injection via `X-Worker-Auth`, session recovery, auth, `require_admin`) |
 | `routes/admin.py` | 管理后台 `/admin/*`（总览/会话踢下线/管理员管理/推送/缓存/水电费/系统状态/审计日志 + 校历/通知上传 + 公众号文章管理）。鉴权：`Depends(require_admin)`（`session.is_admin`），owner 才能增删管理员。敏感操作写 `admin_audit_log`。`admin_role_of()` 供 `/internal/create-session` 标记 is_admin。`list_published_admin_notices()` 供 `/academic/notices` 并入「校历」类通知 |
-| `wechat_service.py` | 公众号文章同步：微信公开「合集」接口（appmsgalbum，匿名/免凭据）抓取文章列表（标题/封面/链接/发布时间）+ `fetch_article_meta()`（og 元数据，粘贴链接兜底）+ `sync_articles()`/`should_sync()` 惰性同步。`WxArticle`/`WechatSyncState` 表。可插拔 `WechatFetcher` 抽象 |
+| `wechat_service.py` | 公众号文章同步（可插拔 `WechatFetcher` 通道）：① `RssFetcher`（wechatrss 第三方 RSS，`WECHAT_RSS_URL` 含私人 token，任何日志/响应必须经 `_mask_url()` 脱敏）② `AlbumFetcher`（微信公开合集接口 appmsgalbum，匿名免凭据）。`default_fetcher()` 按 配置优先级 RSS > 合集 选通道，`active_channel()` 供管理后台展示。另含 `fetch_article_meta()`（og 元数据，粘贴链接兜底）、`sync_articles()`/`should_sync()` 惰性同步。表：`WxArticle`/`WechatSyncState` |
 | `school_client.py` | School portal client (JWXT 教务系统) — HTTP client + login/session. Normalizers/notice parsing split out below. |
 | `jwxt/normalizers.py` | JWXT 数据归一化纯函数 (课表/成绩/考勤/学分) — split from `school_client.py` |
 | `jwxt/notice_parser.py` | 自研 HTML 节点 + 通知条目/详情提取 — split from `school_client.py` |

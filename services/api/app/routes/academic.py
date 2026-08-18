@@ -370,8 +370,28 @@ async def notice_detail(
     request: Request = None,
     session: AppSession = Depends(require_session),
 ) -> dict:
+    _validate_notice_url(url)
     student_id = _get_student_id(session)
     params = {"url": url}
     return await _run_with_cache_fallback(
         "notice_detail", student_id, lambda: session.client.get_notice_detail(url), params,
     )
+
+
+def _validate_notice_url(url: str) -> None:
+    """仅允许教务系统同源的通知链接，拒绝跨域 URL 防止 SSRF。
+
+    与 school_client._endpoint_from_url 的校验保持一致，但在这里提前
+    拦截并返回清晰的 400，而不是被当作上游故障处理成 502。
+    """
+    from urllib.parse import urlparse
+
+    from app.config import get_settings
+
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https", ""):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="无效的通知链接")
+    if parsed.netloc:
+        base = urlparse(get_settings().jw_base_url)
+        if parsed.netloc != base.netloc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="无效的通知链接")

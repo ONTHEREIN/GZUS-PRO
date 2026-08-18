@@ -991,10 +991,18 @@ class SchoolSdkClient:
         return extract_notice_detail(html, url)
 
     def _endpoint_from_url(self, url: str) -> str:
+        """将通知 URL 归一化为教务系统同源端点路径。
+
+        仅放行相对路径或与教务系统同 host 的绝对 URL；跨域绝对 URL 一律
+        拒绝，防止恶意 url 参数经 vendor SDK 直发 requests 触发 SSRF
+        （vendor 的 _request 对完整 URL 会原样请求）。
+        """
         parsed = urlparse(url)
         base = urlparse(self.base_url)
+        if parsed.scheme not in ("http", "https", ""):
+            raise ValueError(f"不支持的通知链接协议: {parsed.scheme or '(空)'}")
         if parsed.netloc and parsed.netloc != base.netloc:
-            return url
+            raise ValueError(f"跨域通知链接被拒绝: {parsed.netloc}")
         endpoint = parsed.path or "/"
         if parsed.query:
             endpoint = f"{endpoint}?{parsed.query}"

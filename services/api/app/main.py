@@ -110,7 +110,7 @@ def create_app() -> FastAPI:
         allow_origins=cfg.cors_origin_list,
         allow_origin_regex=cfg.cors_origin_regex_value,
         allow_credentials=False,
-        allow_methods=["GET", "POST", "PUT", "PATCH"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
         allow_headers=[
             "X-Session-Id",
             "X-Client-Platform",

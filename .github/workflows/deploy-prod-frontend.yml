@@ -1,0 +1,64 @@
+name: Deploy Frontend to Tencent Production
+
+# 推送到 master 后自动构建 Flutter Web 并部署到腾讯云生产服务器
+# （onegzus.onrein.top / 106.55.2.248，nginx 静态托管）
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.44.0'
+
+      - name: Install dependencies
+        run: |
+          cd apps/mobile_web
+          flutter pub get
+
+      - name: Build Web
+        env:
+          # 仓库 Variables/Secrets 里可配 API_BASE_URL 覆盖默认值
+          API_BASE_URL: ${{ vars.API_BASE_URL || secrets.API_BASE_URL || 'https://onegzus.onrein.top/api' }}
+        run: |
+          cd apps/mobile_web
+          flutter build web --release --base-href "/" --dart-define=API_BASE_URL="$API_BASE_URL" --no-web-resources-cdn
+          # 清理（与旧 CI 一致：去调试符号/多余 CanvasKit 变体/NOTICES）
+          cd build/web
+          find . -name "*.symbols" -delete
+          rm -rf canvaskit/experimental_webparagraph
+          rm -f canvaskit/skwasm*.wasm canvaskit/skwasm*.js
+          rm -f canvaskit/wimp.wasm canvaskit/wimp.js
+          rm -f assets/NOTICES
+
+      - name: Deploy to Tencent (rsync + nginx reload)
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          echo "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          export SSH_CMD="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no"
+          rsync -avz --delete -e "$SSH_CMD" \
+            apps/mobile_web/build/web/ "$DEPLOY_USER@$DEPLOY_HOST:/opt/onegzus/web/"
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            "$DEPLOY_USER@$DEPLOY_HOST" "chown -R onegzus:onegzus /opt/onegzus/web && nginx -t && systemctl reload nginx"
+          echo "=== 部署完成，验证 ==="
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            "$DEPLOY_USER@$DEPLOY_HOST" "curl -sk -o /dev/null -w 'https://onegzus.onrein.top/ -> %{http_code}\n' https://onegzus.onrein.top/ || true"

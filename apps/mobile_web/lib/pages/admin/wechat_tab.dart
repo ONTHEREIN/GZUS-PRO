@@ -135,7 +135,16 @@ class _WechatTabState extends State<WechatTab> {
             emptyMessage: '暂无同步状态',
             builder: (status) {
               final configured = status['configured'] as bool? ?? false;
+              final channel = status['channel'] as String? ?? 'none';
               final lastSynced = status['lastSyncedAt'] as String?;
+              final rssUrl = status['rssUrl'] as String?;
+              final albumUrl = status['albumUrl'] as String?;
+              // 通道中文名（后端已把 RSS 源 token 脱敏后才返回）
+              final channelLabel = switch (channel) {
+                'rss' => 'RSS 订阅源（wechatrss）',
+                'album' => '微信合集',
+                _ => '未配置',
+              };
               return Card(
                 elevation: 0,
                 color: Theme.of(context).colorScheme.surfaceContainer,
@@ -164,8 +173,8 @@ class _WechatTabState extends State<WechatTab> {
                           Expanded(
                             child: Text(
                               configured
-                                  ? '已配置合集，自动同步已开启（每 ${status['syncIntervalHours'] ?? 6} 小时）'
-                                  : '未配置合集链接（环境变量 WECHAT_ALBUM_URL），自动同步未开启',
+                                  ? '通道：$channelLabel（每 ${status['syncIntervalHours'] ?? 6} 小时自动同步）'
+                                  : '未配置同步通道（环境变量 WECHAT_RSS_URL 或 WECHAT_ALBUM_URL），自动同步未开启',
                               style: const TextStyle(fontSize: 13),
                             ),
                           ),
@@ -180,6 +189,27 @@ class _WechatTabState extends State<WechatTab> {
                             fontSize: 13,
                             color: Theme.of(context).colorScheme.onSurfaceVariant),
                       ),
+                      if (rssUrl != null) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          'RSS 源：$rssUrl',
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                              fontSize: 12,
+                              color: Theme.of(context).colorScheme.onSurfaceVariant),
+                        ),
+                      ] else if (albumUrl != null) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          '合集：$albumUrl',
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                              fontSize: 12,
+                              color: Theme.of(context).colorScheme.onSurfaceVariant),
+                        ),
+                      ],
                       const SizedBox(height: 12),
                       SizedBox(
                         width: double.infinity,

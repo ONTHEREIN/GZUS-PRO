@@ -1,4 +1,4 @@
-"""公众号文章同步服务测试（微信公开合集接口 + og 元数据解析 + upsert 去重）。"""
+"""公众号文章同步服务测试（RSS 通道 + 微信公开合集接口 + og 元数据解析 + upsert 去重）。"""
 import base64
 from datetime import UTC
 
@@ -6,8 +6,15 @@ from app.config import get_settings
 from app.database import WechatSyncState, WxArticle, get_sync_session_factory
 from app.wechat_service import (
     AlbumFetcher,
+    RssFetcher,
     WechatArticle,
+    _mask_url,
     _parse_album_config,
+    _rss_date_to_str,
+    _rss_description_cover,
+    _rss_description_text,
+    active_channel,
+    default_fetcher,
     delete_article,
     fetch_article_meta,
     list_visible_articles,
@@ -18,6 +25,7 @@ from app.wechat_service import (
 )
 
 ALBUM_URL = "https://mp.weixin.qq.com/mp/appmsgalbum?__biz=Mzg5NDY3NzIwMA==&album_id=2038088622687469575"
+RSS_URL = "https://wechatrss.waytomaster.com/api/rss/all?token=eyJhbGciOiJIUzI1NiJ9.exampleToken"
 
 
 # ─── 配置解析 ─────────────────────────────────────────────
@@ -297,3 +305,150 @@ def test_image_base64_roundtrip():
     raw = b"\x89PNG\r\n\x1a\nfake"
     encoded = base64.b64encode(raw).decode()
     assert base64.b64decode(encoded) == raw
+
+
+# ─── RSS 通道（wechatrss 第三方服务） ─────────────────────
+
+RSS_FIXTURE = """<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+<channel><title>WeChat RSS</title>
+<item>
+  <title>第一篇文章标题</title>
+  <link>https://mp.weixin.qq.com/s/abc123</link>
+  <description>&lt;img src="https://mmbiz.qpic.cn/cover.jpg/0"&gt;&lt;p&gt;这是一段摘要。&lt;/p&gt;&lt;p&gt;第二段。&lt;/p&gt;</description>
+  <content:encoded><![CDATA[<img src="https://mmbiz.qpic.cn/content.jpg"><p>正文</p>]]></content:encoded>
+  <pubDate>Fri, 14 Aug 2026 17:01:46 +0000</pubDate>
+</item>
+<item>
+  <title>第二篇</title>
+  <link>https://mp.weixin.qq.com/s/def456</link>
+  <description>纯文本简介，无HTML</description>
+  <pubDate>Sun, 09 Aug 2026 00:00:00 +0800</pubDate>
+</item>
+</channel>
+</rss>
+"""
+
+
+def _monkeypatch_rss(monkeypatch, body=RSS_FIXTURE, status=200):
+    class FakeResp:
+        def __init__(self):
+            self.status_code = status
+            self.text = body
+
+        def raise_for_status(self):
+            if self.status_code != 200:
+                raise RuntimeError(f"HTTP {self.status_code}")
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        def get(self, url):
+            assert "token" in url
+            return FakeResp()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            pass
+
+    import app.wechat_service as ws
+
+    monkeypatch.setattr(ws.httpx, "Client", FakeClient)
+
+
+def test_rss_fetcher_parses_items(monkeypatch):
+    _monkeypatch_rss(monkeypatch)
+    fetcher = RssFetcher(RSS_URL)
+    assert fetcher.enabled is True
+    articles = fetcher.fetch_latest(limit=10)
+    assert len(articles) == 2
+    first = articles[0]
+    assert first.title == "第一篇文章标题"
+    assert first.article_url == "https://mp.weixin.qq.com/s/abc123"
+    # 封面从 description 图片提取
+    assert first.cover_url == "https://mmbiz.qpic.cn/cover.jpg/0"
+    # 简介剥 HTML
+    assert first.summary == "这是一段摘要。 第二段。"
+    assert first.publish_time == "2026-08-14"
+    # 纯文本 description
+    assert articles[1].summary == "纯文本简介，无HTML"
+    assert articles[1].publish_time == "2026-08-08"
+
+
+def test_rss_fetcher_limit(monkeypatch):
+    _monkeypatch_rss(monkeypatch)
+    fetcher = RssFetcher(RSS_URL)
+    articles = fetcher.fetch_latest(limit=1)
+    assert len(articles) == 1
+
+
+def test_rss_fetcher_disabled_without_url(monkeypatch):
+    get_settings.cache_clear()
+    monkeypatch.setenv("WECHAT_RSS_URL", "")
+    get_settings.cache_clear()
+    fetcher = RssFetcher(None)
+    assert fetcher.enabled is False
+    assert fetcher.fetch_latest() == []
+
+
+def test_rss_date_to_str():
+    assert _rss_date_to_str("Fri, 14 Aug 2026 17:01:46 +0000") == "2026-08-14"
+    assert _rss_date_to_str("Sun, 09 Aug 2026 00:00:00 +0800") == "2026-08-08"
+    assert _rss_date_to_str("") is None
+    assert _rss_date_to_str("not-a-date") is None
+
+
+def test_rss_description_cover_and_text():
+    assert _rss_description_cover('<img src="https://x/y.jpg"><p>t</p>') == "https://x/y.jpg"
+    assert _rss_description_cover("无图片") is None
+    assert _rss_description_text("<p>a</p><p>b</p>") == "a b"
+    assert _rss_description_text("纯文本") == "纯文本"
+
+
+# ─── 通道选择与 token 脱敏 ──────────────────────────────
+
+def test_default_fetcher_prefers_rss(monkeypatch):
+    get_settings.cache_clear()
+    monkeypatch.setenv("WECHAT_RSS_URL", RSS_URL)
+    monkeypatch.setenv("WECHAT_ALBUM_URL", ALBUM_URL)
+    get_settings.cache_clear()
+    assert isinstance(default_fetcher(), RssFetcher)
+    assert active_channel() == "rss"
+
+
+def test_default_fetcher_falls_back_to_album(monkeypatch):
+    get_settings.cache_clear()
+    monkeypatch.setenv("WECHAT_RSS_URL", "")
+    monkeypatch.setenv("WECHAT_ALBUM_URL", ALBUM_URL)
+    get_settings.cache_clear()
+    assert isinstance(default_fetcher(), AlbumFetcher)
+    assert active_channel() == "album"
+
+
+def test_active_channel_none(monkeypatch):
+    get_settings.cache_clear()
+    monkeypatch.setenv("WECHAT_RSS_URL", "")
+    monkeypatch.setenv("WECHAT_ALBUM_URL", "")
+    get_settings.cache_clear()
+    assert active_channel() == "none"
+
+
+def test_mask_url_hides_token():
+    masked = _mask_url(RSS_URL)
+    assert "eyJhbGciOiJIUzI1NiJ9" not in masked  # token 中段不出现
+    assert masked.endswith("token=eyJh…oken")
+    assert _mask_url("https://example.com/plain") == "https://example.com/plain"
+    assert _mask_url("") is None
+    assert _mask_url(None) is None
+
+
+def test_should_sync_respects_rss_channel(monkeypatch):
+    # 仅配 RSS → 应该惰性同步
+    get_settings.cache_clear()
+    monkeypatch.setenv("WECHAT_RSS_URL", RSS_URL)
+    monkeypatch.setenv("WECHAT_ALBUM_URL", "")
+    get_settings.cache_clear()
+    assert should_sync() is True

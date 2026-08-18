@@ -22,3 +22,11 @@ def test_worker_credits_single_object_is_normalized_as_list():
 
     assert "const creditData = unwrapCreditObject(data);" in worker
     assert "normalizeResultList([creditData], module);" in worker
+
+
+def test_worker_proxy_restricts_session_targets_to_jwxt_origins():
+    """SSRF 防护：_proxy 带 session_id 时只允许教务系统同源目标。"""
+    worker = _worker_source()
+
+    assert "allowedOrigins = [JWXT_ORIGIN, JWXT_LEGACY_ORIGIN]" in worker
+    assert "parsedTarget.origin" in worker

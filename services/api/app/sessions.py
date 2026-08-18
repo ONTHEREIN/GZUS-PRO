@@ -265,7 +265,7 @@ class SessionStore:
         student_name: str | None = None,
         ehall_client: Any | None = None,
         student_account: str | None = None,
-        is_admin: bool = False,
+        is_admin: bool | None = None,
     ) -> AppSession:
         from app.database import AppSessionModel
 
@@ -284,6 +284,22 @@ class SessionStore:
                         resolved_student_account = None
                 except Exception:
                     pass
+
+        # 自托管（无 Cloudflare Worker）部署下，登录走 /auth/* 而非
+        # /internal/create-session，这里统一按 admin_users 白名单解析 is_admin，
+        # 保证管理后台在迁移后仍然可用；显式传入时（internal.py）不覆盖。
+        if is_admin is None and resolved_student_account:
+            try:
+                from app.routes.admin import admin_role_of
+
+                is_admin = admin_role_of(resolved_student_account) is not None
+            except Exception:
+                logger.warning(
+                    "Failed to resolve admin role for %s, defaulting to non-admin",
+                    resolved_student_account,
+                    exc_info=True,
+                )
+                is_admin = False
 
         ehall_cookies = ""
         ehall_auth_token = ""

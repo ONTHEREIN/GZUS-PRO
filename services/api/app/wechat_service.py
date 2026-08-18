@@ -1,20 +1,23 @@
 """公众号文章同步服务。
 
 数据源（可插拔通道，按配置优先级选择）：
-1. hiai.ink 公众号 API（配置 HIAI_API_TOKEN + HIAI_USERNAME 后启用）：
-   第三方按次计费接口，任意公众号均可拉取全量历史文章（标题/封面/简介/时间/链接）。
+1. wechatrss 第三方 RSS 服务（配置 WECHAT_RSS_URL 后启用，含订阅 token）：
+   在 wechatrss 账号里订阅公众号后，RSS 源自动输出文章（标题/简介/封面/时间/链接）。
 2. 微信「合集/专辑」公开接口（appmsgalbum，配置 WECHAT_ALBUM_URL 后启用）：
    匿名、无需凭据，读取公开合集数据；需学校公众号建有合集。
 
 架构：WechatFetcher 为可插拔抽象；default_fetcher() 按配置选通道。
 新增通道只需实现 WechatFetcher，不动业务代码与路由。
+注意：WECHAT_RSS_URL 含私人 token，任何日志/响应中都必须脱敏。
 """
 from __future__ import annotations
 
 import html as html_mod
 import logging
 import re
+import xml.etree.ElementTree as ET
 from datetime import UTC, datetime, timedelta
+from email.utils import parsedate_to_datetime
 from typing import Protocol
 from urllib.parse import parse_qs, urlparse
 
@@ -194,6 +197,142 @@ def _ts_to_date(value) -> str | None:
     if ts <= 0:
         return None
     return datetime.fromtimestamp(ts, tz=UTC).strftime("%Y-%m-%d")
+
+
+# ─── RSS 通道（wechatrss 第三方服务） ────────────────────────
+
+_IMG_RE = re.compile(r'<img[^>]+src=["\']([^"\']+)["\']', re.IGNORECASE)
+
+
+def _rss_description_cover(description: str | None) -> str | None:
+    """从 RSS description 的 HTML 中提取第一张图作为封面。"""
+    if not description:
+        return None
+    m = _IMG_RE.search(description)
+    if not m:
+        return None
+    url = html_mod.unescape(m.group(1)).strip()
+    return url or None
+
+
+def _rss_description_text(description: str | None) -> str | None:
+    """把 RSS description 剥成纯文本（作为简介，且兼容非 HTML 纯文本源）。"""
+    if not description:
+        return None
+    # 无 < 标签时原样返回
+    if "<" not in description:
+        return description.strip() or None
+    text = re.sub(r"<br\s*/?>|</p>|</div>", "\n", description, flags=re.IGNORECASE)
+    text = re.sub(r"<[^>]+>", "", text)
+    text = html_mod.unescape(text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text or None
+
+
+def _rss_date_to_str(value: str | None) -> str | None:
+    """把 RSS pubDate（RFC 822，如 Fri, 14 Aug 2026 17:01:46 +0000）转成 yyyy-MM-dd。"""
+    if not value:
+        return None
+    try:
+        dt = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    return dt.astimezone(UTC).strftime("%Y-%m-%d")
+
+
+def _rss_item_text(item, tag: str) -> str | None:
+    """RSS item 中指定子标签的文本（无则 None）。"""
+    node = item.find(tag)
+    return node.text.strip() if node is not None and node.text else None
+
+
+class RssFetcher:
+    """wechatrss 第三方 RSS 服务抓取器（标准库解析，无需新依赖）。"""
+
+    def __init__(self, rss_url: str | None = None):
+        self.rss_url = (rss_url or get_settings().wechat_rss_url).strip()
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.rss_url)
+
+    def fetch_latest(self, limit: int = 50) -> list[WechatArticle]:
+        if not self.enabled:
+            return []
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                          "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+            "Accept": "application/rss+xml, application/xml, text/xml, */*",
+        }
+        collected: list[WechatArticle] = []
+        with httpx.Client(timeout=_TIMEOUT, headers=headers, follow_redirects=True) as client:
+            resp = client.get(self.rss_url)
+            resp.raise_for_status()
+            root = ET.fromstring(resp.text)
+        # RSS 2.0: channel/item；兼容 <rss><channel> 直接结构
+        channel = root.find("channel")
+        items = channel.findall("item") if channel is not None else root.findall("item")
+        for item in items:
+            if len(collected) >= limit:
+                break
+            # content:encoded 命名空间（正文，仅用于取封面图兜底）
+            desc = _rss_item_text(item, "description") or ""
+            content_node = item.find("{http://purl.org/rss/1.0/modules/content/}encoded")
+            content = content_node.text if content_node is not None and content_node.text else ""
+            title = _rss_item_text(item, "title")
+            link = _rss_item_text(item, "link")
+            if not title or not link:
+                continue
+            cover = _rss_description_cover(desc) or _rss_description_cover(content)
+            summary = _rss_description_text(desc)
+            collected.append(
+                WechatArticle(
+                    title=title,
+                    summary=summary,
+                    cover_url=cover,
+                    article_url=link,
+                    author=_rss_item_text(item, "author"),
+                    publish_time=_rss_date_to_str(_rss_item_text(item, "pubDate")),
+                )
+            )
+        return collected
+
+
+def _mask_url(url: str | None) -> str | None:
+    """脱敏 URL 中的 token（query 参数）：只保留参数名与值的前 4/后 4 位。"""
+    if not url:
+        return None
+    parsed = urlparse(url)
+    if not parsed.query:
+        return url
+    parts = []
+    for kv in parsed.query.split("&"):
+        if "=" not in kv:
+            parts.append(kv)
+            continue
+        key, _, value = kv.partition("=")
+        if value and len(value) > 12:
+            value = f"{value[:4]}…{value[-4:]}"
+        parts.append(f"{key}={value}")
+    return f"{parsed._replace(query='&'.join(parts)).geturl()}"
+
+
+def default_fetcher() -> WechatFetcher:
+    """按配置优先级选择同步通道：RSS > 合集。"""
+    settings = get_settings()
+    if settings.wechat_rss_url.strip():
+        return RssFetcher()
+    return AlbumFetcher()
+
+
+def active_channel() -> str:
+    """当前生效的通道名：rss / album / none（供管理后台展示）。"""
+    settings = get_settings()
+    if settings.wechat_rss_url.strip():
+        return "rss"
+    if _parse_album_config(settings.wechat_album_url):
+        return "album"
+    return "none"
 
 
 def fetch_article_meta(url: str) -> WechatArticle:
@@ -379,7 +518,7 @@ def upsert_articles(articles: list[WechatArticle], source: str = "album") -> int
 def sync_articles(fetcher: WechatFetcher | None = None, limit: int = 50) -> dict:
     """执行一次同步并记录状态；返回 {added, total, lastSyncedAt}。"""
     _ensure_tables()
-    fetcher = fetcher or AlbumFetcher()
+    fetcher = fetcher or default_fetcher()
     now = datetime.now(UTC)
     result = {"added": 0, "total": 0, "lastSyncedAt": None, "error": None}
     try:
@@ -421,8 +560,8 @@ def last_sync_at() -> datetime | None:
 
 
 def should_sync() -> bool:
-    """是否需要惰性同步：未配置通道→False；从未同步→True；超过间隔→True。"""
-    if not _parse_album_config(get_settings().wechat_album_url):
+    """是否需要惰性同步：未配置任何通道→False；从未同步→True；超过间隔→True。"""
+    if active_channel() == "none":
         return False
     last = last_sync_at()
     if last is None:

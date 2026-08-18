@@ -1,0 +1,40 @@
+# 软帮手 OneGZUS — FastAPI 后端 systemd 服务单元
+#
+# 安装（由 deploy_api.sh 自动完成，也可手动）：
+#   sudo cp deploy/tencent/systemd/onegzus-api.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now onegzus-api
+#
+# 注意：
+#   - --workers 1 是刻意的：后台轮询器（成绩/考试/水电费/推送）在应用 lifespan 中运行，
+#     多 worker 会导致多套轮询器重复推送。需要扩容时请先把轮询器拆成独立进程。
+#   - EnvironmentFile 指向 /opt/onegzus/api/.env（生产环境变量，含数据库与密钥）
+
+[Unit]
+Description=OneGZUS API (软帮手 FastAPI 后端)
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=onegzus
+Group=onegzus
+WorkingDirectory=/opt/onegzus/api
+EnvironmentFile=/opt/onegzus/api/.env
+ExecStart=/opt/onegzus/api/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1
+Restart=always
+RestartSec=5
+# 优雅退出：给在途请求与轮询器收尾时间
+TimeoutStopSec=30
+
+# 基础安全加固（如遇写文件权限问题可移除 ProtectSystem/ReadWritePaths 后重载）
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/opt/onegzus/api
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

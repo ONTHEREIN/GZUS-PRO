@@ -1,5 +1,6 @@
 from json import JSONDecodeError
 
+import pytest
 import requests
 
 from app.school_client import (
@@ -220,6 +221,34 @@ def test_url_endpoints_are_prefixed_with_jwglxt():
     endpoints = prefixed_url_endpoints("/jwglxt")
     assert endpoints["LOGIN"]["INDEX"] == "/jwglxt/xtgl/login_slogin.html"
     assert endpoints["SCHEDULE"]["API"] == "/jwglxt/kbcx/xskbcx_cxXsKb.html"
+
+
+def test_endpoint_from_url_rejects_cross_origin_and_non_http():
+    """SSRF 防护：跨域/非 http(s) 的通知 URL 必须被拒绝。"""
+    client = SchoolSdkClient("https://jwxt.gzus.edu.cn/jwglxt")
+    with pytest.raises(ValueError, match="跨域"):
+        client._endpoint_from_url("http://169.254.169.254/latest/meta-data/")
+    with pytest.raises(ValueError, match="跨域"):
+        client._endpoint_from_url("https://evil.example/notice/1.html")
+    with pytest.raises(ValueError, match="协议"):
+        client._endpoint_from_url("file:///etc/passwd")
+
+
+def test_endpoint_from_url_normalizes_same_origin_urls():
+    """同源绝对 URL 与相对路径归一化为端点路径，行为不变。"""
+    client = SchoolSdkClient("https://jwxt.gzus.edu.cn/jwglxt")
+    assert (
+        client._endpoint_from_url("/jwglxt/notice/1.html")
+        == "/jwglxt/notice/1.html"
+    )
+    assert (
+        client._endpoint_from_url("https://jwxt.gzus.edu.cn/jwglxt/notice/1.html")
+        == "/jwglxt/notice/1.html"
+    )
+    assert (
+        client._endpoint_from_url("/jwglxt/notice/1.html?id=3")
+        == "/jwglxt/notice/1.html?id=3"
+    )
 
 
 def test_missing_exam_sdk_method_uses_proxy_request_slot():
