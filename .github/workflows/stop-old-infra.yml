@@ -31,21 +31,36 @@ jobs:
           CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CF_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          set -x
+          CF_BASE="https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT"
           for proj in onegzus-onweb onegzus intro-onegzus; do
-            echo "==> 删除 Pages 项目 $proj"
-            curl -s -X DELETE -H "Authorization: Bearer $CF_TOKEN" \
-              "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT/pages/projects/$proj"
+            echo "==> $proj：删除所有 deployments（Cloudflare 要求先删 deployment 才能删项目）"
+            page=1
+            while :; do
+              resp=$(curl -s -H "Authorization: Bearer $CF_TOKEN" \
+                "$CF_BASE/pages/projects/$proj/deployments?per_page=50&page=$page")
+              ids=$(echo "$resp" | jq -r '.result[]?.id' 2>/dev/null)
+              if [ -z "$ids" ]; then break; fi
+              for id in $ids; do
+                curl -s -X DELETE -H "Authorization: Bearer $CF_TOKEN" \
+                  "$CF_BASE/pages/projects/$proj/deployments/$id" > /dev/null
+                echo "  deleted deployment $id"
+              done
+              total_pages=$(echo "$resp" | jq -r '.result_info.total_pages // 1' 2>/dev/null)
+              if [ "$page" -ge "$total_pages" ]; then break; fi
+              page=$((page + 1))
+            done
+            echo "==> 删除项目 $proj"
+            curl -s -X DELETE -H "Authorization: Bearer $CF_TOKEN" "$CF_BASE/pages/projects/$proj"
             echo
           done
           echo "==> 删除 KV SESSIONS_KV"
           curl -s -X DELETE -H "Authorization: Bearer $CF_TOKEN" \
-            "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT/storage/kv/namespaces/09627cf70d7a493f87d8a95f20e682a0"
+            "$CF_BASE/storage/kv/namespaces/09627cf70d7a493f87d8a95f20e682a0"
           echo
           echo "==> 验证：剩余 Pages 项目"
           curl -s -H "Authorization: Bearer $CF_TOKEN" \
-            "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT/pages/projects?per_page=50" | head -c 1200
+            "$CF_BASE/pages/projects?per_page=50" | head -c 1200
           echo
           echo "==> 验证：剩余 KV 命名空间"
           curl -s -H "Authorization: Bearer $CF_TOKEN" \
-            "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT/storage/kv/namespaces?per_page=50" | head -c 800
+            "$CF_BASE/storage/kv/namespaces?per_page=50" | head -c 800
