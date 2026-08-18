@@ -33,10 +33,12 @@ jobs:
           ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
           export SSH_CMD="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no"
 
-          # 同步后端代码（排除本地 venv 与缓存）
+          # 同步后端代码（排除本地 venv 与缓存；⚠️ 必须排除 .env——服务器上的生产配置
+          # 不在本地仓库里，rsync --delete 会把它当多余文件删掉）
           rsync -avz --delete -e "$SSH_CMD" \
             --exclude '.venv' --exclude '__pycache__' --exclude '.pytest_cache' \
-            --exclude '.ruff_cache' --exclude 'test_api.py' --exclude 'test_login.py' \
+            --exclude '.ruff_cache' --exclude '.env' --exclude '.env.*' \
+            --exclude 'test_api.py' --exclude 'test_login.py' \
             services/api/ "$DEPLOY_USER@$DEPLOY_HOST:/opt/onegzus/api/"
 
           # 安装依赖（若 requirements 未变，pip 走缓存很快）+ 重启 + 健康检查
