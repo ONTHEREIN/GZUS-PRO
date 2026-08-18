@@ -26,29 +26,28 @@ jobs:
   stop-cloudflare:
     runs-on: ubuntu-latest
     steps:
-      - name: 删除 Cloudflare Pages 项目与 KV
+      - name: 删除 Cloudflare Pages 项目（wrangler 先清 deployments 再删项目）
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          CF_BASE="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID"
-          # 1) 用 cloudflare-bulk-delete 清空各项目 deployments（官方要求的删除前置条件）
+          npx --yes wrangler@latest --version > /dev/null 2>&1 || true  # 预热 npx 缓存
           for proj in onegzus-onweb onegzus intro-onegzus; do
-            echo "==> $proj：批量删除 deployments"
-            npx --yes cloudflare-bulk-delete delete pages "$proj" 2>&1 | grep -E "completed|Deleted|error|failed" | tail -3 || true
-            # 2) 删除项目本身
+            echo "==> $proj：列出 deployments"
+            npx --yes wrangler@latest pages deployment list --project-name "$proj" --json \
+              | jq -r '.[].id' > /tmp/ids.txt || true
+            echo "    共 $(wc -l < /tmp/ids.txt) 个"
+            # 逐个删除（保留最新生产部署由项目删除兜底；失败跳过不中断）
+            while read -r id; do
+              [ -z "$id" ] && continue
+              if npx --yes wrangler@latest pages deployment delete "$id" --project-name "$proj" > /dev/null 2>&1; then
+                echo "  deleted $id"
+              else
+                echo "  skip $id"
+              fi
+            done < /tmp/ids.txt
             echo "==> 删除项目 $proj"
-            curl -s -X DELETE -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-              "$CF_BASE/pages/projects/$proj" | head -c 300
-            echo
+            npx --yes wrangler@latest pages project delete "$proj" --yes 2>&1 | tail -2
           done
-          # 3) KV（token 可能无 KV 权限，失败容忍）
-          echo "==> 删除 KV SESSIONS_KV"
-          curl -s -X DELETE -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-            "$CF_BASE/storage/kv/namespaces/09627cf70d7a493f87d8a95f20e682a0" | head -c 200
-          echo
-          # 4) 验证：剩余 Pages 项目
           echo "==> 验证：剩余 Pages 项目"
-          curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-            "$CF_BASE/pages/projects" | head -c 800
-          echo
+          npx --yes wrangler@latest pages project list 2>&1 | tail -8
