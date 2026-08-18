@@ -1,0 +1,41 @@
+name: Stop Old Infra (Vercel + Cloudflare)
+
+# 一次性收尾：删除旧生产基础设施（2026-08 迁移腾讯云后）
+#   - Vercel 旧 API 项目（api-one-zeta-dc0jrazxzq）
+#   - Cloudflare Pages 项目（onegzus-onweb / onegzus / intro-onegzus）
+#   - Cloudflare KV（SESSIONS_KV）
+# 触发：workflow_dispatch（手动）；token 来自仓库 Secrets，不出现在日志
+# 注意：破坏性操作，执行前确认新生产（onegzus.onrein.top）已就绪
+
+on:
+  workflow_dispatch:
+
+jobs:
+  stop-vercel:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 删除 Vercel 旧 API 项目
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          echo "==> 当前 Vercel 项目列表"
+          npx --yes vercel ls --token "$VERCEL_TOKEN" 2>&1 | head -20 || true
+          echo "==> 删除项目 api-one-zeta-dc0jrazxzq"
+          npx --yes vercel remove api-one-zeta-dc0jrazxzq --token "$VERCEL_TOKEN" --yes 2>&1 | tail -5 || echo "（删除失败或项目不存在，人工确认）"
+
+  stop-cloudflare:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 删除 Cloudflare Pages 项目与 KV
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          echo "==> Pages 项目列表"
+          npx --yes wrangler@latest pages project list 2>&1 | head -20 || true
+          for proj in onegzus-onweb onegzus intro-onegzus; do
+            echo "==> 删除 Pages 项目 $proj"
+            npx --yes wrangler@latest pages project delete "$proj" --force 2>&1 | tail -3 || echo "（$proj 删除失败或不存在）"
+          done
+          echo "==> 删除 KV 命名空间 SESSIONS_KV (09627cf70d7a493f87d8a95f20e682a0)"
+          npx --yes wrangler@latest kv namespace delete --id 09627cf70d7a493f87d8a95f20e682a0 2>&1 | tail -3 || echo "（KV 删除失败或不存在）"
