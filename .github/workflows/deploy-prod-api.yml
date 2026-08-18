@@ -13,6 +13,11 @@ on:
 permissions:
   contents: read
 
+# 并发保护：同一时间只跑一个部署
+concurrency:
+  group: deploy-prod-api
+  cancel-in-progress: true
+
 jobs:
   deploy:
     runs-on: ubuntu-latest

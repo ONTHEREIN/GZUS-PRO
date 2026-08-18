@@ -11,6 +11,11 @@ on:
 permissions:
   contents: read
 
+# 并发保护：同一时间只跑一个部署，新触发取消旧的（避免 rsync 冲突）
+concurrency:
+  group: deploy-prod-frontend
+  cancel-in-progress: true
+
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
