@@ -73,6 +73,7 @@ android-sdk/
 *.bmp
 *.webp
 !apps/mobile_web/web/icons/*.png
+!apps/mobile_web/assets/icon.png
 ui*.xml
 phone_ui_*.xml
 widget_*.xml
