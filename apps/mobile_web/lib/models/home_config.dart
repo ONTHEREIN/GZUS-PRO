@@ -3,30 +3,69 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../test_flags.dart';
 
+/// 首页模块在 Dashboard 中的视觉分量。
+enum HomeModuleSize {
+  /// 通宽大卡片，单列独占一行，用于最重要/信息密度高的模块。
+  featured,
+
+  /// 半宽卡片，一行两个，用于常规数据模块。
+  medium,
+
+  /// 紧凑磁贴，一行多个或作为小卡片，用于入口型/轻量模块。
+  small,
+}
+
 class HomeModuleConfig {
-  const HomeModuleConfig(this.id, this.label, this.icon);
+  const HomeModuleConfig(
+    this.id,
+    this.label,
+    this.icon, {
+    this.size = HomeModuleSize.medium,
+  });
 
   final String id;
   final String label;
   final IconData icon;
+  final HomeModuleSize size;
 }
 
 class HomePreferences {
   static const orderKey = 'home.moduleOrder';
   static const hiddenKey = 'home.hiddenModules';
   static const defaultModules = [
-    HomeModuleConfig('nextClass', '下一节课', Icons.watch_later),
-    HomeModuleConfig('todayTimeline', '今日时间线', Icons.view_timeline),
-    HomeModuleConfig('weekGrid', '周课表', Icons.grid_view),
-    HomeModuleConfig('dailyCourses', '今日课程', Icons.format_list_bulleted),
-    HomeModuleConfig('grades', '本学期成绩', Icons.school),
-    HomeModuleConfig('utilities', '水电余额', Icons.water_drop),
-    HomeModuleConfig('progress', '业务进度', Icons.route),
-    HomeModuleConfig('notifications', '通知摘要', Icons.notifications_active),
-    HomeModuleConfig('attendance', '考勤统计', Icons.fact_check),
-    HomeModuleConfig('credits', '学分进度', Icons.workspace_premium),
-    HomeModuleConfig('profile', '个人资料', Icons.badge),
-    HomeModuleConfig('apps', '常用服务', Icons.apps),
+    // featured：时间敏感、信息密度高
+    HomeModuleConfig('nextClass', '下一节课', Icons.watch_later,
+        size: HomeModuleSize.featured),
+    HomeModuleConfig('todayTimeline', '今日时间线', Icons.view_timeline,
+        size: HomeModuleSize.featured),
+    HomeModuleConfig('examCountdown', '考试倒计时', Icons.timer,
+        size: HomeModuleSize.featured),
+    HomeModuleConfig('weekGrid', '周课表', Icons.grid_view,
+        size: HomeModuleSize.featured),
+
+    // medium：常规数据卡片
+    HomeModuleConfig('grades', '本学期成绩', Icons.school,
+        size: HomeModuleSize.medium),
+    HomeModuleConfig('attendance', '考勤统计', Icons.fact_check,
+        size: HomeModuleSize.medium),
+    HomeModuleConfig('credits', '学分进度', Icons.workspace_premium,
+        size: HomeModuleSize.medium),
+    HomeModuleConfig('utilities', '水电余额', Icons.water_drop,
+        size: HomeModuleSize.medium),
+    HomeModuleConfig('progress', '业务进度', Icons.route,
+        size: HomeModuleSize.medium),
+    HomeModuleConfig('notifications', '通知摘要', Icons.notifications_active,
+        size: HomeModuleSize.medium),
+    HomeModuleConfig('dailyCourses', '今日课程', Icons.format_list_bulleted,
+        size: HomeModuleSize.medium),
+
+    // small：轻量入口/信息
+    HomeModuleConfig('weather', '今日天气', Icons.wb_sunny,
+        size: HomeModuleSize.small),
+    HomeModuleConfig('profile', '个人资料', Icons.badge,
+        size: HomeModuleSize.small),
+    HomeModuleConfig('apps', '常用服务', Icons.apps,
+        size: HomeModuleSize.small),
   ];
 
   static List<HomeModuleConfig> get availableModules =>

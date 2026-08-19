@@ -728,7 +728,7 @@ void main() {
     await tester.pumpWidget(const OneGzusApp());
     await tester.pumpAndSettle();
 
-    expect(find.text('软帮手 Dev'), findsOneWidget);
+    expect(find.text('软帮手'), findsOneWidget);
     expect(find.text('推荐使用办事大厅统一登录'), findsOneWidget);
     expect(find.text('办事大厅统一登录'), findsOneWidget);
     expect(find.text('教务系统登录'), findsWidgets);
@@ -756,7 +756,7 @@ void main() {
     await tester.pumpWidget(const OneGzusApp());
     await tester.pumpAndSettle();
 
-    expect(find.text('软帮手 Dev'), findsOneWidget);
+    expect(find.text('软帮手'), findsOneWidget);
     expect(find.text('办事大厅统一登录'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });

@@ -1,0 +1,36 @@
+name: Frontend Tests
+
+# 可复用工作流：Flutter widget 测试 + Cloudflare Worker 测试，
+# 供 PR 检查（ci-frontend.yml）与前端部署工作流
+# （deploy-frontend.yml / deploy-prod-frontend.yml）调用。
+# 部署工作流通过 needs: 引用本工作流，测试失败即不发版。
+
+on:
+  workflow_call:
+
+jobs:
+  test-and-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.44.0'
+
+      - name: Install dependencies
+        run: |
+          cd apps/mobile_web
+          flutter pub get
+
+      - name: Run Flutter tests
+        run: |
+          cd apps/mobile_web
+          flutter test
+
+      - name: Test Cloudflare Worker
+        run: |
+          cd apps/mobile_web
+          node --test worker_tests/*_test.mjs

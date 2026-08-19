@@ -28,6 +28,11 @@ ALBUM_URL = "https://mp.weixin.qq.com/mp/appmsgalbum?__biz=Mzg5NDY3NzIwMA==&albu
 RSS_URL = "https://wechatrss.waytomaster.com/api/rss/all?token=eyJhbGciOiJIUzI1NiJ9.exampleToken"
 
 
+def _noop(*_args, **_kwargs):
+    """Fake HTTP 响应方法占位（避免 E731 lambda 赋值）。"""
+    return None
+
+
 # ─── 配置解析 ─────────────────────────────────────────────
 
 def test_parse_album_config_valid():
@@ -123,7 +128,7 @@ def test_fetch_article_meta_parses_og_tags(monkeypatch):
 
     class FakeResp:
         text = html
-        raise_for_status = lambda self: None
+        raise_for_status = _noop
 
     class FakeClient:
         def __init__(self, *a, **k):
@@ -153,7 +158,7 @@ def test_fetch_article_meta_falls_back_to_title_tag(monkeypatch):
 
     class FakeResp:
         text = html
-        raise_for_status = lambda self: None
+        raise_for_status = _noop
 
     class FakeClient:
         def __init__(self, *a, **k):
@@ -178,7 +183,7 @@ def test_fetch_article_meta_falls_back_to_title_tag(monkeypatch):
 def test_fetch_article_meta_raises_without_title(monkeypatch):
     class FakeResp:
         text = "<html><body>无标题</body></html>"
-        raise_for_status = lambda self: None
+        raise_for_status = _noop
 
     class FakeClient:
         def __init__(self, *a, **k):

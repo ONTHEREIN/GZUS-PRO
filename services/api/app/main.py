@@ -63,7 +63,7 @@ async def lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     # 注意：局部变量用 cfg 而非 settings，避免遮蔽 app.routes.settings 模块
     cfg = get_settings()
-    app = FastAPI(title="软帮手 Dev API", version="0.1.1-Dev", lifespan=lifespan)
+    app = FastAPI(title="软帮手 API", version="0.1.1", lifespan=lifespan)
     app.state.sessions = SessionStore(cfg.session_ttl_seconds, db_factory=get_sync_session_factory)
     app.state.pending_captcha = {}
     app.state.ly_sso_states = {}

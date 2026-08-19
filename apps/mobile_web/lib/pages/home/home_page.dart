@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../api_client.dart';
 import '../../gzus_design.dart';
 import '../../models/home_config.dart';
+import '../../responsive/spacing.dart';
 import '../../test_flags.dart';
 import '../../schedule_utils.dart';
 import '../../widgets/badges.dart';
@@ -425,14 +426,19 @@ class _HomePageState extends State<HomePage>
           Expanded(
             child: GzusLayout(
               builder: (context, breakpoint) {
-                final columns =
-                    gridColumnsForBreakpoint(breakpoint, maxColumns: 3);
-                final spacing = columns == 1 ? 10.0 : 12.0;
+                final spacing = breakpoint == GzusBreakpoint.compact ? 10.0 : 12.0;
                 final visible = _moduleOrder
                     .where((id) => !_hiddenModules.contains(id))
                     .where((id) =>
                         !widget.isPasswordLogin ||
                         !HomePage.passwordRestrictedModules.contains(id))
+                    .toList();
+                final items = visible
+                    .map((id) => _HomeLayoutItem(
+                          id: id,
+                          size: HomePreferences.configFor(id).size,
+                          child: _homeModuleFor(id),
+                        ))
                     .toList();
                 return RefreshIndicator(
                   onRefresh: () async {
@@ -441,40 +447,15 @@ class _HomePageState extends State<HomePage>
                         .catchError((_) => _emptyDashboardData());
                     unawaited(_updateHomeWidget());
                   },
-                  child: columns == 1
-                      ? ListView.separated(
-                          physics: const AlwaysScrollableScrollPhysics(),
-                          itemCount: visible.length + 1,
-                          separatorBuilder: (_, __) =>
-                              SizedBox(height: spacing),
-                          itemBuilder: (context, i) {
-                            if (i == visible.length) {
-                              return const SizedBox(height: 24);
-                            }
-                            return _StaggeredAppear(
-                              index: i,
-                              child: _homeModuleFor(visible[i]),
-                            );
-                          },
-                        )
-                      : GridView.builder(
-                          physics: const AlwaysScrollableScrollPhysics(),
-                          padding: const EdgeInsets.only(bottom: 24),
-                          gridDelegate:
-                              SliverGridDelegateWithFixedCrossAxisCount(
-                            crossAxisCount: columns,
-                            mainAxisSpacing: spacing,
-                            crossAxisSpacing: spacing,
-                            childAspectRatio: _homeCardAspectRatio(breakpoint),
-                          ),
-                          itemCount: visible.length,
-                          itemBuilder: (context, i) {
-                            return _StaggeredAppear(
-                              index: i,
-                              child: _homeModuleFor(visible[i]),
-                            );
-                          },
-                        ),
+                  child: ListView(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    padding: const EdgeInsets.only(bottom: 24),
+                    children: _buildHomeLayoutRows(
+                      items: items,
+                      breakpoint: breakpoint,
+                      spacing: spacing,
+                    ),
+                  ),
                 );
               },
             ),
@@ -523,26 +504,39 @@ class _HomePageState extends State<HomePage>
     } catch (_) {}
   }
 
-  /// 首页多列卡片网格的宽高比。
-  ///
-  /// 宽度越大，卡片可以越“扁”，给 fillChild 模块留出足够高度，
-  /// 同时避免小屏上过高的空白。
-  double _homeCardAspectRatio(GzusBreakpoint breakpoint) {
-    return switch (breakpoint) {
-      GzusBreakpoint.compact => 1.0,
-      GzusBreakpoint.medium => 1.12,
-      GzusBreakpoint.expanded => 1.18,
-      GzusBreakpoint.large => 1.22,
+  Color _moduleColor(String id) {
+    return switch (id) {
+      'nextClass' || 'todayTimeline' || 'weekGrid' || 'dailyCourses' =>
+        GzusColors.moduleSchedule,
+      'grades' => GzusColors.moduleGrades,
+      'attendance' => GzusColors.moduleAttendance,
+      'utilities' => GzusColors.moduleEcard,
+      'examCountdown' => GzusColors.moduleExams,
+      'notifications' => GzusColors.moduleNotices,
+      'apps' || 'progress' => GzusColors.moduleApplications,
+      'credits' => GzusColors.moduleCredits,
+      _ => GzusColors.blue,
+    };
+  }
+
+  double _moduleMinHeight(String id) {
+    return switch (HomePreferences.configFor(id).size) {
+      HomeModuleSize.featured => 196,
+      HomeModuleSize.medium => 180,
+      HomeModuleSize.small => 120,
     };
   }
 
   Widget _homeModuleFor(String id) {
+    final color = _moduleColor(id);
     switch (id) {
       case 'nextClass':
         return _AsyncModuleCard<ScheduleResult>(
           future: _scheduleFuture,
           title: '下一节课',
           icon: Icons.watch_later,
+          accentColor: color,
+          minHeight: _moduleMinHeight(id),
           builder: (data) {
             final timedCourses = _homeTimedCourses(
               data.items,
@@ -560,6 +554,8 @@ class _HomePageState extends State<HomePage>
           future: _scheduleFuture,
           title: '今日时间线',
           icon: Icons.view_timeline,
+          accentColor: color,
+          minHeight: _moduleMinHeight(id),
           builder: (data) {
             final timedCourses = _homeTimedCourses(
               data.items,
@@ -575,6 +571,8 @@ class _HomePageState extends State<HomePage>
           future: _scheduleFuture,
           title: '周课表',
           icon: Icons.grid_view,
+          accentColor: color,
+          minHeight: _moduleMinHeight(id),
           builder: (data) {
             return _WeekGridHomeCard(
               courses: data.items
@@ -588,6 +586,8 @@ class _HomePageState extends State<HomePage>
           future: _scheduleFuture,
           title: '今日课程',
           icon: Icons.format_list_bulleted,
+          accentColor: color,
+          minHeight: _moduleMinHeight(id),
           builder: (data) {
             final timedCourses = _homeTimedCourses(
               data.items,
@@ -604,6 +604,8 @@ class _HomePageState extends State<HomePage>
           future: _ecardFuture,
           title: '水电余额',
           icon: Icons.water_drop,
+          accentColor: color,
+          minHeight: _moduleMinHeight(id),
           builder: (data) => _UtilitiesHomeCard(
               summary: data, onTap: () => widget.onNavigate('ecard')),
         );
@@ -612,6 +614,8 @@ class _HomePageState extends State<HomePage>
           future: _progressFuture,
           title: '业务进度',
           icon: Icons.route,
+          accentColor: color,
+          minHeight: _moduleMinHeight(id),
           builder: (data) => _BusinessProgressHomeCard(
               overview: data, onTap: () => widget.onNavigate('business')),
         );
@@ -620,6 +624,8 @@ class _HomePageState extends State<HomePage>
           future: _noticesFuture,
           title: '通知摘要',
           icon: Icons.notifications_active,
+          accentColor: color,
+          minHeight: _moduleMinHeight(id),
           builder: (data) => _NotificationsHomeCard(
               notices: data, onTap: () => widget.onNavigate('notices')),
         );
@@ -628,6 +634,8 @@ class _HomePageState extends State<HomePage>
           future: _attendanceFuture,
           title: '考勤统计',
           icon: Icons.fact_check,
+          accentColor: color,
+          minHeight: _moduleMinHeight(id),
           builder: (data) => _AttendanceHomeCard(
               data: data, onTap: () => widget.onNavigate('attendance')),
         );
@@ -636,6 +644,8 @@ class _HomePageState extends State<HomePage>
           future: _creditsFuture,
           title: '学分进度',
           icon: Icons.workspace_premium,
+          accentColor: color,
+          minHeight: _moduleMinHeight(id),
           builder: (data) => _CreditsHomeCard(
               credits: data, onTap: () => widget.onNavigate('credits')),
         );
@@ -645,6 +655,8 @@ class _HomePageState extends State<HomePage>
           title: '今日天气',
           icon: Icons.wb_sunny,
           allowNull: true,
+          accentColor: color,
+          minHeight: _moduleMinHeight(id),
           builder: (data) => _WeatherHomeCard(weather: data),
         );
       case 'grades':
@@ -652,6 +664,8 @@ class _HomePageState extends State<HomePage>
           future: _gradesFuture,
           title: '本学期成绩',
           icon: Icons.school,
+          accentColor: color,
+          minHeight: _moduleMinHeight(id),
           builder: (data) => _GradesHomeCard(
               grades: data, onTap: () => widget.onNavigate('grades')),
         );
@@ -660,6 +674,8 @@ class _HomePageState extends State<HomePage>
           future: _examsFuture,
           title: '考试倒计时',
           icon: Icons.timer,
+          accentColor: color,
+          minHeight: _moduleMinHeight(id),
           builder: (data) => _ExamCountdownHomeCard(
               exams: data, onTap: () => widget.onNavigate('exams')),
         );
@@ -668,6 +684,8 @@ class _HomePageState extends State<HomePage>
           future: _infoFuture,
           title: '个人资料',
           icon: Icons.badge,
+          accentColor: color,
+          minHeight: _moduleMinHeight(id),
           builder: (data) => _ProfileHomeCard(
               info: data, onTap: () => widget.onNavigate('info')),
         );
@@ -676,6 +694,8 @@ class _HomePageState extends State<HomePage>
           future: _appsFuture,
           title: '常用服务',
           icon: Icons.apps,
+          accentColor: color,
+          minHeight: _moduleMinHeight(id),
           builder: (data) => _AppsHomeCard(
               apps: data, onTap: () => widget.onNavigate('applications')),
         );
@@ -709,11 +729,10 @@ class _HomePageState extends State<HomePage>
                 children: [
                   Row(
                     children: [
-                      const Expanded(
+                      Expanded(
                         child: Text(
                           '自定义首页',
-                          style: TextStyle(
-                              fontSize: 18, fontWeight: FontWeight.w800),
+                          style: GzusTextStyles.sectionTitle(context),
                         ),
                       ),
                       TextButton(
@@ -728,7 +747,7 @@ class _HomePageState extends State<HomePage>
                       ),
                     ],
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: GzusSpacing.s),
                   Expanded(
                     child: ReorderableListView.builder(
                       itemCount: order.length,
@@ -787,6 +806,77 @@ class _HomePageState extends State<HomePage>
       ),
     );
   }
+}
+
+/// 首页模块在列表中的布局元数据。
+class _HomeLayoutItem {
+  const _HomeLayoutItem({
+    required this.id,
+    required this.size,
+    required this.child,
+  });
+
+  final String id;
+  final HomeModuleSize size;
+  final Widget child;
+}
+
+/// 根据断点决定每种 size 每行放几个。
+int _columnsForSize(HomeModuleSize size, GzusBreakpoint breakpoint) {
+  final isCompact = breakpoint == GzusBreakpoint.compact;
+  return switch (size) {
+    HomeModuleSize.featured => 1,
+    HomeModuleSize.medium => isCompact ? 1 : 2,
+    HomeModuleSize.small => isCompact ? 2 : 3,
+  };
+}
+
+/// 将模块按 size 分组为行，保持用户自定义顺序。
+List<Widget> _buildHomeLayoutRows({
+  required List<_HomeLayoutItem> items,
+  required GzusBreakpoint breakpoint,
+  required double spacing,
+}) {
+  final rows = <Widget>[];
+  final buffer = <_HomeLayoutItem>[];
+  HomeModuleSize? currentSize;
+
+  void flushBuffer() {
+    if (buffer.isEmpty) return;
+    final maxColumns = _columnsForSize(currentSize!, breakpoint);
+    final children = buffer.map((item) => item.child).toList();
+    rows.add(
+      _HomeRowGroup(
+        children: children,
+        maxColumns: maxColumns,
+        spacing: spacing,
+      ),
+    );
+    buffer.clear();
+    currentSize = null;
+  }
+
+  for (final item in items) {
+    if (currentSize != null && currentSize != item.size) {
+      flushBuffer();
+    }
+    currentSize = item.size;
+    buffer.add(item);
+    final maxColumns = _columnsForSize(item.size, breakpoint);
+    if (buffer.length >= maxColumns) {
+      flushBuffer();
+    }
+  }
+  flushBuffer();
+
+  // 加入交错入场动画与行间距
+  final result = <Widget>[];
+  for (var i = 0; i < rows.length; i++) {
+    if (i > 0) result.add(SizedBox(height: spacing));
+    result.add(_StaggeredAppear(index: i, child: rows[i]));
+  }
+  result.add(const SizedBox(height: 24));
+  return result;
 }
 
 class HomeWidgetBridge {
@@ -946,6 +1036,8 @@ class _AsyncModuleCard<T> extends StatefulWidget {
     required this.icon,
     required this.builder,
     this.allowNull = false,
+    this.accentColor,
+    this.minHeight = 196,
   });
 
   final Future<T> future;
@@ -953,6 +1045,8 @@ class _AsyncModuleCard<T> extends StatefulWidget {
   final IconData icon;
   final Widget Function(T data) builder;
   final bool allowNull;
+  final Color? accentColor;
+  final double minHeight;
 
   @override
   State<_AsyncModuleCard<T>> createState() => _AsyncModuleCardState<T>();
@@ -974,6 +1068,8 @@ class _AsyncModuleCardState<T> extends State<_AsyncModuleCard<T>> {
           return _HomeCard(
             title: widget.title,
             icon: widget.icon,
+            accentColor: widget.accentColor,
+            minHeight: widget.minHeight,
             child: const _ShimmerPlaceholder(),
           );
         }
@@ -985,11 +1081,13 @@ class _AsyncModuleCardState<T> extends State<_AsyncModuleCard<T>> {
           return _HomeCard(
             title: widget.title,
             icon: widget.icon,
-            child: const Center(
-              child: Padding(
-                padding: EdgeInsets.symmetric(vertical: 24),
-                child: Text('加载失败', style: TextStyle(fontSize: 13)),
-              ),
+            accentColor: widget.accentColor,
+            minHeight: widget.minHeight,
+            child: ErrorState(
+              message: '模块数据加载失败',
+              onRetry: () {
+                if (mounted) setState(() {});
+              },
             ),
           );
         }
@@ -1001,11 +1099,16 @@ class _AsyncModuleCardState<T> extends State<_AsyncModuleCard<T>> {
           return _HomeCard(
             title: widget.title,
             icon: widget.icon,
-            child: const Center(
-              child: Padding(
-                padding: EdgeInsets.symmetric(vertical: 24),
-                child: Text('暂无数据', style: TextStyle(fontSize: 13)),
-              ),
+            accentColor: widget.accentColor,
+            minHeight: widget.minHeight,
+            child: EmptyState(
+              title: '暂无数据',
+              message: '该模块暂时没有内容',
+              icon: widget.icon,
+              iconColor: widget.accentColor,
+              iconBackgroundColor: widget.accentColor != null
+                  ? GzusColors.softColorOf(widget.accentColor!)
+                  : null,
             ),
           );
         }
@@ -1018,6 +1121,8 @@ class _AsyncModuleCardState<T> extends State<_AsyncModuleCard<T>> {
   Widget _buildCard(T data) => _HomeCard(
         title: widget.title,
         icon: widget.icon,
+        accentColor: widget.accentColor,
+        minHeight: widget.minHeight,
         child: widget.builder(data),
       );
 }
@@ -1107,6 +1212,35 @@ class _StaggeredAppearState extends State<_StaggeredAppear>
   }
 }
 
+/// 将若干等宽子项放入一行，不足 [maxColumns] 时右侧补空白占位，
+/// 保证每行卡片宽度一致。
+class _HomeRowGroup extends StatelessWidget {
+  const _HomeRowGroup({
+    required this.children,
+    required this.maxColumns,
+    required this.spacing,
+  });
+
+  final List<Widget> children;
+  final int maxColumns;
+  final double spacing;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (var i = 0; i < maxColumns; i++) ...[
+          if (i > 0) SizedBox(width: spacing),
+          Expanded(
+            child: i < children.length ? children[i] : const SizedBox.shrink(),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
 class _HomeCard extends StatelessWidget {
   const _HomeCard({
     required this.title,
@@ -1115,6 +1249,8 @@ class _HomeCard extends StatelessWidget {
     this.badge,
     this.onTap,
     this.fillChild = false,
+    this.accentColor,
+    this.minHeight = 196,
   });
 
   final String title;
@@ -1123,21 +1259,29 @@ class _HomeCard extends StatelessWidget {
   final String? badge;
   final VoidCallback? onTap;
   final bool fillChild;
+  final Color? accentColor;
+  final double minHeight;
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final effectiveAccent = accentColor ?? cs.primary;
+    final accentSoft = GzusColors.softColorOf(effectiveAccent);
     return LayoutBuilder(
       builder: (context, constraints) {
         final canFillChild = fillChild && constraints.hasBoundedHeight;
         final content = Container(
-          constraints: const BoxConstraints(minHeight: 196),
-          padding: const EdgeInsets.all(16),
+          constraints: BoxConstraints(minHeight: minHeight),
+          padding: const EdgeInsets.all(GzusSpacing.l),
           decoration: BoxDecoration(
             color: gzusSurface(context),
             borderRadius: BorderRadius.circular(GzusRadii.lg),
-            border: Border.all(color: gzusBorder(context)),
-            boxShadow: gzusShadow(context),
+            border: Border(
+              top: BorderSide(color: gzusBorder(context)),
+              left: BorderSide(color: effectiveAccent, width: 3),
+              right: BorderSide(color: gzusBorder(context)),
+              bottom: BorderSide(color: gzusBorder(context)),
+            ),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1149,10 +1293,10 @@ class _HomeCard extends StatelessWidget {
                     width: 34,
                     height: 34,
                     decoration: BoxDecoration(
-                      color: accentFill(context),
+                      color: accentSoft,
                       borderRadius: BorderRadius.circular(12),
                     ),
-                    child: Icon(icon, size: 19, color: cs.primary),
+                    child: Icon(icon, size: 19, color: effectiveAccent),
                   ),
                   const SizedBox(width: 10),
                   Expanded(
@@ -1160,7 +1304,7 @@ class _HomeCard extends StatelessWidget {
                       title,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontWeight: FontWeight.w800),
+                      style: GzusTextStyles.moduleTitle(context),
                     ),
                   ),
                   if (badge != null)
@@ -1168,15 +1312,15 @@ class _HomeCard extends StatelessWidget {
                       padding: const EdgeInsets.symmetric(
                           horizontal: 8, vertical: 3),
                       decoration: BoxDecoration(
-                        color: accentFill(context),
+                        color: accentSoft,
                         borderRadius: BorderRadius.circular(999),
                       ),
                       child: Text(
                         badge!,
                         style: TextStyle(
-                          color: cs.primary,
+                          color: effectiveAccent,
                           fontSize: 11,
-                          fontWeight: FontWeight.w800,
+                          fontWeight: FontWeight.w600,
                         ),
                       ),
                     ),
@@ -1282,8 +1426,8 @@ String _two(int value) => value.toString().padLeft(2, '0');
   );
 }
 
-Color _homeCourseColor(String name) {
-  const palette = [
+Color _homeCourseColor(String name, Brightness brightness) {
+  const lightPalette = [
     Color(0xFF6750A4),
     Color(0xFF386A20),
     Color(0xFF0061A4),
@@ -1291,6 +1435,15 @@ Color _homeCourseColor(String name) {
     Color(0xFF9B3D2D),
     Color(0xFF006C67),
   ];
+  const darkPalette = [
+    Color(0xFF9A82DB),
+    Color(0xFF6DA65A),
+    Color(0xFF4FA3D1),
+    Color(0xFFB87A8E),
+    Color(0xFFD47A68),
+    Color(0xFF4DB6AC),
+  ];
+  final palette = brightness == Brightness.dark ? darkPalette : lightPalette;
   var hash = 0;
   for (final unit in name.codeUnits) {
     hash = (hash + unit) % palette.length;
@@ -1319,7 +1472,7 @@ class _NextClassHomeCard extends StatelessWidget {
       badge: item?.isOngoing == true ? '进行中' : '焦点',
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.all(18),
+        padding: const EdgeInsets.all(GzusSpacing.l),
         decoration: BoxDecoration(
           color: cs.primaryContainer,
           borderRadius: BorderRadius.circular(16),
@@ -1396,7 +1549,7 @@ class _TimelineMiniRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final color =
-        course.isOngoing ? cs.error : _homeCourseColor(course.course.name);
+        course.isOngoing ? cs.error : _homeCourseColor(course.course.name, Theme.of(context).brightness);
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: LayoutBuilder(
@@ -1424,7 +1577,7 @@ class _TimelineMiniRow extends StatelessWidget {
               SizedBox(width: gap),
               Expanded(
                 child: Container(
-                  padding: const EdgeInsets.all(12),
+                  padding: const EdgeInsets.all(GzusSpacing.m),
                   decoration: BoxDecoration(
                     color: course.isOngoing
                         ? cs.primaryContainer
@@ -1438,7 +1591,7 @@ class _TimelineMiniRow extends StatelessWidget {
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(fontWeight: FontWeight.w800)),
-                      const SizedBox(height: 4),
+                      const SizedBox(height: GzusSpacing.xs),
                       Text(
                         [course.course.classroom, course.course.teacher]
                             .where((item) => item != null && item.isNotEmpty)
@@ -1562,7 +1715,7 @@ class _WeekGridCell extends StatelessWidget {
       decoration: BoxDecoration(
         color: item == null
             ? cs.surfaceContainerHighest.withValues(alpha: 0.35)
-            : _homeCourseColor(item.name).withValues(alpha: 0.92),
+            : _homeCourseColor(item.name, Theme.of(context).brightness).withValues(alpha: 0.92),
         borderRadius: BorderRadius.circular(8),
       ),
       child: item == null
@@ -1655,6 +1808,13 @@ class _UtilitiesHomeCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final coldWaterColor =
+        isDark ? const Color(0xFF4FC3F7) : const Color(0xFF0288D1);
+    final hotWaterColor =
+        isDark ? const Color(0xFFFF8A65) : const Color(0xFFD84315);
+    final powerColor =
+        isDark ? const Color(0xFFFFD54F) : const Color(0xFFF9A825);
     if (!summary.isBound) {
       return _HomeCard(
         title: '宿舍绑定',
@@ -1663,24 +1823,25 @@ class _UtilitiesHomeCard extends StatelessWidget {
         onTap: onTap,
         child: Column(
           children: [
-            const SizedBox(height: 4),
+            const SizedBox(height: GzusSpacing.xs),
             Icon(Icons.add_home_outlined,
                 size: 36, color: Theme.of(context).colorScheme.primary),
             const SizedBox(height: 10),
-            Text('点击绑定宿舍',
-                style: TextStyle(
-                    fontWeight: FontWeight.w900,
-                    fontSize: 15,
-                    color: Theme.of(context).colorScheme.primary)),
-            const SizedBox(height: 4),
+            Text(
+              '点击绑定宿舍',
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+            ),
+            const SizedBox(height: GzusSpacing.xs),
             Text(
               '绑定后可实时查看冷水、热水、电费余额',
               textAlign: TextAlign.center,
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                  fontSize: 12,
-                  color: Theme.of(context).colorScheme.onSurfaceVariant),
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
             ),
           ],
         ),
@@ -1700,31 +1861,31 @@ class _UtilitiesHomeCard extends StatelessWidget {
                   icon: Icons.ac_unit,
                   label: '冷水',
                   value: summary.coldWaterText ?? '-',
-                  color: const Color(0xFF0288D1),
+                  color: coldWaterColor,
                 ),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: GzusSpacing.s),
               Expanded(
                 child: _UtilityMini(
                   icon: Icons.local_fire_department,
                   label: '热水',
                   value: summary.hotWaterText ?? '-',
-                  color: const Color(0xFFD84315),
+                  color: hotWaterColor,
                 ),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: GzusSpacing.s),
               Expanded(
                 child: _UtilityMini(
                   icon: Icons.electric_bolt,
                   label: '电费',
                   value: summary.powerText ?? '-',
-                  color: const Color(0xFFF9A825),
+                  color: powerColor,
                 ),
               ),
             ],
           ),
           if (summary.roomDisplay != null) ...[
-            const SizedBox(height: 12),
+            const SizedBox(height: GzusSpacing.m),
             Text(summary.roomDisplay!,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
@@ -1752,26 +1913,33 @@ class _UtilityMini extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Container(
-      constraints: const BoxConstraints(minHeight: 112),
+      constraints: const BoxConstraints(minHeight: 96),
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.10),
+        color: color.withValues(alpha: isDark ? 0.18 : 0.10),
         borderRadius: BorderRadius.circular(12),
       ),
       child: Column(
         children: [
-          Icon(icon, color: color),
-          const SizedBox(height: 12),
-          Text(label,
-              style: TextStyle(
+          Icon(icon, color: color, size: 22),
+          const SizedBox(height: 10),
+          Text(
+            label,
+            style: Theme.of(context).textTheme.labelSmall?.copyWith(
                   color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  fontSize: 12)),
-          const SizedBox(height: 4),
-          Text(value,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontWeight: FontWeight.w900)),
+                ),
+          ),
+          const SizedBox(height: GzusSpacing.xs),
+          Text(
+            value,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w700,
+                ),
+          ),
         ],
       ),
     );
@@ -1801,7 +1969,7 @@ class _BusinessProgressHomeCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           ProgressCategoryStrip(categories: overview.categories),
-          const SizedBox(height: 12),
+          const SizedBox(height: GzusSpacing.m),
           if (items.isEmpty)
             const EmptyState(message: '暂无业务进度')
           else
@@ -1888,10 +2056,19 @@ class _AttendanceHomeCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final normal = data.items.fold(0, (sum, item) => sum + item.normal);
     final late = data.items.fold(0, (sum, item) => sum + item.late);
     final early = data.items.fold(0, (sum, item) => sum + item.leaveEarly);
     final absent = data.items.fold(0, (sum, item) => sum + item.absent);
+    final normalColor =
+        isDark ? const Color(0xFF81C784) : const Color(0xFF2E7D32);
+    final lateColor =
+        isDark ? const Color(0xFFFFB74D) : const Color(0xFFF57C00);
+    final earlyColor =
+        isDark ? const Color(0xFFBA68C8) : const Color(0xFF7B1FA2);
+    final absentColor =
+        isDark ? const Color(0xFFE57373) : const Color(0xFFC62828);
     return _HomeCard(
       title: '本月考勤统计',
       icon: Icons.fact_check,
@@ -1899,16 +2076,10 @@ class _AttendanceHomeCard extends StatelessWidget {
       onTap: onTap,
       child: Row(
         children: [
-          Expanded(
-              child:
-                  _AttendanceStatMini('正常', normal, const Color(0xFF2E7D32))),
-          Expanded(
-              child: _AttendanceStatMini('迟到', late, const Color(0xFFF57C00))),
-          Expanded(
-              child: _AttendanceStatMini('早退', early, const Color(0xFF7B1FA2))),
-          Expanded(
-              child:
-                  _AttendanceStatMini('旷课', absent, const Color(0xFFC62828))),
+          Expanded(child: _AttendanceStatMini('正常', normal, normalColor)),
+          Expanded(child: _AttendanceStatMini('迟到', late, lateColor)),
+          Expanded(child: _AttendanceStatMini('早退', early, earlyColor)),
+          Expanded(child: _AttendanceStatMini('旷课', absent, absentColor)),
         ],
       ),
     );
@@ -1924,20 +2095,28 @@ class _AttendanceStatMini extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 3),
-      padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 4),
+      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.10),
+        color: color.withValues(alpha: isDark ? 0.18 : 0.10),
         borderRadius: BorderRadius.circular(12),
       ),
       child: Column(
         children: [
-          Text('$value',
-              style: TextStyle(
-                  color: color, fontSize: 22, fontWeight: FontWeight.w900)),
-          const SizedBox(height: 4),
-          Text(label, style: const TextStyle(fontSize: 12)),
+          Text(
+            '$value',
+            style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                  color: color,
+                  fontWeight: FontWeight.w700,
+                ),
+          ),
+          const SizedBox(height: GzusSpacing.xs),
+          Text(
+            label,
+            style: Theme.of(context).textTheme.labelSmall,
+          ),
         ],
       ),
     );
@@ -1964,12 +2143,15 @@ class _CreditsHomeCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text('${earned.toStringAsFixed(1)} / ${expected.toStringAsFixed(1)}',
-              style:
-                  const TextStyle(fontSize: 24, fontWeight: FontWeight.w900)),
+          Text(
+            '${earned.toStringAsFixed(1)} / ${expected.toStringAsFixed(1)}',
+            style: GzusTextStyles.statisticValue(context)?.copyWith(
+                  color: Theme.of(context).colorScheme.primary,
+                ),
+          ),
           const SizedBox(height: 10),
           StaticProgressBar(value: progress),
-          const SizedBox(height: 12),
+          const SizedBox(height: GzusSpacing.m),
           _HomeInfoLine(
               '必修',
               item == null
@@ -2148,7 +2330,7 @@ class _WeatherHomeCard extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: GzusSpacing.m),
           Row(
             children: [
               _HomeMeta(icon: Icons.water_drop, text: '湿度 ${w.humidity}%'),
@@ -2171,12 +2353,12 @@ class _WeatherHomeCard extends StatelessWidget {
                               color: Theme.of(context)
                                   .colorScheme
                                   .onSurfaceVariant)),
-                      const SizedBox(height: 4),
+                      const SizedBox(height: GzusSpacing.xs),
                       Icon(_weatherIcon(f.weatherDay),
                           size: 20,
                           color:
                               Theme.of(context).colorScheme.onSurfaceVariant),
-                      const SizedBox(height: 4),
+                      const SizedBox(height: GzusSpacing.xs),
                       Text('${f.tempMax.round()}°',
                           style: const TextStyle(
                               fontSize: 14, fontWeight: FontWeight.w700)),
@@ -2315,7 +2497,7 @@ class _GradesHomeCard extends StatelessWidget {
                     padding: EdgeInsets.zero,
                     physics: const ClampingScrollPhysics(),
                     itemCount: sorted.length.clamp(0, 6),
-                    separatorBuilder: (_, __) => const SizedBox(height: 8),
+                    separatorBuilder: (_, __) => const SizedBox(height: GzusSpacing.s),
                     itemBuilder: (context, i) {
                       final g = sorted[i];
                       final score = int.parse(g.score!);
@@ -2358,7 +2540,7 @@ class _GradesHomeCard extends StatelessWidget {
                                   fontWeight: FontWeight.w800,
                                   color: _scoreColor(
                                       score, Theme.of(context).colorScheme))),
-                          const SizedBox(width: 8),
+                          const SizedBox(width: GzusSpacing.s),
                           Container(
                             padding: const EdgeInsets.symmetric(
                                 horizontal: 8, vertical: 2),
@@ -2452,7 +2634,7 @@ class _ExamCountdownHomeCard extends StatelessWidget {
                 final isToday = days == 0;
 
                 return Container(
-                  padding: const EdgeInsets.all(12),
+                  padding: const EdgeInsets.all(GzusSpacing.m),
                   decoration: BoxDecoration(
                     color: isUrgent
                         ? Theme.of(context)

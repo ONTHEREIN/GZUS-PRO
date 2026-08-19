@@ -8,7 +8,9 @@ import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../api_client.dart';
+import '../../gzus_design.dart';
 import '../../models/schedule_override.dart';
+import '../../responsive/spacing.dart';
 import '../../schedule_utils.dart';
 import '../../background_service.dart' deferred as background_service;
 import '../../ics_download.dart' deferred as ics_download;
@@ -143,9 +145,49 @@ class _ScheduleOnboardingPageState extends State<ScheduleOnboardingPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
+                  // 步骤指示器
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 5),
+                        decoration: BoxDecoration(
+                          color: colorScheme.primaryContainer,
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Text(
+                          '步骤 1 / 2',
+                          style: textTheme.labelSmall?.copyWith(
+                            color: colorScheme.onPrimaryContainer,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Container(
+                          height: 4,
+                          decoration: BoxDecoration(
+                            color: colorScheme.primaryContainer,
+                            borderRadius: BorderRadius.circular(2),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Container(
+                        width: 12,
+                        height: 12,
+                        decoration: BoxDecoration(
+                          color: colorScheme.outlineVariant,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: GzusSpacing.xl),
                   // 顶部欢迎卡片
                   Container(
-                    padding: const EdgeInsets.all(20),
+                    padding: const EdgeInsets.all(GzusSpacing.l),
                     decoration: BoxDecoration(
                       gradient: LinearGradient(
                         colors: [
@@ -162,17 +204,30 @@ class _ScheduleOnboardingPageState extends State<ScheduleOnboardingPage> {
                       children: [
                         Row(
                           children: [
-                            Container(
-                              width: 56,
-                              height: 56,
-                              decoration: BoxDecoration(
-                                color: colorScheme.primary,
-                                borderRadius: BorderRadius.circular(18),
-                              ),
-                              child: Icon(
-                                Icons.waving_hand,
-                                color: colorScheme.onPrimary,
-                                size: 28,
+                            Hero(
+                              tag: 'app-logo',
+                              child: Container(
+                                width: 56,
+                                height: 56,
+                                decoration: BoxDecoration(
+                                  color: colorScheme.primary,
+                                  borderRadius: BorderRadius.circular(18),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: colorScheme.primary
+                                          .withValues(alpha: 0.25),
+                                      blurRadius: 16,
+                                      offset: const Offset(0, 6),
+                                    ),
+                                  ],
+                                ),
+                                child: ClipRRect(
+                                  borderRadius: BorderRadius.circular(18),
+                                  child: Image.asset(
+                                    'assets/icon.png',
+                                    fit: BoxFit.cover,
+                                  ),
+                                ),
                               ),
                             ),
                             const SizedBox(width: 14),
@@ -184,9 +239,7 @@ class _ScheduleOnboardingPageState extends State<ScheduleOnboardingPage> {
                                     widget.studentName == null
                                         ? '你好！'
                                         : '你好，${widget.studentName}！',
-                                    style: textTheme.headlineSmall?.copyWith(
-                                      fontWeight: FontWeight.w900,
-                                    ),
+                                    style: GzusTextStyles.pageTitle(context),
                                   ),
                                   const SizedBox(height: 4),
                                   Text(
@@ -208,7 +261,7 @@ class _ScheduleOnboardingPageState extends State<ScheduleOnboardingPage> {
                       ],
                     ),
                   ),
-                  const SizedBox(height: 24),
+                  const SizedBox(height: GzusSpacing.xl),
                   // 学期信息
                   Container(
                     padding: const EdgeInsets.symmetric(
@@ -234,7 +287,7 @@ class _ScheduleOnboardingPageState extends State<ScheduleOnboardingPage> {
                   const SizedBox(height: 16),
                   // 日期选择卡片
                   Container(
-                    padding: const EdgeInsets.all(18),
+                    padding: const EdgeInsets.all(GzusSpacing.l),
                     decoration: BoxDecoration(
                       color: colorScheme.surfaceContainerLow,
                       borderRadius: BorderRadius.circular(24),
@@ -244,9 +297,7 @@ class _ScheduleOnboardingPageState extends State<ScheduleOnboardingPage> {
                       children: [
                         Text(
                           '第一周开始日期',
-                          style: textTheme.titleMedium?.copyWith(
-                            fontWeight: FontWeight.w800,
-                          ),
+                          style: GzusTextStyles.cardTitle(context),
                         ),
                         const SizedBox(height: 4),
                         Text(
@@ -272,8 +323,8 @@ class _ScheduleOnboardingPageState extends State<ScheduleOnboardingPage> {
                             ),
                             child: Text(
                               '${dateText(_selected)}（$weekdayName）',
-                              style: textTheme.titleMedium?.copyWith(
-                                fontWeight: FontWeight.w700,
+                              style: GzusTextStyles.cardTitle(context)?.copyWith(
+                                color: colorScheme.primary,
                               ),
                             ),
                           ),
@@ -296,7 +347,7 @@ class _ScheduleOnboardingPageState extends State<ScheduleOnboardingPage> {
                       ],
                     ),
                   ),
-                  const SizedBox(height: 20),
+                  const SizedBox(height: GzusSpacing.xl),
                   // 操作按钮
                   FilledButton.icon(
                     onPressed: _loading ? null : _complete,
@@ -312,7 +363,7 @@ class _ScheduleOnboardingPageState extends State<ScheduleOnboardingPage> {
                       child: Text(
                         '完成，开始使用',
                         style: TextStyle(
-                            fontSize: 16, fontWeight: FontWeight.w700),
+                            fontSize: 16, fontWeight: FontWeight.w600),
                       ),
                     ),
                     style: FilledButton.styleFrom(
@@ -331,7 +382,7 @@ class _ScheduleOnboardingPageState extends State<ScheduleOnboardingPage> {
                       ),
                     ),
                   ),
-                  const SizedBox(height: 24),
+                  const SizedBox(height: GzusSpacing.xl),
                 ],
               ),
             ),

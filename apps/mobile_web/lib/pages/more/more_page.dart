@@ -829,7 +829,7 @@ class _AboutPageState extends State<AboutPage> {
                     ),
                     const SizedBox(height: 16),
                     Text(
-                      '软帮手 Dev',
+                      '软帮手',
                       style: theme.textTheme.headlineSmall
                           ?.copyWith(fontWeight: FontWeight.w700),
                     ),

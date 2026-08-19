@@ -290,7 +290,7 @@ function startupAppName() {
     : (isLocal ? 'debug' : 'release');
 
   if (mode === 'debug' || mode === 'dev' || mode === 'development') {
-    return '软帮手 Dev';
+    return '软帮手';
   }
   if (mode === 'profile' || mode === 'preview' || mode === 'staging') {
     return '软帮手预览版';

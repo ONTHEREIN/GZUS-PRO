@@ -178,15 +178,21 @@ flutter build apk --dart-define=API_BASE_URL=<URL>
 
 **功能特性：**
 
-- 自动递增 `pubspec.yaml` 中的构建号（`version: x.y.z+N` 中的 N）
+- 自动递增 `pubspec.yaml` 版本号（语义化版本 + 构建号，由 `tools/bump_version.ps1` 统一处理）：
+  - 每次构建默认仅构建号 +1（`version: x.y.z+N` 中的 N）
+  - `-Minor`：实质性更新（新功能），次版本号 +1、修订归零
+  - `-Major`：大版本更新，主版本号 +1、次版本/修订归零
+  - `-Patch`：小修复，修订号 +1
+  - 构建号永不回退（Android versionCode 需单调递增），版本后缀（如有）原样保留
 - 支持 `-Cloud`（默认）和 `-Local` 两种模式
 - 自动检测 LAN IP 或回退到 `10.0.2.2`（模拟器）
 - 通过 ADB 自动安装到连接的设备
+- 以脚本所在目录为项目根，仓库迁移到任意路径均可运行
 
 **使用方式：**
 
 ```powershell
-# 云端模式（默认）
+# 云端模式（默认，仅构建号 +1）
 .\build_deploy.ps1
 
 # 局域网模式
@@ -194,17 +200,28 @@ flutter build apk --dart-define=API_BASE_URL=<URL>
 
 # 自定义 API URL
 .\build_deploy.ps1 -ApiUrl=https://onegzus.cc.cd/api
+
+# 实质性更新（新功能）：次版本号 +1，如 0.1.1+5 -> 0.2.0+6
+.\build_deploy.ps1 -Minor
+
+# 大版本更新：主版本号 +1，如 0.1.1+5 -> 1.0.0+6
+.\build_deploy.ps1 -Major
+
+# 小修复：修订号 +1，如 0.1.1+5 -> 0.1.2+6
+.\build_deploy.ps1 -Patch
 ```
 
 **执行流程：**
 
 ```
-1. 解析 pubspec.yaml 版本号，自动 +1
+1. 调用 tools/bump_version.ps1 递增版本号（默认构建号 +1，或按 -Major/-Minor/-Patch 升版本）
 2. 根据 -Cloud/-Local 确定 API_BASE_URL
 3. 执行 flutter build apk
 4. 检测 ADB 连接设备（优先 Wi-Fi 设备）
 5. adb install -r 安装 APK
 ```
+
+> `apps/mobile_web/build_hap.ps1`（HarmonyOS HAP 构建）同样在构建前调用 `tools/bump_version.ps1`，支持相同的 `-Major` / `-Minor` / `-Patch` 参数。
 
 ---
 
@@ -615,12 +632,12 @@ CREDENTIAL_ENCRYPTION_KEY=change-this-to-a-random-32-byte-string
 EHALL_CSRF_KEY=
 
 # ─── 应用版本 ───
-APP_LATEST_VERSION=0.1.1-Dev
+APP_LATEST_VERSION=0.1.1
 APP_LATEST_BUILD=4
 APP_MIN_SUPPORTED_VERSION=0.0.1
 APP_MIN_SUPPORTED_BUILD=1
 APP_DOWNLOAD_URL=
-APP_RELEASE_NOTES=Dev
+APP_RELEASE_NOTES=
 ```
 
 ### 7.7.2 关键环境变量清单

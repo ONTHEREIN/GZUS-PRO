@@ -1,7 +1,8 @@
-from cryptography.hazmat.primitives.asymmetric import rsa, padding
-from cryptography.hazmat.primitives import serialization
 import base64
 import hashlib
+
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
 
 class RsaKeyManager:
@@ -22,6 +23,9 @@ class RsaKeyManager:
                 pem.encode(), password=None
             )
         else:
+            # 仅开发/测试环境允许临时生成：生产环境 get_settings() 会在
+            # 缺少 RSA_PRIVATE_KEY 时直接拒绝启动（config.py 校验），
+            # 避免 serverless 冷启动每实例一把新密钥导致 keyId 漂移。
             self._private_key = rsa.generate_private_key(
                 public_exponent=65537,
                 key_size=2048,

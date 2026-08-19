@@ -261,6 +261,8 @@ def test_ensure_table_creates_admin_tables_when_init_db_skipped(monkeypatch):
     """生产（Vercel）init_db 跳过全部建表，懒建表 helper 必须能补建表。"""
     monkeypatch.setenv("VERCEL", "1")
     monkeypatch.setenv("DEBUG", "false")
+    # 生产配置校验要求 RSA_PRIVATE_KEY 非空（本测试不涉及 RSA，占位即可）
+    monkeypatch.setenv("RSA_PRIVATE_KEY", "test-rsa-key")
     get_settings.cache_clear()
     database.reset_engine()
     admin_route._tables_ready = False

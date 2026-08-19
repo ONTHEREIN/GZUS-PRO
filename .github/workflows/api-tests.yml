@@ -1,0 +1,35 @@
+name: API Tests and Lint
+
+# 可复用工作流：后端 pytest + ruff，供 PR 检查（ci-api.yml）与 API 部署
+# 工作流（deploy-api.yml / deploy-prod-api.yml）调用。
+# 部署工作流通过 needs: 引用本工作流，测试失败即不发版。
+
+on:
+  workflow_call:
+
+jobs:
+  test-and-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: services/api/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r services/api/requirements.txt pytest pytest-asyncio pytest-cov ruff
+
+      - name: Run tests (pytest)
+        working-directory: services/api
+        run: pytest
+
+      - name: Lint (ruff)
+        working-directory: services/api
+        run: ruff check .

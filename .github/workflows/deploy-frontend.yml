@@ -3,13 +3,20 @@ name: Deploy Frontend to Cloudflare Pages
 on:
   push:
     branches: [ master ]
+    paths:
+      - 'apps/mobile_web/**'
+      - 'wrangler.toml'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
+  test-and-lint:
+    uses: ./.github/workflows/frontend-tests.yml
+
   build-and-deploy:
+    needs: test-and-lint
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -24,11 +31,6 @@ jobs:
         run: |
           cd apps/mobile_web
           flutter pub get
-
-      - name: Test Cloudflare Worker
-        run: |
-          cd apps/mobile_web
-          node --test worker_tests/*_test.mjs
 
       - name: Build Web
         env:

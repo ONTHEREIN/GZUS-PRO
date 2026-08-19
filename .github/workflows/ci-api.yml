@@ -1,0 +1,17 @@
+name: CI API
+
+# PR 检查：services/api/** 变更时运行后端测试与 lint，合并前先看到红绿。
+# master 推送的检查由各部署工作流内部的测试 job 承担（同样调用 api-tests.yml），
+# 避免同一推送在 PR 检查 + 两个部署工作流里重复跑三遍测试。
+
+on:
+  pull_request:
+    paths:
+      - 'services/api/**'
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-lint:
+    uses: ./.github/workflows/api-tests.yml

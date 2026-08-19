@@ -1,3 +1,4 @@
+import os
 from functools import lru_cache
 from pathlib import Path
 from urllib.parse import urlparse
@@ -54,12 +55,12 @@ class Settings(BaseSettings):
     web_push_vapid_public_key: str = ""
     web_push_vapid_private_key: str = ""
     web_push_vapid_subject: str = "mailto:example@example.com"
-    app_latest_version: str = "0.1.1-Dev"
+    app_latest_version: str = "0.1.1"
     app_latest_build: str = "4"
     app_min_supported_version: str = "0.0.1"
     app_min_supported_build: str = "1"
     app_download_url: str = ""
-    app_release_notes: str = "Dev"
+    app_release_notes: str = ""
     # 管理后台首个 owner 学号（逗号分隔，可多个）；启动时幂等写入 admin_users 表
     admin_seed_owner: str = ""
     # 微信公众号「合集」链接（含 __biz 与 album_id）；空=该通道关闭。
@@ -106,6 +107,17 @@ def get_settings() -> Settings:
             raise RuntimeError(
                 "CREDENTIAL_ENCRYPTION_KEY must be set to a random key in production. "
                 "Generate one with: python -c \"import secrets; print(secrets.token_urlsafe(32))\""
+            )
+        if not settings.rsa_private_key_pem and not os.environ.get("RSA_PRIVATE_KEY"):
+            raise RuntimeError(
+                "RSA_PRIVATE_KEY must be set in production (PEM-encoded RSA private key). "
+                "Without it the app generates a new key on every cold start, so frontend "
+                "RSA-encrypted passwords fail to decrypt on other instances. Generate one "
+                "with: python -c \"from cryptography.hazmat.primitives.asymmetric import rsa; "
+                "from cryptography.hazmat.primitives import serialization; "
+                "k = rsa.generate_private_key(public_exponent=65537, key_size=2048); "
+                "print(k.private_bytes(serialization.Encoding.PEM, "
+                "serialization.PrivateFormat.PKCS8, serialization.NoEncryption()).decode())\""
             )
         if settings.public_api_base_url.startswith("http://"):
             raise RuntimeError(

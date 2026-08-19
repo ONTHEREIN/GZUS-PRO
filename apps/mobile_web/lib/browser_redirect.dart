@@ -4,3 +4,5 @@ import 'browser_redirect_stub.dart'
 void redirectTo(String url) => impl.redirectTo(url);
 
 void replaceBrowserUrl(String url) => impl.replaceBrowserUrl(url);
+
+String currentBrowserUrl() => impl.currentBrowserUrl();

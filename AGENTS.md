@@ -14,7 +14,7 @@ tools/                    Standalone helper scripts (leave automation, ecard tes
 ### Request flow (critical)
 
 1. Flutter app calls API at `API_BASE_URL` (compile-time `--dart-define`).
-2. On Cloudflare Pages, a **Worker** (`apps/mobile_web/web/_worker.js`, ~2300 lines) intercepts requests:
+2. On Cloudflare Pages, a **Worker** (`apps/mobile_web/web/_worker.js` — 入口 + fetch handler，辅助模块在 `web/worker/`：`config.js` 常量 / `crypto.js` RSA·验证码·凭据 / `http.js` 请求·响应工具 / `static.js` 静态资源 / `session.js` 会话 KV / `login.js` CAS 登录) intercepts requests:
    - `POST /auth/auto-login`, `POST /auth/relogin`, `GET /health` → handled at edge (CAS SSO flow with captcha OCR, RSA decryption).
    - Everything else → proxied to the Vercel backend.
 3. The Worker injects `X-Worker-Auth` and `Cookie` headers; the API reads them in `app/routes/deps.py` to reconstruct school sessions.
@@ -71,11 +71,18 @@ ruff check .
 
 | Workflow | Trigger | Action |
 |---|---|---|
-| `deploy-frontend.yml` | any push | Flutter 3.44.0 → `build web` → Cloudflare Pages (`onegzus-onweb` + `onegzus`) |
-| `deploy-api.yml` | `services/api/**` changed | `npx vercel --prod` |
+| `ci-api.yml` | PR 中 `services/api/**` changed | 复用 `api-tests.yml` 跑 pytest + ruff，合并前把关 |
+| `api-tests.yml` | 被其他工作流 `uses:` 调用 | 可复用 job：Python 3.11 + `pytest` + `ruff check .`（规则集固定 E4/E7/E9/F） |
+| `ci-frontend.yml` | PR 中 `apps/mobile_web/**` changed | 复用 `frontend-tests.yml` 跑 Flutter + Worker 测试，合并前把关 |
+| `frontend-tests.yml` | 被其他工作流 `uses:` 调用 | 可复用 job：Flutter 3.44.0 `flutter test` + `node --test worker_tests/*_test.mjs` |
+| `deploy-frontend.yml` | `apps/mobile_web/**` 或 `wrangler.toml` changed | 先跑测试（`needs: test-and-lint`，失败不发版）→ Flutter 3.44.0 `build web` → Cloudflare Pages (`onegzus-onweb` + `onegzus`) |
+| `deploy-prod-frontend.yml` | `apps/mobile_web/**` 或 `wrangler.toml` changed | 先跑测试（`needs: test-and-lint`，失败不发版）→ Flutter `build web` → rsync 到腾讯云生产（`onegzus.onrein.top`，nginx） |
+| `deploy-api.yml` | `services/api/**` changed | 先跑测试（`needs: test-and-lint`，失败不发版）→ `npx vercel --prod` |
+| `deploy-prod-api.yml` | `services/api/**` changed | 先跑测试（`needs: test-and-lint`，失败不发版）→ rsync 到腾讯云生产并重启 systemd 服务 |
 | `deploy-cloudflare-pages.yml` | any push | Deploys `website/` to `intro-onegzus` |
 | `deploy-edgeone-pages.yml` | `workflow_dispatch` only | Deploys `apps/mobile_web/web/` to EdgeOne (`onegzus-overseas`) for overseas access |
 | `cron-wechat-sync.yml` | 每 6 小时 | 调 `/internal/cron/wechat-sync` 同步公众号文章（`X-Internal-Key` 鉴权） |
+| `cron-ecard-reminder.yml` | cron | 调 `/internal/cron/ecard-reminder` 触发水电费提醒（`X-Internal-Key` 鉴权） |
 
 - Frontend CI removes `.symbols`, CanvasKit variants, and `NOTICES` from build output before deploying.
 - Vercel entry point: `app/main.py` (`vercel.json`). Sets `DEBUG=false`, `JWXT_WORKER_PROXY_ORIGIN=https://onegzus.cc.cd`, `ECARD_WORKER_PROXY_ORIGIN=https://onegzus.cc.cd` in production env.
@@ -100,7 +107,7 @@ ruff check .
 | Change DB schema | `services/api/app/database.py` (add model + `_ensure_columns` migration) |
 | Flutter UI theme | `apps/mobile_web/lib/gzus_design.dart` |
 | Push notifications | `services/api/app/push.py`, `services/api/app/jobs.py`, `apps/mobile_web/lib/push_service.dart` |
-| Cloudflare Worker | `apps/mobile_web/web/_worker.js` (edit), `wrangler.toml` (KV config) |
+| Cloudflare Worker | `apps/mobile_web/web/_worker.js` (fetch handler 入口) + `web/worker/*.js` 辅助模块（`wrangler pages deploy` **默认打包**本地 import 为单文件，勿加 `--no-bundle`），`wrangler.toml` (KV config) |
 | Internal Worker→API bridge | `services/api/app/routes/internal.py` |
 | WebSocket | `services/api/app/ws.py` + `ws_router`, `apps/mobile_web/lib/ws_service.dart` |
 | Leave/请假 service | `services/api/app/leave_service.py`, `routes/ehall.py` |
@@ -121,6 +128,7 @@ ruff check .
 | `school_client.py` | School portal client (JWXT 教务系统) — HTTP client + login/session. Normalizers/notice parsing split out below. |
 | `jwxt/normalizers.py` | JWXT 数据归一化纯函数 (课表/成绩/考勤/学分) — split from `school_client.py` |
 | `jwxt/notice_parser.py` | 自研 HTML 节点 + 通知条目/详情提取 — split from `school_client.py` |
+| `jwxt/photo_utils.py` | 学生照片/图片处理辅助（图片 MIME 嗅探/PNG 归一化/编码照片 URL 提取/端点 URL 生成）— split from `school_client.py` |
 | `ehall_client.py` | ehall (一站式服务) client |
 | `ecard_client.py` | 一卡通 client |
 | `leave_service.py` | Leave/请假 business logic (section times, date ranges) |
@@ -138,8 +146,10 @@ ruff check .
 
 | File | Purpose |
 |---|---|
-| `main.dart` | App shell — 入口、`OneGzusApp`、`DashboardShell`(导航壳/登录/加载/侧栏/底部导航)。页面 UI 已拆到 `pages/`。 |
-| `api_client.dart` | API client — all API calls, session management |
+| `main.dart` | 应用入口 + `OneGzusApp` 启动/登录接线。导航壳拆到 `shell/`，登录页拆到 `pages/login/`，数据模型拆到 `api_models.dart` |
+| `api_client.dart` | API client — all API calls, session management。数据模型拆到 `api_models.dart`（`part` 共享同一 library） |
+| `api_models.dart` | 数据模型 + JSON 解析辅助（`part of api_client.dart`，34 个模型类 + `_doubleFromJson` 等解析 helper） |
+| `shell/` | 导航壳（`part of main.dart`）：`dashboard_shell.dart`（`DashboardShell` 状态 + 壳级部件）、`nav_widgets.dart`（`AppSidebar`/`MobileNavBar`）、`marquee_text.dart`（`MarqueeText`） |
 | `gzus_design.dart` | Design theme / UI components |
 | `schedule_utils.dart` | 课表/日期共享工具 (`mondayOf`/`weekFromDate`/`dateText`/`scheduleTimes`/`defaultFirstWeekStart`) |
 | `services_deferred.dart` | Deferred loading service module config |
@@ -163,6 +173,7 @@ ruff check .
 | `business/` | `BusinessPage` 业务 |
 | `info/` | `InfoPage` 个人信息 |
 | `leave/` | `AutoLeavePage` 自动请假 |
+| `login/` | `LoginPage` 登录页（含 `_AgreementContent` 协议内容） |
 | `ftp/` | `FtpUploadPage` 作业上传 |
 | `more/` | `MorePage` + 关于/桌面组件引导页 |
 | `admin/` | `AdminPage` 管理后台（总览/会话/管理员/数据统计/系统 + `notices_tab.dart` 校历上传 + `wechat_tab.dart` 公众号文章管理） |

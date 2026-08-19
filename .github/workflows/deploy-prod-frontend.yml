@@ -6,6 +6,9 @@ name: Deploy Frontend to Tencent Production
 on:
   push:
     branches: [master]
+    paths:
+      - 'apps/mobile_web/**'
+      - 'wrangler.toml'
   workflow_dispatch:
 
 permissions:
@@ -17,7 +20,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  test-and-lint:
+    uses: ./.github/workflows/frontend-tests.yml
+
   build-and-deploy:
+    needs: test-and-lint
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

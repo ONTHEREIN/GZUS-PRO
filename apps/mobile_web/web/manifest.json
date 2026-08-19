@@ -1,7 +1,7 @@
 {
-  "name": "软帮手 Dev",
-  "short_name": "软帮手 Dev",
-  "description": "OneGZUS Dev",
+  "name": "软帮手",
+  "short_name": "软帮手",
+  "description": "OneGZUS",
   "start_url": "./",
   "display": "standalone",
   "background_color": "#ffffff",

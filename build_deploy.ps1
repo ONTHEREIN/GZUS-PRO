@@ -1,5 +1,6 @@
 $ErrorActionPreference = "Stop"
-$ProjectRoot = "D:\REINs\Documents\GZUS-PRO"
+# 以脚本所在目录为项目根（脚本可随仓库移动到任意路径）
+$ProjectRoot = if ($PSScriptRoot) { $PSScriptRoot } else { "D:\REINs\Documents\GZUS-PRO" }
 $FlutterCandidates = @(
     $env:FLUTTER_BIN,
     "E:\REINs\Documents\flutter\bin\flutter.bat",
@@ -17,17 +18,16 @@ $ApkPath = "$ProjectRoot\apps\mobile_web\build\app\outputs\flutter-apk\app-relea
 $PubspecPath = "$ProjectRoot\apps\mobile_web\pubspec.yaml"
 $CloudApiUrl = if ($env:API_BASE_URL) { $env:API_BASE_URL } else { "https://onegzus.cc.cd/api,https://onegzus-onweb.pages.dev/api" }
 
-# ---------- 自动递增构建号 ----------
-$pubspecContent = Get-Content $PubspecPath -Raw
-if ($pubspecContent -match 'version:\s*([0-9A-Za-z\.\-]+)\+(\d+)') {
-    $versionStr = $Matches[1]
-    $buildNum = [int]$Matches[2] + 1
-    $newVersionLine = "version: $versionStr+$buildNum"
-    $pubspecContent = $pubspecContent -replace 'version:\s*[0-9A-Za-z\.\-]+\+\d+', $newVersionLine
-    Set-Content $PubspecPath $pubspecContent -NoNewline
-    Write-Host "Build number: $($Matches[2]) -> $buildNum (version $versionStr)" -ForegroundColor Magenta
-} else {
-    Write-Host "WARNING: Could not parse version from pubspec.yaml" -ForegroundColor Yellow
+# ---------- 自动递增版本号 ----------
+# 默认仅构建号 +1（每次构建）；-Major 大版本更新；-Minor 实质性更新（新功能）；-Patch 小修复
+$VersionFlags = @()
+if ($args -contains "-Major") { $VersionFlags += "-Major" }
+if ($args -contains "-Minor") { $VersionFlags += "-Minor" }
+if ($args -contains "-Patch") { $VersionFlags += "-Patch" }
+& (Join-Path $ProjectRoot "tools\bump_version.ps1") -PubspecPath $PubspecPath @VersionFlags
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "版本号递增失败，终止构建" -ForegroundColor Red
+    exit 1
 }
 
 # 使用 -Cloud 参数构建云端版本（默认），-Local 构建局域网版本

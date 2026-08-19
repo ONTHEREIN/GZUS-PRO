@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'api_client.dart';
 import 'gzus_design.dart';
 import 'permission_service.dart';
+import 'responsive/spacing.dart';
 import 'background_service.dart';
 import 'web_push_service.dart';
 
@@ -307,17 +308,114 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
     final colorScheme = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('优化推送体验'),
         automaticallyImplyLeading: false,
+        title: const SizedBox.shrink(),
       ),
       body: SafeArea(
         child: SingleChildScrollView(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.all(GzusSpacing.l),
           child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    // 步骤指示器
+                    Row(
+                      children: [
+                        Container(
+                          width: 12,
+                          height: 12,
+                          decoration: BoxDecoration(
+                            color: colorScheme.primary,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                        const SizedBox(width: GzusSpacing.s),
+                        Expanded(
+                          child: Container(
+                            height: 4,
+                            decoration: BoxDecoration(
+                              color: colorScheme.primaryContainer,
+                              borderRadius: BorderRadius.circular(2),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: GzusSpacing.s),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 10, vertical: 5),
+                          decoration: BoxDecoration(
+                            color: colorScheme.primaryContainer,
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Text(
+                            '步骤 2 / 2',
+                            style: Theme.of(context)
+                                .textTheme
+                                .labelSmall
+                                ?.copyWith(
+                                  color: colorScheme.onPrimaryContainer,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: GzusSpacing.xl),
+                    // 欢迎头部
+                    Row(
+                      children: [
+                        Hero(
+                          tag: 'app-logo',
+                          child: Container(
+                            width: 52,
+                            height: 52,
+                            decoration: BoxDecoration(
+                              color: colorScheme.primary,
+                              borderRadius: BorderRadius.circular(16),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: colorScheme.primary
+                                      .withValues(alpha: 0.25),
+                                  blurRadius: 16,
+                                  offset: const Offset(0, 6),
+                                ),
+                              ],
+                            ),
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(16),
+                              child: Image.asset(
+                                'assets/icon.png',
+                                fit: BoxFit.cover,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: GzusSpacing.m),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                '优化推送体验',
+                                style: GzusTextStyles.pageTitle(context),
+                              ),
+                              const SizedBox(height: GzusSpacing.xs),
+                              Text(
+                                '完成最后一步，及时收到教务提醒',
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .bodyMedium
+                                    ?.copyWith(
+                                      color: colorScheme.onSurfaceVariant,
+                                    ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: GzusSpacing.xl),
                     Container(
-                      padding: const EdgeInsets.all(18),
+                      padding: const EdgeInsets.all(GzusSpacing.l),
                       decoration: BoxDecoration(
                         color: colorScheme.tertiaryContainer
                             .withValues(alpha: 0.5),
@@ -329,7 +427,7 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
                             Icons.info_outline,
                             color: colorScheme.onTertiaryContainer,
                           ),
-                          const SizedBox(width: 12),
+                          const SizedBox(width: GzusSpacing.m),
                           Expanded(
                             child: Text(
                               kIsWeb
@@ -343,7 +441,7 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
                         ],
                       ),
                     ),
-                    const SizedBox(height: 24),
+                    const SizedBox(height: GzusSpacing.xl),
                     if (!kIsWeb) ...[
                       _PermissionCard(
                         icon: Icons.power_settings_new,
@@ -354,7 +452,7 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
                         onAction: _openAutoStart,
                         actionLabel: '打开设置',
                       ),
-                      const SizedBox(height: 12),
+                      const SizedBox(height: GzusSpacing.m),
                       _PermissionCard(
                         icon: Icons.battery_charging_full,
                         title: '电池优化',
@@ -364,7 +462,7 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
                         onAction: _openBatteryOptimization,
                         actionLabel: '关闭优化',
                       ),
-                      const SizedBox(height: 12),
+                      const SizedBox(height: GzusSpacing.m),
                       if (Platform.isAndroid) ...[
                         _PermissionCard(
                           icon: Icons.alarm,
@@ -375,7 +473,7 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
                           onAction: _openExactAlarm,
                           actionLabel: '去授权',
                         ),
-                        const SizedBox(height: 12),
+                        const SizedBox(height: GzusSpacing.m),
                       ],
                     ],
                     _PermissionCard(
@@ -392,9 +490,9 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
                         _notificationGranted &&
                         !_webPushSubscribed &&
                         !_checking) ...[
-                      const SizedBox(height: 12),
+                      const SizedBox(height: GzusSpacing.m),
                       Container(
-                        padding: const EdgeInsets.all(14),
+                        padding: const EdgeInsets.all(GzusSpacing.l),
                         decoration: BoxDecoration(
                           color:
                               colorScheme.errorContainer.withValues(alpha: 0.5),
@@ -404,7 +502,7 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
                           children: [
                             Icon(Icons.warning_amber_rounded,
                                 color: colorScheme.onErrorContainer),
-                            const SizedBox(width: 12),
+                            const SizedBox(width: GzusSpacing.m),
                             Expanded(
                               child: Text(
                                 '推送订阅未完成，可能无法收到通知',
@@ -421,7 +519,7 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
                       ),
                     ],
                     if (!kIsWeb && Platform.isAndroid) ...[
-                      const SizedBox(height: 24),
+                      const SizedBox(height: GzusSpacing.xl),
                       SwitchListTile(
                         title: const Text('在最近任务中隐藏应用'),
                         subtitle: const Text('开启后可防止他人看到您正在使用此应用'),
@@ -431,7 +529,7 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
                         },
                       ),
                     ],
-                    const SizedBox(height: 32),
+                    const SizedBox(height: GzusSpacing.xxl),
                     SizedBox(
                       width: double.infinity,
                       height: 50,
@@ -440,7 +538,7 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
                         child: const Text('已完成配置'),
                       ),
                     ),
-                    const SizedBox(height: 12),
+                    const SizedBox(height: GzusSpacing.m),
                     Center(
                       child: TextButton(
                         onPressed: _skip,
@@ -479,7 +577,7 @@ class _PermissionCard extends StatelessWidget {
     final colorScheme = Theme.of(context).colorScheme;
     final stateColor = isGranted ? colorScheme.secondary : colorScheme.primary;
     return Container(
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.all(GzusSpacing.l),
       decoration: BoxDecoration(
         color: colorScheme.surfaceContainerLow,
         borderRadius: BorderRadius.circular(22),
@@ -497,7 +595,7 @@ class _PermissionCard extends StatelessWidget {
             ),
             child: checking
                 ? const Padding(
-                    padding: EdgeInsets.all(12),
+                    padding: const EdgeInsets.all(GzusSpacing.m),
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
                 : Icon(
@@ -505,47 +603,42 @@ class _PermissionCard extends StatelessWidget {
                     color: stateColor,
                   ),
           ),
-          const SizedBox(width: 16),
+          const SizedBox(width: GzusSpacing.l),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
                   title,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w700,
-                    fontSize: 16,
-                  ),
+                  style: GzusTextStyles.cardTitle(context),
                 ),
-                const SizedBox(height: 4),
+                const SizedBox(height: GzusSpacing.xs),
                 Text(
                   description,
-                  style: TextStyle(
-                    color: colorScheme.onSurfaceVariant,
-                    fontSize: 13,
-                  ),
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: colorScheme.onSurfaceVariant,
+                      ),
                 ),
-                const SizedBox(height: 4),
+                const SizedBox(height: GzusSpacing.xs),
                 Text(
                   checking
                       ? '检查中…'
                       : isGranted
                           ? '已开启'
                           : '未开启',
-                  style: TextStyle(
-                    color: checking
-                        ? colorScheme.onSurfaceVariant
-                        : isGranted
-                            ? colorScheme.secondary
-                            : colorScheme.error,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                  ),
+                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                        color: checking
+                            ? colorScheme.onSurfaceVariant
+                            : isGranted
+                                ? colorScheme.secondary
+                                : colorScheme.error,
+                        fontWeight: FontWeight.w600,
+                      ),
                 ),
               ],
             ),
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: GzusSpacing.m),
           OutlinedButton(
             onPressed: (isGranted || checking) ? null : onAction,
             child: Text(actionLabel),

@@ -4,13 +4,27 @@
 param(
     [ValidateSet('debug', 'release')]
     [string]$Mode = 'release',
-    [string]$ApiUrl = 'https://onegzus.cc.cd/api,https://onegzus-onweb.pages.dev/api'
+    [string]$ApiUrl = 'https://onegzus.cc.cd/api,https://onegzus-onweb.pages.dev/api',
+    [switch]$Major,
+    [switch]$Minor,
+    [switch]$Patch
 )
 
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $flutterOhos = Join-Path $repoRoot 'tools' 'flutter_ohos_3.22.0'
+
+# ---------- 自动递增版本号 ----------
+# 默认仅构建号 +1（每次构建）；-Major 大版本更新；-Minor 实质性更新（新功能）；-Patch 小修复
+$VersionFlags = @()
+if ($Major) { $VersionFlags += "-Major" }
+if ($Minor) { $VersionFlags += "-Minor" }
+if ($Patch) { $VersionFlags += "-Patch" }
+& (Join-Path $repoRoot 'tools' 'bump_version.ps1') @VersionFlags
+if ($LASTEXITCODE -ne 0) {
+    throw "版本号递增失败，终止构建"
+}
 
 if (-not (Test-Path $flutterOhos)) {
     throw "鸿蒙版 Flutter SDK 未找到: $flutterOhos。请先运行 tools/setup_flutter_ohos.ps1 或手动克隆。"

@@ -193,7 +193,9 @@ def test_wechat_import_by_url(monkeypatch):
 
     class FakeResp:
         text = '<meta property="og:title" content="导入标题">'
-        raise_for_status = lambda self: None
+
+        def raise_for_status(self):
+            return None
 
     class FakeClient:
         def __init__(self, *a, **k):

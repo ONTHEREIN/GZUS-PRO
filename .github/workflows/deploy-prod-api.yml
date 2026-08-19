@@ -19,7 +19,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  test-and-lint:
+    uses: ./.github/workflows/api-tests.yml
+
   deploy:
+    needs: test-and-lint
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

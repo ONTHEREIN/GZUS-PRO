@@ -1,0 +1,18 @@
+name: CI Frontend
+
+# PR 检查：apps/mobile_web/** 变更时运行 Flutter 与 Worker 测试，合并前先看到红绿。
+# master 推送的检查由前端部署工作流内部的测试 job 承担（同样调用 frontend-tests.yml），
+# 避免同一推送重复跑多遍测试。
+
+on:
+  pull_request:
+    paths:
+      - 'apps/mobile_web/**'
+      - 'wrangler.toml'
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-lint:
+    uses: ./.github/workflows/frontend-tests.yml

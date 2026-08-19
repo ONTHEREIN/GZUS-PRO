@@ -7,3 +7,5 @@ void redirectTo(String url) {
 void replaceBrowserUrl(String url) {
   web.window.history.replaceState(null, '', url);
 }
+
+String currentBrowserUrl() => web.window.location.href;

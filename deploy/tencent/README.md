@@ -199,20 +199,47 @@ ssh onegzus@SERVER_IP 'bash /opt/onegzus/deploy/scripts/deploy_frontend.sh'
 
 ## 6. nginx + HTTPS
 
-### 6.1 申请 SSL 证书
+> ⚠️ **先决条件：ICP 备案必须完成**（见第 1 节）。备案未通过时，腾讯云会拦截域名：
+> 境外 HTTP 访问被 302 → `https://dnspod.qcloud.com/static/webblock.html?d=<域名>`（webblock 拦截页，
+> `Server: TencentEdgeOne`），境内 443 的 TLS 握手被直接重置。
+> 这会导致 **Let's Encrypt HTTP-01 校验失败**（LE 校验服务器拿到的是拦截页），证书根本无法签发；
+> 即便用 DNS-01 硬签出证书，443 仍被重置，HTTPS 对外依然打不开。
+> **必须先完成备案**，拦截解除后才能签发并正常使用 HTTPS。
 
-- 腾讯云控制台 →「SSL 证书」→ 申请**免费 DV 证书**（TrustAsia，有效期 1 年，到期前续期）。
-- 下载 **Nginx 版本**，解压得到 `fullchain.crt`（或 `1_你的域名_bundle.crt`）与 `privkey.pem`（或 `2_你的域名.key`）。
+### 6.1 方案 A（推荐）：Let's Encrypt / certbot 自动签发
+
+服务器上安装 certbot（含 nginx 插件）并启用自动续期：
+
+```bash
+# OpenCloudOS 9 / RHEL 系：仓库自带 certbot（本仓库已在 106.55.2.248 装好）
+dnf install -y certbot python3-certbot-nginx
+
+# 确保 80 端口 HTTP-01 校验路径可直达（模板已含 /.well-known/acme-challenge/ location；
+# 若你的 80 server 块是裸 return 301，必须改成 location 包住跳转，否则签发会失败）
+mkdir -p /var/www/certbot
+
+# 备案通过后，签发证书（HTTP-01 webroot 校验；-m 换成你的邮箱）
+certbot certonly --webroot -w /var/www/certbot -d 你的域名 \
+  --non-interactive --agree-tos -m you@example.com --keep-until-expiring
+
+# 续期后自动重载 nginx（一次即可）
+mkdir -p /etc/letsencrypt/renewal-hooks/deploy
+printf '#!/bin/sh\n/bin/systemctl reload nginx\n' > /etc/letsencrypt/renewal-hooks/deploy/nginx-reload.sh
+chmod +x /etc/letsencrypt/renewal-hooks/deploy/nginx-reload.sh
+
+# 启用自动续期定时器（每天运行 certbot renew，证书 90 天有效，提前 30 天自动续）
+systemctl enable --now certbot-renew.timer
+```
+
+签发后证书路径为 `/etc/letsencrypt/live/<你的域名>/{fullchain,privkey}.pem`，把 nginx 模板里的
+`ssl_certificate*` 指向该路径（见 6.2）。腾讯云 DV 证书也可用，见 6.3。
 
 ### 6.2 放置证书并启用站点（服务器上）
 
 ```bash
-sudo mkdir -p /etc/nginx/ssl/onegzus
-# 上传证书（本地执行）：
-#   scp fullchain.crt privkey.pem root@SERVER_IP:/etc/nginx/ssl/onegzus/
-# 或服务器上直接编辑粘贴。证书文件命名统一为 fullchain.pem / privkey.pem：
-sudo cp /etc/nginx/ssl/onegzus/fullchain.crt /etc/nginx/ssl/onegzus/fullchain.pem  # 按实际文件名调整
-sudo cp /etc/nginx/ssl/onegzus/privkey.key  /etc/nginx/ssl/onegzus/privkey.pem      # 按实际文件名调整
+# 方案 A（certbot）：nginx 配置里改成
+#   ssl_certificate     /etc/letsencrypt/live/你的域名/fullchain.pem;
+#   ssl_certificate_key /etc/letsencrypt/live/你的域名/privkey.pem;
 
 # 把配置里的域名替换为你的域名（模板见 /opt/onegzus/deploy/nginx/onegzus.conf）
 sudo sed -i 's/onegzus\.example\.com/你的域名/g' /opt/onegzus/deploy/nginx/onegzus.conf
@@ -225,7 +252,20 @@ sudo rm -f /etc/nginx/sites-enabled/default
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
-### 6.3 放行端口
+### 6.3 方案 B（可选）：腾讯云免费 DV 证书
+
+- 腾讯云控制台 →「SSL 证书」→ 申请**免费 DV 证书**（TrustAsia，有效期 1 年，到期前手动续期）。
+- 下载 **Nginx 版本**，解压得到 `fullchain.crt`（或 `1_你的域名_bundle.crt`）与 `privkey.pem`（或 `2_你的域名.key`）。
+- 上传到服务器并命名统一为 `fullchain.pem` / `privkey.pem`：
+  ```bash
+  sudo mkdir -p /etc/nginx/ssl/onegzus
+  #   scp fullchain.crt privkey.pem root@SERVER_IP:/etc/nginx/ssl/onegzus/
+  sudo cp /etc/nginx/ssl/onegzus/fullchain.crt /etc/nginx/ssl/onegzus/fullchain.pem  # 按实际文件名调整
+  sudo cp /etc/nginx/ssl/onegzus/privkey.key  /etc/nginx/ssl/onegzus/privkey.pem      # 按实际文件名调整
+  ```
+- nginx 配置里 `ssl_certificate` / `ssl_certificate_key` 指向 `/etc/nginx/ssl/onegzus/` 下的这两个文件。
+
+### 6.4 放行端口
 
 - 腾讯云控制台 → 该服务器 →「防火墙/安全组」：放行 **80（TCP）**、**443（TCP）**、22（SSH，已有）。
 - 服务器内如启用了 ufw：`sudo ufw allow 80/tcp && sudo ufw allow 443/tcp`。
@@ -234,6 +274,7 @@ nginx 配置要点（已写入模板）：
 - `/api/xxx` → 剥掉 `/api` 前缀代理到 `127.0.0.1:8000/xxx`（与 Worker 行为一致）
 - `/api/ws/notifications` 与 `/ws` → WebSocket Upgrade 代理（移动端推送实时通道）
 - 旧版非 `/api` 前缀路径（`/auth/*`、`/academic/*` 等）→ 兼容代理（与 Worker 的向后兼容逻辑一致）
+- `/.well-known/acme-challenge/` → webroot（`/var/www/certbot`）直答，供 certbot HTTP-01 校验
 - 静态资源长缓存、`index.html` 不缓存、SPA 回退、安全响应头、10MB body 上限
 
 ---

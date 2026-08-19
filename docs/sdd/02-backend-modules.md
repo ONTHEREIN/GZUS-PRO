@@ -26,7 +26,7 @@
 ```python
 def create_app() -> FastAPI:
     settings = get_settings()
-    app = FastAPI(title="软帮手 Dev API", version="0.1.1-Dev", lifespan=lifespan)
+    app = FastAPI(title="软帮手 API", version="0.1.1", lifespan=lifespan)
 ```
 
 - 读取配置（`get_settings()`）
@@ -1136,7 +1136,7 @@ def changed_grade_items(items, previous) -> list[dict]:
 | | `cas_login_timeout_seconds` | 60 |
 | **CORS** | `cors_origins` | localhost 列表 |
 | | `cors_origin_regex` | localhost/192.168.* 正则 |
-| **应用** | `app_latest_version` / `build` | `0.1.1-Dev` / `4` |
+| **应用** | `app_latest_version` / `build` | `0.1.1` / `4` |
 | | `app_min_supported_version` / `build` | `0.0.1` / `1` |
 | | `debug` | `False` |
 
