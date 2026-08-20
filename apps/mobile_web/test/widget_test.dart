@@ -729,8 +729,8 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('软帮手'), findsOneWidget);
-    expect(find.text('推荐使用办事大厅统一登录'), findsOneWidget);
-    expect(find.text('办事大厅统一登录'), findsOneWidget);
+    expect(find.text('一键登录'), findsOneWidget);
+    expect(find.text('办事大厅一键登录'), findsOneWidget);
     expect(find.text('教务系统登录'), findsWidgets);
   });
 
@@ -741,7 +741,7 @@ void main() {
     await tester.pumpAndSettle();
 
     final ssoButton = tester.widget<FilledButton>(
-      find.widgetWithText(FilledButton, '办事大厅统一登录'),
+      find.widgetWithText(FilledButton, '办事大厅一键登录'),
     );
     expect(ssoButton.onPressed, isNotNull);
     expect(find.text('请先输入学号'), findsNothing);
@@ -757,7 +757,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('软帮手'), findsOneWidget);
-    expect(find.text('办事大厅统一登录'), findsOneWidget);
+    expect(find.text('办事大厅一键登录'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
