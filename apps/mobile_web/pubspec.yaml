@@ -46,4 +46,5 @@ flutter_launcher_icons:
 flutter:
   uses-material-design: true
   assets:
+    # 应用品牌图标，用于 LoadingPage、登录页、侧边栏与引导页。
     - assets/icon.png
