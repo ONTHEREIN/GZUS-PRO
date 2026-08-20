@@ -731,7 +731,7 @@ void main() {
     expect(find.text('软帮手'), findsOneWidget);
     expect(find.text('一键登录'), findsOneWidget);
     expect(find.text('办事大厅一键登录'), findsOneWidget);
-    expect(find.text('教务系统登录'), findsWidgets);
+    expect(find.text('教务系统'), findsWidgets);
   });
 
   testWidgets('mobile sso is enabled without account', (tester) async {
