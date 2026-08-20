@@ -97,7 +97,7 @@ class GzusColors {
 
   /// 返回某个主题色的柔和背景色（浅色模式用）。
   static Color softColorOf(Color color) {
-    const map = <Color, Color>{
+    final map = <Color, Color>{
       blue: blueSoft,
       teal: tealSoft,
       green: greenSoft,
