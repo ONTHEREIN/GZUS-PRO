@@ -1279,62 +1279,64 @@ class _HomeCard extends StatelessWidget {
           ),
           child: ClipRRect(
             borderRadius: BorderRadius.circular(GzusRadii.lg),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
+            child: Stack(
               children: [
-                Container(width: 3, color: effectiveAccent),
-                Expanded(
-                  child: Padding(
-                    padding: const EdgeInsets.all(GzusSpacing.l),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      mainAxisSize:
-                          canFillChild ? MainAxisSize.max : MainAxisSize.min,
-                      children: [
-                        Row(
-                          children: [
+                Positioned(
+                  left: 0,
+                  top: 0,
+                  bottom: 0,
+                  child: Container(width: 3, color: effectiveAccent),
+                ),
+                Padding(
+                  padding: const EdgeInsets.all(GzusSpacing.l),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    mainAxisSize:
+                        canFillChild ? MainAxisSize.max : MainAxisSize.min,
+                    children: [
+                      Row(
+                        children: [
+                          Container(
+                            width: 34,
+                            height: 34,
+                            decoration: BoxDecoration(
+                              color: accentSoft,
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Icon(icon,
+                                size: 19, color: effectiveAccent),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: GzusTextStyles.moduleTitle(context),
+                            ),
+                          ),
+                          if (badge != null)
                             Container(
-                              width: 34,
-                              height: 34,
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 3),
                               decoration: BoxDecoration(
                                 color: accentSoft,
-                                borderRadius: BorderRadius.circular(12),
+                                borderRadius: BorderRadius.circular(999),
                               ),
-                              child: Icon(icon,
-                                  size: 19, color: effectiveAccent),
-                            ),
-                            const SizedBox(width: 10),
-                            Expanded(
                               child: Text(
-                                title,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: GzusTextStyles.moduleTitle(context),
+                                badge!,
+                                style: TextStyle(
+                                  color: effectiveAccent,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                ),
                               ),
                             ),
-                            if (badge != null)
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 8, vertical: 3),
-                                decoration: BoxDecoration(
-                                  color: accentSoft,
-                                  borderRadius: BorderRadius.circular(999),
-                                ),
-                                child: Text(
-                                  badge!,
-                                  style: TextStyle(
-                                    color: effectiveAccent,
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ),
-                          ],
-                        ),
-                        const SizedBox(height: 14),
-                        canFillChild ? Expanded(child: child) : child,
-                      ],
-                    ),
+                        ],
+                      ),
+                      const SizedBox(height: 14),
+                      canFillChild ? Expanded(child: child) : child,
+                    ],
                   ),
                 ),
               ],
