@@ -52,7 +52,7 @@ else
   ln -sfn ../../../shared/api.env "$RELEASE/.env"
   [[ -x "$RELEASE/.venv/bin/python" ]] || { echo "API release 未完成 uv sync" >&2; exit 1; }
   "$RELEASE/.venv/bin/python" -c 'from app.main import create_app; create_app()'
-  "$ROOT/deploy/scripts/backup_db.sh"
+  bash "$ROOT/deploy/scripts/backup_db.sh"
   local_previous=""
   if [[ -L "$CURRENT" ]]; then
     local_previous="$(readlink -f "$CURRENT")"
