@@ -72,6 +72,12 @@ jobs:
             "$DEPLOY_USER@$DEPLOY_HOST" 'bash -s --' "$RELEASE_ID" <<'REMOTE'
           release_id="$1"
           release_dir="/opt/onegzus/releases/api/$release_id"
+          env_file="/opt/onegzus/shared/api.env"
+          if ! grep -q '^RSA_PRIVATE_KEY_PEM=.' "$env_file"; then
+            rsa_key="$(openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 | base64 -w0)"
+            printf '\nRSA_PRIVATE_KEY_PEM=%s\n' "$rsa_key" >> "$env_file"
+            chmod 600 "$env_file"
+          fi
           cd "$release_dir"
           uv sync --frozen --no-dev
           chown -R onegzus:onegzus "$release_dir"
