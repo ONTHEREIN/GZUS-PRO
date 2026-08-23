@@ -102,7 +102,18 @@ jobs:
             fi
           fi
           systemctl enable --now certbot-renew.timer
-          bash /opt/onegzus/deploy/scripts/issue_letsencrypt.sh onegzus.onrein.top
+          for attempt in {1..12}; do
+            if bash /opt/onegzus/deploy/scripts/issue_letsencrypt.sh onegzus.onrein.top; then
+              exit 0
+            fi
+            if ! pgrep -f '[c]ertbot' >/dev/null; then
+              exit 1
+            fi
+            echo "certbot 已被其他任务占用，${attempt}/12，10 秒后重试" >&2
+            sleep 10
+          done
+          echo "certbot 持续被占用，停止发布" >&2
+          exit 1
           REMOTE
           ssh -i "$HOME/.ssh/deploy_key" \
             -o "UserKnownHostsFile=$HOME/.ssh/known_hosts" \
