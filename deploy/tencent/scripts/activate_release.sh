@@ -59,7 +59,17 @@ else
     activate_link "$PREVIOUS" "$local_previous"
   fi
   activate_link "$CURRENT" "$RELEASE"
-  if ! systemctl restart onegzus-api || ! curl -fsS --max-time 10 http://127.0.0.1:8000/health/ready | grep -q '"status":"ready"'; then
+  ready=false
+  if systemctl restart onegzus-api; then
+    for _ in {1..10}; do
+      if curl -fsS --max-time 2 http://127.0.0.1:8000/health/ready | grep -q '"status":"ready"'; then
+        ready=true
+        break
+      fi
+      sleep 1
+    done
+  fi
+  if [[ "$ready" != true ]]; then
     if [[ -n "$local_previous" ]]; then
       activate_link "$CURRENT" "$local_previous"
       systemctl restart onegzus-api
