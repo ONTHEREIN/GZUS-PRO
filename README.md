@@ -14,7 +14,7 @@
 
 <p align="center">
   <a href="#features"><img src="https://img.shields.io/badge/功能介绍-2563EB?style=flat-square" alt="功能介绍"></a>
-  <a href="./deploy-free.md"><img src="https://img.shields.io/badge/零成本部署-059669?style=flat-square&logo=vercel&logoColor=white" alt="零成本部署"></a>
+  <img src="https://img.shields.io/badge/腾讯云自托管-059669?style=flat-square&logo=tencentcloud&logoColor=white" alt="腾讯云自托管">
   <img src="https://img.shields.io/badge/License-MIT-yellow?style=flat-square" alt="License">
 </p>
 
@@ -61,7 +61,7 @@
 无需下载，浏览器打开即用：
 
 ```
-https://onegzus-onweb.pages.dev
+https://onegzus.onrein.top
 ```
 
 支持手机浏览器，可添加到主屏幕获得类似原生 App 的体验。
@@ -115,9 +115,9 @@ A: 欢迎通过 GitHub Issues 提交反馈，或直接联系开发者。
 
 - **前端**: Flutter 3.x，一套代码构建 Web + Android + iOS
 - **后端**: FastAPI + Python，高性能异步 API 服务
-- **部署**: 支持 Cloudflare Pages + Vercel 零成本部署
+- **部署**: 腾讯云自托管，Nginx 提供 Web 服务并反向代理 FastAPI
 
-详细开发文档和部署指南请参考 [**deploy-free.md**](./deploy-free.md)。
+生产环境由 GitHub Actions 在测试通过后通过 SSH 和 rsync 自动部署。
 
 ## 项目结构
 
@@ -134,10 +134,13 @@ GZUS-PRO/
 
 | 服务 | 平台 | 项目名 | 说明 |
 |------|------|--------|------|
-| 项目介绍页 | Cloudflare Pages | `intro-onegzus` | 静态介绍网站，部署 `website/` |
-| Web 应用 | Cloudflare Pages | `onegzus-onweb` | Flutter Web 前端，部署 `apps/mobile_web/build/web` |
+| Web 应用 | 腾讯云 | `onegzus.onrein.top` | Nginx 托管 Flutter Web 静态资源 |
+| API 服务 | 腾讯云 | `onegzus-api` | FastAPI 常驻进程，由 systemd 管理 |
+| 数据库 | 自托管 PostgreSQL | `DATABASE_URL` | 持久化会话和业务数据，不依赖 Neon |
 
-> 推送至 `master` 分支后，GitHub Actions 会自动构建并部署到 Cloudflare Pages。
+客户端通过 `https://onegzus.onrein.top/api` 访问后端，不再经过 Cloudflare Worker 或
+Vercel。推送至 `master` 分支后，GitHub Actions 会先运行测试，再通过 SSH 和 rsync
+部署到腾讯云；前端部署后重载 Nginx，后端部署后重启 `onegzus-api` 服务。
 
 ## 免责声明
 

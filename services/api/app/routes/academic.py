@@ -232,9 +232,7 @@ async def dashboard(
 ) -> dict:
     """Return a home-page snapshot with module-level failures.
 
-    Cloudflare Worker handles this route for production web traffic.  This
-    backend implementation keeps local dev, native clients, and Worker fallback
-    on the same wire shape without fanning the frontend out to many endpoints.
+    后端聚合首页所需模块，避免前端扇出多次请求。
     """
     trace_id = request.headers.get("X-GZUS-Trace-Id") or f"api-{int(time.time() * 1000)}"
 

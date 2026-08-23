@@ -148,7 +148,7 @@ def load_and_get_cached_at(
 
 # ─── 轮询器内存缓存 ─────────────────────────────────
 # 从 jobs.py 迁出，使 main.py 无需为这几个类加载整个 jobs 依赖链
-# （jobs → ecard_client → notice_utils → push），降低 Vercel 冷启动开销。
+# （jobs → ecard_client → notice_utils → push），避免后台任务导入环。
 
 
 class NoticeCache:

@@ -191,7 +191,6 @@ class _DashboardShellState extends State<DashboardShell> {
   DateTime? _lastBackTime;
   bool _autoHideNavBar = true;
   final ValueNotifier<bool> _navBarVisible = ValueNotifier(true);
-  final bool _mobileHeaderToolsVisible = false;
   bool _sidebarCollapsed = false;
   double _lastScrollOffset = 0;
 
@@ -272,7 +271,7 @@ class _DashboardShellState extends State<DashboardShell> {
 
     return PopScope(
       canPop: false,
-      onPopInvoked: (didPop) {
+      onPopInvokedWithResult: (didPop, _) {
         if (didPop) return;
         if (_overrideTabId != null) {
           final backTabId =
@@ -895,4 +894,3 @@ class _DashboardShellState extends State<DashboardShell> {
     _saveScheduleSettings();
   }
 }
-

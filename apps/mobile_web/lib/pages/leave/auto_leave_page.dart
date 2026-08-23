@@ -456,7 +456,7 @@ class _TeacherCandidateSelector extends StatelessWidget {
               Text('${group.teacher}：未找到候选教师')
             else
               DropdownButtonFormField<String>(
-                value: selections[group.teacher]?.userid,
+                initialValue: selections[group.teacher]?.userid,
                 decoration: InputDecoration(labelText: group.teacher),
                 items: [
                   for (final candidate in group.candidates)

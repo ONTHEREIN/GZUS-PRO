@@ -36,11 +36,6 @@ class SsoCompleteRequest(BaseModel):
     sso_code: str = Field(alias="ssoCode", min_length=1)
 
 
-class PushRegisterRequest(BaseModel):
-    registration_id: str = Field(alias="registrationId", min_length=1)
-    platform: str = "android"
-
-
 class EcardBindingRequest(BaseModel):
     room_id: str = Field(alias="roomId", min_length=1)
     room_display: str = Field(alias="roomDisplay", min_length=1)

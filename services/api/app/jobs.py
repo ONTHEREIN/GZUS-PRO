@@ -6,10 +6,10 @@ from zoneinfo import ZoneInfo
 
 from app.cache_service import ExamReminderCache, GradeUpdateCache, NoticeCache
 from app.config import get_settings
-from app.database import EcardBinding, PushRegistration, get_sync_session_factory
+from app.database import EcardBinding, get_sync_session_factory
 from app.ecard_client import EcardApiError, EcardClient, EcardConfigurationError, EcardRoomRef, safe_float
 from app.notice_utils import merge_notices, notice_key, valid_notice_items
-from app.push import send_push, send_web_push_to_student
+from app.push import send_web_push_to_student
 from app.sessions import student_id_of
 
 __all__ = [
@@ -82,7 +82,6 @@ async def run_notice_poller_once(app) -> None:
     app.state.notice_cache = cache
     sessions = getattr(app.state.sessions, "_sessions", {})
     manager = app.state.ws_manager
-    factory = get_sync_session_factory()
 
     async def poll_session(session_id: str, session) -> None:
         try:
@@ -102,16 +101,6 @@ async def run_notice_poller_once(app) -> None:
         student_id = await asyncio.get_event_loop().run_in_executor(
             None, _session_student_id, session,
         )
-        registration_ids: list[str] = []
-        if student_id:
-            with factory() as db:
-                registration_ids = [
-                    item.registration_id
-                    for item in db.query(PushRegistration)
-                    .filter(PushRegistration.student_id == student_id)
-                    .all()
-                ]
-
         new_items = [
             item
             for item in items
@@ -129,13 +118,6 @@ async def run_notice_poller_once(app) -> None:
                 "liveUpdate": False,
             }
             await manager.send_to_session(session_id, message)
-            if registration_ids:
-                await send_push(
-                    registration_ids,
-                    "新通知",
-                    title if not body else f"{title}\n{body}",
-                    {"type": "new_notice", "url": item.get("url") or ""},
-                )
             if student_id:
                 send_web_push_to_student(
                     student_id,
@@ -310,7 +292,6 @@ def _next_reminder_at(now: datetime, reminder_times: list[str] | None = None) ->
 
 async def run_ecard_reminder_once(app) -> None:
     try:
-        # 与 routes/ecard.py 保持一致：统一走 ecard_worker_proxy_origin
         client = EcardClient()
     except EcardConfigurationError:
         logger.info("ECARD_OPENID not configured, skipping ecard reminders")
@@ -356,20 +337,7 @@ async def run_ecard_reminder_once(app) -> None:
                     "progressCurrent": progress_current,
                     "progress": progress_current / 100,
                 }
-                registration_ids = [
-                    item.registration_id
-                    for item in db.query(PushRegistration)
-                    .filter(PushRegistration.student_id == binding.student_id)
-                    .all()
-                ]
                 await _send_ecard_ws(app, binding.student_id, title, body, summary, live_payload)
-                if registration_ids:
-                    await send_push(
-                        registration_ids,
-                        title,
-                        body,
-                        live_payload,
-                    )
                 send_web_push_to_student(
                     binding.student_id,
                     title,
@@ -447,7 +415,6 @@ async def run_exam_reminder_once(app) -> None:
     app.state.exam_reminder_cache = cache
     sessions = getattr(app.state.sessions, "_sessions", {})
     manager = app.state.ws_manager
-    factory = get_sync_session_factory()
     tz = ZoneInfo("Asia/Shanghai")
     today = datetime.now(tz).date()
     now_ms = int(datetime.now(tz).timestamp() * 1000)
@@ -480,16 +447,6 @@ async def run_exam_reminder_once(app) -> None:
         student_id = await asyncio.get_event_loop().run_in_executor(
             None, _session_student_id, session,
         )
-        registration_ids: list[str] = []
-        if student_id:
-            with factory() as db:
-                registration_ids = [
-                    item.registration_id
-                    for item in db.query(PushRegistration)
-                    .filter(PushRegistration.student_id == student_id)
-                    .all()
-                ]
-
         for exam in today_exams:
             key = _exam_key(exam)
             if cache.is_reminded(session_id, key):
@@ -536,13 +493,6 @@ async def run_exam_reminder_once(app) -> None:
             }
             if end_time is not None:
                 extras["endTime"] = end_time
-            if registration_ids:
-                await send_push(
-                    registration_ids,
-                    "考试提醒",
-                    body,
-                    extras,
-                )
             if student_id:
                 send_web_push_to_student(
                     student_id,
@@ -571,7 +521,6 @@ async def run_grade_update_once(app) -> None:
     app.state.grade_update_cache = cache
     sessions = getattr(app.state.sessions, "_sessions", {})
     manager = app.state.ws_manager
-    factory = get_sync_session_factory()
 
     async def poll_session(session_id: str, session) -> None:
         student_id = await asyncio.get_event_loop().run_in_executor(
@@ -597,15 +546,6 @@ async def run_grade_update_once(app) -> None:
         if not changed:
             return
 
-        registration_ids: list[str] = []
-        with factory() as db:
-            registration_ids = [
-                item.registration_id
-                for item in db.query(PushRegistration)
-                .filter(PushRegistration.student_id == student_id)
-                .all()
-            ]
-
         for grade in changed:
             course_name = str(grade.get("courseName") or "课程")
             score = str(grade.get("score") or "").strip()
@@ -628,8 +568,6 @@ async def run_grade_update_once(app) -> None:
             }
             await manager.send_to_session(session_id, payload)
             extras = {key: value for key, value in payload.items() if key not in {"title", "body"}}
-            if registration_ids:
-                await send_push(registration_ids, title, body, extras)
             send_web_push_to_student(student_id, title, body, extras)
 
     tasks = [

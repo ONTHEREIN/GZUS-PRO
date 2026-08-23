@@ -7,8 +7,8 @@
 #   bash setup_server.sh
 #
 # 功能：
-#   1. 安装 Python 3.11+ / nginx / PostgreSQL / rsync / curl
-#   2. 创建部署用户 onegzus 与目录 /opt/onegzus/{api,web,backups}
+#   1. 安装 Python 3.11+ / uv / nginx / PostgreSQL / rsync / curl
+#   2. 创建版本化发布所需目录
 #   3. 创建 PostgreSQL 角色 onegzus 与数据库 onegzus
 #   4. 把部署脚本复制到 /opt/onegzus/deploy（后续步骤都从这里调用）
 # ============================================================
@@ -50,7 +50,14 @@ echo "==> [2/5] 创建部署用户与目录"
 if ! id onegzus >/dev/null 2>&1; then
   useradd -m -d /opt/onegzus -s /bin/bash onegzus
 fi
-install -d -o onegzus -g onegzus /opt/onegzus/api /opt/onegzus/web /opt/onegzus/backups /opt/onegzus/deploy
+install -d -o onegzus -g onegzus \
+  /opt/onegzus/releases/api /opt/onegzus/releases/web /opt/onegzus/current \
+  /opt/onegzus/shared /opt/onegzus/backups /opt/onegzus/deploy
+
+if ! command -v uv >/dev/null 2>&1; then
+  echo "==> 安装 uv"
+  curl -LsSf https://astral.sh/uv/install.sh | UV_UNMANAGED_INSTALL=/usr/local/bin sh
+fi
 
 echo "==> [3/5] 初始化 PostgreSQL"
 PG_PASSWORD="${PG_PASSWORD:-$(openssl rand -hex 16)}"
@@ -67,16 +74,19 @@ if [[ -d /tmp/deploy ]]; then
   cp -a /tmp/deploy/. /opt/onegzus/deploy/
   chown -R onegzus:onegzus /opt/onegzus/deploy
 fi
+install -m 644 /opt/onegzus/deploy/systemd/onegzus-api.service /etc/systemd/system/onegzus-api.service
+systemctl daemon-reload
+systemctl enable onegzus-api
 
 echo "==> [5/5] 完成"
 echo "------------------------------------------------------------"
 echo "  部署用户   : onegzus"
-echo "  目录       : /opt/onegzus/{api,web,backups,deploy}"
+echo "  目录       : /opt/onegzus/{releases,current,shared,backups,deploy}"
 echo "  数据库     : postgresql://onegzus:$PG_PASSWORD@127.0.0.1:5432/onegzus"
 echo "  Python     : $PYTHON_BIN"
 echo "------------------------------------------------------------"
 echo " 下一步："
-echo "  1) 本地执行 migrate_db.sh 迁移 Neon 数据（README 第 3 节）"
-echo "  2) 上传后端代码并填写 .env（README 第 4 节）"
-echo "  3) 运行 /opt/onegzus/deploy/scripts/deploy_api.sh"
-echo "  4) 构建前端并运行 deploy_frontend.sh（README 第 5 节）"
+echo "  1) 创建 /opt/onegzus/shared/api.env（见 deploy README）"
+echo "  2) 安装 nginx 与 systemd 配置并启用 onegzus-api"
+echo "  3) 通过 GitHub Actions 上传首个 API/Web release"
+echo "  4) 运行 /opt/onegzus/deploy/scripts/install_cron.sh"

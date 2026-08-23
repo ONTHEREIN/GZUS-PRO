@@ -228,7 +228,7 @@ class LoginResult {
   final String? ehallCookies;
   final String? ehallAuthToken;
 
-  /// 管理后台标记：学号在 admin_users 白名单中时为 true（Worker 透传或后端直连）。
+  /// 管理后台标记：学号在 admin_users 白名单中时为 true。
   final bool? isAdmin;
 }
 

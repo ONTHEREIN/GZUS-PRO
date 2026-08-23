@@ -108,8 +108,6 @@ class SchoolSdkClient:
         base_url: str,
         timeout_seconds: int = 15,
         httpx_client: Any | None = None,
-        session_id: str | None = None,
-        worker_proxy_origin: str | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
@@ -117,62 +115,18 @@ class SchoolSdkClient:
         self._account: str | None = None
         self._student_name: str | None = None
         self._httpx_client: Any | None = httpx_client
-        self._session_id = session_id
-        self._worker_proxy_origin = worker_proxy_origin
-
-    def set_worker_proxy(self, session_id: str, worker_proxy_origin: str) -> None:
-        """Configure the Worker proxy after session creation (when session_id
-        wasn't available at client construction time).
-
-        Called by ``create_session_endpoint`` after ``sessions.create()``
-        generates the session ID.
-        """
-        self._session_id = session_id
-        self._worker_proxy_origin = worker_proxy_origin
-        self._install_worker_proxy()
 
     def _jwxt_origin(self) -> str:
         """Return the origin used for JWXT requests.
 
-        When ``worker_proxy_origin`` is set, all JWXT HTTP requests are routed
-        through the Cloudflare Worker (preserving the Worker's edge IP so
-        IP-bounded cookies remain valid).  Otherwise requests go to JWXT directly.
+        请求始终直接发送至学校教务系统。
         """
-        if self._worker_proxy_origin:
-            return self._worker_proxy_origin
         parsed = urlparse(self.base_url)
         return f"{parsed.scheme}://{parsed.netloc}"
 
     def _jwxt_headers(self, extra: dict | None = None) -> dict:
-        """Return headers for JWXT requests, including session ID for Worker proxy."""
-        headers = dict(extra or {})
-        if self._session_id:
-            headers["X-Jwxt-Session-Id"] = self._session_id
-        return headers
-
-    def _install_worker_proxy(self) -> None:
-        """Add ``X-Jwxt-Session-Id`` header to the SDK's ``requests.Session``.
-
-        The SDK's host is already set to the Worker origin by ``_build_client``.
-        Adding this header lets the Worker identify which session's cookies to
-        inject when forwarding requests to JWXT.
-        """
-        if not self._session_id or not self._worker_proxy_origin:
-            return
-        if self._client is None or not hasattr(self._client, "_http"):
-            return
-
-        http_session = self._client._http  # requests.Session
-        if getattr(http_session, "_gz_worker_proxy_installed", False):
-            return
-
-        http_session.headers["X-Jwxt-Session-Id"] = self._session_id
-        http_session._gz_worker_proxy_installed = True
-        logger.info(
-            "Worker proxy enabled for session %s → %s",
-            self._session_id[:8],
-            self._worker_proxy_origin,
-        )
+        """返回附加到学校请求的 headers。"""
+        return dict(extra or {})
 
     def login(self, account: str, password: str) -> str | None:
         client_cls = self._load_school_client()
@@ -186,7 +140,6 @@ class SchoolSdkClient:
             if self._looks_like_captcha(exc):
                 raise CaptchaRequired(CaptchaChallenge(token="", image="", client=self)) from exc
             raise AuthenticationError("教务系统登录失败") from exc
-        self._install_worker_proxy()
         name = self._extract_student_name(result)
         if name:
             self._student_name = name
@@ -202,10 +155,7 @@ class SchoolSdkClient:
         self._account = account
 
         if not validate:
-            # Skip JWXT validation.  Used when cookies are IP-bounded to
-            # the Cloudflare Worker edge and Vercel (different IP) cannot
-            # validate them.  Just set cookies and return; real validation
-            # will happen on first actual API call.
+            # 不验证 cookie 即恢复 SDK 客户端；首次业务请求会完成真实校验。
             method = getattr(school_client, "user_login_with_cookies", None)
             if method is None:
                 raise AuthenticationError("当前 SDK 未提供 cookie 登录方法")
@@ -214,7 +164,6 @@ class SchoolSdkClient:
             except Exception as exc:  # noqa: BLE001 - third-party SDK exceptions are not stable.
                 raise AuthenticationError("教务系统 cookie 初始化失败") from exc
             self._apply_cookie_pairs(cookie_pairs)
-            self._install_worker_proxy()
             return None
 
         method = getattr(school_client, "user_login_with_cookies", None)
@@ -230,7 +179,6 @@ class SchoolSdkClient:
         except Exception as exc:  # noqa: BLE001 - third-party SDK exceptions are not stable.
             self._client = None
             raise AuthenticationError("教务系统 cookie 登录验证失败") from exc
-        self._install_worker_proxy()
         name = self._student_name_from_logged_in_client(result)
         if name:
             self._student_name = name
@@ -683,25 +631,7 @@ class SchoolSdkClient:
 
     def _build_client(self, client_cls: Any) -> Any:
         parsed = urlparse(self.base_url)
-        # When a Worker proxy is configured, route ALL SDK HTTP requests
-        # through the Cloudflare Worker (preserving the Worker's edge IP).
-        # The Worker detects requests by the X-Jwxt-Session-Id header and
-        # path prefix (/jwglxt/*), injects IP-bounded cookies, and forwards
-        # to the real JWXT server.
-        if self._worker_proxy_origin and parsed.scheme and parsed.netloc:
-            proxy_parsed = urlparse(self._worker_proxy_origin)
-            host = proxy_parsed.hostname or proxy_parsed.netloc
-            ssl = proxy_parsed.scheme == "https"
-            port = proxy_parsed.port or (443 if ssl else 80)
-            prefix = parsed.path.rstrip("/")  # JWXT path prefix
-            endpoints = prefixed_url_endpoints(prefix) if prefix else None
-            logger.debug(
-                "SDK client routed through Worker proxy: %s → %s (prefix=%s)",
-                parsed.netloc,
-                host,
-                prefix,
-            )
-        elif parsed.scheme and parsed.netloc:
+        if parsed.scheme and parsed.netloc:
             host = parsed.hostname or parsed.netloc
             ssl = parsed.scheme == "https"
             port = parsed.port or (443 if ssl else 80)
@@ -1351,44 +1281,3 @@ class SchoolSdkClient:
         parsed = urlparse(self.base_url)
         domains = [parsed.hostname or "jwxt.gzus.edu.cn", "jwxt.seig.edu.cn", "jwxt.gzus.edu.cn"]
         return list(dict.fromkeys(domain for domain in domains if domain))
-
-    def apply_cookie_header(self, cookie_header: str) -> None:
-        """Apply a Cookie header string (from Cloudflare Worker) to both the
-        SDK client cookie jar and the httpx client cookie jar.
-
-        This is needed because JWXT cookies are IP-bounded to the Worker's
-        edge location.  The DB-stored cookies won't work from Vercel's IP,
-        so the Worker injects fresh cookies on every proxied request.
-        """
-        # Parse "key1=val1; key2=val2" into pairs
-        pairs = []
-        for part in cookie_header.split(";"):
-            part = part.strip()
-            if "=" in part:
-                key, _, value = part.partition("=")
-                key = key.strip()
-                value = value.strip()
-                if key:
-                    pairs.append((key, value))
-
-        logger.info(
-            "apply_cookie_header: parsed %d cookie pairs from Worker header (%d chars), "
-            "SDK client=%s, httpx_client=%s",
-            len(pairs),
-            len(cookie_header),
-            "present" if self._client is not None else "None",
-            "present" if self._httpx_client is not None else "None",
-        )
-
-        # Apply to SDK client (requests-based cookie jar)
-        self._apply_cookie_pairs(pairs)
-
-        # Also apply to httpx_client cookie jar (used by _proxy_via_httpx)
-        if self._httpx_client is not None:
-            for key, value in pairs:
-                for domain in self._jwxt_cookie_domains():
-                    self._httpx_client.cookies.set(key, value, domain=domain, path="/")
-                    self._httpx_client.cookies.set(key, value, domain=domain, path="/jwglxt")
-            logger.info("apply_cookie_header: applied %d pairs to httpx_client cookie jar", len(pairs))
-
-

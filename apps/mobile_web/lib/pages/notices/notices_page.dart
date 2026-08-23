@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../api_client.dart';
+import '../../app_providers.dart';
 import '../../responsive/breakpoints.dart';
 import '../../responsive/sizing.dart';
 import '../../widgets/async_panel.dart';
@@ -20,41 +22,23 @@ String _noticeDetailTitle(NoticeItem item, NoticeDetail detail) {
   return value.isEmpty ? _noticeItemTitle(item) : value;
 }
 
-class NoticesPage extends StatefulWidget {
+class NoticesPage extends ConsumerStatefulWidget {
   const NoticesPage({super.key, required this.api, this.onSessionExpired});
 
   final ApiClient api;
   final VoidCallback? onSessionExpired;
 
   @override
-  State<NoticesPage> createState() => _NoticesPageState();
+  ConsumerState<NoticesPage> createState() => _NoticesPageState();
 }
 
-class _NoticesPageState extends State<NoticesPage>
+class _NoticesPageState extends ConsumerState<NoticesPage>
     with PageSilentRefresh<NoticesPage> {
   int? _selectedIndex;
-  late Future<List<NoticeItem>> _noticesFuture;
-
-  @override
-  void initState() {
-    super.initState();
-    _noticesFuture = _loadNotices();
-  }
-
-  @override
-  void didUpdateWidget(covariant NoticesPage oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.api != widget.api) {
-      _noticesFuture = _loadNotices();
-    }
-  }
-
-  Future<List<NoticeItem>> _loadNotices({bool forceRefresh = false}) =>
-      widget.api.notices(forceRefresh: forceRefresh).then((r) => r.data);
 
   Future<void> _refreshNotices() async {
-    setState(() => _noticesFuture = _loadNotices(forceRefresh: true));
-    final items = await _noticesFuture;
+    ref.invalidate(noticesProvider(widget.api));
+    final items = await ref.read(noticesProvider(widget.api).future);
     if (mounted && _selectedIndex != null && _selectedIndex! >= items.length) {
       setState(() => _selectedIndex = null);
     }
@@ -63,15 +47,16 @@ class _NoticesPageState extends State<NoticesPage>
   @override
   void silentRefresh() {
     if (!mounted) return;
-    setState(() => _noticesFuture = _loadNotices());
+    ref.invalidate(noticesProvider(widget.api));
   }
 
   @override
   Widget build(BuildContext context) {
+    final noticesFuture = ref.watch(noticesProvider(widget.api).future);
     return PageRefresh(
       onRefresh: _refreshNotices,
       child: AsyncPanel<List<NoticeItem>>(
-        future: _noticesFuture,
+        future: noticesFuture,
         emptyMessage: '暂无通知',
         onSessionExpired: widget.onSessionExpired,
         builder: (items) => LayoutBuilder(
@@ -162,7 +147,7 @@ class _NoticesPageState extends State<NoticesPage>
   }
 }
 
-class _NoticeDetailContent extends StatefulWidget {
+class _NoticeDetailContent extends ConsumerStatefulWidget {
   const _NoticeDetailContent(
       {required this.api, required this.item, this.onSessionExpired});
   final ApiClient api;
@@ -170,30 +155,10 @@ class _NoticeDetailContent extends StatefulWidget {
   final VoidCallback? onSessionExpired;
 
   @override
-  State<_NoticeDetailContent> createState() => _NoticeDetailContentState();
+  ConsumerState<_NoticeDetailContent> createState() => _NoticeDetailContentState();
 }
 
-class _NoticeDetailContentState extends State<_NoticeDetailContent> {
-  late Future<NoticeDetail> _detailFuture;
-
-  @override
-  void initState() {
-    super.initState();
-    _loadDetail();
-  }
-
-  @override
-  void didUpdateWidget(covariant _NoticeDetailContent oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.item.url != widget.item.url) _loadDetail();
-  }
-
-  void _loadDetail() {
-    if (widget.item.url != null && widget.item.url!.isNotEmpty) {
-      _detailFuture =
-          widget.api.fetchNoticeDetail(widget.item.url!).then((r) => r.data);
-    }
-  }
+class _NoticeDetailContentState extends ConsumerState<_NoticeDetailContent> {
 
   @override
   Widget build(BuildContext context) {
@@ -231,8 +196,13 @@ class _NoticeDetailContentState extends State<_NoticeDetailContent> {
         ),
       );
     }
+    final detailFuture = ref.watch(
+      noticeDetailProvider(
+        NoticeDetailRequest(client: widget.api, url: widget.item.url!),
+      ).future,
+    );
     return FutureBuilder<NoticeDetail>(
-      future: _detailFuture,
+      future: detailFuture,
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());

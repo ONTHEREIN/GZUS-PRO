@@ -16,7 +16,7 @@ if (-not $FlutterBin) {
 }
 $ApkPath = "$ProjectRoot\apps\mobile_web\build\app\outputs\flutter-apk\app-release.apk"
 $PubspecPath = "$ProjectRoot\apps\mobile_web\pubspec.yaml"
-$CloudApiUrl = if ($env:API_BASE_URL) { $env:API_BASE_URL } else { "https://onegzus.cc.cd/api,https://onegzus-onweb.pages.dev/api" }
+$CloudApiUrl = if ($env:API_BASE_URL) { $env:API_BASE_URL } else { "https://onegzus.onrein.top/api" }
 
 # ---------- 自动递增版本号 ----------
 # 默认仅构建号 +1（每次构建）；-Major 大版本更新；-Minor 实质性更新（新功能）；-Patch 小修复

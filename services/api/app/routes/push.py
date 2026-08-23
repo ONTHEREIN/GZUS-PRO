@@ -2,9 +2,9 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request, Header, status
 
 from app.config import get_settings
-from app.database import PushRegistration, WebPushSubscription, get_sync_session_factory
+from app.database import WebPushSubscription, get_sync_session_factory
 from app.routes.deps import require_session
-from app.schemas import PushRegisterRequest, WebPushConfigResponse, WebPushSubscriptionRequest
+from app.schemas import WebPushConfigResponse, WebPushSubscriptionRequest
 from app.sessions import AppSession, student_id_of
 
 router = APIRouter(prefix="/push", tags=["push"])
@@ -101,49 +101,6 @@ def unregister_web_push(
     return {"status": "ok"}
 
 
-@router.post("/register")
-def register_push(
-    payload: PushRegisterRequest,
-    session: AppSession = Depends(require_session),
-    request: Request = None,
-) -> dict[str, str]:
-    session.push_registration_id = payload.registration_id
-    session.push_platform = payload.platform
-    if request is not None:
-        request.app.state.sessions.update(
-            session.id,
-            push_registration_id=payload.registration_id,
-            push_platform=payload.platform,
-        )
-    _upsert_push_registration(session, payload.registration_id, payload.platform)
-    return {"status": "ok"}
-
-
-@router.post("/unregister")
-def unregister_push(
-    session: AppSession = Depends(require_session),
-    request: Request = None,
-) -> dict[str, str]:
-    registration_id = session.push_registration_id
-    platform = session.push_platform or "android"
-    session.push_registration_id = None
-    session.push_platform = platform
-    if request is not None:
-        request.app.state.sessions.update(
-            session.id,
-            push_registration_id=None,
-            push_platform=platform,
-        )
-    if registration_id:
-        factory = get_sync_session_factory()
-        with factory() as db:
-            db.query(PushRegistration).filter(
-                PushRegistration.registration_id == registration_id
-            ).delete()
-            db.commit()
-    return {"status": "ok"}
-
-
 @router.post("/test")
 async def test_push(
     request: Request,
@@ -184,30 +141,6 @@ def poll_push(
             "Error draining push messages for session %s", session.id[:8], exc_info=True
         )
         return {"messages": []}
-
-
-def _upsert_push_registration(session: AppSession, registration_id: str, platform: str) -> None:
-    student_id = student_id_of(session)
-    if not student_id:
-        return
-    factory = get_sync_session_factory()
-    with factory() as db:
-        item = (
-            db.query(PushRegistration)
-            .filter(PushRegistration.registration_id == registration_id)
-            .first()
-        )
-        if item is None:
-            item = PushRegistration(
-                student_id=student_id,
-                registration_id=registration_id,
-                platform=platform,
-            )
-            db.add(item)
-        else:
-            item.student_id = student_id
-            item.platform = platform
-        db.commit()
 
 
 def _copy_live_update_fields(source: dict, target: dict) -> None:

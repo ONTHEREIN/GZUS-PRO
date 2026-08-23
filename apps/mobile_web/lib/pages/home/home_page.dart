@@ -17,7 +17,6 @@ import '../../responsive/breakpoints.dart';
 import '../../widgets/empty_state.dart';
 import '../../widgets/page_panel.dart';
 import '../../widgets/page_silent_refresh.dart';
-import '../../widgets/grid_columns.dart';
 import '../../widgets/progress.dart';
 import '../../widgets/scale_tap.dart';
 
@@ -751,8 +750,7 @@ class _HomePageState extends State<HomePage>
                   Expanded(
                     child: ReorderableListView.builder(
                       itemCount: order.length,
-                      onReorder: (oldIndex, newIndex) async {
-                        if (oldIndex < newIndex) newIndex -= 1;
+                      onReorderItem: (oldIndex, newIndex) async {
                         final id = order.removeAt(oldIndex);
                         order.insert(newIndex, id);
                         await persist();
@@ -847,9 +845,9 @@ List<Widget> _buildHomeLayoutRows({
     final children = buffer.map((item) => item.child).toList();
     rows.add(
       _HomeRowGroup(
-        children: children,
         maxColumns: maxColumns,
         spacing: spacing,
+        children: children,
       ),
     );
     buffer.clear();

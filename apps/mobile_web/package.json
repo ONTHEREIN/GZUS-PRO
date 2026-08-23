@@ -1,8 +1,0 @@
-{
-  "name": "onegzus-worker-tests",
-  "private": true,
-  "type": "module",
-  "scripts": {
-    "test:worker": "node --test --experimental-test-coverage worker_tests/*_test.mjs"
-  }
-}

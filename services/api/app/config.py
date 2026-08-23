@@ -11,7 +11,6 @@ ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
 
 class Settings(BaseSettings):
     jw_base_url: str = "https://jwxt.gzus.edu.cn/jwglxt"
-    jwxt_worker_proxy_origin: str = ""  # e.g. https://onegzus-onweb.pages.dev - route JWXT through Worker
     ehall_base_url: str = "https://ehall.gzus.edu.cn"
     ehall_staff_sync_url: str = ""
     ehall_staff_json_path: str = ""
@@ -29,8 +28,6 @@ class Settings(BaseSettings):
     request_timeout_seconds: int = 6
     request_connect_timeout_seconds: int = 5
     cas_login_timeout_seconds: int = 60
-    jpush_app_key: str = ""
-    jpush_master_secret: str = ""
     push_poll_interval_seconds: int = 1800
     ws_heartbeat_seconds: int = 30
     debug: bool = False
@@ -41,7 +38,6 @@ class Settings(BaseSettings):
     db_pool_recycle: int = 300
     ehall_session_ttl_hours: int = 24
     ecard_base_url: str = "https://ecarduser.gzus.edu.cn"
-    ecard_worker_proxy_origin: str = ""
     ecard_openid: str = ""
     ecard_unionid: str = ""
     ecard_secret: str = ""
@@ -51,7 +47,7 @@ class Settings(BaseSettings):
     ehall_csrf_key: str = ""
     credential_encryption_key: str = ""
     rsa_private_key_pem: str = ""
-    internal_api_key: str = ""  # Key for Cloudflare Worker to call internal endpoints
+    internal_api_key: str = ""  # 服务器本机 cron 调用维护端点的密钥
     web_push_vapid_public_key: str = ""
     web_push_vapid_private_key: str = ""
     web_push_vapid_subject: str = "mailto:example@example.com"

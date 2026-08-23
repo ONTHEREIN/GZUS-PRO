@@ -2,9 +2,11 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../api_client.dart';
+import '../../app_providers.dart';
 import '../../schedule_utils.dart';
 import '../../local_notification_service.dart' deferred as local_notification_service;
 import '../../widgets/async_panel.dart';
@@ -15,7 +17,7 @@ import '../../widgets/page_panel.dart';
 import '../../widgets/page_silent_refresh.dart';
 import '../../widgets/progress.dart';
 
-class AttendancePage extends StatefulWidget {
+class AttendancePage extends ConsumerStatefulWidget {
   const AttendancePage(
       {super.key,
       required this.api,
@@ -29,12 +31,11 @@ class AttendancePage extends StatefulWidget {
   final VoidCallback? onSessionExpired;
 
   @override
-  State<AttendancePage> createState() => _AttendancePageState();
+  ConsumerState<AttendancePage> createState() => _AttendancePageState();
 }
 
-class _AttendancePageState extends State<AttendancePage>
+class _AttendancePageState extends ConsumerState<AttendancePage>
     with PageSilentRefresh<AttendancePage> {
-  late Future<AttendanceResponse> _attendanceFuture;
   String _sortField = 'none';
   bool _sortDescending = true;
   String _filterType = 'all';
@@ -42,40 +43,21 @@ class _AttendancePageState extends State<AttendancePage>
   Set<String> _highlightedAttendanceKeys = {};
   String? _processedAttendanceSignature;
 
-  @override
-  void initState() {
-    super.initState();
-    _attendanceFuture = _loadAttendance();
-  }
-
-  @override
-  void didUpdateWidget(covariant AttendancePage oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.api != widget.api ||
-        oldWidget.year != widget.year ||
-        oldWidget.term != widget.term) {
-      _attendanceFuture = _loadAttendance();
-    }
-  }
-
-  Future<AttendanceResponse> _loadAttendance({bool forceRefresh = false}) =>
-      widget.api
-          .attendance(
-            year: widget.year,
-            term: widget.term,
-            forceRefresh: forceRefresh,
-          )
-          .then((r) => r.data);
+  AttendanceRequest get _request => AttendanceRequest(
+        client: widget.api,
+        year: widget.year,
+        term: widget.term,
+      );
 
   Future<void> _refreshAttendance() async {
-    setState(() => _attendanceFuture = _loadAttendance(forceRefresh: true));
-    await _attendanceFuture;
+    ref.invalidate(attendanceProvider(_request));
+    await ref.read(attendanceProvider(_request).future);
   }
 
   @override
   void silentRefresh() {
     if (!mounted) return;
-    setState(() => _attendanceFuture = _loadAttendance());
+    ref.invalidate(attendanceProvider(_request));
   }
 
   String get _sortLabel {
@@ -226,8 +208,9 @@ class _AttendancePageState extends State<AttendancePage>
 
   @override
   Widget build(BuildContext context) {
+    final attendanceFuture = ref.watch(attendanceProvider(_request).future);
     return AsyncPanel<AttendanceResponse>(
-      future: _attendanceFuture,
+      future: attendanceFuture,
       onSessionExpired: widget.onSessionExpired,
       builder: (data) => LayoutBuilder(
         builder: (context, constraints) {

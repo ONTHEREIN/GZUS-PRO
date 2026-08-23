@@ -12,7 +12,7 @@
 set -euo pipefail
 
 CRON_USER="${CRON_USER:-onegzus}"
-ENV_FILE="/opt/onegzus/api/.env"
+ENV_FILE="/opt/onegzus/shared/api.env"
 LOG_FILE="/var/log/onegzus/cron.log"
 
 if [[ "$(id -u)" -ne 0 ]]; then
@@ -21,7 +21,7 @@ if [[ "$(id -u)" -ne 0 ]]; then
 fi
 
 if [[ ! -f "$ENV_FILE" ]]; then
-  echo "错误：$ENV_FILE 不存在，请先部署后端（deploy_api.sh）" >&2
+  echo "错误：$ENV_FILE 不存在，请先完成首个 API release 部署" >&2
   exit 1
 fi
 

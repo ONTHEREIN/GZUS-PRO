@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../api_client.dart';
+import '../../app_providers.dart';
 import '../../responsive/breakpoints.dart';
 import '../../responsive/sizing.dart';
 import '../../widgets/async_panel.dart';
@@ -10,54 +12,36 @@ import '../../widgets/info_tile.dart';
 import '../../widgets/page_panel.dart';
 import '../../widgets/page_silent_refresh.dart';
 
-class CreditsPage extends StatefulWidget {
+class CreditsPage extends ConsumerStatefulWidget {
   const CreditsPage({super.key, required this.api, this.onSessionExpired});
 
   final ApiClient api;
   final VoidCallback? onSessionExpired;
 
   @override
-  State<CreditsPage> createState() => _CreditsPageState();
+  ConsumerState<CreditsPage> createState() => _CreditsPageState();
 }
 
-class _CreditsPageState extends State<CreditsPage>
+class _CreditsPageState extends ConsumerState<CreditsPage>
     with PageSilentRefresh<CreditsPage> {
-  late Future<List<CreditItem>> _creditsFuture;
-
-  @override
-  void initState() {
-    super.initState();
-    _creditsFuture = _loadCredits();
-  }
-
-  @override
-  void didUpdateWidget(covariant CreditsPage oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.api != widget.api) {
-      _creditsFuture = _loadCredits();
-    }
-  }
-
-  Future<List<CreditItem>> _loadCredits({bool forceRefresh = false}) =>
-      widget.api.credits(forceRefresh: forceRefresh).then((r) => r.data);
-
   Future<void> _refreshCredits() async {
-    setState(() => _creditsFuture = _loadCredits(forceRefresh: true));
-    await _creditsFuture;
+    ref.invalidate(creditsProvider(widget.api));
+    await ref.read(creditsProvider(widget.api).future);
   }
 
   @override
   void silentRefresh() {
     if (!mounted) return;
-    setState(() => _creditsFuture = _loadCredits());
+    ref.invalidate(creditsProvider(widget.api));
   }
 
   @override
   Widget build(BuildContext context) {
+    final creditsFuture = ref.watch(creditsProvider(widget.api).future);
     return PageRefresh(
       onRefresh: _refreshCredits,
       child: AsyncPanel<List<CreditItem>>(
-        future: _creditsFuture,
+        future: creditsFuture,
         onSessionExpired: widget.onSessionExpired,
         builder: (items) => LayoutBuilder(
           builder: (context, constraints) {

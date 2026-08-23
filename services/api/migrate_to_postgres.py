@@ -27,7 +27,6 @@ from app.database import (
     DataCache,
     EcardBinding,
     EhallSession,
-    PushRegistration,
     StaffMember,
     WebPushSubscription,
 )
@@ -37,7 +36,6 @@ TABLES = [
     (StaffMember, "staff_members", False),  # 字符串 PK，无序列
     (EhallSession, "ehall_sessions", True),
     (EcardBinding, "ecard_bindings", True),
-    (PushRegistration, "push_registrations", True),
     (DataCache, "data_cache", True),
     (WebPushSubscription, "web_push_subscriptions", True),
 ]

@@ -16,8 +16,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
-# 生产环境（Vercel）init_db 会跳过全部建表工作（database.py 的 Vercel 分支），
-# 新表在这里首次访问时幂等补建，避免新部署后 user_settings 表不存在导致 500。
 _table_ready = False
 
 

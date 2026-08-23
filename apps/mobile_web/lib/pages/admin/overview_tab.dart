@@ -49,8 +49,6 @@ class _OverviewTabState extends State<OverviewTab> {
                 GzusColors.blue),
             ('已下线', '${data['revokedSessions'] ?? 0}', Icons.block,
                 GzusColors.red),
-            ('极光推送', '${data['pushRegistrations'] ?? 0}', Icons.notifications,
-                GzusColors.amber),
             ('Web 推送', '${data['webPushSubscriptions'] ?? 0}',
                 Icons.notifications_active_outlined, GzusColors.amber),
             ('水电费绑定', '${data['ecardBindings'] ?? 0}', Icons.electric_bolt,

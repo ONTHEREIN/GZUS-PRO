@@ -8,7 +8,6 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
-from urllib.parse import urlencode
 
 import httpx
 
@@ -19,7 +18,7 @@ logger = logging.getLogger(__name__)
 # ─── Global token cache (all users share one ECARD_OPENID/SECRET) ───
 _TOKEN_CACHE_LOCK = threading.Lock()
 _GLOBAL_TOKEN: dict[str, Any] = {"token": None, "unionid": None, "cached_at": 0.0}
-_TOKEN_TTL = 3000  # 50 minutes (conservative; EdgeOne uses 60min)
+_TOKEN_TTL = 3000  # 50 minutes
 
 
 class EcardConfigurationError(RuntimeError):
@@ -168,13 +167,8 @@ def _delete_token_from_db() -> None:
 
 
 class EcardClient:
-    def __init__(self, worker_proxy_origin: str | None = None) -> None:
+    def __init__(self) -> None:
         self.settings = get_settings()
-        self._worker_proxy_origin = (
-            worker_proxy_origin
-            if worker_proxy_origin is not None
-            else self.settings.ecard_worker_proxy_origin
-        )
         if not self.settings.ecard_openid:
             raise EcardConfigurationError("未配置 ECARD_OPENID")
         self._token: str | None = None
@@ -184,15 +178,8 @@ class EcardClient:
 
     def _get_http_client(self) -> httpx.Client:
         if self._http_client is None or self._http_client.is_closed:
-            # 直连模式超时压到 3s:Vercel 函数执行上限 10s,冷启动还需
-            # 数秒,海外→学校链路响应不稳。3s 超时保证 login+getBalance
-            # 能在上限内返回(成功或 stale 兜底),避免请求被 Vercel 静默
-            # 杀掉后前端 30s 超时显示"请求超时"。学校实际响应约 1-2s。
-            timeout = self.settings.request_timeout_seconds
-            if not self._worker_proxy_origin:
-                timeout = 3
             self._http_client = httpx.Client(
-                timeout=timeout,
+                timeout=self.settings.request_timeout_seconds,
                 verify=self.settings.ecard_verify_tls,
                 limits=httpx.Limits(max_connections=4, max_keepalive_connections=2),
             )
@@ -210,7 +197,6 @@ class EcardClient:
         *,
         token: str | None = None,
         timeout: float | None = None,
-        proxy_origin: str | None = None,
     ) -> dict[str, Any]:
         payload = dict(params or {})
         payload.setdefault("from", "wxminiprogram")
@@ -219,7 +205,7 @@ class EcardClient:
         payload["openid"] = self._openid
         # unionid 仅在已认证请求（带 token）中发送。登录请求若带上
         # unionid，学校服务端会判定为"已登录态"并返回 code=203 未登录，
-        # 拒绝签发新 token。与 Cloudflare 透明代理路径保持一致：
+        # 拒绝签发新 token，登录响应成功后才记录 unionid：
         # 登录响应成功后才记录 unionid，再用于后续业务请求。
         if self._unionid and token:
             payload["unionid"] = self._unionid
@@ -231,25 +217,6 @@ class EcardClient:
             "User-Agent": WX_UA,
         }
         url = f"{self.settings.ecard_base_url.rstrip('/')}/{path.lstrip('/')}"
-
-        # If Worker proxy is configured, route through Cloudflare to reach
-        # the ecard API from serverless regions where direct access is flaky.
-        effective_proxy_origin = proxy_origin or self._worker_proxy_origin
-        if effective_proxy_origin:
-            try:
-                return self._post_via_proxy(
-                    url, payload, headers, effective_proxy_origin, timeout=timeout
-                )
-            except EcardApiError as exc:
-                # CF Worker → 学校服务器链路可能整体不可达（如 HTTP 522/超时，
-                # 见 4ec5708 记录）。直连学校通常正常，回退直连避免缴费查询
-                # 全线不可用；下一次请求仍会优先尝试代理。
-                logger.warning(
-                    "ecard_client: proxy %s failed for %s (%s); falling back to direct",
-                    effective_proxy_origin,
-                    path,
-                    exc,
-                )
 
         try:
             client = self._get_http_client()
@@ -271,56 +238,6 @@ class EcardClient:
         if not isinstance(data, dict):
             raise EcardApiError("一卡通服务响应异常")
         return data
-
-    def _post_via_proxy(
-        self,
-        url: str,
-        payload: dict[str, Any],
-        headers: dict[str, str],
-        proxy_origin: str | None = None,
-        *,
-        timeout: float | None = None,
-    ) -> dict[str, Any]:
-        """Send the already-signed ecard request through Cloudflare Worker."""
-        effective_proxy_origin = proxy_origin or getattr(self, "_worker_proxy_origin", "")
-        proxy_url = f"{effective_proxy_origin.rstrip('/')}/_proxy"
-        proxy_body = {
-            "url": url,
-            "method": "POST",
-            "headers": headers,
-            "body": urlencode(payload),
-        }
-        try:
-            client = self._get_http_client()
-            response = client.post(
-                proxy_url,
-                json=proxy_body,
-                timeout=timeout or self.settings.request_timeout_seconds + 15,
-            )
-            response.raise_for_status()
-            upstream_status = int(response.headers.get("X-Proxy-Status", response.status_code))
-            if upstream_status >= 400:
-                raise EcardApiError(f"一卡通服务请求失败: HTTP {upstream_status}")
-            data = response.json()
-        except httpx.TimeoutException as exc:
-            logger.error("ecard_client: Cloudflare proxy timeout for %s: %s", proxy_url, exc)
-            raise EcardApiError("一卡通服务请求超时") from exc
-        except EcardApiError:
-            raise
-        except Exception as exc:
-            logger.error("ecard_client: Cloudflare proxy request failed: %s", exc, exc_info=True)
-            raise EcardApiError("一卡通服务请求失败") from exc
-        if not isinstance(data, dict):
-            raise EcardApiError("一卡通服务响应异常")
-        return data
-
-    def _room_proxy_origin(self) -> str:
-        # 仅当显式配置 ECARD_WORKER_PROXY_ORIGIN 时才走代理。此前曾把
-        # 前端域名（FRONTEND_BASE_URL）当作代理源——生产环境 debug=False
-        # 且 frontend 为 https 时宿舍列表会经前端域名 Worker 转发，而该
-        # Worker 与学校服务器链路可能整体不可达（HTTP 522），导致宿舍
-        # 查询全线失败。宿舍列表与 login/balance 应统一使用同一代理配置。
-        return getattr(self, "_worker_proxy_origin", "")
 
     def login(self) -> str:
         if self._token:
@@ -369,20 +286,16 @@ class EcardClient:
         token = self.login()
         rooms_by_impl: dict[str, list[dict[str, Any]]] = {}
 
-        # Fetch sequentially. The upstream ecard service is sensitive to
-        # concurrent requests from serverless regions and may reject all room
-        # sources when the same token is used in parallel.
+        # 上游对同一 token 的并发请求敏感，宿舍类型按顺序查询。
         def _fetch_one(impl_type: str) -> list[dict[str, Any]]:
             settings = getattr(self, "settings", None)
             base_timeout = getattr(settings, "request_timeout_seconds", 6)
-            room_timeout = max(base_timeout + 39, 45)
-            room_proxy_origin = self._room_proxy_origin()
+            room_timeout = max(base_timeout, 15)
             data = self.post_api(
                 "/powerfee/getRoomInfo",
                 {"implType": impl_type},
                 token=token,
                 timeout=room_timeout,
-                proxy_origin=room_proxy_origin,
             )
             if not is_ok(data):
                 # Retry on auth failure
@@ -394,7 +307,6 @@ class EcardClient:
                         {"implType": impl_type},
                         token=token_fresh,
                         timeout=room_timeout,
-                        proxy_origin=room_proxy_origin,
                     )
                 if not is_ok(data):
                     message = data.get("msg") or data.get("message") or "获取宿舍列表失败"
@@ -451,12 +363,12 @@ class EcardClient:
             token=token,
         )
         # 注意:这里不做 203 重试。重试链 login+getBalance 会叠加到 10s+
-        # 触发 Vercel 函数上限(请求被静默杀掉,前端 30s 超时)。token 有
+        # 避免余额查询叠加多个耗时请求，token 有
         # 50min 全局缓存,203 属低频;遇到时置为无效并抛错,由上层走 stale
         # 兜底,下一次请求会自动重新登录。
         if power_data.get("code") == 203 or "未登录" in str(power_data.get("msg", "")):
             logger.warning(
-                "ecard_client: getBalance token expired (code=%s), invalidating; no retry to stay within Vercel limit",
+                "ecard_client: getBalance token expired (code=%s), invalidating; no immediate retry",
                 power_data.get("code"),
             )
             self._invalidate_token()
@@ -491,7 +403,7 @@ class EcardClient:
 
     def consumption(self, room_ref: EcardRoomRef, month: str) -> dict[str, Any]:
         # 单次请求,不做 203 重试:与 balance() 同理,避免 login+业务请求
-        # 叠加超 Vercel 函数上限。token 全局缓存 50min,203 属低频。
+        # 叠加超时。token 全局缓存 50min，203 属低频。
         token = self.login()
         data = self.post_api(
             "/powerfee/getDailyDetails",

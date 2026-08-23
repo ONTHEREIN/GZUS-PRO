@@ -49,7 +49,7 @@ _table_ready = False
 
 
 def _ensure_tables() -> None:
-    """Vercel 分支 init_db 会跳过建表，这里首次访问时幂等补建（仿 routes/settings.py）。"""
+    """兼容旧数据库中尚未创建的公众号数据表。"""
     global _table_ready
     if _table_ready:
         return

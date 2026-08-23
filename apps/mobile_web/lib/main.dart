@@ -5,9 +5,11 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'api_client.dart';
+import 'app_providers.dart';
 import 'gzus_design.dart';
 import 'responsive/spacing.dart';
 import 'schedule_utils.dart';
@@ -67,7 +69,7 @@ void main() async {
 
   SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
 
-  runApp(const OneGzusApp());
+  runApp(const ProviderScope(child: OneGzusRoot()));
 
   unawaited(_initDeferredServices());
 }
@@ -84,15 +86,39 @@ ThemeData _appTheme(Brightness brightness,
       navBarHeight: _mobileNavBarHeight, seedColor: seedColor);
 }
 
+class OneGzusRoot extends ConsumerWidget {
+  const OneGzusRoot({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return OneGzusApp.withApi(
+      api: ref.watch(apiClientProvider),
+      onAuthenticationChanged:
+          ref.read(authenticatedProvider.notifier).setAuthenticated,
+    );
+  }
+}
+
 class OneGzusApp extends StatefulWidget {
-  const OneGzusApp({super.key});
+  const OneGzusApp({super.key})
+      : apiOverride = null,
+        onAuthenticationChanged = null;
+
+  const OneGzusApp.withApi({
+    super.key,
+    required ApiClient api,
+    required this.onAuthenticationChanged,
+  }) : apiOverride = api;
+
+  final ApiClient? apiOverride;
+  final ValueChanged<bool>? onAuthenticationChanged;
 
   @override
   State<OneGzusApp> createState() => _OneGzusAppState();
 }
 
 class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
-  final api = ApiClient();
+  late final ApiClient api;
   final _navigatorKey = GlobalKey<NavigatorState>();
   ThemeMode themeMode = ThemeMode.system;
   Color seedColor = GzusColors.blue;
@@ -125,12 +151,13 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+    api = widget.apiOverride ?? ApiClient();
     WidgetsBinding.instance.addObserver(this);
     _systemDark =
         WidgetsBinding.instance.platformDispatcher.platformBrightness ==
             Brightness.dark;
     // 当 relogin 失败时（credential token 已失效），触发 logout
-    // 添加 5 秒冷却期，防止登录后立即因 Vercel/Neon 瞬态错误被踢出
+    // 添加 5 秒冷却期，防止登录后因短暂网络故障被误踢出。
     api.onReloginFailed = () {
       if (!loggedIn) return;
       final now = DateTime.now();
@@ -150,7 +177,9 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    api.dispose();
+    if (widget.apiOverride == null) {
+      api.dispose();
+    }
     super.dispose();
   }
 
@@ -416,6 +445,7 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
         _backgroundGuideCompleted = false;
         loginMethod = result.loginMethod ?? 'sso';
       });
+      widget.onAuthenticationChanged?.call(true);
       _initPushServices();
     } on ApiException catch (exc) {
       replaceBrowserUrl(_withoutSsoParams(uri).toString());
@@ -426,6 +456,7 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
         loggedIn = false;
         loginError = exc.message;
       });
+      widget.onAuthenticationChanged?.call(false);
     }
   }
 
@@ -460,6 +491,7 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
       _globalDataSource = const DataSourceInfo(fromLocalCache: true);
       loginMethod = prefs.getString('auth.loginMethod');
     });
+    widget.onAuthenticationChanged?.call(true);
 
     unawaited(_tryBackgroundRefresh(prefs));
     unawaited(_checkAdminStatus());
@@ -513,19 +545,7 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
       sessionId: api.sessionId ?? '',
       onNotificationTap: _handleNotificationTap,
     );
-    unawaited(_registerPushIfNeeded());
     unawaited(_drainPendingPushMessages());
-  }
-
-  Future<void> _registerPushIfNeeded() async {
-    try {
-      final regId = await LoginRequiredServices.getPushRegistrationId();
-      if (regId != null && regId.isNotEmpty) {
-        await api.registerPush(regId);
-      }
-    } on ApiException {
-      // WebSocket/native polling still cover notifications if JPush is absent.
-    } catch (_) {}
   }
 
   void _handleNotificationTap(Map<String, dynamic> extras) {
@@ -607,6 +627,7 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
           cloud?.onboardingCompleted ?? localCompleted;
       loginMethod = result.loginMethod;
     });
+    widget.onAuthenticationChanged?.call(true);
 
     // Fetch student info asynchronously (studentId, photo, etc.)
     // This was separated from the login flow to speed up login response time.
@@ -728,6 +749,7 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
       _isAdmin = false;
       _isOwner = false;
     });
+    widget.onAuthenticationChanged?.call(false);
     _navigatorKey.currentState?.popUntil((route) => route.isFirst);
 
     unawaited(_performLogoutCleanup(activeSessionId, activeStudentId));
@@ -739,11 +761,6 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
   ) async {
     try {
       if (activeSessionId != null && activeSessionId.isNotEmpty) {
-        try {
-          await api.unregisterPushForSession(activeSessionId);
-        } catch (error) {
-          debugPrint('注销推送绑定失败: error=${error.runtimeType}');
-        }
         if (kIsWeb) {
           try {
             await LoginRequiredServices.unsubscribeWebPush(

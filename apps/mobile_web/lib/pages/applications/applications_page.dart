@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../api_client.dart';
+import '../../app_providers.dart';
 import '../../widgets/async_panel.dart';
 import '../../widgets/badges.dart';
 import '../../widgets/empty_state.dart';
@@ -10,63 +12,34 @@ import '../../widgets/open_browser.dart';
 import '../../widgets/page_panel.dart';
 import '../../widgets/scale_tap.dart';
 
-class ApplicationsPage extends StatefulWidget {
+class ApplicationsPage extends ConsumerStatefulWidget {
   const ApplicationsPage({super.key, required this.api, this.onSessionExpired});
 
   final ApiClient api;
   final VoidCallback? onSessionExpired;
 
   @override
-  State<ApplicationsPage> createState() => _ApplicationsPageState();
+  ConsumerState<ApplicationsPage> createState() => _ApplicationsPageState();
 }
 
-class _ApplicationsPageState extends State<ApplicationsPage> {
+class _ApplicationsPageState extends ConsumerState<ApplicationsPage> {
   String _query = '';
   String _department = '全部';
   String _type = '全部';
   String _tag = '全部';
-  String? _loadError;
   bool _filtersExpanded = false;
-  late Future<List<EhallApplicationItem>> _applicationsFuture;
-
-  @override
-  void initState() {
-    super.initState();
-    _applicationsFuture = _loadApplications();
-  }
-
-  @override
-  void didUpdateWidget(covariant ApplicationsPage oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.api != widget.api) {
-      _applicationsFuture = _loadApplications();
-    }
-  }
-
-  Future<List<EhallApplicationItem>> _loadApplications({
-    bool forceRefresh = false,
-  }) async {
-    try {
-      final items = await widget.api
-          .ehallApplications(forceRefresh: forceRefresh)
-          .timeout(const Duration(seconds: 12));
-      _loadError = null;
-      return items;
-    } catch (_) {
-      _loadError = '办事大厅暂时不可用，下拉可重试';
-      return const [];
-    }
-  }
 
   Future<void> _refreshApplications() async {
-    setState(() => _applicationsFuture = _loadApplications(forceRefresh: true));
-    await _applicationsFuture;
+    ref.invalidate(ehallApplicationsProvider(widget.api));
+    await ref.read(ehallApplicationsProvider(widget.api).future);
   }
 
   @override
   Widget build(BuildContext context) {
+    final applicationsFuture =
+        ref.watch(ehallApplicationsProvider(widget.api).future);
     return FutureBuilder<List<EhallApplicationItem>>(
-      future: _applicationsFuture,
+      future: applicationsFuture,
       builder: (context, snapshot) {
         final loading = snapshot.connectionState != ConnectionState.done;
         final items = snapshot.data ?? const <EhallApplicationItem>[];
@@ -74,7 +47,7 @@ class _ApplicationsPageState extends State<ApplicationsPage> {
         final types = _values(items.map((item) => item.type));
         final tags = _values(items.expand((item) => item.tags));
         final filtered = items.where(_matches).toList();
-        final emptyMessage = _loadError ?? '没有匹配的应用';
+        final emptyMessage = snapshot.hasError ? '办事大厅暂时不可用，下拉可重试' : '没有匹配的应用';
         return PagePanel(
           title: '应用',
           icon: Icons.dashboard_customize,

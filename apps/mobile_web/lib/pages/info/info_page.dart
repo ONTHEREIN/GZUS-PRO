@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../api_client.dart';
+import '../../app_providers.dart';
 import '../../responsive/breakpoints.dart';
 import '../../responsive/sizing.dart';
 import '../../widgets/async_panel.dart';
@@ -8,47 +10,30 @@ import '../../widgets/info_tile.dart';
 import '../../widgets/page_panel.dart';
 import '../../widgets/student_avatar.dart';
 
-class InfoPage extends StatefulWidget {
+class InfoPage extends ConsumerStatefulWidget {
   const InfoPage({super.key, required this.api, this.onSessionExpired});
 
   final ApiClient api;
   final VoidCallback? onSessionExpired;
 
   @override
-  State<InfoPage> createState() => _InfoPageState();
+  ConsumerState<InfoPage> createState() => _InfoPageState();
 }
 
-class _InfoPageState extends State<InfoPage> {
-  late Future<StudentInfo> _infoFuture;
-
-  @override
-  void initState() {
-    super.initState();
-    _infoFuture = _loadInfo();
-  }
-
-  @override
-  void didUpdateWidget(covariant InfoPage oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.api != widget.api) {
-      _infoFuture = _loadInfo();
-    }
-  }
-
-  Future<StudentInfo> _loadInfo({bool forceRefresh = false}) =>
-      widget.api.me(forceRefresh: forceRefresh).then((r) => r.data);
+class _InfoPageState extends ConsumerState<InfoPage> {
 
   Future<void> _refreshInfo() async {
-    setState(() => _infoFuture = _loadInfo(forceRefresh: true));
-    await _infoFuture;
+    ref.invalidate(studentInfoProvider(widget.api));
+    await ref.read(studentInfoProvider(widget.api).future);
   }
 
   @override
   Widget build(BuildContext context) {
+    final infoFuture = ref.watch(studentInfoProvider(widget.api).future);
     return PageRefresh(
       onRefresh: _refreshInfo,
       child: AsyncPanel<StudentInfo>(
-        future: _infoFuture,
+        future: infoFuture,
         onSessionExpired: widget.onSessionExpired,
         builder: (info) => LayoutBuilder(
           builder: (context, constraints) {

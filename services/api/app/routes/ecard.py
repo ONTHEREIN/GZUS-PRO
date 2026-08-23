@@ -10,7 +10,6 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.academic_period import now_shanghai
-from app.config import get_settings
 from app.database import DataCache, EcardBinding, get_sync_session_factory
 from app.ecard_client import EcardApiError, EcardClient, EcardConfigurationError, EcardRoomRef
 from app.routes.deps import require_session
@@ -204,12 +203,7 @@ def _student_info(session: AppSession) -> tuple[str, str]:
 
 def _client() -> EcardClient:
     try:
-        # When ECARD_WORKER_PROXY_ORIGIN is empty, use direct mode (no Worker
-        # proxy). This avoids the broken CF Worker → school fetch path that
-        # times out after 20s. Direct mode calls the school server via httpx.
-        settings = get_settings()
-        proxy_origin = settings.ecard_worker_proxy_origin or ""
-        return EcardClient(worker_proxy_origin=proxy_origin if proxy_origin else None)
+        return EcardClient()
     except EcardConfigurationError as exc:
         logger.error("ecard: configuration error: %s", exc)
         raise HTTPException(status_code=503, detail=str(exc)) from exc

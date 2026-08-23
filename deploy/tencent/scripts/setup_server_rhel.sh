@@ -10,7 +10,7 @@
 # 功能：
 #   1. 安装 Python 3.11 / nginx / PostgreSQL / rsync / curl
 #   2. 初始化 PostgreSQL 并允许本机密码登录（onegzus 用户）
-#   3. 创建部署用户 onegzus 与目录 /opt/onegzus/{api,web,backups,deploy}
+#   3. 创建部署用户 onegzus 与版本化发布目录
 #   4. 放行防火墙 80/443；SELinux 放行 nginx 反代
 #   5. 把部署脚本复制到 /opt/onegzus/deploy
 # ============================================================
@@ -41,10 +41,16 @@ echo "==> [2/6] 创建部署用户与目录"
 if ! id onegzus >/dev/null 2>&1; then
   useradd -m -d /opt/onegzus -s /bin/bash onegzus
 fi
-# /opt/onegzus 需 755（nginx 要能穿越到 web）；api/deploy/backups/frontend 收紧为 750
+# /opt/onegzus 需 755（nginx 要能穿越到 current/web）。
 chmod 755 /opt/onegzus
-install -d -m 750 -o onegzus -g onegzus /opt/onegzus/api /opt/onegzus/web /opt/onegzus/backups /opt/onegzus/deploy
-install -d -m 755 -o onegzus -g onegzus /opt/onegzus/frontend
+install -d -m 750 -o onegzus -g onegzus \
+  /opt/onegzus/releases/api /opt/onegzus/releases/web /opt/onegzus/current \
+  /opt/onegzus/shared /opt/onegzus/backups /opt/onegzus/deploy
+
+if ! command -v uv >/dev/null 2>&1; then
+  echo "==> 安装 uv"
+  curl -LsSf https://astral.sh/uv/install.sh | UV_UNMANAGED_INSTALL=/usr/local/bin sh
+fi
 
 echo "==> [3/6] 初始化 PostgreSQL（RHEL 系需手动 initdb）"
 if [[ ! -d /var/lib/pgsql/data/base ]]; then
@@ -78,11 +84,11 @@ if systemctl is-active --quiet firewalld; then
   firewall-cmd --permanent --add-service=http --add-service=https 2>/dev/null || true
   firewall-cmd --reload 2>/dev/null || true
 fi
-# SELinux：允许 nginx 反代后端 + 读 /opt/onegzus/web
+# SELinux：允许 nginx 反代后端 + 读当前 Web release
 if command -v getenforce >/dev/null 2>&1 && [[ "$(getenforce)" == "Enforcing" ]]; then
   setsebool -P httpd_can_network_connect 1
-  semanage fcontext -a -t httpd_sys_content_t "/opt/onegzus/web(/.*)?" 2>/dev/null || true
-  restorecon -Rv /opt/onegzus/web 2>/dev/null || true
+  semanage fcontext -a -t httpd_sys_content_t "/opt/onegzus/current/web(/.*)?" 2>/dev/null || true
+  restorecon -Rv /opt/onegzus/current/web 2>/dev/null || true
   echo "    SELinux 已放行 nginx 反代与静态目录"
 fi
 
@@ -91,16 +97,19 @@ if [[ -d /tmp/deploy ]]; then
   cp -a /tmp/deploy/. /opt/onegzus/deploy/
   chown -R onegzus:onegzus /opt/onegzus/deploy
 fi
+install -m 644 /opt/onegzus/deploy/systemd/onegzus-api.service /etc/systemd/system/onegzus-api.service
+systemctl daemon-reload
+systemctl enable onegzus-api
 
 echo "==> [6/6] 完成"
 echo "------------------------------------------------------------"
 echo "  部署用户   : onegzus"
-echo "  目录       : /opt/onegzus/{api,web,backups,deploy}"
+echo "  目录       : /opt/onegzus/{releases,current,shared,backups,deploy}"
 echo "  数据库     : postgresql://onegzus:$PG_PASSWORD@127.0.0.1:5432/onegzus"
 echo "  Python     : $PYTHON_BIN"
 echo "------------------------------------------------------------"
 echo " 下一步："
-echo "  1) 上传后端代码并填写 .env"
-echo "  2) 运行 /opt/onegzus/deploy/scripts/deploy_api.sh"
-echo "  3) 构建前端并运行 deploy_frontend.sh"
-echo "  4) nginx 站点：/opt/onegzus/deploy/nginx/onegzus.conf → /etc/nginx/conf.d/"
+echo "  1) 创建 /opt/onegzus/shared/api.env（见 deploy README）"
+echo "  2) nginx 站点：/opt/onegzus/deploy/nginx/onegzus.conf → /etc/nginx/conf.d/"
+echo "  3) 通过 GitHub Actions 上传首个 API/Web release"
+echo "  4) 运行 /opt/onegzus/deploy/scripts/install_cron.sh"

@@ -6,7 +6,7 @@
 - 若已保存各学期开学日期（first_weeks，键 "{year}-{term}"），可用
   `period_from_first_weeks` 按日期区间反推当前学期，比启发式更贴合真实校历。
 
-时间判定一律使用 Asia/Shanghai 时区：Vercel 运行时是 UTC，naive now 在
+时间判定一律使用 Asia/Shanghai 时区：naive now 在
 跨月边界会偏差最多 8 小时，导致取错学年/学期的课表、成绩、考试数据。
 """
 

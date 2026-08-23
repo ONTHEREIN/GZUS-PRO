@@ -22,16 +22,6 @@ const apiBaseUrl = String.fromEnvironment(
   defaultValue: '',
 );
 
-List<String> _parseApiBaseUrlCandidates(String value) {
-  final trimmed = value.trim();
-  if (trimmed.isEmpty) return [];
-  return trimmed
-      .split(',')
-      .map((e) => e.trim())
-      .where((e) => e.isNotEmpty)
-      .toList();
-}
-
 String _normalizeSingle(String url) {
   final normalized = url.endsWith('/') ? url.substring(0, url.length - 1) : url;
   if (defaultTargetPlatform == TargetPlatform.android) {
@@ -44,7 +34,7 @@ String _normalizeSingle(String url) {
 }
 
 String _defaultApiBaseUrl() {
-  // 默认指向自托管服务器（2026-08 从 Cloudflare/Vercel 迁移后的生产地址）
+  // 默认指向腾讯云生产 API；构建时只允许注入一个 API 地址。
   // 可通过 `flutter build --dart-define=API_BASE_URL=...` 覆盖
   const onrein = 'https://onegzus.onrein.top/api';
 
@@ -97,33 +87,18 @@ class ApiClient {
       : _http = httpClient ?? _createDefaultClient(),
         _cache = cache ?? RequestCache() {
     final raw = baseUrl ?? apiBaseUrl;
-    _candidates = _buildCandidates(raw);
-    this.baseUrl = _candidates.isEmpty ? '' : _candidates.first;
-    _currentBaseUrl = this.baseUrl;
-  }
-
-  static List<String> _buildCandidates(String raw) {
-    final list = _parseApiBaseUrlCandidates(raw);
-    final defaults = _parseApiBaseUrlCandidates(_defaultApiBaseUrl());
-    if (list.isEmpty) return defaults;
-    final merged = list.map(_normalizeSingle).toList();
-    for (final defaultUrl in defaults) {
-      if (!merged.contains(defaultUrl)) {
-        merged.add(defaultUrl);
-      }
+    if (raw.contains(',')) {
+      throw ArgumentError.value(raw, 'API_BASE_URL', '只支持一个 API 地址');
     }
-    // 排除 Vercel 直连 URL：Cloudflare Worker 已代理所有 API 到 Vercel，
-    // Web 端直连 Vercel 会因为 CORS/GFW 导致超时，影响 fallback 候选切换。
-    return merged.where((url) {
-      final host = Uri.tryParse(url)?.host ?? '';
-      return !host.contains('vercel.app');
-    }).toList();
+    final configured = raw.trim();
+    this.baseUrl = _normalizeSingle(
+      configured.isEmpty ? _defaultApiBaseUrl() : configured,
+    );
   }
 
   final http.Client _http;
   static const AuthStorage _authStorage = AuthStorage();
   late final String baseUrl;
-  late final List<String> _candidates;
   final RequestCache _cache;
   final Map<String, Future<void>> _backgroundRefreshes = {};
   final Map<String, DateTime> _backgroundRefreshAt = {};
@@ -140,8 +115,6 @@ class ApiClient {
   String? _rsaKeyId;
   Future<void>? _publicKeyFuture;
 
-  /// 当前使用的 baseUrl（可能因连接失败自动切换）
-  String _currentBaseUrl = '';
 
   /// 当自动重新登录失败时调用的回调，UI 层可用来导航到登录页
   void Function()? onReloginFailed;
@@ -433,7 +406,7 @@ class ApiClient {
   }
 
   String lySsoStartUrl({required String returnUrl}) {
-    final url = _resolveBaseUrl();
+    final url = _requireBaseUrl();
     final uri = Uri.parse('$url/auth/ly/start');
     return uri.replace(queryParameters: {'return_url': returnUrl}).toString();
   }
@@ -529,28 +502,18 @@ class ApiClient {
       message.contains('密码解密失败') || message.contains('RSA密钥不匹配');
 
   Future<bool> checkHealth() async {
-    if (_candidates.isEmpty) return false;
-    // Probe all candidates in parallel
-    final results = await Future.wait(
-      _candidates.map((candidate) async {
-        try {
-          final response = await _http
-              .get(Uri.parse('$candidate/health'), headers: _headers())
-              .timeout(const Duration(seconds: 5));
-          if (response.statusCode == 200) {
-            return candidate;
-          }
-        } catch (_) {}
-        return null;
-      }),
-    );
-    for (final result in results) {
-      if (result != null) {
-        _currentBaseUrl = result;
-        return true;
-      }
+    try {
+      final response = await _http
+          .get(Uri.parse('$baseUrl/health'), headers: _headers())
+          .timeout(const Duration(seconds: 5));
+      return response.statusCode == 200;
+    } on TimeoutException {
+      return false;
+    } on http.ClientException {
+      return false;
+    } on SocketException {
+      return false;
     }
-    return false;
   }
 
   Future<void> revokeSession(String activeSessionId) async {
@@ -600,7 +563,7 @@ class ApiClient {
   Future<LoginResult> _reloginWithCredentialToken(
       String credentialToken) async {
     // 直接发HTTP请求，不走 _withReloginRetry，避免 relogin 自身 401 时无限递归
-    final url = _resolveBaseUrl();
+    final url = _requireBaseUrl();
     final response = await _http
         .post(Uri.parse('$url/auth/relogin'),
             headers: _headers(),
@@ -688,7 +651,7 @@ class ApiClient {
 
   Future<void> _fetchPublicKeyOnce() async {
     try {
-      final url = _resolveBaseUrl();
+      final url = _requireBaseUrl();
       final response = await _http.get(Uri.parse('$url/auth/public-key'),
           headers: {
             'Content-Type': 'application/json'
@@ -751,8 +714,8 @@ class ApiClient {
     try {
       // Use a direct HTTP call without _withReloginRetry to avoid
       // triggering onReloginFailed->_logout() when called immediately
-      // after login (Neon/Vercel cold-start can transiently return 401).
-      final url = _resolveBaseUrl();
+      // 登录后短暂网络抖动可能导致瞬态 401。
+      final url = _requireBaseUrl();
       if (url.isEmpty) return null;
       final response = await _http
           .get(Uri.parse('$url/auth/student-info'), headers: _headers())
@@ -1381,18 +1344,6 @@ class ApiClient {
     }
   }
 
-  Future<void> registerPush(String registrationId,
-      {String platform = 'android'}) async {
-    await _post('/push/register', {
-      'registrationId': registrationId,
-      'platform': platform,
-    });
-  }
-
-  Future<void> unregisterPushForSession(String activeSessionId) async {
-    await _postSessionCleanup('/push/unregister', activeSessionId);
-  }
-
   Future<List<Map<String, dynamic>>> pollPushMessages() async {
     final data = await _get('/push/poll');
     final messages = data['messages'];
@@ -1438,7 +1389,7 @@ class ApiClient {
   Future<Map<String, dynamic>> adminRemoveUser(String studentId) async =>
       _delete('/admin/users/$studentId');
 
-  /// 推送注册列表（Android 极光 + Web Push）。
+  /// Web Push 订阅列表。
   Future<Map<String, dynamic>> adminPush({int limit = 50}) async =>
       _get('/admin/push?limit=$limit');
 
@@ -1546,8 +1497,7 @@ class ApiClient {
   /// 把后端返回的相对路径（如校历图片 /admin/notices/1/image）拼成完整 URL。
   String resolveMediaUrl(String path) {
     if (path.startsWith('http://') || path.startsWith('https://')) return path;
-    final base = _currentBaseUrl.isNotEmpty ? _currentBaseUrl : baseUrl;
-    final trimmed = base.replaceAll(RegExp(r'/+$'), '');
+    final trimmed = baseUrl.replaceAll(RegExp(r'/+$'), '');
     return '$trimmed${path.startsWith('/') ? path : '/$path'}';
   }
 
@@ -1671,93 +1621,31 @@ class ApiClient {
     return decoded;
   }
 
-  String _resolveBaseUrl() {
-    if (_currentBaseUrl.isEmpty) _currentBaseUrl = baseUrl;
-    return _currentBaseUrl;
-  }
-
   String _requireBaseUrl() {
-    final url = _resolveBaseUrl();
-    if (url.isEmpty) {
-      throw ApiException('未配置 API_BASE_URL，请使用 Vercel 后端地址重新构建应用');
+    if (baseUrl.isEmpty) {
+      throw ApiException('未配置 API_BASE_URL，请使用腾讯云 API 地址重新构建应用');
     }
-    return url;
+    return baseUrl;
   }
 
   Future<void>? _warmupFuture;
   bool _warmedUp = false;
   bool _warmupDisposed = false;
-  final Set<Timer> _warmupTimers = {};
 
   void startWarmup() {
-    if (_candidates.isEmpty) return;
     if (_warmupDisposed) return;
     if (_warmedUp || _warmupFuture != null) return;
     _warmupFuture = _doWarmup();
   }
 
-  Future<T> _withWarmupTimeout<T>(Future<T> future, Duration timeout) {
-    final completer = Completer<T>();
-    late final Timer timer;
-    timer = Timer(timeout, () {
-      if (!completer.isCompleted) {
-        completer.completeError(TimeoutException('warmup timeout', timeout));
-      }
-    });
-    _warmupTimers.add(timer);
-    future.then((value) {
-      if (!completer.isCompleted) completer.complete(value);
-    }, onError: (Object error, StackTrace stackTrace) {
-      if (!completer.isCompleted) {
-        completer.completeError(error, stackTrace);
-      }
-    }).whenComplete(() {
-      timer.cancel();
-      _warmupTimers.remove(timer);
-    });
-    return completer.future;
-  }
-
   void dispose() {
     _warmupDisposed = true;
-    for (final timer in List<Timer>.from(_warmupTimers)) {
-      timer.cancel();
-    }
-    _warmupTimers.clear();
   }
 
   Future<void> _doWarmup() async {
     try {
-      // 并行探测所有候选地址，首个健康响应者胜出（无需等待慢节点超时）
-      final completer = Completer<String>();
-      for (final candidate in _candidates) {
-        unawaited(() async {
-          try {
-            final response = await _withWarmupTimeout(
-              _http.get(Uri.parse('$candidate/health'), headers: _headers()),
-              const Duration(seconds: 3),
-            );
-            if (!_warmupDisposed &&
-                response.statusCode == 200 &&
-                !completer.isCompleted) {
-              completer.complete(candidate);
-            }
-          } on TimeoutException {
-            // ignore
-          } on http.ClientException {
-            // ignore
-          } on SocketException {
-            // ignore
-          }
-        }());
-      }
-      // 整体上限 4 秒：即使所有候选都慢，也不会无限阻塞 warmup
-      final winner = await _withWarmupTimeout(
-        completer.future,
-        const Duration(seconds: 4),
-      ).catchError((_) => '');
-      if (!_warmupDisposed && winner.isNotEmpty) {
-        _currentBaseUrl = winner;
+      final healthy = await checkHealth();
+      if (!_warmupDisposed && healthy) {
         unawaited(fetchPublicKey());
       }
     } finally {
@@ -1770,13 +1658,12 @@ class ApiClient {
 
   /// 在收到 401 时自动尝试 relogin 并重试原始请求
   Future<T> _withReloginRetry<T>(Future<T> Function() request) async {
-    return _withFallback(request, tried: {});
+    return _withRetry(request, retryCount: 0);
   }
 
-  /// 带候选地址切换的请求重试，每个候选地址只尝试一次
-  Future<T> _withFallback<T>(
+  /// 在唯一生产 API 上有限重试；不再切换旧域名或边缘节点。
+  Future<T> _withRetry<T>(
     Future<T> Function() request, {
-    required Set<String> tried,
     int retryCount = 0,
   }) async {
     try {
@@ -1791,7 +1678,7 @@ class ApiClient {
         await loadSavedCredentials();
         if (_credentialToken == null) {
           // 无凭证 token 时无法自动 relogin，但不要清空本地登录态。
-          // 数据接口可能只是短暂拿不到 Worker/后端会话，直接退出会造成误踢。
+          // 数据接口可能只是短暂拿不到会话，直接退出会造成误踢。
           throw ApiException('登录已过期，请重新登录', statusCode: 401);
         }
         // --- Relogin with backoff ---
@@ -1815,7 +1702,7 @@ class ApiClient {
         } on ApiException catch (e) {
           _consecutiveReloginFailures++;
           // relogin 本身失败时只清除失效的凭证 token，不清空 session。
-          // 避免学校系统/Worker 短暂失败被误判为用户需要退出登录。
+          // 避免学校系统短暂失败被误判为用户需要退出登录。
           if (e.statusCode == 401) {
             await clearSavedCredentialToken();
           } else {
@@ -1840,57 +1727,30 @@ class ApiClient {
           }
         }
       }
-      // 5xx errors: retry once on same host before switching
+      // 5xx 错误只在同一生产 API 上重试一次。
       if ((e.statusCode ?? 0) >= 500 && retryCount < _maxRetries) {
-        return _withFallback(request, tried: tried, retryCount: retryCount + 1);
+        return _withRetry(request, retryCount: retryCount + 1);
       }
       rethrow;
     } on TimeoutException {
-      // Retry once on same host before switching candidates
+      // 超时后只在同一生产 API 上重试一次。
       if (retryCount < _maxRetries) {
-        return _withFallback(request, tried: tried, retryCount: retryCount + 1);
+        return _withRetry(request, retryCount: retryCount + 1);
       }
-      final next = _nextUntriedCandidate(tried);
-      if (next != null) {
-        _currentBaseUrl = next;
-        return _withFallback(request, tried: {...tried, next});
-      }
-      final target = _resolveBaseUrl();
-      throw ApiException('请求超时 ($target)，请检查网络连接');
+      throw ApiException('请求超时 ($baseUrl)，请检查网络连接');
     } on http.ClientException {
-      // Retry once on same host before switching candidates
+      // 连接失败后只在同一生产 API 上重试一次。
       if (retryCount < _maxRetries) {
-        return _withFallback(request, tried: tried, retryCount: retryCount + 1);
+        return _withRetry(request, retryCount: retryCount + 1);
       }
-      final next = _nextUntriedCandidate(tried);
-      if (next != null) {
-        _currentBaseUrl = next;
-        return _withFallback(request, tried: {...tried, next});
-      }
-      final target = _resolveBaseUrl();
-      throw ApiException('无法连接服务器 ($target)，请确认服务已启动且设备在同一网络');
+      throw ApiException('无法连接服务器 ($baseUrl)，请确认服务已启动且设备在同一网络');
     } on SocketException {
-      // Retry once on same host before switching candidates
+      // Socket 失败后只在同一生产 API 上重试一次。
       if (retryCount < _maxRetries) {
-        return _withFallback(request, tried: tried, retryCount: retryCount + 1);
+        return _withRetry(request, retryCount: retryCount + 1);
       }
-      final next = _nextUntriedCandidate(tried);
-      if (next != null) {
-        _currentBaseUrl = next;
-        return _withFallback(request, tried: {...tried, next});
-      }
-      final target = _resolveBaseUrl();
-      throw ApiException('无法连接服务器 ($target)，请确认服务已启动且设备在同一网络');
+      throw ApiException('无法连接服务器 ($baseUrl)，请确认服务已启动且设备在同一网络');
     }
-  }
-
-  /// 返回下一个未尝试过的候选地址
-  String? _nextUntriedCandidate(Set<String> tried) {
-    final current = _resolveBaseUrl();
-    final untried =
-        _candidates.where((c) => !tried.contains(c) && c != current).toList();
-    if (untried.isNotEmpty) return untried.first;
-    return null;
   }
 
   Map<String, String> _headers() => {
@@ -1913,7 +1773,7 @@ class ApiClient {
     String path,
     String activeSessionId,
   ) async {
-    final url = _resolveBaseUrl();
+    final url = _requireBaseUrl();
     Object? lastError;
     StackTrace? lastStackTrace;
     for (var attempt = 1; attempt <= 2; attempt++) {
@@ -2478,9 +2338,7 @@ class SchoolDirectClient {
 }
 
 // ============================================================
-// Direct ecard API client — bypasses Vercel/Worker entirely.
-// Calls ecarduser.gzus.edu.cn from the user's device.
-// Vercel & Cloudflare Worker IPs are blocked by ecard server.
+// Direct ecard API client — calls ecarduser.gzus.edu.cn from the user's device.
 // ============================================================
 class EcardDirectClient {
   static const _base = 'https://ecarduser.gzus.edu.cn';
@@ -2506,8 +2364,6 @@ class EcardDirectClient {
     _cachedAt = DateTime.now();
   }
 
-  String? get _unionid => _cachedUnionid;
-  set _unionid(String? v) => _cachedUnionid = v;
 
   void _invalidateToken() {
     _cachedToken = null;
@@ -2538,9 +2394,9 @@ class EcardDirectClient {
     params['openid'] = _openid;
     if (activeToken != null &&
         activeToken.isNotEmpty &&
-        _unionid != null &&
-        _unionid!.isNotEmpty) {
-      params['unionid'] = _unionid!;
+        _cachedUnionid != null &&
+        _cachedUnionid!.isNotEmpty) {
+      params['unionid'] = _cachedUnionid!;
     }
     if (activeToken != null && activeToken.isNotEmpty) {
       params['token'] = activeToken;
@@ -2578,7 +2434,7 @@ class EcardDirectClient {
         await _post('user/routine/routine-login', {'from': 'wxminiprogram'});
     if (r['code'] == 200 && r['token'] != null) {
       _token = r['token'].toString();
-      if (r['unionid'] != null) _unionid = r['unionid'].toString();
+      if (r['unionid'] != null) _cachedUnionid = r['unionid'].toString();
       return true;
     }
     return false;

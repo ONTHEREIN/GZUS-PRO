@@ -1,4 +1,3 @@
-from app.push import send_push, send_push_to_all
 from app.ws import ConnectionManager
 from app.jobs import (
     NoticeCache,
@@ -183,17 +182,3 @@ class TestNoticePoller:
         await run_notice_poller_once(app)
 
         assert app.state.ws_manager.sent == []
-
-
-class TestSendPush:
-    async def test_send_push_no_credentials(self):
-        result = await send_push(["rid1"], "title", "alert")
-        assert result is False
-
-    async def test_send_push_empty_ids(self):
-        result = await send_push([], "title", "alert")
-        assert result is False
-
-    async def test_send_push_to_all_empty(self):
-        result = await send_push_to_all([], "title", "alert")
-        assert result is False

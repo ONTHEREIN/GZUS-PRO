@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../api_client.dart';
+import '../../app_providers.dart';
 import '../../widgets/async_panel.dart';
 import '../../widgets/business_item_tile.dart';
 import '../../widgets/empty_state.dart';
@@ -9,48 +11,30 @@ import '../../widgets/open_browser.dart';
 import '../../widgets/page_panel.dart';
 import '../../widgets/progress.dart';
 
-class _BusinessProgressSection extends StatefulWidget {
+class _BusinessProgressSection extends ConsumerStatefulWidget {
   const _BusinessProgressSection({
     required this.api,
-    required this.refreshVersion,
     this.onSessionExpired,
   });
 
   final ApiClient api;
-  final int refreshVersion;
   final VoidCallback? onSessionExpired;
 
   @override
-  State<_BusinessProgressSection> createState() =>
+  ConsumerState<_BusinessProgressSection> createState() =>
       _BusinessProgressSectionState();
 }
 
-class _BusinessProgressSectionState extends State<_BusinessProgressSection> {
+class _BusinessProgressSectionState
+    extends ConsumerState<_BusinessProgressSection> {
   String _status = '全部';
   bool _expanded = false;
-  late Future<EhallProgressOverview> _progressFuture;
-
-  @override
-  void initState() {
-    super.initState();
-    _progressFuture = widget.api.ehallProgressOverview();
-  }
-
-  @override
-  void didUpdateWidget(covariant _BusinessProgressSection oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.api != widget.api ||
-        oldWidget.refreshVersion != widget.refreshVersion) {
-      _progressFuture = widget.api.ehallProgressOverview(
-        forceRefresh: oldWidget.refreshVersion != widget.refreshVersion,
-      );
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
+    final progressFuture = ref.watch(ehallProgressProvider(widget.api).future);
     return FutureBuilder<EhallProgressOverview>(
-      future: _progressFuture,
+      future: progressFuture,
       builder: (context, snapshot) {
         if (snapshot.connectionState != ConnectionState.done) {
           return const SizedBox(
@@ -148,51 +132,31 @@ class _BusinessProgressSectionState extends State<_BusinessProgressSection> {
   }
 }
 
-class BusinessPage extends StatefulWidget {
+class BusinessPage extends ConsumerStatefulWidget {
   const BusinessPage({super.key, required this.api, this.onSessionExpired});
 
   final ApiClient api;
   final VoidCallback? onSessionExpired;
 
   @override
-  State<BusinessPage> createState() => _BusinessPageState();
+  ConsumerState<BusinessPage> createState() => _BusinessPageState();
 }
 
-class _BusinessPageState extends State<BusinessPage> {
+class _BusinessPageState extends ConsumerState<BusinessPage> {
   String _query = '';
   String _department = '全部';
-  int _refreshVersion = 0;
-  late Future<List<EhallAffairItem>> _affairsFuture;
-
-  @override
-  void initState() {
-    super.initState();
-    _affairsFuture = _loadAffairs();
-  }
-
-  @override
-  void didUpdateWidget(covariant BusinessPage oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.api != widget.api) {
-      _affairsFuture = _loadAffairs();
-    }
-  }
-
-  Future<List<EhallAffairItem>> _loadAffairs({bool forceRefresh = false}) =>
-      widget.api.ehallAffairs(forceRefresh: forceRefresh);
 
   Future<void> _refreshAffairs() async {
-    setState(() {
-      _refreshVersion++;
-      _affairsFuture = _loadAffairs(forceRefresh: true);
-    });
-    await _affairsFuture;
+    ref.invalidate(ehallAffairsProvider(widget.api));
+    ref.invalidate(ehallProgressProvider(widget.api));
+    await ref.read(ehallAffairsProvider(widget.api).future);
   }
 
   @override
   Widget build(BuildContext context) {
+    final affairsFuture = ref.watch(ehallAffairsProvider(widget.api).future);
     return AsyncPanel<List<EhallAffairItem>>(
-      future: _affairsFuture,
+      future: affairsFuture,
       emptyMessage: '暂无业务',
       onSessionExpired: widget.onSessionExpired,
       builder: (items) {
@@ -220,7 +184,6 @@ class _BusinessPageState extends State<BusinessPage> {
             children: [
               _BusinessProgressSection(
                 api: widget.api,
-                refreshVersion: _refreshVersion,
                 onSessionExpired: widget.onSessionExpired,
               ),
               const SizedBox(height: 12),

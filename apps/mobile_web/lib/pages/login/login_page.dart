@@ -14,7 +14,6 @@ import '../../gzus_design.dart';
 import '../../responsive/spacing.dart';
 import '../../test_flags.dart';
 import '../../widgets/icon_label.dart';
-import '../../widgets/page_panel.dart';
 
 class LoginPage extends StatefulWidget {
   const LoginPage({
@@ -295,7 +294,7 @@ class _LoginPageState extends State<LoginPage>
                                     ),
                                     child: Row(
                                       children: [
-                                        Icon(
+                                        const Icon(
                                           Icons.verified_user,
                                           size: 18,
                                           color: GzusColors.green,
@@ -775,4 +774,3 @@ class _AgreementContent extends StatelessWidget {
 // 登录页自身的移动端宽度阈值（与 shell 的 _mobileBreakpoint 同值，但分属不同
 // library，避免跨文件私有符号耦合；后续可统一迁到 responsive/breakpoints.dart）。
 const _mobileBreakpoint = 720.0;
-

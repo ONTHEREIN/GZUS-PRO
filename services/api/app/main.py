@@ -1,6 +1,7 @@
 import asyncio
 import logging
-import os
+import time
+import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, status
@@ -12,14 +13,13 @@ from slowapi.middleware import SlowAPIMiddleware
 
 from app.cache_service import ExamReminderCache, GradeUpdateCache, NoticeCache
 from app.config import get_settings
-from app.database import get_sync_session_factory, init_db
+from app.database import check_database_ready, get_sync_session_factory, init_db
 from app.rate_limit import limiter
 from app.routes import academic, admin, auth, ecard, ehall, push, settings, weather
 from app.rsa_keys import rsa_key_manager
 from app.sessions import SessionStore, SessionStoreUnavailableError
 from app.ws import ConnectionManager, ws_router
 
-IS_VERCEL = os.environ.get("VERCEL") == "1"
 MAX_BODY_BYTES = 10 * 1024 * 1024
 
 
@@ -37,26 +37,24 @@ def _security_headers(settings) -> dict[str, str]:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    if not IS_VERCEL:
-        # 轮询器仅本地开发运行；延迟导入避免 Vercel 冷启动加载 jobs 依赖链
-        from app.jobs import (
-            run_ecard_reminder_poller,
-            run_exam_reminder_poller,
-            run_grade_update_poller,
-            run_notice_poller,
-        )
-        init_db()
-        poller_task = asyncio.create_task(run_notice_poller(app))
-        ecard_task = asyncio.create_task(run_ecard_reminder_poller(app))
-        exam_task = asyncio.create_task(run_exam_reminder_poller(app))
-        grade_task = asyncio.create_task(run_grade_update_poller(app))
+    from app.jobs import (
+        run_ecard_reminder_poller,
+        run_exam_reminder_poller,
+        run_grade_update_poller,
+        run_notice_poller,
+    )
+
+    init_db()
+    poller_task = asyncio.create_task(run_notice_poller(app))
+    ecard_task = asyncio.create_task(run_ecard_reminder_poller(app))
+    exam_task = asyncio.create_task(run_exam_reminder_poller(app))
+    grade_task = asyncio.create_task(run_grade_update_poller(app))
     await app.state.sessions.start_cleanup_task()
     yield
-    if not IS_VERCEL:
-        poller_task.cancel()
-        ecard_task.cancel()
-        exam_task.cancel()
-        grade_task.cancel()
+    poller_task.cancel()
+    ecard_task.cancel()
+    exam_task.cancel()
+    grade_task.cancel()
     app.state.sessions.stop_cleanup_task()
 
 
@@ -77,6 +75,11 @@ def create_app() -> FastAPI:
 
     @app.middleware("http")
     async def security_and_body_limits(request: Request, call_next):
+        trace_id = request.headers.get("X-GZUS-Trace-Id", "").strip()
+        if not trace_id or len(trace_id) > 128:
+            trace_id = uuid.uuid4().hex
+        request.state.trace_id = trace_id
+        started_at = time.perf_counter()
         content_length = request.headers.get("content-length")
         if content_length:
             try:
@@ -98,6 +101,17 @@ def create_app() -> FastAPI:
             response = await call_next(request)
         for key, value in security_headers.items():
             response.headers.setdefault(key, value)
+        response.headers.setdefault("X-GZUS-Trace-Id", trace_id)
+        logging.getLogger("app.request").info(
+            "request_completed",
+            extra={
+                "trace_id": trace_id,
+                "method": request.method,
+                "path": request.url.path,
+                "status_code": response.status_code,
+                "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+            },
+        )
         return response
 
     # Rate limiting
@@ -125,10 +139,13 @@ def create_app() -> FastAPI:
         """Catch all unhandled exceptions, log them, and return a 500."""
         logger = logging.getLogger("app.main")
         logger.error(
-            "Unhandled exception on %s %s: %s",
-            request.method,
-            request.url.path,
-            exc,
+            "unhandled_exception",
+            extra={
+                "trace_id": getattr(request.state, "trace_id", None),
+                "method": request.method,
+                "path": request.url.path,
+                "error_type": type(exc).__name__,
+            },
             exc_info=True,
         )
         return JSONResponse(
@@ -166,13 +183,29 @@ def create_app() -> FastAPI:
     app.include_router(settings.router)
     app.include_router(ws_router)
 
-    # Internal endpoints for Cloudflare Worker
+    # Internal cron endpoints are only reachable from the loopback server.
     from app.routes.internal import router as internal_router
     app.include_router(internal_router)
 
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/health/ready")
+    def ready() -> dict[str, str]:
+        try:
+            check_database_ready()
+        except Exception as exc:
+            logging.getLogger("app.main").error(
+                "readiness_check_failed",
+                extra={"error_type": type(exc).__name__},
+                exc_info=True,
+            )
+            return JSONResponse(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                content={"status": "unavailable"},
+            )
+        return {"status": "ready"}
 
     return app
 

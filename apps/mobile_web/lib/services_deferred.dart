@@ -203,12 +203,6 @@ class LoginRequiredServices {
     } catch (_) {}
   }
 
-  static Future<void> unregisterPush(Function unregisterPushFunc) async {
-    try {
-      await unregisterPushFunc();
-    } catch (_) {}
-  }
-
   static Future<void> unsubscribeWebPush(
       String apiBaseUrl, String sessionId) async {
     try {
@@ -217,15 +211,6 @@ class LoginRequiredServices {
         sessionId: sessionId,
       );
     } catch (_) {}
-  }
-
-  static Future<String?> getPushRegistrationId() async {
-    try {
-      await push_service.loadLibrary();
-      return push_service.PushService.registrationId;
-    } catch (_) {
-      return null;
-    }
   }
 
   static Future<void> checkForUpdate() async {

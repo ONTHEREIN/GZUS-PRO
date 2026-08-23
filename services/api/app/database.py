@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from collections.abc import Mapping
 from datetime import datetime, timezone
 
@@ -36,17 +35,6 @@ class EcardBinding(Base):
     # 热水余额缓存（独立于 last_summary_json，用于超时 fallback）
     hot_water_balance_cache = Column(Float, nullable=True)
     hot_water_cache_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
-
-
-class PushRegistration(Base):
-    __tablename__ = "push_registrations"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    student_id = Column(String(100), nullable=False, index=True)
-    registration_id = Column(String(300), nullable=False, unique=True)
-    platform = Column(String(50), default="android")
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
@@ -107,8 +95,6 @@ class AppSessionModel(Base):
     is_admin = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
     last_active_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
-    push_registration_id = Column(String(300), nullable=True)
-    push_platform = Column(String(50), default="android", nullable=False)
     jwxt_cookies = Column(Text, nullable=True)
     ehall_cookies = Column(Text, nullable=True)
     ehall_auth_token = Column(Text, nullable=True)
@@ -195,6 +181,19 @@ class WechatSyncState(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     key = Column(String(50), nullable=False, unique=True)
     last_synced_at = Column(DateTime, nullable=True)
+    last_error = Column(Text, nullable=True)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
+class MaintenanceJobStatus(Base):
+    """服务器维护任务最近一次执行结果，供管理后台和监控读取。"""
+
+    __tablename__ = "maintenance_job_status"
+
+    job_name = Column(String(100), primary_key=True)
+    last_started_at = Column(DateTime, nullable=True)
+    last_succeeded_at = Column(DateTime, nullable=True)
+    last_duration_ms = Column(Integer, nullable=True)
     last_error = Column(Text, nullable=True)
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
@@ -291,6 +290,36 @@ def get_sync_session_factory() -> sessionmaker[Session]:
     return _session_factory
 
 
+def check_database_ready() -> None:
+    """验证数据库连接可用，不执行建表或迁移。"""
+    engine = get_sync_engine()
+    with engine.connect() as connection:
+        connection.execute(text("SELECT 1"))
+
+
+def record_maintenance_job_result(
+    job_name: str,
+    started_at: datetime,
+    duration_ms: int,
+    error: str | None,
+) -> None:
+    """记录 cron 的成功时间、耗时或可诊断的失败原因。"""
+    factory = get_sync_session_factory()
+    now = datetime.now(timezone.utc)
+    with factory() as db:
+        row = db.get(MaintenanceJobStatus, job_name)
+        if row is None:
+            row = MaintenanceJobStatus(job_name=job_name)
+            db.add(row)
+        row.last_started_at = started_at
+        row.last_duration_ms = duration_ms
+        row.last_error = error
+        if error is None:
+            row.last_succeeded_at = now
+        row.updated_at = now
+        db.commit()
+
+
 def _is_sqlite(engine) -> bool:
     return "sqlite" in str(engine.url)
 
@@ -316,10 +345,6 @@ def _apply_sqlite_pragmas(engine) -> None:
 def init_db():
     global _db_initialized
     if _db_initialized:
-        return
-    settings = get_settings()
-    if os.environ.get("VERCEL") == "1" and not settings.debug:
-        _db_initialized = True
         return
     engine = get_sync_engine()
     Base.metadata.create_all(engine)

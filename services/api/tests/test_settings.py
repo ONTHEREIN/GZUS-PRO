@@ -2,7 +2,6 @@ from fastapi.testclient import TestClient
 from sqlalchemy import inspect
 
 from app import database
-from app.config import get_settings
 from app.database import UserSettings, get_sync_session_factory
 from app.main import app
 from app.routes import settings as settings_route
@@ -160,23 +159,12 @@ def test_put_schedule_settings_rejects_unknown_fields(monkeypatch):
     assert response.status_code == 422
 
 
-def test_ensure_table_creates_user_settings_when_init_db_skipped(monkeypatch):
-    """生产（Vercel）init_db 跳过全部建表，懒建表 helper 必须能补建表。
-
-    回归测试：新表首次访问若不补建，Vercel 上会一直 500。
-    """
-    monkeypatch.setenv("VERCEL", "1")
-    monkeypatch.setenv("DEBUG", "false")
-    # 生产配置校验要求 RSA_PRIVATE_KEY 非空（本测试不涉及 RSA，占位即可）
-    monkeypatch.setenv("RSA_PRIVATE_KEY", "test-rsa-key")
-    get_settings.cache_clear()
+def test_ensure_table_keeps_user_settings_available(monkeypatch):
+    """常驻服务的兜底建表 helper 保持幂等。"""
     database.reset_engine()
     settings_route._table_ready = False
 
-    engine = database.get_sync_engine()
-    assert not inspect(engine).has_table("user_settings")
-
     settings_route._ensure_table()
 
-    assert inspect(engine).has_table("user_settings")
+    assert inspect(database.get_sync_engine()).has_table("user_settings")
     assert settings_route._table_ready is True

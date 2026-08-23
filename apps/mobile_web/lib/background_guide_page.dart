@@ -184,7 +184,7 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
           pushEnabled =
               supported && config != null && config['enabled'] == true;
           if (pushEnabled) {
-            final publicKey = config!['publicKey'] as String?;
+            final publicKey = config['publicKey'] as String?;
             if (publicKey != null && publicKey.isNotEmpty) {
               await webPush.subscribe(
                 publicKey,
@@ -224,7 +224,7 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
       final pushEnabled =
           config != null && config['enabled'] == true;
       if (pushEnabled) {
-        final publicKey = config!['publicKey'] as String?;
+        final publicKey = config['publicKey'] as String?;
         if (publicKey != null && publicKey.isNotEmpty) {
           await webPush.subscribe(
             publicKey,
@@ -595,7 +595,7 @@ class _PermissionCard extends StatelessWidget {
             ),
             child: checking
                 ? const Padding(
-                    padding: const EdgeInsets.all(GzusSpacing.m),
+                    padding: EdgeInsets.all(GzusSpacing.m),
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
                 : Icon(

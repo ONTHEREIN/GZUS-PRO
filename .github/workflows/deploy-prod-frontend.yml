@@ -8,7 +8,6 @@ on:
     branches: [master]
     paths:
       - 'apps/mobile_web/**'
-      - 'wrangler.toml'
   workflow_dispatch:
 
 permissions:
@@ -17,7 +16,7 @@ permissions:
 # 并发保护：同一时间只跑一个部署，新触发取消旧的（避免 rsync 冲突）
 concurrency:
   group: deploy-prod-frontend
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   test-and-lint:
@@ -58,6 +57,7 @@ jobs:
       - name: Deploy to Tencent (rsync + nginx reload)
         env:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
         run: |
@@ -65,12 +65,19 @@ jobs:
           mkdir -p ~/.ssh
           echo "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
-          export SSH_CMD="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no"
+          test -n "$DEPLOY_KNOWN_HOSTS"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          export SSH_CMD="ssh -i ~/.ssh/deploy_key -o UserKnownHostsFile=$HOME/.ssh/known_hosts -o StrictHostKeyChecking=yes"
+          export RELEASE_ID="$GITHUB_SHA"
+          ssh $SSH_CMD "$DEPLOY_USER@$DEPLOY_HOST" \
+            "install -d -o onegzus -g onegzus /opt/onegzus/releases/web/$RELEASE_ID"
           rsync -avz --delete -e "$SSH_CMD" \
-            apps/mobile_web/build/web/ "$DEPLOY_USER@$DEPLOY_HOST:/opt/onegzus/web/"
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
-            "$DEPLOY_USER@$DEPLOY_HOST" "chown -R onegzus:onegzus /opt/onegzus/web && nginx -t && systemctl reload nginx"
-          echo "=== 部署完成，验证 ==="
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
-            "$DEPLOY_USER@$DEPLOY_HOST" "curl -sk -o /dev/null -w 'https://onegzus.onrein.top/ -> %{http_code}\n' https://onegzus.onrein.top/ || true"
+            apps/mobile_web/build/web/ "$DEPLOY_USER@$DEPLOY_HOST:/opt/onegzus/releases/web/$RELEASE_ID/"
+          rsync -avz --delete -e "$SSH_CMD" --exclude '.ssh/' \
+            deploy/tencent/ "$DEPLOY_USER@$DEPLOY_HOST:/opt/onegzus/deploy/"
+          ssh $SSH_CMD "$DEPLOY_USER@$DEPLOY_HOST" \
+            "bash /opt/onegzus/deploy/scripts/install_runtime.sh"
+          ssh $SSH_CMD "$DEPLOY_USER@$DEPLOY_HOST" \
+            "chown -R onegzus:onegzus /opt/onegzus/releases/web/$RELEASE_ID && bash /opt/onegzus/deploy/scripts/activate_release.sh web $RELEASE_ID && curl -fsS --max-time 10 https://onegzus.onrein.top/ >/dev/null"
+          echo "=== 前端版本已原子激活 ==="

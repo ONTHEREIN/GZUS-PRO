@@ -1,8 +1,7 @@
 name: Frontend Tests
 
-# 可复用工作流：Flutter widget 测试 + Cloudflare Worker 测试，
-# 供 PR 检查（ci-frontend.yml）与前端部署工作流
-# （deploy-frontend.yml / deploy-prod-frontend.yml）调用。
+# 可复用工作流：Flutter 测试与 Web 构建，供 PR 检查（ci-frontend.yml）与前端部署工作流
+# （deploy-prod-frontend.yml）调用。
 # 部署工作流通过 needs: 引用本工作流，测试失败即不发版。
 
 on:
@@ -30,7 +29,8 @@ jobs:
           cd apps/mobile_web
           flutter test
 
-      - name: Test Cloudflare Worker
+      - name: Analyze and build Flutter Web
         run: |
           cd apps/mobile_web
-          node --test worker_tests/*_test.mjs
+          flutter analyze
+          flutter build web --release --dart-define=API_BASE_URL=https://onegzus.onrein.top/api --no-web-resources-cdn

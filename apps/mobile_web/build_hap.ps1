@@ -4,7 +4,7 @@
 param(
     [ValidateSet('debug', 'release')]
     [string]$Mode = 'release',
-    [string]$ApiUrl = 'https://onegzus.cc.cd/api,https://onegzus-onweb.pages.dev/api',
+    [string]$ApiUrl = 'https://onegzus.onrein.top/api',
     [switch]$Major,
     [switch]$Minor,
     [switch]$Patch

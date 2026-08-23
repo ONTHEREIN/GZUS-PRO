@@ -32,6 +32,9 @@ dev = [
   "ruff>=0.5.0",
 ]
 
+[tool.uv]
+default-groups = []
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"

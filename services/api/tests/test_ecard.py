@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
 
-from app.config import Settings, get_settings
+from app.config import get_settings
 from app.database import EcardBinding, get_sync_session_factory
 from app.ecard_client import EcardClient, EcardConfigurationError, EcardRoomRef, calc_sign
 from app.jobs import ecard_reminder_message
@@ -32,7 +32,6 @@ def test_login_request_omits_unionid(monkeypatch):
     get_settings.cache_clear()
 
     client = EcardClient()
-    client._worker_proxy_origin = ""  # 强制走直连路径（非代理）
     client._unionid = "unionid-xyz"
     captured = {}
 
@@ -67,7 +66,6 @@ def test_authenticated_request_includes_unionid(monkeypatch):
     get_settings.cache_clear()
 
     client = EcardClient()
-    client._worker_proxy_origin = ""  # 强制走直连路径（非代理）
     client._token = "tok-1"
     client._unionid = "unionid-xyz"
     captured = []
@@ -95,12 +93,6 @@ def test_authenticated_request_includes_unionid(monkeypatch):
     client.post_api("/powerfee/getBalance", {"implType": "CGCOMMON1111"}, token="tok-1")
     assert captured[0].get("unionid") == "unionid-xyz"
     assert captured[0].get("token") == "tok-1"
-
-
-def test_ecard_worker_proxy_origin_defaults_to_direct_mode(monkeypatch):
-    monkeypatch.delenv("ECARD_WORKER_PROXY_ORIGIN", raising=False)
-
-    assert Settings(debug=True).ecard_worker_proxy_origin == ""
 
 
 def test_rooms_do_not_expose_balances(monkeypatch):
@@ -349,100 +341,6 @@ def test_balance_uses_room_ref_and_hot_water_student_fallback():
     assert summary["coldWaterText"] == "9.99 吨"
     assert summary["hotWaterBalance"] == 15.176
     assert summary["hotWaterText"] == "15.176 元"
-
-
-def test_cloudflare_proxy_mode_requires_ecard_openid(monkeypatch):
-    monkeypatch.setenv("ECARD_OPENID", "")
-    monkeypatch.setenv("ECARD_WORKER_PROXY_ORIGIN", "https://cloudflare.example")
-    get_settings.cache_clear()
-
-    try:
-        EcardClient()
-    except EcardConfigurationError as exc:
-        assert str(exc) == "未配置 ECARD_OPENID"
-    else:
-        raise AssertionError("Cloudflare transparent proxy still requires ECARD_OPENID")
-
-
-def test_proxy_maps_rooms_balance_and_consumption(monkeypatch):
-    monkeypatch.setenv("ECARD_OPENID", "openid-abc")
-    monkeypatch.setenv("ECARD_SECRET", "secret-abc")
-    get_settings.cache_clear()
-    calls = []
-
-    class FakeResponse:
-        def __init__(self, data):
-            self._data = data
-            self.headers = {"X-Proxy-Status": "200"}
-            self.status_code = 200
-
-        def raise_for_status(self):
-            return None
-
-        def json(self):
-            return self._data
-
-    class FakeHttpClient:
-        def post(self, url, json=None, timeout=None):
-            calls.append((url, json, timeout))
-            if json["url"].endswith("/powerfee/getRoomInfo"):
-                return FakeResponse({"ret": True, "code": 200, "obj": [{"id": "room-1"}]})
-            if json["url"].endswith("/powerfee/getBalance"):
-                return FakeResponse(
-                    {"ret": True, "code": 200, "obj": {"powerBalance": 12, "coldWaterBalance": 3}}
-                )
-            if json["url"].endswith("/powerfee/getDailyDetails"):
-                return FakeResponse({"status": "ok", "items": [{"title": "剩余 1 度"}]})
-            return FakeResponse({"ret": True, "code": 200})
-
-    client = EcardClient(worker_proxy_origin="https://cloudflare.example")
-    monkeypatch.setattr(client, "_get_http_client", lambda: FakeHttpClient())
-
-    rooms = client._post_via_proxy(
-        "https://ecarduser.gzus.edu.cn/powerfee/getRoomInfo",
-        {"implType": "CGCOMMON1111"},
-        {},
-    )
-    balance = client._post_via_proxy(
-        "https://ecarduser.gzus.edu.cn/powerfee/getBalance",
-        {
-            "implType": "CGCOMMON1111",
-            "schoolAreaNo": "1",
-            "buildingNo": "A2",
-            "roomNum": "932",
-            "studentId": "20240001",
-        },
-        {},
-    )
-    consumption = client._post_via_proxy(
-        "https://ecarduser.gzus.edu.cn/powerfee/getDailyDetails",
-        {
-            "implType": "CGCOMMON1111",
-            "schoolAreaNo": "1",
-            "buildingNo": "A2",
-            "roomNum": "932",
-            "lastDate": "2026-06",
-        },
-        {},
-    )
-
-    assert rooms == {"ret": True, "code": 200, "obj": [{"id": "room-1"}]}
-    assert balance == {
-        "ret": True,
-        "code": 200,
-        "obj": {"powerBalance": 12, "coldWaterBalance": 3},
-    }
-    assert consumption == {"status": "ok", "items": [{"title": "剩余 1 度"}]}
-    assert calls[0][0] == "https://cloudflare.example/_proxy"
-    assert calls[0][1]["method"] == "POST"
-    assert calls[0][1]["url"] == "https://ecarduser.gzus.edu.cn/powerfee/getRoomInfo"
-    assert "implType=CGCOMMON1111" in calls[0][1]["body"]
-    assert calls[1][0] == "https://cloudflare.example/_proxy"
-    assert calls[1][1]["url"] == "https://ecarduser.gzus.edu.cn/powerfee/getBalance"
-    assert "studentId=20240001" in calls[1][1]["body"]
-    assert calls[2][0] == "https://cloudflare.example/_proxy"
-    assert calls[2][1]["url"] == "https://ecarduser.gzus.edu.cn/powerfee/getDailyDetails"
-    assert "lastDate=2026-06" in calls[2][1]["body"]
 
 
 def test_summary_not_bound_returns_status(monkeypatch):

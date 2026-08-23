@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gzus_pro_mobile_web/main.dart';
@@ -66,8 +67,8 @@ void main() {
 
   test('websocket url uses explicit default ports', () {
     expect(
-      WsService.buildWsUrlForTest('https://onegzus.cc.cd/api', 'sid'),
-      'wss://onegzus.cc.cd:443/api/ws/notifications?sessionId=sid',
+      WsService.buildWsUrlForTest('https://onegzus.onrein.top/api', 'sid'),
+      'wss://onegzus.onrein.top:443/api/ws/notifications?sessionId=sid',
     );
     expect(
       WsService.buildWsUrlForTest('http://127.0.0.1:8000/api', 'sid'),
@@ -634,10 +635,9 @@ void main() {
     api.useSession('active-session');
     api.clearCredentials();
 
-    await api.unregisterPushForSession('active-session');
     await api.revokeSession('active-session');
 
-    expect(requestedPaths, ['/push/unregister', '/auth/logout']);
+    expect(requestedPaths, ['/auth/logout']);
   });
 
   test('native academic reads prefer direct school endpoint', () async {
@@ -1172,13 +1172,15 @@ Future<void> _pumpDashboard(
   addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
 
   await tester.pumpWidget(
-    MaterialApp(
-      home: DashboardShell(
-        api: api ?? _mockApi(scheduleItems: scheduleItems),
-        studentName: '测试学生',
-        themeMode: ThemeMode.light,
-        onThemeChanged: (_) {},
-        onLogout: () {},
+    ProviderScope(
+      child: MaterialApp(
+        home: DashboardShell(
+          api: api ?? _mockApi(scheduleItems: scheduleItems),
+          studentName: '测试学生',
+          themeMode: ThemeMode.light,
+          onThemeChanged: (_) {},
+          onLogout: () {},
+        ),
       ),
     ),
   );

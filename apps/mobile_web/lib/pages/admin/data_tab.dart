@@ -5,7 +5,7 @@ import '../../gzus_design.dart';
 import '../../widgets/async_panel.dart';
 import '../../widgets/badges.dart';
 
-/// 数据统计页签：推送注册 / 数据库缓存（可清空）/ 水电费绑定。
+/// 数据统计页签：Web Push 订阅 / 数据库缓存（可清空）/ 水电费绑定。
 class DataTab extends StatefulWidget {
   const DataTab({super.key, required this.api});
 
@@ -88,23 +88,18 @@ class _DataTabState extends State<DataTab> {
         padding: const EdgeInsets.all(16),
         children: [
           _SectionCard(
-            title: '推送注册',
+            title: 'Web Push 订阅',
             icon: Icons.notifications,
             trailing: AsyncPanel<Map<String, dynamic>>(
               future: _pushFuture,
               builder: (data) => Text(
-                'Android ${data['androidCount'] ?? 0} · Web ${data['webCount'] ?? 0}',
+                '共 ${data['webCount'] ?? 0} 个订阅',
                 style: GzusTextStyles.cardSubtitle(context),
               ),
             ),
             child: AsyncPanel<Map<String, dynamic>>(
               future: _pushFuture,
               builder: (data) {
-                final android =
-                    (data['android'] as List<dynamic>? ?? const [])
-                        .whereType<Map<String, dynamic>>()
-                        .take(5)
-                        .toList();
                 final web = (data['web'] as List<dynamic>? ?? const [])
                     .whereType<Map<String, dynamic>>()
                     .take(5)
@@ -112,18 +107,13 @@ class _DataTabState extends State<DataTab> {
                 return Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    for (final row in android)
-                      _RowLine(
-                        leading: const Icon(Icons.smartphone, size: 16),
-                        text: '${row['studentId']} · ${_fmt(row['createdAt'])}',
-                      ),
                     for (final row in web)
                       _RowLine(
                         leading: const Icon(Icons.language, size: 16),
                         text: '${row['studentId']} · ${_fmt(row['createdAt'])}',
                       ),
-                    if (android.isEmpty && web.isEmpty)
-                      Text('暂无注册设备',
+                    if (web.isEmpty)
+                      Text('暂无 Web Push 订阅',
                           style: GzusTextStyles.caption(context)),
                   ],
                 );

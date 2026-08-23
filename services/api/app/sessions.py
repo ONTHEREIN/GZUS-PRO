@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 _DB_CONNECTION_ATTEMPTS = 3
 _DB_RETRY_BASE_DELAY_SECONDS = 0.3
-# Neon 跨实例写后读延迟时的重试次数
+# PostgreSQL 短暂写后读延迟时的重试次数
 _DB_READ_AFTER_WRITE_RETRIES = 3
 
 
@@ -63,11 +63,9 @@ class AppSession:
     student_name: str | None = None
     ehall_client: Any | None = None
     # 内存态约定为 naive UTC（见 touch()/get() 的 now_naive 用法）：naive 本地时间
-    # 会被当 UTC 用，让会话早 8 小时过期（Vercel 运行时为 UTC 时区）。
+    # 统一按 UTC 处理 naive 时间，避免时区差异导致会话提前过期。
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
     last_active_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
-    push_registration_id: str | None = None
-    push_platform: str = "android"
     revoked_at: datetime | None = None
     revoked_reason: str | None = None
     student_account: str | None = None
@@ -112,16 +110,9 @@ def decrypt_credentials(token: str, key: str, ttl_seconds: int | None = None) ->
 def _rebuild_school_client(
     jwxt_cookies: str,
     validate_cookies: bool = False,
-    session_id: str | None = None,
     account: str | None = None,
 ) -> Any:
-    """Rebuild a SchoolSdkClient from stored cookies.
-
-    By default does NOT validate cookies against JWXT (validate_cookies=False)
-    because cookies obtained from the Cloudflare Worker edge are IP-bounded
-    and cannot be verified from Vercel's IP.  The real validation happens on
-    the first actual API call; the caller handles AuthenticationError gracefully.
-    """
+    """从持久化 cookie 重建 SchoolSdkClient。"""
     from app.config import get_settings
     from app.school_client import SchoolSdkClient
 
@@ -129,8 +120,6 @@ def _rebuild_school_client(
     client = SchoolSdkClient(
         settings.jw_base_url,
         timeout_seconds=settings.request_timeout_seconds,
-        session_id=session_id,
-        worker_proxy_origin=settings.jwxt_worker_proxy_origin or None,
     )
     client.login_with_cookies(jwxt_cookies, account or "", validate=validate_cookies)
     return client
@@ -153,9 +142,7 @@ def _rebuild_ehall_client(ehall_cookies: str | None, ehall_auth_token: str | Non
 class SessionStore:
     """Persistent session store backed by PostgreSQL.
 
-    Designed for serverless deployments (Vercel) where in-memory state is
-    lost on every cold start.  Session metadata and JWXT/ehall cookies are
-    stored in the database; live client objects are rebuilt on demand.
+    会话元数据与 JWXT/ehall cookie 保存在数据库中，进程重启后按需重建客户端。
 
     Usage:
         store = SessionStore(ttl_seconds=7200, db_factory=get_sync_session_factory)
@@ -285,9 +272,7 @@ class SessionStore:
                 except Exception:
                     pass
 
-        # 自托管（无 Cloudflare Worker）部署下，登录走 /auth/* 而非
-        # /internal/create-session，这里统一按 admin_users 白名单解析 is_admin，
-        # 保证管理后台在迁移后仍然可用；显式传入时（internal.py）不覆盖。
+        # 登录统一通过 /auth/*，这里按 admin_users 白名单解析管理员身份。
         if is_admin is None and resolved_student_account:
             try:
                 from app.routes.admin import admin_role_of
@@ -454,7 +439,7 @@ class SessionStore:
             self._clear_legacy_credentials(db)
             row = db.query(AppSessionModel).filter(AppSessionModel.id == session_id).first()
             if row is None:
-                # Neon PostgreSQL may have a slight read-after-write delay
+                # PostgreSQL 可能出现短暂写后读延迟。
                 # after a session is created on a different serverless
                 # instance.  Retry with increasing backoff.
                 for attempt in range(_DB_READ_AFTER_WRITE_RETRIES):
@@ -516,8 +501,6 @@ class SessionStore:
                     last_active_at=row.last_active_at.replace(tzinfo=None)
                     if row.last_active_at.tzinfo is not None
                     else row.last_active_at,
-                    push_registration_id=row.push_registration_id,
-                    push_platform=row.push_platform or "android",
                     revoked_at=revoked_at,
                     revoked_reason=row.revoked_reason or "single_device_login",
                     student_account=row.student_account,
@@ -538,8 +521,6 @@ class SessionStore:
                     cached.created_at = row.created_at.replace(tzinfo=None)
                 else:
                     cached.created_at = row.created_at
-                cached.push_registration_id = row.push_registration_id
-                cached.push_platform = row.push_platform or "android"
                 cached.student_account = row.student_account
                 cached.is_admin = bool(getattr(row, "is_admin", False))
                 self._session_checked_at[session_id] = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -547,28 +528,23 @@ class SessionStore:
                     self.touch(session_id)
                 return cached
 
-            # Rebuild client objects from stored cookies.
-            # If DB rebuild fails (stale cookies), leave client=None so
-            # _inject_worker_cookies() can attempt recovery with fresh
-            # cookies injected by the Cloudflare Worker edge.
+            # 从持久化 cookie 重建客户端；失效 cookie 会在业务请求中明确失败。
             client = None
             ehall_client = None
             if row.jwxt_cookies:
                 try:
                     client = _rebuild_school_client(
                         row.jwxt_cookies,
-                        session_id=session_id,
                         account=getattr(row, "student_account", None) or None,
                     )
                 except Exception:
                     logger.warning(
-                        "Failed to rebuild SchoolSdkClient from DB cookies for session %s — "
-                        "client will be None, recovery possible if Worker injects fresh cookies",
+                        "Failed to rebuild SchoolSdkClient from DB cookies for session %s",
                         session_id[:8],
                         exc_info=True,
                     )
                     # DO NOT return None — allow caller to attempt recovery
-                    # via Worker-injected cookies in _inject_worker_cookies().
+                    # 由当前持久化会话恢复流程重建。
 
             if row.ehall_cookies or row.ehall_auth_token:
                 try:
@@ -588,8 +564,6 @@ class SessionStore:
                 ehall_client=ehall_client,
                 created_at=created_utc.replace(tzinfo=None),
                 last_active_at=last_active,
-                push_registration_id=row.push_registration_id,
-                push_platform=row.push_platform or "android",
                 student_account=row.student_account,
                 is_admin=bool(getattr(row, "is_admin", False)),
             )
@@ -639,11 +613,10 @@ class SessionStore:
             db.close()
 
     def update(self, session_id: str, **fields: Any) -> None:
-        """Persist mutable session fields (e.g. push_registration_id) to DB."""
+        """Persist mutable session fields to DB."""
         from app.database import AppSessionModel
 
         allowed = {
-            "push_registration_id", "push_platform",
             "student_name",
             "jwxt_cookies", "ehall_cookies", "ehall_auth_token",
         }

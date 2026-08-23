@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import base64
 import logging
-import os
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -20,7 +19,7 @@ from app.database import (
     Base,
     DataCache,
     EcardBinding,
-    PushRegistration,
+    MaintenanceJobStatus,
     WebPushSubscription,
     get_sync_engine,
     get_sync_session_factory,
@@ -35,8 +34,6 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 # 活跃会话口径与 deps.SESSION_IDLE_STALE_THRESHOLD 保持一致（JWXT 约 30 分钟过期）
 ACTIVE_SESSION_WINDOW = timedelta(minutes=25)
 
-# 生产环境（Vercel）init_db 跳过全部建表，新表在这里首次访问时幂等补建
-# （仿 routes/settings.py 的 _ensure_table 模式）。
 _tables_ready = False
 
 # 校历/通知图片上限：3MB（base64 后约 4MB）
@@ -118,7 +115,6 @@ def _session_row_to_dict(row: AppSessionModel) -> dict[str, Any]:
         "lastActiveAt": row.last_active_at,
         "revokedAt": row.revoked_at,
         "revokedReason": row.revoked_reason,
-        "pushPlatform": row.push_platform or "android",
     }
 
 
@@ -166,7 +162,6 @@ def admin_overview(
         )
         sessions_today = db.query(AppSessionModel).filter(AppSessionModel.created_at >= today_start).count()
         revoked_sessions = db.query(AppSessionModel).filter(AppSessionModel.revoked_at.is_not(None)).count()
-        android_push = db.query(PushRegistration).count()
         web_push = db.query(WebPushSubscription).count()
         ecard_bindings = db.query(EcardBinding).count()
         cache_entries = db.query(DataCache).count()
@@ -176,7 +171,6 @@ def admin_overview(
         "activeSessions": active_sessions,
         "sessionsToday": sessions_today,
         "revokedSessions": revoked_sessions,
-        "pushRegistrations": android_push,
         "webPushSubscriptions": web_push,
         "ecardBindings": ecard_bindings,
         "cacheEntries": cache_entries,
@@ -337,33 +331,17 @@ def admin_push(
     session: AppSession = Depends(require_admin),
     limit: int = Query(50, ge=1, le=200),
 ) -> dict[str, Any]:
-    """推送注册列表（Android 极光 + Web Push 订阅）。"""
+    """Web Push 订阅列表。"""
     ensure_admin_tables()
     factory = get_sync_session_factory()
     with factory() as db:
-        android_count = db.query(PushRegistration).count()
         web_count = db.query(WebPushSubscription).count()
-        android_rows = (
-            db.query(PushRegistration)
-            .order_by(PushRegistration.created_at.desc())
-            .limit(limit)
-            .all()
-        )
         web_rows = (
             db.query(WebPushSubscription)
             .order_by(WebPushSubscription.created_at.desc())
             .limit(limit)
             .all()
         )
-        android_items = [
-            {
-                "studentId": row.student_id,
-                "platform": row.platform or "android",
-                "registrationId": row.registration_id[:32] + "…" if len(row.registration_id or "") > 32 else row.registration_id,
-                "createdAt": row.created_at,
-            }
-            for row in android_rows
-        ]
         web_items = [
             {
                 "studentId": row.student_id,
@@ -374,9 +352,7 @@ def admin_push(
             for row in web_rows
         ]
     return {
-        "androidCount": android_count,
         "webCount": web_count,
-        "android": android_items,
         "web": web_items,
     }
 
@@ -481,14 +457,28 @@ def admin_status(
 ) -> dict[str, Any]:
     """系统状态（脱敏：不暴露数据库地址/密钥等敏感信息）。"""
     settings = get_settings()
+    factory = get_sync_session_factory()
+    with factory() as db:
+        jobs = db.query(MaintenanceJobStatus).order_by(MaintenanceJobStatus.job_name).all()
+        job_statuses = [
+            {
+                "name": row.job_name,
+                "lastStartedAt": row.last_started_at,
+                "lastSucceededAt": row.last_succeeded_at,
+                "lastDurationMs": row.last_duration_ms,
+                "lastError": row.last_error,
+            }
+            for row in jobs
+        ]
     return {
         "status": "ok",
         "debug": settings.debug,
-        "isVercel": os.environ.get("VERCEL") == "1",
+        "runtime": "self_hosted",
         "timeUtc": datetime.now(UTC),
         "sessionTtlSeconds": settings.session_ttl_seconds,
         "appVersion": settings.app_latest_version,
         "appBuild": settings.app_latest_build,
+        "maintenanceJobs": job_statuses,
     }
 
 

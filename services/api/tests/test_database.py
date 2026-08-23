@@ -71,15 +71,12 @@ def test_ensure_columns_raises_when_table_is_missing():
         database._ensure_columns(engine, "missing_table", {"label": "VARCHAR(20)"})
 
 
-def test_init_db_skips_schema_work_on_vercel(monkeypatch):
-    monkeypatch.setenv("VERCEL", "1")
-    monkeypatch.setenv("DEBUG", "false")
-    # 生产配置校验要求 RSA_PRIVATE_KEY 非空（本测试不涉及 RSA，占位即可）
-    monkeypatch.setenv("RSA_PRIVATE_KEY", "test-rsa-key")
+def test_init_db_initializes_schema_in_production(monkeypatch):
+    monkeypatch.setenv("DEBUG", "true")
     get_settings.cache_clear()
     database.reset_engine()
 
     database.init_db()
 
     assert database._db_initialized is True
-    assert database._engine is None
+    assert database._engine is not None

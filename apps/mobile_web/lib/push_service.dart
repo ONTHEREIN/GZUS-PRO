@@ -5,10 +5,7 @@ typedef OnPushTap = void Function(Map<String, dynamic> extras);
 
 class PushService {
   static const _channel = MethodChannel('cn.gzus.pro/push');
-  static String? _registrationId;
   static OnPushTap? _onTap;
-
-  static String? get registrationId => _registrationId;
 
   static Future<void> init({OnPushTap? onTap}) async {
     _onTap = onTap;
@@ -23,7 +20,7 @@ class PushService {
   }
 
   static void stop() {
-    _registrationId = null;
+    _onTap = null;
   }
 
   static void resume() {

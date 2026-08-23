@@ -16,7 +16,7 @@ permissions:
 # 并发保护：同一时间只跑一个部署
 concurrency:
   group: deploy-prod-api
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   test-and-lint:
@@ -32,6 +32,7 @@ jobs:
       - name: Deploy to Tencent (rsync + restart)
         env:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
         run: |
@@ -39,19 +40,25 @@ jobs:
           mkdir -p ~/.ssh
           echo "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
-          export SSH_CMD="ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no"
+          test -n "$DEPLOY_KNOWN_HOSTS"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          export SSH_CMD="ssh -i ~/.ssh/deploy_key -o UserKnownHostsFile=$HOME/.ssh/known_hosts -o StrictHostKeyChecking=yes"
+          export RELEASE_ID="$GITHUB_SHA"
 
-          # 同步后端代码（排除本地 venv 与缓存；⚠️ 必须排除 .env——服务器上的生产配置
-          # 不在本地仓库里，rsync --delete 会把它当多余文件删掉）
+          ssh $SSH_CMD "$DEPLOY_USER@$DEPLOY_HOST" \
+            "install -d -o onegzus -g onegzus /opt/onegzus/releases/api/$RELEASE_ID"
           rsync -avz --delete -e "$SSH_CMD" \
             --exclude '.venv' --exclude '__pycache__' --exclude '.pytest_cache' \
             --exclude '.ruff_cache' --exclude '.env' --exclude '.env.*' \
             --exclude 'test_api.py' --exclude 'test_login.py' \
-            services/api/ "$DEPLOY_USER@$DEPLOY_HOST:/opt/onegzus/api/"
+            services/api/ "$DEPLOY_USER@$DEPLOY_HOST:/opt/onegzus/releases/api/$RELEASE_ID/"
+          rsync -avz --delete -e "$SSH_CMD" --exclude '.ssh/' \
+            deploy/tencent/ "$DEPLOY_USER@$DEPLOY_HOST:/opt/onegzus/deploy/"
 
-          # 安装依赖（若 requirements 未变，pip 走缓存很快）+ 重启 + 健康检查
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+          ssh $SSH_CMD "$DEPLOY_USER@$DEPLOY_HOST" \
+            "bash /opt/onegzus/deploy/scripts/install_runtime.sh"
+          ssh $SSH_CMD \
             "$DEPLOY_USER@$DEPLOY_HOST" \
-            "cd /opt/onegzus/api && .venv/bin/pip install -q -r requirements.txt && chown -R onegzus:onegzus /opt/onegzus/api && systemctl restart onegzus-api && sleep 4 && curl -fsS http://127.0.0.1:8000/health || { journalctl -u onegzus-api -n 30 --no-pager; exit 1; }"
+            "cd /opt/onegzus/releases/api/$RELEASE_ID && uv sync --frozen --no-dev && chown -R onegzus:onegzus /opt/onegzus/releases/api/$RELEASE_ID && bash /opt/onegzus/deploy/scripts/activate_release.sh api $RELEASE_ID"
           echo "=== API 部署完成 ==="

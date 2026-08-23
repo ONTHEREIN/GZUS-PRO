@@ -421,8 +421,9 @@ class GradeGroupRow extends StatelessWidget {
       latest.grade.gradePoint ?? '-',
     ];
     if (!group.hasRetake) {
-      if (examTag == null)
+      if (examTag == null) {
         return SimpleTableRow(values: values, border: border);
+      }
       return Container(
         decoration: BoxDecoration(
           border: Border(bottom: border),

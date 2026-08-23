@@ -92,7 +92,9 @@ class _StatusTabState extends State<StatusTab> {
                       const _KeyValueRow(label: '服务状态', value: '正常'),
                       _KeyValueRow(
                           label: '部署形态',
-                          value: data['isVercel'] == true ? 'Vercel' : '本地'),
+                          value: data['runtime'] == 'self_hosted'
+                              ? '腾讯云自托管'
+                              : '未知'),
                       _KeyValueRow(
                           label: '服务器时间 (UTC)',
                           value: _fmt(data['timeUtc'])),
@@ -103,6 +105,14 @@ class _StatusTabState extends State<StatusTab> {
                           label: 'App 版本',
                           value:
                               '${data['appVersion'] ?? '-'} (${data['appBuild'] ?? '-'})'),
+                      for (final job in (data['maintenanceJobs'] as List<dynamic>? ?? const [])
+                          .whereType<Map<String, dynamic>>())
+                        _KeyValueRow(
+                          label: '${job['name'] ?? '维护任务'}',
+                          value: job['lastError'] == null
+                              ? '成功 · ${_fmt(job['lastSucceededAt'])} · ${job['lastDurationMs'] ?? '-'}ms'
+                              : '失败 · ${job['lastError']}',
+                        ),
                     ],
                   ),
                 ),
