@@ -48,4 +48,4 @@ jobs:
           FRONTEND_BASE_URL: https://app.example.test
         run: >-
           PYTHONPATH=. uv run --locked python -c
-          "from app.main import create_app; assert any(route.path == '/health/ready' for route in create_app().routes)"
+          "from app.main import create_app; assert any(getattr(route, 'path', None) == '/health/ready' for route in create_app().routes)"
