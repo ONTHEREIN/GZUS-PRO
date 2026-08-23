@@ -42,7 +42,7 @@ jobs:
         working-directory: services/api
         env:
           DEBUG: "true"
-          DATABASE_URL: sqlite:///:memory:
+          DATABASE_URL: "sqlite:///:memory:"
           CREDENTIAL_ENCRYPTION_KEY: test-key
           PUBLIC_API_BASE_URL: https://api.example.test
           FRONTEND_BASE_URL: https://app.example.test

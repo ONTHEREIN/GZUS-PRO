@@ -43,22 +43,38 @@ jobs:
           test -n "$DEPLOY_KNOWN_HOSTS"
           printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
-          export SSH_CMD="ssh -i ~/.ssh/deploy_key -o UserKnownHostsFile=$HOME/.ssh/known_hosts -o StrictHostKeyChecking=yes"
-          export RELEASE_ID="$GITHUB_SHA"
+          SSH_COMMAND="ssh -i $HOME/.ssh/deploy_key -o UserKnownHostsFile=$HOME/.ssh/known_hosts -o StrictHostKeyChecking=yes"
+          RELEASE_ID="$GITHUB_SHA"
 
-          ssh $SSH_CMD "$DEPLOY_USER@$DEPLOY_HOST" \
-            "install -d -o onegzus -g onegzus /opt/onegzus/releases/api/$RELEASE_ID"
-          rsync -avz --delete -e "$SSH_CMD" \
+          ssh -i "$HOME/.ssh/deploy_key" \
+            -o "UserKnownHostsFile=$HOME/.ssh/known_hosts" \
+            -o StrictHostKeyChecking=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" 'bash -s --' "$RELEASE_ID" <<'REMOTE'
+          release_id="$1"
+          install -d -o onegzus -g onegzus "/opt/onegzus/releases/api/$release_id"
+          REMOTE
+          rsync -avz --delete -e "$SSH_COMMAND" \
             --exclude '.venv' --exclude '__pycache__' --exclude '.pytest_cache' \
             --exclude '.ruff_cache' --exclude '.env' --exclude '.env.*' \
             --exclude 'test_api.py' --exclude 'test_login.py' \
             services/api/ "$DEPLOY_USER@$DEPLOY_HOST:/opt/onegzus/releases/api/$RELEASE_ID/"
-          rsync -avz --delete -e "$SSH_CMD" --exclude '.ssh/' \
+          rsync -avz --delete -e "$SSH_COMMAND" --exclude '.ssh/' \
             deploy/tencent/ "$DEPLOY_USER@$DEPLOY_HOST:/opt/onegzus/deploy/"
 
-          ssh $SSH_CMD "$DEPLOY_USER@$DEPLOY_HOST" \
-            "bash /opt/onegzus/deploy/scripts/install_runtime.sh"
-          ssh $SSH_CMD \
+          ssh -i "$HOME/.ssh/deploy_key" \
+            -o "UserKnownHostsFile=$HOME/.ssh/known_hosts" \
+            -o StrictHostKeyChecking=yes \
             "$DEPLOY_USER@$DEPLOY_HOST" \
-            "cd /opt/onegzus/releases/api/$RELEASE_ID && uv sync --frozen --no-dev && chown -R onegzus:onegzus /opt/onegzus/releases/api/$RELEASE_ID && bash /opt/onegzus/deploy/scripts/activate_release.sh api $RELEASE_ID"
+            "bash /opt/onegzus/deploy/scripts/install_runtime.sh"
+          ssh -i "$HOME/.ssh/deploy_key" \
+            -o "UserKnownHostsFile=$HOME/.ssh/known_hosts" \
+            -o StrictHostKeyChecking=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" 'bash -s --' "$RELEASE_ID" <<'REMOTE'
+          release_id="$1"
+          release_dir="/opt/onegzus/releases/api/$release_id"
+          cd "$release_dir"
+          uv sync --frozen --no-dev
+          chown -R onegzus:onegzus "$release_dir"
+          bash /opt/onegzus/deploy/scripts/activate_release.sh api "$release_id"
+          REMOTE
           echo "=== API 部署完成 ==="

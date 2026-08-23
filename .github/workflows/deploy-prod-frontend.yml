@@ -68,16 +68,32 @@ jobs:
           test -n "$DEPLOY_KNOWN_HOSTS"
           printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
-          export SSH_CMD="ssh -i ~/.ssh/deploy_key -o UserKnownHostsFile=$HOME/.ssh/known_hosts -o StrictHostKeyChecking=yes"
-          export RELEASE_ID="$GITHUB_SHA"
-          ssh $SSH_CMD "$DEPLOY_USER@$DEPLOY_HOST" \
-            "install -d -o onegzus -g onegzus /opt/onegzus/releases/web/$RELEASE_ID"
-          rsync -avz --delete -e "$SSH_CMD" \
+          SSH_COMMAND="ssh -i $HOME/.ssh/deploy_key -o UserKnownHostsFile=$HOME/.ssh/known_hosts -o StrictHostKeyChecking=yes"
+          RELEASE_ID="$GITHUB_SHA"
+          ssh -i "$HOME/.ssh/deploy_key" \
+            -o "UserKnownHostsFile=$HOME/.ssh/known_hosts" \
+            -o StrictHostKeyChecking=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" 'bash -s --' "$RELEASE_ID" <<'REMOTE'
+          release_id="$1"
+          install -d -o onegzus -g onegzus "/opt/onegzus/releases/web/$release_id"
+          REMOTE
+          rsync -avz --delete -e "$SSH_COMMAND" \
             apps/mobile_web/build/web/ "$DEPLOY_USER@$DEPLOY_HOST:/opt/onegzus/releases/web/$RELEASE_ID/"
-          rsync -avz --delete -e "$SSH_CMD" --exclude '.ssh/' \
+          rsync -avz --delete -e "$SSH_COMMAND" --exclude '.ssh/' \
             deploy/tencent/ "$DEPLOY_USER@$DEPLOY_HOST:/opt/onegzus/deploy/"
-          ssh $SSH_CMD "$DEPLOY_USER@$DEPLOY_HOST" \
+          ssh -i "$HOME/.ssh/deploy_key" \
+            -o "UserKnownHostsFile=$HOME/.ssh/known_hosts" \
+            -o StrictHostKeyChecking=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
             "bash /opt/onegzus/deploy/scripts/install_runtime.sh"
-          ssh $SSH_CMD "$DEPLOY_USER@$DEPLOY_HOST" \
-            "chown -R onegzus:onegzus /opt/onegzus/releases/web/$RELEASE_ID && bash /opt/onegzus/deploy/scripts/activate_release.sh web $RELEASE_ID && curl -fsS --max-time 10 https://onegzus.onrein.top/ >/dev/null"
+          ssh -i "$HOME/.ssh/deploy_key" \
+            -o "UserKnownHostsFile=$HOME/.ssh/known_hosts" \
+            -o StrictHostKeyChecking=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" 'bash -s --' "$RELEASE_ID" <<'REMOTE'
+          release_id="$1"
+          release_dir="/opt/onegzus/releases/web/$release_id"
+          chown -R onegzus:onegzus "$release_dir"
+          bash /opt/onegzus/deploy/scripts/activate_release.sh web "$release_id"
+          curl -fsS --max-time 10 https://onegzus.onrein.top/ >/dev/null
+          REMOTE
           echo "=== 前端版本已原子激活 ==="
