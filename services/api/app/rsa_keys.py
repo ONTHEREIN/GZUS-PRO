@@ -19,9 +19,7 @@ class RsaKeyManager:
             pem = os.environ.get("RSA_PRIVATE_KEY", "").strip()
 
         if pem:
-            self._private_key = serialization.load_pem_private_key(
-                pem.encode(), password=None
-            )
+            self._private_key = _load_private_key(pem)
         else:
             # 仅开发/测试环境允许临时生成：生产环境 get_settings() 会在
             # 缺少 RSA_PRIVATE_KEY 时直接拒绝启动（config.py 校验），
@@ -56,6 +54,20 @@ class RsaKeyManager:
             return plaintext.decode()
         except Exception as exc:
             raise ValueError("RSA decryption failed") from exc
+
+
+def _load_private_key(value: str) -> rsa.RSAPrivateKey:
+    """加载 PEM，或环境文件中单行存储的 Base64 PEM。"""
+    pem_bytes = value.encode()
+    if not value.lstrip().startswith("-----BEGIN"):
+        try:
+            pem_bytes = base64.b64decode(value, validate=True)
+        except ValueError as exc:
+            raise ValueError("RSA 私钥必须是 PEM 或 Base64 编码的 PEM") from exc
+    loaded_key = serialization.load_pem_private_key(pem_bytes, password=None)
+    if not isinstance(loaded_key, rsa.RSAPrivateKey):
+        raise ValueError("RSA 私钥不是 RSA 格式")
+    return loaded_key
 
 
 rsa_key_manager = RsaKeyManager()
