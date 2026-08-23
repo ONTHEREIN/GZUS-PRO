@@ -1,5 +1,6 @@
 from fastapi.testclient import TestClient
 
+from app.config import get_settings
 from app.main import create_app
 from app.school_client import AuthenticationError
 
@@ -244,15 +245,16 @@ def test_academic_authentication_error_returns_json_401():
 
 def test_notice_detail_route():
     client, headers = client_with_session()
+    url = f"{get_settings().jw_base_url}/notice/1.html"
     response = client.get(
-        "/notices/detail?url=https://jwxt.seig.edu.cn/jwglxt/notice/1.html",
+        f"/notices/detail?url={url}",
         headers=headers,
     )
     assert response.status_code == 200
     data = response.json()
     assert data["title"] == "测试通知详情"
     assert data["contentHtml"] == "<p>正文内容</p>"
-    assert data["url"] == "https://jwxt.seig.edu.cn/jwglxt/notice/1.html"
+    assert data["url"] == url
 
 
 class FailingClient(FakeClient):
