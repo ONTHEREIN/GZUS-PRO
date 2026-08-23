@@ -89,6 +89,24 @@ jobs:
           ssh -i "$HOME/.ssh/deploy_key" \
             -o "UserKnownHostsFile=$HOME/.ssh/known_hosts" \
             -o StrictHostKeyChecking=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" 'bash -s' <<'REMOTE'
+          if ! command -v certbot >/dev/null 2>&1; then
+            if command -v dnf >/dev/null 2>&1; then
+              dnf install -y certbot python3-certbot-nginx
+            elif command -v apt-get >/dev/null 2>&1; then
+              apt-get update
+              DEBIAN_FRONTEND=noninteractive apt-get install -y certbot python3-certbot-nginx
+            else
+              echo "未找到受支持的包管理器，无法安装 certbot" >&2
+              exit 1
+            fi
+          fi
+          systemctl enable --now certbot-renew.timer
+          bash /opt/onegzus/deploy/scripts/issue_letsencrypt.sh onegzus.onrein.top
+          REMOTE
+          ssh -i "$HOME/.ssh/deploy_key" \
+            -o "UserKnownHostsFile=$HOME/.ssh/known_hosts" \
+            -o StrictHostKeyChecking=yes \
             "$DEPLOY_USER@$DEPLOY_HOST" 'bash -s --' "$RELEASE_ID" <<'REMOTE'
           release_id="$1"
           release_dir="/opt/onegzus/releases/web/$release_id"
