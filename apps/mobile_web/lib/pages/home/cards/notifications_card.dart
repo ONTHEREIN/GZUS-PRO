@@ -18,13 +18,14 @@ class NotificationsLargeCard extends StatelessWidget {
     return HomeCardShell(
       title: '最新通知',
       icon: Icons.notifications_active,
+      density: HomeCardDensity.large,
       badge: '${notices.length}',
       onTap: onTap,
       child: notices.isEmpty
           ? const EmptyState(message: '暂无通知')
           : Column(
               children: [
-                for (final item in notices.take(4)) _NoticeRow(item: item),
+                for (final item in notices.take(3)) _NoticeRow(item: item),
               ],
             ),
     );
@@ -43,13 +44,14 @@ class NotificationsMediumCard extends StatelessWidget {
     return HomeCardShell(
       title: '最新通知',
       icon: Icons.notifications_active,
+      density: HomeCardDensity.medium,
       badge: '${notices.length}',
       onTap: onTap,
       child: notices.isEmpty
           ? const EmptyState(message: '暂无通知')
           : Column(
               children: [
-                for (final item in notices.take(2)) _NoticeRow(item: item),
+                _NoticeRow(item: notices.first),
               ],
             ),
     );
@@ -69,9 +71,9 @@ class NotificationsSmallCard extends StatelessWidget {
     return HomeCardShell(
       title: '通知',
       icon: Icons.notifications_active,
+      density: HomeCardDensity.small,
       badge: '${notices.length}',
       onTap: onTap,
-      compact: true,
       child: notices.isEmpty
           ? Center(
               child: Text('暂无',
@@ -80,7 +82,7 @@ class NotificationsSmallCard extends StatelessWidget {
               mainAxisAlignment: MainAxisAlignment.center,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                for (final item in notices.take(2))
+                for (final item in notices.take(1))
                   Padding(
                     padding: const EdgeInsets.only(bottom: 4),
                     child: Text(

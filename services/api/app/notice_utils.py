@@ -29,6 +29,7 @@ def normalize_notice_item(item: dict) -> dict:
     for key in ("category", "title", "summary", "date"):
         if key in normalized:
             normalized[key] = clean_notice_text(normalized.get(key))
+    normalized["source"] = str(normalized.get("source") or "jwxt")
     return normalized
 
 

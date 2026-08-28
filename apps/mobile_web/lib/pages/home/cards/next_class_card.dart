@@ -19,6 +19,7 @@ class NextClassLargeCard extends StatelessWidget {
     return HomeCardShell(
       title: '下一节课',
       icon: Icons.watch_later,
+      density: HomeCardDensity.large,
       badge: item?.isOngoing == true ? '进行中' : '焦点',
       onTap: onTap,
       child: Container(
@@ -75,6 +76,7 @@ class NextClassMediumCard extends StatelessWidget {
     return HomeCardShell(
       title: '下一节课',
       icon: Icons.watch_later,
+      density: HomeCardDensity.medium,
       badge: item?.isOngoing == true ? '进行中' : '下一节',
       onTap: onTap,
       child: Container(
@@ -129,9 +131,9 @@ class NextClassSmallCard extends StatelessWidget {
     return HomeCardShell(
       title: '下一节',
       icon: Icons.watch_later,
+      density: HomeCardDensity.small,
       badge: item?.isOngoing == true ? '进行中' : null,
       onTap: onTap,
-      compact: true,
       child: item == null
           ? Center(
               child: Text('无',

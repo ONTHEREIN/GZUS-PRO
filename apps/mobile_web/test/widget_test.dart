@@ -764,7 +764,7 @@ void main() {
     expect(requestedPaths, ['/auth/logout']);
   });
 
-  test('native academic reads prefer direct school endpoint', () async {
+  test('native academic reads prefer cloud API for cache reuse', () async {
     SharedPreferences.setMockInitialValues({});
     debugEnableSchoolDirectForTests = true;
     addTearDown(() {
@@ -797,21 +797,34 @@ void main() {
       baseUrl: 'https://api.example.test',
       httpClient: MockClient((request) async {
         apiCalled = true;
-        return http.Response('unexpected api call', 500);
+        expect(request.url.path, '/schedule');
+        return http.Response.bytes(
+          utf8.encode(jsonEncode([
+            {
+              'name': '云端缓存课程',
+              'weekday': 2,
+              'startSection': 3,
+              'endSection': 4,
+            }
+          ])),
+          200,
+        );
       }),
     )..setJwxtCookies('JSESSIONID=direct');
     await api.rememberAccount('2024000000');
 
     final result = await api.schedule(year: 2026, term: 2, forceRefresh: true);
 
-    expect(directCalled, isTrue);
-    expect(apiCalled, isFalse);
-    expect(result.data.items.single.name, '直连课程');
+    expect(directCalled, isFalse);
+    expect(apiCalled, isTrue);
+    expect(result.data.items.single.name, '云端缓存课程');
     expect(result.data.items.single.startSection, 3);
     expect(result.data.items.single.endSection, 4);
   });
 
-  test('native academic reads fall back to API when direct fails', () async {
+  test(
+      'native academic reads fall back to direct school endpoint when API fails',
+      () async {
     SharedPreferences.setMockInitialValues({});
     debugEnableSchoolDirectForTests = true;
     addTearDown(() {
@@ -822,28 +835,38 @@ void main() {
     var apiCalled = false;
     debugSchoolDirectHttpClientForTests = MockClient((request) async {
       directCalled = true;
-      return http.Response('school error', 502);
+      expect(request.url.host, 'jwxt.gzus.edu.cn');
+      return http.Response.bytes(
+        utf8.encode(jsonEncode({
+          'kbList': [
+            {
+              'kcmc': '直连课程',
+              'jsxx': '张老师',
+              'cdmc': 'A101',
+              'xqj': 2,
+              'ksjc': '3-4',
+              'zcd': '1-16',
+            }
+          ],
+        })),
+        200,
+      );
     });
     final api = ApiClient(
       baseUrl: 'https://api.example.test',
       httpClient: MockClient((request) async {
         apiCalled = true;
-        expect(request.url.path, '/grades');
-        return http.Response.bytes(
-          utf8.encode(jsonEncode([
-            {'courseName': 'API课程', 'score': '95'}
-          ])),
-          200,
-        );
+        expect(request.url.path, '/schedule');
+        return http.Response('API unavailable', 502);
       }),
     )..setJwxtCookies('JSESSIONID=direct');
     await api.rememberAccount('2024000000');
 
-    final result = await api.grades(year: 2026, term: 2, forceRefresh: true);
+    final result = await api.schedule(year: 2026, term: 2, forceRefresh: true);
 
     expect(directCalled, isTrue);
     expect(apiCalled, isTrue);
-    expect(result.data.single.courseName, 'API课程');
+    expect(result.data.items.single.name, '直连课程');
   });
 
   testWidgets('renders login page', (tester) async {

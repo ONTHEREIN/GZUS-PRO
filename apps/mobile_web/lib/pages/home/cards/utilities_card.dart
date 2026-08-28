@@ -20,6 +20,7 @@ class UtilitiesLargeCard extends StatelessWidget {
     return HomeCardShell(
       title: '水电费余额',
       icon: Icons.water_drop,
+      density: HomeCardDensity.large,
       badge: '实时',
       onTap: onTap,
       child: Column(
@@ -85,6 +86,7 @@ class UtilitiesMediumCard extends StatelessWidget {
     return HomeCardShell(
       title: '水电余额',
       icon: Icons.water_drop,
+      density: HomeCardDensity.medium,
       badge: '实时',
       onTap: onTap,
       child: Row(
@@ -127,27 +129,17 @@ class UtilitiesSmallCard extends StatelessWidget {
     return HomeCardShell(
       title: '水电',
       icon: Icons.water_drop,
-      badge: summary.roomDisplay,
+      density: HomeCardDensity.small,
+      badge: '实时',
       onTap: onTap,
-      compact: true,
       child: Row(
         children: [
           Expanded(
             child: _UtilityMini(
               icon: Icons.electric_bolt,
-              label: '电',
+              label: '电费余额',
               value: summary.powerText ?? '-',
               color: _powerColor(context),
-              compact: true,
-            ),
-          ),
-          const SizedBox(width: 6),
-          Expanded(
-            child: _UtilityMini(
-              icon: Icons.water_drop,
-              label: '水',
-              value: summary.hotWaterText ?? '-',
-              color: _hotWaterColor(context),
               compact: true,
             ),
           ),
@@ -168,9 +160,9 @@ class _UnboundUtilitiesCard extends StatelessWidget {
     return HomeCardShell(
       title: compact ? '宿舍' : '宿舍绑定',
       icon: Icons.home_work,
+      density: compact ? HomeCardDensity.small : HomeCardDensity.medium,
       badge: '未绑定',
       onTap: onTap,
-      compact: compact,
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [

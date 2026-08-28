@@ -14,6 +14,17 @@ from urllib.parse import urljoin
 NOTICE_PREFIX_PATTERNS = [re.compile(p) for p in [r'【[^】]*】', r'\d{4}[-/.年]\d{1,2}[-/.月]\d{1,2}日?']]
 DATE_PATTERN = re.compile(r'\d{4}[-/.年]\d{1,2}[-/.月]\d{1,2}日?')
 HTML_URL_PATTERN = re.compile(r"['\"]([^'\"]+\.html(?:\?[^'\"]*)?)['\"]")
+_NON_NOTICE_TITLES = {
+    "更多",
+    "通知公告",
+    "当前角色消息",
+    "其他角色消息",
+    "待阅事宜",
+    "已阅事宜",
+    "名称",
+    "待办事宜",
+    "已办事宜",
+}
 
 @dataclass
 class HtmlNode:
@@ -196,10 +207,10 @@ def parse_html(html: str) -> HtmlNode:
     return parser.root
 
 def extract_notice_items_from_node(node: HtmlNode, page_url: str, category: str) -> list[dict]:
-    items = []
+    items: list[dict] = []
     seen: set[tuple[str, str]] = set()
     for link in iter_nodes(node):
-        if link.tag != "a":
+        if link.tag != "a" or not is_notice_link(link):
             continue
         attr_title = clean_text(link.attrs.get("title") or "")
         text_title = clean_text(strip_notice_prefixes(text_content(link) or ""))
@@ -228,44 +239,18 @@ def extract_notice_items_from_node(node: HtmlNode, page_url: str, category: str)
                 "date": date,
                 "url": absolute_url,
                 "summary": notice_summary(row_text, title, date),
+                "source": "jwxt",
             }
         )
-    for table in iter_nodes(node):
-        if table.tag != "table":
-            continue
-        for link in iter_nodes(table):
-            if link.tag != "a":
-                continue
-            attr_title = clean_text(link.attrs.get("title") or "")
-            text_title = clean_text(strip_notice_prefixes(text_content(link) or ""))
-            title = attr_title or text_title
-            if not is_notice_title(title):
-                continue
-            href = link.attrs.get("href", "")
-            normalized_href = href.strip().lower()
-            if (
-                not normalized_href
-                or normalized_href == "#"
-                or normalized_href.startswith("javascript:")
-            ):
-                continue
-            absolute_url = urljoin(page_url, href)
-            row_text = clean_text(text_content(record_container(link)) or title)
-            date = extract_date(row_text)
-            key = (title, absolute_url or "")
-            if key in seen:
-                continue
-            seen.add(key)
-            items.append(
-                {
-                    "category": category,
-                    "title": title,
-                    "date": date,
-                    "url": absolute_url,
-                    "summary": notice_summary(row_text, title, date),
-                }
-            )
     return items
+
+
+def is_notice_link(link: HtmlNode) -> bool:
+    """排除栏目标题、表头和导航链接，只保留通知记录中的链接。"""
+    if any(ancestor.tag in {"h1", "h2", "h3", "h4", "h5", "h6", "th", "nav"} for ancestor in ancestors(link)):
+        return False
+    title = clean_text(strip_notice_prefixes(text_content(link) or ""))
+    return title not in _NON_NOTICE_TITLES
 
 def is_notice_section(node: HtmlNode) -> bool:
     marker = " ".join(
@@ -357,7 +342,7 @@ def strip_notice_prefixes(value: str) -> str:
     return value.strip()
 
 def is_notice_title(title: str) -> bool:
-    if not title or title in {"更多", "more", "MORE"}:
+    if not title or title in _NON_NOTICE_TITLES or title.lower() == "more":
         return False
     return len(title) >= 2
 

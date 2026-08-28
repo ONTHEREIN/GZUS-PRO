@@ -741,7 +741,8 @@ class ApiClient {
   Future<DataResult<StudentInfo>> me({bool forceRefresh = false}) =>
       _cacheFirstObject<StudentInfo>(
         cacheKey: 'me',
-        fetch: () => _plainObject(_get('/me')),
+        fetch: () =>
+            _plainObject(_get('/me${forceRefresh ? '?refresh=true' : ''}')),
         fromJson: (json) => StudentInfo.fromJson(json),
         forceRefresh: forceRefresh,
       );
@@ -842,16 +843,21 @@ class ApiClient {
     required Future<List<Map<String, dynamic>>> Function(SchoolDirectClient)
         direct,
   }) async {
-    final client = _schoolDirectClient();
-    if (client != null) {
+    try {
+      return await _getList(path);
+    } catch (error, stackTrace) {
+      if (!_isApiUnavailable(error)) {
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      final client = _schoolDirectClient();
+      if (client == null) Error.throwWithStackTrace(error, stackTrace);
       try {
         final data = await direct(client);
-        if (data.isNotEmpty || path != '/credits') return data;
+        return data;
       } catch (_) {
-        // Direct school access is best-effort; keep existing API fallback.
+        Error.throwWithStackTrace(error, stackTrace);
       }
     }
-    return _getList(path);
   }
 
   Future<_Fetched<List<Map<String, dynamic>>>> _academicListOrDirect({
@@ -925,7 +931,8 @@ class ApiClient {
     return _cacheFirstList<ScheduleCourse>(
       cacheKey: cacheKey,
       fetch: () => _plainList(_schoolDirectListOrApi(
-        path: '/schedule?year=$year&term=$term',
+        path:
+            '/schedule?year=$year&term=$term${forceRefresh ? '&refresh=true' : ''}',
         direct: (client) => client.schedule(year: year, term: term),
       )),
       fromJson: (json) => ScheduleCourse.fromJson(json),
@@ -946,7 +953,8 @@ class ApiClient {
       _cacheFirstList<ExamItem>(
         cacheKey: 'exams_${year}_$term',
         fetch: () => _academicListOrDirect(
-          path: '/exams?year=$year&term=$term',
+          path:
+              '/exams?year=$year&term=$term${forceRefresh ? '&refresh=true' : ''}',
           direct: (client) => client.exams(year: year, term: term),
         ),
         fromJson: (json) => ExamItem.fromJson(json),
@@ -958,7 +966,8 @@ class ApiClient {
       _cacheFirstList<GradeItem>(
         cacheKey: 'grades_${year}_$term',
         fetch: () => _plainList(_schoolDirectListOrApi(
-          path: '/grades?year=$year&term=$term',
+          path:
+              '/grades?year=$year&term=$term${forceRefresh ? '&refresh=true' : ''}',
           direct: (client) => client.grades(year: year, term: term),
         )),
         fromJson: (json) => GradeItem.fromJson(json),
@@ -970,7 +979,8 @@ class ApiClient {
       _cacheFirstObject<AttendanceResponse>(
         cacheKey: 'attendance_${year}_$term',
         fetch: () => _academicObjectOrDirect(
-          path: '/attendance?year=$year&term=$term',
+          path:
+              '/attendance?year=$year&term=$term${forceRefresh ? '&refresh=true' : ''}',
           direct: (client) => client.attendance(year: year, term: term),
         ),
         fromJson: (json) => AttendanceResponse.fromJson(json),
@@ -1008,7 +1018,7 @@ class ApiClient {
       _cacheFirstList<CreditItem>(
         cacheKey: 'credits',
         fetch: () => _plainList(_schoolDirectListOrApi(
-          path: '/credits',
+          path: '/credits${forceRefresh ? '?refresh=true' : ''}',
           direct: (client) => client.credits(),
         )),
         fromJson: (json) => CreditItem.fromJson(json),
@@ -1149,7 +1159,7 @@ class ApiClient {
     final result = await _cacheFirstObject<DashboardSnapshot>(
       cacheKey: 'dashboard_${year}_${term}_$week',
       fetch: () => _plainObject(_getDashboardObject(
-        '/dashboard?year=$year&term=$term&week=$week',
+        '/dashboard?year=$year&term=$term&week=$week${forceRefresh ? '&refresh=true' : ''}',
       )),
       fromJson: (json) => DashboardSnapshot.fromJson(json),
       forceRefresh: forceRefresh,
@@ -1201,7 +1211,9 @@ class ApiClient {
       {bool forceRefresh = false}) async {
     final result = await _cacheFirstList<NoticeItem>(
       cacheKey: 'notices',
-      fetch: () => _plainList(_getList('/notices')),
+      fetch: () => _plainList(
+        _getList('/notices${forceRefresh ? '?refresh=true' : ''}'),
+      ),
       fromJson: (json) => NoticeItem.fromJson(json),
       forceRefresh: forceRefresh,
       memoryTtl: const Duration(minutes: 2),

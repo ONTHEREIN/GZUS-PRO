@@ -7,60 +7,71 @@ import '../../home/cards/schedule_helpers.dart';
 
 /// 今日时间线卡片：大/中/小三种信息密度。
 class TodayTimelineLargeCard extends StatelessWidget {
-  const TodayTimelineLargeCard({required this.courses, super.key});
+  const TodayTimelineLargeCard({
+    required this.courses,
+    required this.onTap,
+    super.key,
+  });
 
   final List<TimedCourse> courses;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     return HomeCardShell(
       title: '今日时间线',
       icon: Icons.view_timeline,
+      density: HomeCardDensity.large,
       badge: '${courses.length} 节',
+      onTap: onTap,
       child: courses.isEmpty
           ? const EmptyState(message: '今日无课')
-          : SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  for (final item in courses) _TimelineRow(course: item),
-                ],
-              ),
+          : Column(
+              children: [
+                for (final item in courses.take(3)) _TimelineRow(course: item),
+              ],
             ),
     );
   }
 }
 
 class TodayTimelineMediumCard extends StatelessWidget {
-  const TodayTimelineMediumCard({required this.courses, super.key});
+  const TodayTimelineMediumCard({
+    required this.courses,
+    required this.onTap,
+    super.key,
+  });
 
   final List<TimedCourse> courses;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     return HomeCardShell(
       title: '今日时间线',
       icon: Icons.view_timeline,
+      density: HomeCardDensity.medium,
       badge: '${courses.length} 节',
+      onTap: onTap,
       child: courses.isEmpty
           ? const EmptyState(message: '今日无课')
-          : SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  for (final item in courses.take(4))
-                    _TimelineRow(course: item, compact: true),
-                ],
-              ),
+          : Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [_TimelineRow(course: courses.first, compact: true)],
             ),
     );
   }
 }
 
 class TodayTimelineSmallCard extends StatelessWidget {
-  const TodayTimelineSmallCard({required this.courses, super.key});
+  const TodayTimelineSmallCard({
+    required this.courses,
+    required this.onTap,
+    super.key,
+  });
 
   final List<TimedCourse> courses;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -68,8 +79,9 @@ class TodayTimelineSmallCard extends StatelessWidget {
     return HomeCardShell(
       title: '今日课程',
       icon: Icons.view_timeline,
+      density: HomeCardDensity.small,
       badge: courses.isEmpty ? '0' : '${courses.length} 节',
-      compact: true,
+      onTap: onTap,
       child: courses.isEmpty
           ? Center(
               child: Text('今日无课',
@@ -77,7 +89,7 @@ class TodayTimelineSmallCard extends StatelessWidget {
           : Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                for (final item in courses.take(2))
+                for (final item in courses.take(1))
                   Padding(
                     padding: const EdgeInsets.only(bottom: 6),
                     child: Row(

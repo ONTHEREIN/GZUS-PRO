@@ -25,6 +25,7 @@ class BusinessProgressLargeCard extends StatelessWidget {
     return HomeCardShell(
       title: '业务进度',
       icon: Icons.route,
+      density: HomeCardDensity.large,
       badge: '$total 项',
       onTap: onTap,
       child: Column(
@@ -35,14 +36,10 @@ class BusinessProgressLargeCard extends StatelessWidget {
           if (items.isEmpty)
             const EmptyState(message: '暂无业务进度')
           else
-            Expanded(
-              child: SingleChildScrollView(
-                child: Column(
-                  children: [
-                    for (final item in items) ProgressMiniRow(item: item),
-                  ],
-                ),
-              ),
+            Column(
+              children: [
+                for (final item in items.take(3)) ProgressMiniRow(item: item),
+              ],
             ),
         ],
       ),
@@ -67,6 +64,7 @@ class BusinessProgressMediumCard extends StatelessWidget {
     return HomeCardShell(
       title: '业务进度',
       icon: Icons.route,
+      density: HomeCardDensity.medium,
       badge: '$total 项',
       onTap: onTap,
       child: Column(
@@ -103,9 +101,9 @@ class BusinessProgressSmallCard extends StatelessWidget {
     return HomeCardShell(
       title: '业务',
       icon: Icons.route,
+      density: HomeCardDensity.small,
       badge: '$total 项',
       onTap: onTap,
-      compact: true,
       child: first == null
           ? const Center(child: Text('暂无进度'))
           : Column(

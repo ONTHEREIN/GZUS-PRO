@@ -755,6 +755,8 @@ def list_published_admin_notices() -> list[dict]:
                 "url": None,
                 "summary": row.description,
                 "coverUrl": f"/admin/notices/{row.id}/image" if row.image_data else None,
+                "source": "admin",
+                "isPinned": row.is_pinned,
             }
             for row in rows
         ]

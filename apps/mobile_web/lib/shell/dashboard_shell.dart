@@ -129,6 +129,9 @@ class _DashboardShellState extends State<DashboardShell> {
   String? _highlightCourse;
   String? _overrideTabId;
   final List<String> _tabHistory = [];
+  String? _exitingTabId;
+  Offset _tabExitOffset = Offset.zero;
+  Timer? _tabTransitionTimer;
   int? _iosBackGesturePointer;
   Offset? _iosBackGestureStart;
   DateTime? _lastBackTime;
@@ -177,6 +180,7 @@ class _DashboardShellState extends State<DashboardShell> {
     LiveActivityController.instance.onOpen = null;
     _navBarVisible.dispose();
     _homeHeaderScrollProgress.dispose();
+    _tabTransitionTimer?.cancel();
     super.dispose();
   }
 
@@ -202,8 +206,9 @@ class _DashboardShellState extends State<DashboardShell> {
     return false;
   }
 
-  double _mobileContentBottomInset(BuildContext context, bool navBarVisible) {
-    if (!navBarVisible) return _mobileContentBottomGap;
+  double _mobileContentBottomInset(BuildContext context) {
+    // 底栏隐藏时仍保留内容安全区。若随隐藏动画缩放内容区，页面会在动画期间
+    // 露出 Scaffold 底色，并可能短暂遮挡滚动内容。
     return MediaQuery.paddingOf(context).bottom +
         _mobileNavBarHeight +
         GzusSpacing.s +
@@ -352,42 +357,30 @@ class _DashboardShellState extends State<DashboardShell> {
                             },
                           ),
                         Expanded(
-                          child: ValueListenableBuilder<bool>(
-                            valueListenable: _navBarVisible,
-                            builder: (context, visible, _) {
-                              final navBarVisible = !_autoHideNavBar || visible;
-                              return NotificationListener<ScrollNotification>(
-                                onNotification: _onScrollNotification,
-                                child: AnimatedPadding(
-                                  duration: const Duration(milliseconds: 200),
-                                  curve: Curves.easeInOut,
-                                  padding: EdgeInsets.fromLTRB(
-                                    GzusInsets.contentGutter(context),
-                                    8,
-                                    GzusInsets.contentGutter(context),
-                                    _mobileContentBottomInset(
-                                      context,
-                                      navBarVisible,
-                                    ),
+                          child: NotificationListener<ScrollNotification>(
+                            onNotification: _onScrollNotification,
+                            child: Padding(
+                              padding: EdgeInsets.fromLTRB(
+                                GzusInsets.contentGutter(context),
+                                8,
+                                GzusInsets.contentGutter(context),
+                                _mobileContentBottomInset(context),
+                              ),
+                              child: Theme(
+                                data: Theme.of(context).copyWith(
+                                  scaffoldBackgroundColor: Colors.transparent,
+                                ),
+                                child: KeyedSubtree(
+                                  key: const ValueKey(
+                                    'mobile-dashboard-content',
                                   ),
-                                  child: Theme(
-                                    data: Theme.of(context).copyWith(
-                                      scaffoldBackgroundColor:
-                                          Colors.transparent,
-                                    ),
-                                    child: KeyedSubtree(
-                                      key: const ValueKey(
-                                        'mobile-dashboard-content',
-                                      ),
-                                      child: _CenteredPage(
-                                        maxWidth: 720,
-                                        child: _buildPageStack(activeTabId),
-                                      ),
-                                    ),
+                                  child: _CenteredPage(
+                                    maxWidth: 720,
+                                    child: _buildPageStack(activeTabId),
                                   ),
                                 ),
-                              );
-                            },
+                              ),
+                            ),
                           ),
                         ),
                       ],
@@ -513,17 +506,30 @@ class _DashboardShellState extends State<DashboardShell> {
         .toList();
   }
 
-  /// 惰性保活页面栈：页面首次激活时才构建，之后常驻 IndexedStack 不销毁；
-  /// 切换 Tab 只换 index，激活的子页淡入。
+  /// 惰性保活页面栈：页面首次激活时才构建，之后常驻 Stack 不销毁。
+  /// 返回历史页面时，当前页会横向退出，露出下方已保活的前页。
   Widget _buildPageStack(String? activeTabId) {
     if (activeTabId == null) return const SizedBox.shrink();
     _retainTab(activeTabId);
-    final children = <Widget>[
-      for (final tabId in _residentTabs)
-        _pageSlot(tabId, active: tabId == activeTabId),
+    final pageOrder = <String>[
+      for (final tabId in _residentTabs.where(
+        (tabId) => tabId != activeTabId && tabId != _exitingTabId,
+      ))
+        tabId,
+      activeTabId,
+      if (_exitingTabId != null && _exitingTabId != activeTabId) _exitingTabId!,
     ];
-    final activeIndex = _residentTabs.indexOf(activeTabId);
-    return IndexedStack(index: activeIndex, children: children);
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        for (final tabId in pageOrder)
+          _pageSlot(
+            tabId,
+            active: tabId == activeTabId,
+            exiting: tabId == _exitingTabId,
+          ),
+      ],
+    );
   }
 
   /// 保留当前和最近访问的少量页面，限制重页面、定时器和滚动树无限累积。
@@ -531,7 +537,10 @@ class _DashboardShellState extends State<DashboardShell> {
     _residentTabs.remove(tabId);
     _residentTabs.add(tabId);
     while (_residentTabs.length > _maxResidentTabPages) {
-      final evictedTabId = _residentTabs.removeAt(0);
+      final evictedIndex = _residentTabs.indexWhere(
+        (residentTabId) => residentTabId != _exitingTabId,
+      );
+      final evictedTabId = _residentTabs.removeAt(evictedIndex);
       _pageCache.remove(evictedTabId);
       _pageKeys.remove(evictedTabId);
       _pageGen.remove(evictedTabId);
@@ -542,7 +551,11 @@ class _DashboardShellState extends State<DashboardShell> {
 
   /// 单个页面的保活槽位：未访问时用占位符，访问后缓存页面实例；
   /// GlobalKey 保证参数变化重建 widget 实例时 State 不销毁。
-  Widget _pageSlot(String tabId, {required bool active}) {
+  Widget _pageSlot(
+    String tabId, {
+    required bool active,
+    required bool exiting,
+  }) {
     final key = _pageKeys.putIfAbsent(
         tabId, () => GlobalKey(debugLabel: 'page-$tabId'));
     final Widget child;
@@ -552,15 +565,26 @@ class _DashboardShellState extends State<DashboardShell> {
     } else {
       child = const SizedBox.shrink();
     }
-    return KeyedSubtree(
-      key: key,
-      child: TickerMode(
-        enabled: active,
-        child: AnimatedOpacity(
-          opacity: active ? 1 : 0,
-          duration: const Duration(milliseconds: 250),
-          curve: Curves.easeOutCubic,
-          child: child,
+    final visible = active || exiting;
+    return Positioned.fill(
+      child: IgnorePointer(
+        ignoring: !active,
+        child: KeyedSubtree(
+          key: key,
+          child: TickerMode(
+            enabled: visible,
+            child: AnimatedSlide(
+              offset: exiting ? _tabExitOffset : Offset.zero,
+              duration: GzusDurations.normal,
+              curve: GzusCurves.standard,
+              child: AnimatedOpacity(
+                opacity: visible ? 1 : 0,
+                duration: GzusDurations.normal,
+                curve: GzusCurves.exit,
+                child: child,
+              ),
+            ),
+          ),
         ),
       ),
     );
@@ -722,6 +746,7 @@ class _DashboardShellState extends State<DashboardShell> {
     final activeTabId = _activeTabId;
     if (activeTabId == tabId) return;
     _recordTabHistory(activeTabId);
+    _startTabExit(activeTabId, isBackNavigation: false);
     _activateTab(tabId);
     final idx = _navBarTabs.indexWhere((t) => t.tabId == tabId);
     if (idx >= 0) {
@@ -800,7 +825,9 @@ class _DashboardShellState extends State<DashboardShell> {
 
   bool _goBackInTabHistory() {
     if (_tabHistory.isEmpty) return false;
+    final activeTabId = _activeTabId;
     final tabId = _tabHistory.removeLast();
+    _startTabExit(activeTabId, isBackNavigation: true);
     _activateTab(tabId);
     final idx = _navBarTabs.indexWhere((tab) => tab.tabId == tabId);
     _navBarVisible.value = true;
@@ -809,6 +836,22 @@ class _DashboardShellState extends State<DashboardShell> {
       _overrideTabId = idx >= 0 ? null : tabId;
     });
     return true;
+  }
+
+  void _startTabExit(
+    String? tabId, {
+    required bool isBackNavigation,
+  }) {
+    _tabTransitionTimer?.cancel();
+    _exitingTabId = tabId;
+    _tabExitOffset = Offset(isBackNavigation ? 0.16 : -0.16, 0);
+    _tabTransitionTimer = Timer(GzusDurations.normal, () {
+      if (!mounted) return;
+      setState(() {
+        _exitingTabId = null;
+        _tabExitOffset = Offset.zero;
+      });
+    });
   }
 
   Future<void> _consumeWidgetLaunch() async {

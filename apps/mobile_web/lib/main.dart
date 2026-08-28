@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'api_client.dart';
 import 'app_providers.dart';
 import 'gzus_design.dart';
+import 'gzus_motion.dart';
 import 'responsive/spacing.dart';
 import 'schedule_utils.dart';
 import 'services_deferred.dart';

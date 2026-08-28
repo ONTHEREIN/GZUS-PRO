@@ -475,7 +475,7 @@ def test_no_cache_returns_502():
         assert resp.json()["detail"] == "学校教务系统暂时不可用（上游 HTTP 502），请稍后重试"
 
 
-def test_401_not_cached():
+def test_force_refresh_does_not_mask_authentication_error():
     app = create_app()
     with TestClient(app) as client:
         ok_session = app.state.sessions.create(FakeClient(), "测试学生")
@@ -486,5 +486,68 @@ def test_401_not_cached():
         auth_fail_session = app.state.sessions.create(AuthFailClient(), "测试学生")
         auth_headers = {"X-Session-Id": auth_fail_session.id}
 
-        resp = client.get("/schedule", headers=auth_headers)
+        resp = client.get("/schedule?refresh=true", headers=auth_headers)
         assert resp.status_code == 401
+
+
+class CountingClient(FakeClient):
+    def __init__(self):
+        self.schedule_calls = 0
+        self.grade_calls = 0
+        self.notice_calls = 0
+
+    def get_schedule(self, year, term):
+        self.schedule_calls += 1
+        return super().get_schedule(year, term)
+
+    def get_grades(self, year, term):
+        self.grade_calls += 1
+        return super().get_grades(year, term)
+
+    def get_notices(self):
+        self.notice_calls += 1
+        return super().get_notices()
+
+
+def test_fresh_cache_avoids_repeat_school_requests():
+    app = create_app()
+    upstream = CountingClient()
+    session = app.state.sessions.create(upstream, "测试学生")
+    headers = {"X-Session-Id": session.id}
+    client = TestClient(app)
+
+    client.get("/schedule?year=2025&term=2", headers=headers)
+    cached_schedule = client.get("/schedule?year=2025&term=2", headers=headers)
+    client.get("/grades?year=2025&term=2", headers=headers)
+    cached_grades = client.get("/grades?year=2025&term=2", headers=headers)
+    client.get("/notices", headers=headers)
+    cached_notices = client.get("/notices", headers=headers)
+
+    assert upstream.schedule_calls == 1
+    assert upstream.grade_calls == 1
+    assert upstream.notice_calls == 1
+    assert cached_schedule.headers["X-Data-Source"] == "cache"
+    assert cached_schedule.headers["X-Data-Cached-At"]
+    assert cached_grades.headers["X-Data-Source"] == "cache"
+    assert cached_notices.headers["X-Data-Source"] == "cache"
+
+
+def test_dashboard_reuses_fresh_module_caches_and_refreshes_on_demand():
+    app = create_app()
+    upstream = CountingClient()
+    session = app.state.sessions.create(upstream, "测试学生")
+    headers = {"X-Session-Id": session.id}
+    client = TestClient(app)
+
+    client.get("/dashboard?year=2025&term=2&week=3", headers=headers)
+    cached = client.get("/dashboard?year=2025&term=2&week=3", headers=headers)
+
+    assert upstream.schedule_calls == 1
+    assert upstream.grade_calls == 1
+    assert upstream.notice_calls == 1
+    assert cached.json()["modules"]["schedule"]["source"] == "cache"
+
+    client.get("/dashboard?year=2025&term=2&week=3&refresh=true", headers=headers)
+    assert upstream.schedule_calls == 2
+    assert upstream.grade_calls == 2
+    assert upstream.notice_calls == 2

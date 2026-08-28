@@ -7,44 +7,50 @@ import '../../../widgets/scale_tap.dart';
 /// 首页模块卡片基础容器。
 ///
 /// 所有大/中/小模块统一使用该容器，仅在内部内容上区分信息密度。
+enum HomeCardDensity {
+  large,
+  medium,
+  small,
+}
+
 class HomeCardShell extends StatelessWidget {
   const HomeCardShell({
     required this.title,
     required this.icon,
     required this.child,
+    required this.density,
     this.badge,
     this.onTap,
-    this.compact = false,
     super.key,
   });
 
   final String title;
   final IconData icon;
   final Widget child;
+  final HomeCardDensity density;
   final String? badge;
   final VoidCallback? onTap;
-
-  /// 小模块使用更紧凑的标题栏。
-  final bool compact;
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final accentSoft = GzusColors.softColorOf(cs.primary);
 
-    final iconSize = compact ? 16.0 : 19.0;
-    final iconBoxSize = compact ? 28.0 : 34.0;
-    final iconBoxRadius = compact ? 10.0 : 12.0;
-    final titleStyle = compact
+    final isSmall = density == HomeCardDensity.small;
+    final isLarge = density == HomeCardDensity.large;
+    final iconSize = isSmall ? 16.0 : 19.0;
+    final iconBoxSize = isSmall ? 28.0 : 34.0;
+    final iconBoxRadius = isSmall ? 10.0 : 12.0;
+    final titleStyle = isSmall
         ? Theme.of(context).textTheme.titleSmall?.copyWith(
               fontWeight: FontWeight.w700,
             )
         : GzusTextStyles.moduleTitle(context);
-    final headerSpacing = compact ? 10.0 : 14.0;
-    final padding = compact
+    final headerSpacing = isSmall ? 8.0 : (isLarge ? 14.0 : 10.0);
+    final padding = isSmall
         ? const EdgeInsets.all(GzusSpacing.m)
-        : const EdgeInsets.all(GzusSpacing.l);
-    final badgePadding = compact
+        : EdgeInsets.all(isLarge ? GzusSpacing.l : GzusSpacing.m);
+    final badgePadding = isSmall
         ? const EdgeInsets.symmetric(horizontal: 6, vertical: 2)
         : const EdgeInsets.symmetric(horizontal: 8, vertical: 3);
 
@@ -72,7 +78,7 @@ class HomeCardShell extends StatelessWidget {
                   ),
                   child: Icon(icon, size: iconSize, color: cs.primary),
                 ),
-                SizedBox(width: compact ? 8 : 10),
+                SizedBox(width: isSmall ? 8 : 10),
                 Expanded(
                   child: Text(
                     title,
@@ -92,7 +98,7 @@ class HomeCardShell extends StatelessWidget {
                       badge!,
                       style: TextStyle(
                         color: cs.primary,
-                        fontSize: compact ? 10 : 11,
+                        fontSize: isSmall ? 10 : 11,
                         fontWeight: FontWeight.w600,
                       ),
                     ),

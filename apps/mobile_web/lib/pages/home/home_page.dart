@@ -540,7 +540,7 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
                     id: id,
                     size: size,
                     child: SizedBox(
-                      height: _moduleHeight(size),
+                      height: _moduleHeight(size, breakpoint),
                       child: _homeModuleFor(id, size),
                     ),
                   );
@@ -552,6 +552,7 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
                       children: _buildHomeBentoGrid(
                         items: items,
                         spacing: spacing,
+                        compact: breakpoint == GzusBreakpoint.compact,
                       ),
                     );
                 return RefreshIndicator(
@@ -614,12 +615,27 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
     };
   }
 
-  double _moduleHeight(HomeModuleSize size) {
+  double _moduleHeight(HomeModuleSize size, GzusBreakpoint breakpoint) {
+    if (breakpoint == GzusBreakpoint.compact) {
+      return switch (size) {
+        HomeModuleSize.large => 288,
+        HomeModuleSize.medium => 280,
+        HomeModuleSize.small => 144,
+      };
+    }
     return _kSmallRowHeight * _rowSpanFor(size);
   }
 
   HomeModuleSize _sizeFor(String id) {
     return _moduleSizes[id] ?? HomePreferences.configFor(id).size;
+  }
+
+  HomeCardDensity _cardDensity(HomeModuleSize size) {
+    return switch (size) {
+      HomeModuleSize.large => HomeCardDensity.large,
+      HomeModuleSize.medium => HomeCardDensity.medium,
+      HomeModuleSize.small => HomeCardDensity.small,
+    };
   }
 
   Widget _homeModuleFor(String id, HomeModuleSize size) {
@@ -630,7 +646,8 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
           onRetry: _retryDashboard,
           title: '下一节课',
           icon: Icons.watch_later,
-          minHeight: _moduleHeight(size),
+          density: _cardDensity(size),
+          minHeight: _moduleHeight(size, context.gzusBreakpoint),
           builder: (data) {
             final timedCourses = homeTimedCourses(
               data.items,
@@ -664,7 +681,8 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
           onRetry: _retryDashboard,
           title: '今日时间线',
           icon: Icons.view_timeline,
-          minHeight: _moduleHeight(size),
+          density: _cardDensity(size),
+          minHeight: _moduleHeight(size, context.gzusBreakpoint),
           builder: (data) {
             final timedCourses = homeTimedCourses(
               data.items,
@@ -672,17 +690,21 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
               firstWeekStart: widget.firstWeekStart,
             );
             final courses = todayTimedCourses(timedCourses);
+            void onTap() => widget.onNavigate('schedule');
             return switch (size) {
               HomeModuleSize.large => TodayTimelineLargeCard(
                   courses: courses,
+                  onTap: onTap,
                   key: const ValueKey('todayTimeline-large'),
                 ),
               HomeModuleSize.medium => TodayTimelineMediumCard(
                   courses: courses,
+                  onTap: onTap,
                   key: const ValueKey('todayTimeline-medium'),
                 ),
               HomeModuleSize.small => TodayTimelineSmallCard(
                   courses: courses,
+                  onTap: onTap,
                   key: const ValueKey('todayTimeline-small'),
                 ),
             };
@@ -694,22 +716,27 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
           onRetry: _retryDashboard,
           title: '周课表',
           icon: Icons.grid_view,
-          minHeight: _moduleHeight(size),
+          density: _cardDensity(size),
+          minHeight: _moduleHeight(size, context.gzusBreakpoint),
           builder: (data) {
             final courses = data.items
                 .where((item) => item.occursInWeek(widget.currentWeek))
                 .toList();
+            void onTap() => widget.onNavigate('schedule');
             return switch (size) {
               HomeModuleSize.large => WeekGridLargeCard(
                   courses: courses,
+                  onTap: onTap,
                   key: const ValueKey('weekGrid-large'),
                 ),
               HomeModuleSize.medium => WeekGridMediumCard(
                   courses: courses,
+                  onTap: onTap,
                   key: const ValueKey('weekGrid-medium'),
                 ),
               HomeModuleSize.small => WeekGridSmallCard(
                   courses: courses,
+                  onTap: onTap,
                   key: const ValueKey('weekGrid-small'),
                 ),
             };
@@ -721,7 +748,8 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
           onRetry: _retryDashboard,
           title: '今日课程',
           icon: Icons.format_list_bulleted,
-          minHeight: _moduleHeight(size),
+          density: _cardDensity(size),
+          minHeight: _moduleHeight(size, context.gzusBreakpoint),
           builder: (data) {
             final timedCourses = homeTimedCourses(
               data.items,
@@ -729,17 +757,21 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
               firstWeekStart: widget.firstWeekStart,
             );
             final courses = todayTimedCourses(timedCourses);
+            void onTap() => widget.onNavigate('schedule');
             return switch (size) {
               HomeModuleSize.large => DailyCoursesLargeCard(
                   courses: courses,
+                  onTap: onTap,
                   key: const ValueKey('dailyCourses-large'),
                 ),
               HomeModuleSize.medium => DailyCoursesMediumCard(
                   courses: courses,
+                  onTap: onTap,
                   key: const ValueKey('dailyCourses-medium'),
                 ),
               HomeModuleSize.small => DailyCoursesSmallCard(
                   courses: courses,
+                  onTap: onTap,
                   key: const ValueKey('dailyCourses-small'),
                 ),
             };
@@ -752,7 +784,8 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
           onRetry: _retryDashboard,
           title: '水电费余额',
           icon: Icons.water_drop,
-          minHeight: _moduleHeight(size),
+          density: _cardDensity(size),
+          minHeight: _moduleHeight(size, context.gzusBreakpoint),
           builder: (data) {
             void onTap() => widget.onNavigate('ecard');
             return switch (size) {
@@ -780,7 +813,8 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
           onRetry: _retryDashboard,
           title: '业务进度',
           icon: Icons.route,
-          minHeight: _moduleHeight(size),
+          density: _cardDensity(size),
+          minHeight: _moduleHeight(size, context.gzusBreakpoint),
           builder: (data) {
             void onTap() => widget.onNavigate('business');
             return switch (size) {
@@ -808,7 +842,8 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
           onRetry: _retryDashboard,
           title: '最新通知',
           icon: Icons.notifications_active,
-          minHeight: _moduleHeight(size),
+          density: _cardDensity(size),
+          minHeight: _moduleHeight(size, context.gzusBreakpoint),
           builder: (data) {
             void onTap() => widget.onNavigate('notices');
             return switch (size) {
@@ -836,7 +871,8 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
           onRetry: _retryDashboard,
           title: '本月考勤统计',
           icon: Icons.fact_check,
-          minHeight: _moduleHeight(size),
+          density: _cardDensity(size),
+          minHeight: _moduleHeight(size, context.gzusBreakpoint),
           builder: (data) {
             void onTap() => widget.onNavigate('attendance');
             return switch (size) {
@@ -864,7 +900,8 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
           onRetry: _retryDashboard,
           title: '学分进度',
           icon: Icons.workspace_premium,
-          minHeight: _moduleHeight(size),
+          density: _cardDensity(size),
+          minHeight: _moduleHeight(size, context.gzusBreakpoint),
           builder: (data) {
             void onTap() => widget.onNavigate('credits');
             return switch (size) {
@@ -892,8 +929,9 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
           onRetry: _retryDashboard,
           title: '今日天气',
           icon: Icons.wb_sunny,
+          density: _cardDensity(size),
           allowNull: true,
-          minHeight: _moduleHeight(size),
+          minHeight: _moduleHeight(size, context.gzusBreakpoint),
           builder: (data) => switch (size) {
             HomeModuleSize.large => WeatherLargeCard(
                 weather: data,
@@ -915,7 +953,8 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
           onRetry: _retryDashboard,
           title: '本学期成绩',
           icon: Icons.school,
-          minHeight: _moduleHeight(size),
+          density: _cardDensity(size),
+          minHeight: _moduleHeight(size, context.gzusBreakpoint),
           builder: (data) {
             void onTap() => widget.onNavigate('grades');
             return switch (size) {
@@ -943,7 +982,8 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
           onRetry: _retryDashboard,
           title: '考试倒计时',
           icon: Icons.timer,
-          minHeight: _moduleHeight(size),
+          density: _cardDensity(size),
+          minHeight: _moduleHeight(size, context.gzusBreakpoint),
           builder: (data) {
             void onTap() => widget.onNavigate('exams');
             return switch (size) {
@@ -971,7 +1011,8 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
           onRetry: _retryDashboard,
           title: '个人资料',
           icon: Icons.badge,
-          minHeight: _moduleHeight(size),
+          density: _cardDensity(size),
+          minHeight: _moduleHeight(size, context.gzusBreakpoint),
           builder: (data) {
             void onTap() => widget.onNavigate('info');
             return switch (size) {
@@ -999,7 +1040,8 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
           onRetry: _retryDashboard,
           title: '常用服务',
           icon: Icons.apps,
-          minHeight: _moduleHeight(size),
+          density: _cardDensity(size),
+          minHeight: _moduleHeight(size, context.gzusBreakpoint),
           builder: (data) {
             void onTap() => widget.onNavigate('applications');
             return switch (size) {
@@ -1227,7 +1269,9 @@ const double _kSmallRowHeight = 140;
 List<Widget> _buildHomeBentoGrid({
   required List<_HomeLayoutItem> items,
   required double spacing,
+  required bool compact,
 }) {
+  if (compact) return _buildCompactHomeGrid(items: items, spacing: spacing);
   final rows = <Widget>[];
   const columnCount = 2;
   final currentRow = <Widget>[];
@@ -1303,6 +1347,48 @@ List<Widget> _buildHomeBentoGrid({
   }
   result.add(const SizedBox(height: 24));
   return result;
+}
+
+List<Widget> _buildCompactHomeGrid({
+  required List<_HomeLayoutItem> items,
+  required double spacing,
+}) {
+  final rows = <Widget>[];
+  final pendingSmall = <_HomeLayoutItem>[];
+
+  void addRow(Widget child) {
+    if (rows.isNotEmpty) rows.add(SizedBox(height: spacing));
+    rows.add(child);
+  }
+
+  void flushSmall() {
+    if (pendingSmall.isEmpty) return;
+    final first = pendingSmall.removeAt(0);
+    final second = pendingSmall.isEmpty ? null : pendingSmall.removeAt(0);
+    addRow(
+      Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(child: first.child),
+          SizedBox(width: spacing),
+          Expanded(child: second?.child ?? const SizedBox.shrink()),
+        ],
+      ),
+    );
+  }
+
+  for (final item in items) {
+    if (item.size != HomeModuleSize.small) {
+      flushSmall();
+      addRow(item.child);
+      continue;
+    }
+    pendingSmall.add(item);
+    if (pendingSmall.length == 2) flushSmall();
+  }
+  flushSmall();
+  rows.add(const SizedBox(height: 24));
+  return rows;
 }
 
 String _two(int value) => value.toString().padLeft(2, '0');
@@ -1466,6 +1552,7 @@ class _AsyncModuleCard<T> extends StatefulWidget {
     required this.onRetry,
     required this.title,
     required this.icon,
+    required this.density,
     required this.builder,
     this.allowNull = false,
     this.minHeight = 196,
@@ -1475,6 +1562,7 @@ class _AsyncModuleCard<T> extends StatefulWidget {
   final VoidCallback onRetry;
   final String title;
   final IconData icon;
+  final HomeCardDensity density;
   final Widget Function(T data) builder;
   final bool allowNull;
   final double minHeight;
@@ -1499,6 +1587,7 @@ class _AsyncModuleCardState<T> extends State<_AsyncModuleCard<T>> {
           return HomeCardShell(
             title: widget.title,
             icon: widget.icon,
+            density: widget.density,
             child: const _ShimmerPlaceholder(),
           );
         }
@@ -1510,6 +1599,7 @@ class _AsyncModuleCardState<T> extends State<_AsyncModuleCard<T>> {
           return HomeCardShell(
             title: widget.title,
             icon: widget.icon,
+            density: widget.density,
             child: _AsyncModuleError(
               message: snapshot.error.toString(),
               onRetry: widget.onRetry,
@@ -1524,6 +1614,7 @@ class _AsyncModuleCardState<T> extends State<_AsyncModuleCard<T>> {
           return HomeCardShell(
             title: widget.title,
             icon: widget.icon,
+            density: widget.density,
             child: _AsyncModuleEmpty(icon: widget.icon),
           );
         }

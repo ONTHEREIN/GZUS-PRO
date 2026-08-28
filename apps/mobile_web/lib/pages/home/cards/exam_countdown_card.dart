@@ -13,7 +13,7 @@ class ExamCountdownLargeCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return _ExamCountdownCard(exams: exams, onTap: onTap, maxItems: 4);
+    return _ExamCountdownCard(exams: exams, onTap: onTap, maxItems: 3);
   }
 }
 
@@ -25,7 +25,7 @@ class ExamCountdownMediumCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return _ExamCountdownCard(exams: exams, onTap: onTap, maxItems: 2);
+    return _ExamCountdownCard(exams: exams, onTap: onTap, maxItems: 1);
   }
 }
 
@@ -44,9 +44,9 @@ class ExamCountdownSmallCard extends StatelessWidget {
     return HomeCardShell(
       title: '考试',
       icon: Icons.timer,
+      density: HomeCardDensity.small,
       badge: upcoming.isEmpty ? '0' : '${upcoming.length}',
       onTap: onTap,
-      compact: true,
       child: upcoming.isEmpty
           ? const Center(child: Text('暂无考试'))
           : Column(
@@ -99,6 +99,7 @@ class _ExamCountdownCard extends StatelessWidget {
     return HomeCardShell(
       title: '考试倒计时',
       icon: Icons.timer,
+      density: maxItems == 3 ? HomeCardDensity.large : HomeCardDensity.medium,
       badge: '期末',
       onTap: onTap,
       child: upcoming.isEmpty

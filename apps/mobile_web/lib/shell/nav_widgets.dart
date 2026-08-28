@@ -255,7 +255,7 @@ class AppSidebar extends StatelessWidget {
   }
 }
 
-class MobileNavBar extends StatelessWidget {
+class MobileNavBar extends StatefulWidget {
   const MobileNavBar({
     super.key,
     required this.tabs,
@@ -268,6 +268,59 @@ class MobileNavBar extends StatelessWidget {
   final int selected;
   final ValueChanged<int> onChanged;
   final bool visible;
+
+  @override
+  State<MobileNavBar> createState() => _MobileNavBarState();
+}
+
+class _MobileNavBarState extends State<MobileNavBar>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _visibilityController;
+  late final Animation<Offset> _visibilityOffset;
+  late final Animation<double> _visibilityOpacity;
+
+  @override
+  void initState() {
+    super.initState();
+    _visibilityController = AnimationController(
+      vsync: this,
+      value: widget.visible ? 1 : 0,
+      duration: const Duration(milliseconds: 280),
+      reverseDuration: const Duration(milliseconds: 180),
+    );
+    _visibilityOffset = Tween<Offset>(
+      begin: const Offset(0, 1),
+      end: Offset.zero,
+    ).animate(
+      CurvedAnimation(
+        parent: _visibilityController,
+        curve: Curves.easeOutCubic,
+        reverseCurve: Curves.easeInCubic,
+      ),
+    );
+    _visibilityOpacity = CurvedAnimation(
+      parent: _visibilityController,
+      curve: Curves.easeOut,
+      reverseCurve: Curves.easeIn,
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant MobileNavBar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.visible == widget.visible) return;
+    if (widget.visible) {
+      _visibilityController.forward();
+      return;
+    }
+    _visibilityController.reverse();
+  }
+
+  @override
+  void dispose() {
+    _visibilityController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -296,31 +349,34 @@ class MobileNavBar extends StatelessWidget {
                 : _mobileNavBarHeight,
             child: useNativeTabBar
                 ? NativeIosLiquidTabBar(
-                    tabs: tabs
+                    tabs: widget.tabs
                         .map((tab) => NativeLiquidTabBarItem(
                               title: tab.shortLabel,
                               systemImageName:
                                   _nativeSystemImageName(tab.tabId),
                             ))
                         .toList(growable: false),
-                    selected: selected,
-                    onChanged: onChanged,
+                    selected: widget.selected,
+                    onChanged: widget.onChanged,
                     tintColor: colorScheme.primary,
                   )
                 : _FlutterMobileNavBar(
-                    tabs: tabs,
-                    selected: selected,
-                    onChanged: onChanged,
+                    tabs: widget.tabs,
+                    selected: widget.selected,
+                    onChanged: widget.onChanged,
                     colorScheme: colorScheme,
                   ),
           ),
         );
-        return AnimatedSize(
-          duration: const Duration(milliseconds: 200),
-          curve: Curves.easeInOut,
-          alignment: Alignment.bottomCenter,
-          clipBehavior: Clip.hardEdge,
-          child: visible ? dock : const SizedBox.shrink(),
+        return IgnorePointer(
+          ignoring: !widget.visible,
+          child: FadeTransition(
+            opacity: _visibilityOpacity,
+            child: SlideTransition(
+              position: _visibilityOffset,
+              child: dock,
+            ),
+          ),
         );
       },
     );

@@ -39,44 +39,31 @@ class WeatherSmallCard extends StatelessWidget {
       return const HomeCardShell(
         title: '天气',
         icon: Icons.wb_sunny,
+        density: HomeCardDensity.small,
         badge: '--',
-        compact: true,
         child: Center(child: Text('加载失败')),
       );
     }
     return HomeCardShell(
       title: '天气',
       icon: Icons.wb_sunny,
-      badge: w.location,
-      compact: true,
-      child: Row(
+      density: HomeCardDensity.small,
+      badge: '${w.temperature.round()}°',
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(
-            _weatherIcon(w.weather),
-            size: 32,
-            color: _weatherColor(w.weather, context),
+          Text(
+            '${w.temperature.round()}°',
+            style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800),
           ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
-                  '${w.temperature.round()}°',
-                  style: const TextStyle(
-                      fontSize: 22, fontWeight: FontWeight.w800),
-                ),
-                Text(
-                  w.weather,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                    fontSize: 12,
-                  ),
-                ),
-              ],
+          Text(
+            w.weather,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+              fontSize: 12,
             ),
           ),
         ],
@@ -98,6 +85,7 @@ class _WeatherCard extends StatelessWidget {
       return const HomeCardShell(
         title: '今日天气',
         icon: Icons.wb_sunny,
+        density: HomeCardDensity.medium,
         badge: '--',
         child: Center(child: Text('天气数据加载失败')),
       );
@@ -108,6 +96,7 @@ class _WeatherCard extends StatelessWidget {
     return HomeCardShell(
       title: '今日天气',
       icon: Icons.wb_sunny,
+      density: showForecast ? HomeCardDensity.large : HomeCardDensity.medium,
       badge: w.location,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,

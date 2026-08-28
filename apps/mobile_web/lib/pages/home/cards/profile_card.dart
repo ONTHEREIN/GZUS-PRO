@@ -15,6 +15,7 @@ class ProfileLargeCard extends StatelessWidget {
     return HomeCardShell(
       title: '个人资料',
       icon: Icons.badge,
+      density: HomeCardDensity.large,
       badge: '已认证',
       onTap: onTap,
       child: Row(
@@ -58,6 +59,7 @@ class ProfileMediumCard extends StatelessWidget {
     return HomeCardShell(
       title: '个人资料',
       icon: Icons.badge,
+      density: HomeCardDensity.medium,
       badge: '已认证',
       onTap: onTap,
       child: Row(
@@ -100,8 +102,8 @@ class ProfileSmallCard extends StatelessWidget {
     return HomeCardShell(
       title: '资料',
       icon: Icons.badge,
+      density: HomeCardDensity.small,
       onTap: onTap,
-      compact: true,
       child: Row(
         children: [
           CircleAvatar(

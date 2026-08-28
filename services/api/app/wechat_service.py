@@ -394,6 +394,7 @@ def _row_to_notice(row: WxArticle) -> dict:
         "url": row.article_url,
         "summary": row.summary,
         "coverUrl": row.cover_url,
+        "source": "wechat",
     }
 
 

@@ -17,7 +17,7 @@ class AttendanceLargeCard extends StatelessWidget {
     return _AttendanceCard(
       data: data,
       onTap: onTap,
-      showAll: true,
+      showAll: false,
     );
   }
 }
@@ -48,26 +48,21 @@ class AttendanceSmallCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final normal = data.items.fold(0, (sum, item) => sum + item.normal);
-    final total = data.items.fold(
-        0,
-        (sum, item) =>
-            sum + item.normal + item.late + item.leaveEarly + item.absent);
+    final abnormal = data.items.fold(
+      0,
+      (sum, item) => sum + item.late + item.leaveEarly + item.absent,
+    );
     return HomeCardShell(
       title: '考勤',
       icon: Icons.fact_check,
+      density: HomeCardDensity.small,
       badge: '${data.items.length} 门',
       onTap: onTap,
-      compact: true,
       child: Center(
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            _AttendanceStatCompact('正常', normal, _normalColor(context)),
-            const SizedBox(width: 12),
-            _AttendanceStatCompact(
-                '总计', total, Theme.of(context).colorScheme.primary),
-          ],
+        child: _AttendanceStatCompact(
+          abnormal == 0 ? '本月无异常' : '异常记录',
+          abnormal,
+          abnormal == 0 ? _normalColor(context) : _absentColor(context),
         ),
       ),
     );
@@ -94,18 +89,33 @@ class _AttendanceCard extends StatelessWidget {
     return HomeCardShell(
       title: '本月考勤统计',
       icon: Icons.fact_check,
+      density: showAll ? HomeCardDensity.large : HomeCardDensity.medium,
       badge: '${data.items.length} 门',
       onTap: onTap,
       child: Row(
-        children: [
-          Expanded(
-              child: _AttendanceStatMini('正常', normal, _normalColor(context))),
-          Expanded(child: _AttendanceStatMini('迟到', late, _lateColor(context))),
-          Expanded(
-              child: _AttendanceStatMini('早退', early, _earlyColor(context))),
-          Expanded(
-              child: _AttendanceStatMini('旷课', absent, _absentColor(context))),
-        ],
+        children: showAll
+            ? [
+                Expanded(
+                    child: _AttendanceStatMini(
+                        '正常', normal, _normalColor(context))),
+                Expanded(
+                    child:
+                        _AttendanceStatMini('迟到', late, _lateColor(context))),
+                Expanded(
+                    child:
+                        _AttendanceStatMini('早退', early, _earlyColor(context))),
+                Expanded(
+                    child: _AttendanceStatMini(
+                        '旷课', absent, _absentColor(context))),
+              ]
+            : [
+                Expanded(
+                    child: _AttendanceStatMini(
+                        '正常', normal, _normalColor(context))),
+                Expanded(
+                    child: _AttendanceStatMini(
+                        '异常', late + early + absent, _absentColor(context))),
+              ],
       ),
     );
   }

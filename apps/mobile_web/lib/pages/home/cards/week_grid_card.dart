@@ -6,9 +6,14 @@ import '../../home/cards/schedule_helpers.dart';
 
 /// 周课表卡片：大/中/小三种信息密度。
 class WeekGridLargeCard extends StatelessWidget {
-  const WeekGridLargeCard({required this.courses, super.key});
+  const WeekGridLargeCard({
+    required this.courses,
+    required this.onTap,
+    super.key,
+  });
 
   final List<ScheduleCourse> courses;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -17,9 +22,14 @@ class WeekGridLargeCard extends StatelessWidget {
     return HomeCardShell(
       title: '周课表',
       icon: Icons.grid_view,
+      density: HomeCardDensity.large,
       badge: '紧凑',
+      onTap: onTap,
       child: LayoutBuilder(
         builder: (context, constraints) {
+          if (constraints.maxWidth < 400) {
+            return _WeekSummary(courses: courses);
+          }
           final labelWidth = constraints.maxWidth < 280 ? 28.0 : 36.0;
           final cellWidth =
               (constraints.maxWidth - labelWidth - 8) / days.length;
@@ -85,87 +95,37 @@ class WeekGridLargeCard extends StatelessWidget {
 }
 
 class WeekGridMediumCard extends StatelessWidget {
-  const WeekGridMediumCard({required this.courses, super.key});
+  const WeekGridMediumCard({
+    required this.courses,
+    required this.onTap,
+    super.key,
+  });
 
   final List<ScheduleCourse> courses;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    const days = ['一', '二', '三', '四', '五'];
-    const slots = [1, 3, 5, 7];
     return HomeCardShell(
       title: '周课表',
       icon: Icons.grid_view,
+      density: HomeCardDensity.medium,
       badge: '本周',
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          const labelWidth = 28.0;
-          final cellWidth =
-              (constraints.maxWidth - labelWidth - 8) / days.length;
-          final cellHeight =
-              (constraints.maxHeight - 20 - 6 - 8) / slots.length;
-          final fontSize = cellWidth < 36 ? 8.0 : 9.0;
-          return Column(
-            children: [
-              Row(
-                children: [
-                  const SizedBox(width: labelWidth),
-                  for (final day in days)
-                    Expanded(
-                      child: Text('周$day',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(fontSize: fontSize + 2)),
-                    ),
-                ],
-              ),
-              const SizedBox(height: 6),
-              Expanded(
-                child: Column(
-                  children: [
-                    for (final slot in slots)
-                      Expanded(
-                        child: Row(
-                          children: [
-                            SizedBox(
-                              width: labelWidth,
-                              child: Text('$slot',
-                                  style: TextStyle(
-                                      color: Theme.of(context)
-                                          .colorScheme
-                                          .onSurfaceVariant,
-                                      fontSize: fontSize + 1)),
-                            ),
-                            for (var day = 1; day <= 5; day++)
-                              Expanded(
-                                child: _WeekGridCell(
-                                  course: firstOrNull(courses.where((item) {
-                                    final start = item.startSection ?? 0;
-                                    return item.weekday == day &&
-                                        start >= slot &&
-                                        start <= slot + 1;
-                                  })),
-                                  height: cellHeight,
-                                  fontSize: fontSize,
-                                ),
-                              ),
-                          ],
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-            ],
-          );
-        },
-      ),
+      onTap: onTap,
+      child: _WeekSummary(courses: courses),
     );
   }
 }
 
 class WeekGridSmallCard extends StatelessWidget {
-  const WeekGridSmallCard({required this.courses, super.key});
+  const WeekGridSmallCard({
+    required this.courses,
+    required this.onTap,
+    super.key,
+  });
 
   final List<ScheduleCourse> courses;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -178,8 +138,9 @@ class WeekGridSmallCard extends StatelessWidget {
     return HomeCardShell(
       title: '周课表',
       icon: Icons.grid_view,
+      density: HomeCardDensity.small,
       badge: '今天',
-      compact: true,
+      onTap: onTap,
       child: todayCourses.isEmpty
           ? Center(
               child: Text('今天没课',
@@ -187,7 +148,7 @@ class WeekGridSmallCard extends StatelessWidget {
           : Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                for (final item in todayCourses.take(2))
+                for (final item in todayCourses.take(1))
                   Padding(
                     padding: const EdgeInsets.only(bottom: 4),
                     child: Row(
@@ -215,6 +176,42 @@ class WeekGridSmallCard extends StatelessWidget {
                   ),
               ],
             ),
+    );
+  }
+}
+
+class _WeekSummary extends StatelessWidget {
+  const _WeekSummary({required this.courses});
+
+  final List<ScheduleCourse> courses;
+
+  @override
+  Widget build(BuildContext context) {
+    final today = DateTime.now().weekday;
+    final todayCourses = courses.where((item) => item.weekday == today).toList()
+      ..sort((a, b) => (a.startSection ?? 0).compareTo(b.startSection ?? 0));
+    final first = todayCourses.firstOrNull;
+    final cs = Theme.of(context).colorScheme;
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '本周 ${courses.length} 节 · 今日 ${todayCourses.length} 节',
+            style: TextStyle(color: cs.onSurfaceVariant, fontSize: 13),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            first?.name ?? '今天没课',
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.w800,
+                ),
+          ),
+        ],
+      ),
     );
   }
 }

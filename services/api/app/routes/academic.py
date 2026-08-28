@@ -37,6 +37,18 @@ T = TypeVar("T")
 
 _DASHBOARD_MODULE_TIMEOUT_SECONDS = 8.0
 
+# 正常请求优先读取未过期的云端缓存，避免页面切换和重复打开持续打到学校系统。
+# 下拉刷新会带 refresh=true，跳过这一层并更新缓存。
+_CACHE_FRESH_SECONDS = {
+    "me": 24 * 3600,
+    "schedule": 12 * 3600,
+    "notices": 10 * 60,
+    "attendance": 5 * 60,
+    "credits": 12 * 3600,
+    "grades": 30 * 60,
+    "exams": 60 * 60,
+}
+
 _DASHBOARD_MODULE_LABELS = {
     "me": "个人信息",
     "schedule": "课表",
@@ -65,8 +77,45 @@ def _academic_upstream_error_detail(exc: Exception) -> str:
     return "学校教务系统请求失败（未返回可用数据），请稍后重试"
 
 
-def _dashboard_module(name: str, call: Callable[[], T], *, empty) -> dict:
+def _cached_response(data: dict | list, cached_at: datetime | None) -> JSONResponse:
+    cached_at_str = cached_at.isoformat() if cached_at else ""
+    response = JSONResponse(content=data)
+    response.headers["X-Data-Source"] = "cache"
+    response.headers["X-Data-Cached-At"] = cached_at_str
+    return response
+
+
+def _load_cached_data(
+    student_id: str,
+    resource: str,
+    params: dict | None,
+    max_age_seconds: int | None,
+) -> tuple[dict | list | None, datetime | None]:
+    try:
+        return load_and_get_cached_at(student_id, resource, params, max_age_seconds)
+    except Exception:
+        logger.warning("Failed to load cache for resource=%s", resource, exc_info=True)
+        return None, None
+
+
+def _dashboard_module(
+    name: str,
+    fresh_cache: tuple[dict | list | None, datetime | None],
+    fallback_cache: tuple[dict | list | None, datetime | None],
+    call: Callable[[], T],
+    *,
+    empty,
+) -> dict:
     started = time.perf_counter()
+    cached, cached_at = fresh_cache
+    if cached is not None:
+        return {
+            "status": "empty" if cached == empty else "ok",
+            "data": cached,
+            "source": "cache",
+            "cachedAt": cached_at.isoformat() if cached_at else None,
+            "durationMs": round((time.perf_counter() - started) * 1000),
+        }
     try:
         data = _run_academic_call(call)
         status_value = "empty" if data == empty else "ok"
@@ -77,6 +126,15 @@ def _dashboard_module(name: str, call: Callable[[], T], *, empty) -> dict:
             "durationMs": round((time.perf_counter() - started) * 1000),
         }
     except HTTPException as exc:
+        cached, cached_at = fallback_cache
+        if cached is not None:
+            return {
+                "status": "empty" if cached == empty else "ok",
+                "data": cached,
+                "source": "cache",
+                "cachedAt": cached_at.isoformat() if cached_at else None,
+                "durationMs": round((time.perf_counter() - started) * 1000),
+            }
         return {
             "status": "error",
             "data": empty,
@@ -84,6 +142,65 @@ def _dashboard_module(name: str, call: Callable[[], T], *, empty) -> dict:
             "error": str(exc.detail),
             "durationMs": round((time.perf_counter() - started) * 1000),
         }
+
+
+def _load_dashboard_caches(
+    student_id: str,
+    params: dict | None,
+    refresh: bool,
+) -> dict[str, tuple[tuple[dict | list | None, datetime | None], tuple[dict | list | None, datetime | None]]]:
+    cache_params = {
+        "me": None,
+        "schedule": params,
+        "notices": None,
+        "attendance": params,
+        "credits": None,
+        "grades": params,
+        "exams": params,
+    }
+    cache_by_resource = {}
+    for resource, resource_params in cache_params.items():
+        fresh_cache = (
+            (None, None)
+            if refresh
+            else _load_cached_data(
+                student_id,
+                resource,
+                resource_params,
+                _CACHE_FRESH_SECONDS[resource],
+            )
+        )
+        fallback_cache = (
+            fresh_cache
+            if fresh_cache[0] is not None
+            else _load_cached_data(student_id, resource, resource_params, None)
+        )
+        cache_by_resource[resource] = (fresh_cache, fallback_cache)
+    return cache_by_resource
+
+
+def _save_dashboard_module_caches(
+    student_id: str,
+    params: dict | None,
+    modules: dict[str, dict],
+) -> None:
+    cache_params = {
+        "me": None,
+        "schedule": params,
+        "notices": None,
+        "attendance": params,
+        "credits": None,
+        "grades": params,
+        "exams": params,
+    }
+    for resource, resource_params in cache_params.items():
+        module = modules[resource]
+        if module["source"] != "api" or module["status"] == "error":
+            continue
+        try:
+            save_cache(student_id, resource, module["data"], resource_params)
+        except Exception:
+            logger.warning("Failed to save cache for resource=%s", resource, exc_info=True)
 
 
 def _dashboard_ehall_module(call: Callable[[], T], *, empty) -> dict:
@@ -187,8 +304,21 @@ async def _run_with_cache_fallback(
     call: Callable[[], T],
     params: dict | None = None,
     cache_max_age_seconds: int | None = None,
+    refresh: bool = False,
 ) -> JSONResponse | T:
     loop = asyncio.get_event_loop()
+    if not refresh and resource in _CACHE_FRESH_SECONDS:
+        cached, cached_at = await loop.run_in_executor(
+            None,
+            _load_cached_data,
+            student_id,
+            resource,
+            params,
+            _CACHE_FRESH_SECONDS[resource],
+        )
+        if cached is not None:
+            logger.info("Serving fresh cached data for resource=%s", resource)
+            return _cached_response(cached, cached_at)
     try:
         result = await loop.run_in_executor(None, _run_academic_call, call)
         try:
@@ -202,32 +332,31 @@ async def _run_with_cache_fallback(
             and resource not in {"exams", "attendance"}
         ):
             raise
-        try:
-            cached, cached_at = await loop.run_in_executor(
-                None,
-                load_and_get_cached_at,
-                student_id,
-                resource,
-                params,
-                cache_max_age_seconds,
-            )
-        except Exception:
-            logger.warning("Failed to load cache for resource=%s", resource, exc_info=True)
-            cached, cached_at = None, None
+        cached, cached_at = await loop.run_in_executor(
+            None,
+            _load_cached_data,
+            student_id,
+            resource,
+            params,
+            cache_max_age_seconds,
+        )
         if cached is not None:
             cached_at_str = cached_at.isoformat() if cached_at else ""
             logger.info("Serving cached data for resource=%s, cached_at=%s", resource, cached_at_str)
-            resp = JSONResponse(content=cached)
-            resp.headers["X-Data-Source"] = "cache"
-            resp.headers["X-Data-Cached-At"] = cached_at_str
-            return resp
+            return _cached_response(cached, cached_at)
         raise
 
 
 @router.get("/me", response_model=StudentInfo)
-async def me(request: Request, session: AppSession = Depends(require_session)) -> dict:
+async def me(
+    request: Request,
+    refresh: bool = False,
+    session: AppSession = Depends(require_session),
+) -> dict:
     student_id = _get_student_id(session)
-    return await _run_with_cache_fallback("me", student_id, session.client.get_info)
+    return await _run_with_cache_fallback(
+        "me", student_id, session.client.get_info, refresh=refresh
+    )
 
 
 @router.get("/schedule", response_model=list[ScheduleCourse])
@@ -235,12 +364,13 @@ async def schedule(
     year: str | None = None,
     term: str | None = None,
     request: Request = None,
+    refresh: bool = False,
     session: AppSession = Depends(require_session),
 ) -> list[dict]:
     student_id = _get_student_id(session)
     params = {"year": year, "term": term} if year or term else None
     return await _run_with_cache_fallback(
-        "schedule", student_id, lambda: session.client.get_schedule(year, term), params,
+        "schedule", student_id, lambda: session.client.get_schedule(year, term), params, refresh=refresh,
     )
 
 
@@ -249,6 +379,7 @@ async def exams(
     year: str | None = None,
     term: str | None = None,
     request: Request = None,
+    refresh: bool = False,
     session: AppSession = Depends(require_session),
 ) -> list[dict]:
     student_id = _get_student_id(session)
@@ -259,6 +390,7 @@ async def exams(
         lambda: session.client.get_exams(year, term),
         params,
         ACADEMIC_CACHE_MAX_AGE_SECONDS,
+        refresh,
     )
 
 
@@ -267,12 +399,13 @@ async def grades(
     year: str | None = None,
     term: str | None = None,
     request: Request = None,
+    refresh: bool = False,
     session: AppSession = Depends(require_session),
 ) -> list[dict]:
     student_id = _get_student_id(session)
     params = {"year": year, "term": term} if year or term else None
     return await _run_with_cache_fallback(
-        "grades", student_id, lambda: session.client.get_grades(year, term), params,
+        "grades", student_id, lambda: session.client.get_grades(year, term), params, refresh=refresh,
     )
 
 
@@ -281,6 +414,7 @@ async def attendance(
     year: str | None = None,
     term: str | None = None,
     request: Request = None,
+    refresh: bool = False,
     session: AppSession = Depends(require_session),
 ) -> AttendanceResponse:
     student_id = _get_student_id(session)
@@ -296,16 +430,20 @@ async def attendance(
         call,
         params,
         ACADEMIC_CACHE_MAX_AGE_SECONDS,
+        refresh,
     )
 
 
 @router.get("/credits", response_model=list[CreditItem])
 async def credits(
     request: Request,
+    refresh: bool = False,
     session: AppSession = Depends(require_session),
 ) -> list[dict]:
     student_id = _get_student_id(session)
-    return await _run_with_cache_fallback("credits", student_id, session.client.get_credits)
+    return await _run_with_cache_fallback(
+        "credits", student_id, session.client.get_credits, refresh=refresh
+    )
 
 
 @router.get("/dashboard")
@@ -314,6 +452,7 @@ async def dashboard(
     year: str | None = None,
     term: str | None = None,
     week: str | None = None,
+    refresh: bool = False,
     session: AppSession = Depends(require_session),
 ) -> dict:
     """Return a home-page snapshot with module-level failures.
@@ -321,6 +460,9 @@ async def dashboard(
     后端聚合首页所需模块，避免前端扇出多次请求。
     """
     trace_id = request.headers.get("X-GZUS-Trace-Id") or f"api-{int(time.time() * 1000)}"
+    student_id = _get_student_id(session)
+    params = {"year": year, "term": term} if year or term else None
+    dashboard_caches = _load_dashboard_caches(student_id, params, refresh)
 
     ehall_client = getattr(session, "ehall_client", None)
     module_jobs = [
@@ -329,6 +471,8 @@ async def dashboard(
             {},
             lambda: _dashboard_module(
                 "me",
+                dashboard_caches["me"][0],
+                dashboard_caches["me"][1],
                 session.client.get_info if session.client else dict,
                 empty={},
             ),
@@ -338,6 +482,8 @@ async def dashboard(
             [],
             lambda: _dashboard_module(
                 "schedule",
+                dashboard_caches["schedule"][0],
+                dashboard_caches["schedule"][1],
                 lambda: session.client.get_schedule(year, term) if session.client else [],
                 empty=[],
             ),
@@ -347,6 +493,8 @@ async def dashboard(
             [],
             lambda: _dashboard_module(
                 "notices",
+                dashboard_caches["notices"][0],
+                dashboard_caches["notices"][1],
                 lambda: _merged_public_notices(
                     session.client.get_notices() if session.client else [],
                     ehall_client,
@@ -359,6 +507,8 @@ async def dashboard(
             {"status": "empty", "items": []},
             lambda: _dashboard_module(
                 "attendance",
+                dashboard_caches["attendance"][0],
+                dashboard_caches["attendance"][1],
                 lambda: {
                     "status": "ok",
                     "items": session.client.get_attendance(year, term),
@@ -373,6 +523,8 @@ async def dashboard(
             [],
             lambda: _dashboard_module(
                 "credits",
+                dashboard_caches["credits"][0],
+                dashboard_caches["credits"][1],
                 session.client.get_credits if session.client else list,
                 empty=[],
             ),
@@ -382,6 +534,8 @@ async def dashboard(
             [],
             lambda: _dashboard_module(
                 "grades",
+                dashboard_caches["grades"][0],
+                dashboard_caches["grades"][1],
                 lambda: session.client.get_grades(year, term) if session.client else [],
                 empty=[],
             ),
@@ -391,6 +545,8 @@ async def dashboard(
             [],
             lambda: _dashboard_module(
                 "exams",
+                dashboard_caches["exams"][0],
+                dashboard_caches["exams"][1],
                 lambda: session.client.get_exams(year, term) if session.client else [],
                 empty=[],
             ),
@@ -415,6 +571,7 @@ async def dashboard(
         ),
     ]
     modules = dict(await asyncio.gather(*module_jobs))
+    _save_dashboard_module_caches(student_id, params, modules)
     modules["ecard"] = {
         "status": "empty",
         "data": {"status": "not_bound"},
@@ -462,6 +619,7 @@ def _merged_public_notices(jwxt_items: list, ehall_client) -> list[dict]:
 @router.get("/notices", response_model=list[NoticeItem])
 async def notices(
     request: Request,
+    refresh: bool = False,
     session: AppSession = Depends(require_session),
 ) -> list[dict]:
     student_id = _get_student_id(session)
@@ -479,7 +637,7 @@ async def notices(
             getattr(session, "ehall_client", None),
         )
 
-    return await _run_with_cache_fallback("notices", student_id, call)
+    return await _run_with_cache_fallback("notices", student_id, call, refresh=refresh)
 
 
 @router.get("/notices/detail", response_model=NoticeDetail)

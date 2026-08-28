@@ -274,6 +274,7 @@ class NoticeItem(BaseModel):
     summary: str | None = None
     content_summary: str | None = None
     cover_url: str | None = Field(default=None, alias="coverUrl")
+    source: Literal["jwxt", "ehall", "admin", "wechat"] = "jwxt"
 
 
 class NoticeDetail(BaseModel):

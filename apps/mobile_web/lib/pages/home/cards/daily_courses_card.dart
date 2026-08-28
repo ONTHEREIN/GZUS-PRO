@@ -7,58 +7,74 @@ import '../../home/cards/schedule_helpers.dart';
 
 /// 今日课程卡片：大/中/小三种信息密度。
 class DailyCoursesLargeCard extends StatelessWidget {
-  const DailyCoursesLargeCard({required this.courses, super.key});
+  const DailyCoursesLargeCard({
+    required this.courses,
+    required this.onTap,
+    super.key,
+  });
 
   final List<TimedCourse> courses;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     return HomeCardShell(
       title: '今日课程',
       icon: Icons.format_list_bulleted,
+      density: HomeCardDensity.large,
       badge: '${courses.length} 节',
+      onTap: onTap,
       child: courses.isEmpty
           ? const EmptyState(message: '今日无课')
-          : SingleChildScrollView(
-              child: Column(
-                children: [
-                  for (final item in courses) _CourseRow(course: item),
-                ],
-              ),
+          : Column(
+              children: [
+                for (final item in courses.take(3)) _CourseRow(course: item),
+              ],
             ),
     );
   }
 }
 
 class DailyCoursesMediumCard extends StatelessWidget {
-  const DailyCoursesMediumCard({required this.courses, super.key});
+  const DailyCoursesMediumCard({
+    required this.courses,
+    required this.onTap,
+    super.key,
+  });
 
   final List<TimedCourse> courses;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     return HomeCardShell(
       title: '今日课程',
       icon: Icons.format_list_bulleted,
+      density: HomeCardDensity.medium,
       badge: '${courses.length} 节',
+      onTap: onTap,
       child: courses.isEmpty
           ? const EmptyState(message: '今日无课')
-          : SingleChildScrollView(
-              child: Column(
-                children: [
-                  for (final item in courses.take(4))
-                    _CourseRow(course: item, compact: true),
-                ],
-              ),
+          : Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                for (final item in courses.take(2))
+                  _CourseRow(course: item, compact: true),
+              ],
             ),
     );
   }
 }
 
 class DailyCoursesSmallCard extends StatelessWidget {
-  const DailyCoursesSmallCard({required this.courses, super.key});
+  const DailyCoursesSmallCard({
+    required this.courses,
+    required this.onTap,
+    super.key,
+  });
 
   final List<TimedCourse> courses;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -66,8 +82,9 @@ class DailyCoursesSmallCard extends StatelessWidget {
     return HomeCardShell(
       title: '今日课程',
       icon: Icons.format_list_bulleted,
+      density: HomeCardDensity.small,
       badge: '${courses.length} 节',
-      compact: true,
+      onTap: onTap,
       child: courses.isEmpty
           ? Center(
               child: Text('无',
@@ -75,7 +92,7 @@ class DailyCoursesSmallCard extends StatelessWidget {
           : Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                for (final item in courses.take(2))
+                for (final item in courses.take(1))
                   Padding(
                     padding: const EdgeInsets.only(bottom: 4),
                     child: Row(

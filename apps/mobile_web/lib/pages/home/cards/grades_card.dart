@@ -13,7 +13,7 @@ class GradesLargeCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return _GradesCard(grades: grades, onTap: onTap, maxRows: 6);
+    return _GradesCard(grades: grades, onTap: onTap, maxRows: 2);
   }
 }
 
@@ -25,7 +25,7 @@ class GradesMediumCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return _GradesCard(grades: grades, onTap: onTap, maxRows: 3);
+    return _GradesCard(grades: grades, onTap: onTap, maxRows: 0);
   }
 }
 
@@ -42,20 +42,16 @@ class GradesSmallCard extends StatelessWidget {
     return HomeCardShell(
       title: '成绩',
       icon: Icons.school,
+      density: HomeCardDensity.small,
       badge: '${stats.count} 门',
       onTap: onTap,
-      compact: true,
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceAround,
-            children: [
-              _GradeStatCompact(
-                  '绩点', stats.gpa, _gpaTagColor(double.parse(stats.gpa))),
-              _GradeStatCompact(
-                  '平均', stats.avg, Theme.of(context).colorScheme.primary),
-            ],
+          _GradeStatCompact(
+            '平均绩点',
+            stats.gpa,
+            _gpaTagColor(double.parse(stats.gpa)),
           ),
         ],
       ),
@@ -89,10 +85,13 @@ class _GradesCard extends StatelessWidget {
     return HomeCardShell(
       title: '本学期成绩',
       icon: Icons.school,
+      density: maxRows > 0 ? HomeCardDensity.large : HomeCardDensity.medium,
       badge: '${stats.count} 门',
       onTap: onTap,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisAlignment:
+            maxRows == 0 ? MainAxisAlignment.center : MainAxisAlignment.start,
         children: [
           Row(
             children: [
@@ -132,77 +131,80 @@ class _GradesCard extends StatelessWidget {
               ),
             ],
           ),
-          const Divider(height: 20),
-          Expanded(
-            child: sorted.isEmpty
-                ? const Center(child: Text('暂无成绩数据'))
-                : ListView.separated(
-                    padding: EdgeInsets.zero,
-                    physics: const ClampingScrollPhysics(),
-                    itemCount: sorted.length.clamp(0, maxRows),
-                    separatorBuilder: (_, __) =>
-                        const SizedBox(height: GzusSpacing.s),
-                    itemBuilder: (context, i) {
-                      final g = sorted[i];
-                      final score = int.parse(g.score!);
-                      final gpa = _scoreToGPA(g.score);
-                      return Row(
-                        children: [
-                          Container(
-                            width: 4,
-                            height: 28,
-                            decoration: BoxDecoration(
-                              color: _scoreColor(
-                                  score, Theme.of(context).colorScheme),
-                              borderRadius: BorderRadius.circular(2),
+          if (maxRows > 0) ...[
+            const Divider(height: 20),
+            Expanded(
+              child: sorted.isEmpty
+                  ? const Center(child: Text('暂无成绩数据'))
+                  : ListView.separated(
+                      padding: EdgeInsets.zero,
+                      physics: const NeverScrollableScrollPhysics(),
+                      itemCount: sorted.length.clamp(0, maxRows),
+                      separatorBuilder: (_, __) =>
+                          const SizedBox(height: GzusSpacing.s),
+                      itemBuilder: (context, i) {
+                        final g = sorted[i];
+                        final score = int.parse(g.score!);
+                        final gpa = _scoreToGPA(g.score);
+                        return Row(
+                          children: [
+                            Container(
+                              width: 4,
+                              height: 28,
+                              decoration: BoxDecoration(
+                                color: _scoreColor(
+                                    score, Theme.of(context).colorScheme),
+                                borderRadius: BorderRadius.circular(2),
+                              ),
                             ),
-                          ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(g.courseName,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
-                                        fontSize: 13,
-                                        fontWeight: FontWeight.w600)),
-                                if (g.credit != null)
-                                  Text('${g.credit} 学分',
-                                      style: TextStyle(
-                                          fontSize: 11,
-                                          color: Theme.of(context)
-                                              .colorScheme
-                                              .onSurfaceVariant)),
-                              ],
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(g.courseName,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w600)),
+                                  if (g.credit != null)
+                                    Text('${g.credit} 学分',
+                                        style: TextStyle(
+                                            fontSize: 11,
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .onSurfaceVariant)),
+                                ],
+                              ),
                             ),
-                          ),
-                          Text('$score',
-                              style: TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w800,
-                                  color: _scoreColor(
-                                      score, Theme.of(context).colorScheme))),
-                          const SizedBox(width: GzusSpacing.s),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 8, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: _gpaTagColor(gpa).withValues(alpha: 0.12),
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Text(gpa.toStringAsFixed(1),
+                            Text('$score',
                                 style: TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w700,
-                                    color: _gpaTagColor(gpa))),
-                          ),
-                        ],
-                      );
-                    },
-                  ),
-          ),
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w800,
+                                    color: _scoreColor(
+                                        score, Theme.of(context).colorScheme))),
+                            const SizedBox(width: GzusSpacing.s),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 2),
+                              decoration: BoxDecoration(
+                                color:
+                                    _gpaTagColor(gpa).withValues(alpha: 0.12),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Text(gpa.toStringAsFixed(1),
+                                  style: TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w700,
+                                      color: _gpaTagColor(gpa))),
+                            ),
+                          ],
+                        );
+                      },
+                    ),
+            ),
+          ],
         ],
       ),
     );

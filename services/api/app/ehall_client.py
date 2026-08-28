@@ -577,6 +577,7 @@ def normalize_task_record(record: dict, category: str, base_url: str) -> dict | 
         "date": date,
         "url": _record_url(record, base_url),
         "summary": summary or None,
+        "source": "ehall",
     }
 
 

@@ -23,6 +23,7 @@ class CreditsLargeCard extends StatelessWidget {
     return HomeCardShell(
       title: '学分进度',
       icon: Icons.workspace_premium,
+      density: HomeCardDensity.large,
       badge: item?.grade ?? '学分',
       onTap: onTap,
       child: Column(
@@ -69,6 +70,7 @@ class CreditsMediumCard extends StatelessWidget {
     return HomeCardShell(
       title: '学分进度',
       icon: Icons.workspace_premium,
+      density: HomeCardDensity.medium,
       badge: item?.grade ?? '学分',
       onTap: onTap,
       child: Column(
@@ -105,9 +107,9 @@ class CreditsSmallCard extends StatelessWidget {
     return HomeCardShell(
       title: '学分',
       icon: Icons.workspace_premium,
+      density: HomeCardDensity.small,
       badge: '${(progress * 100).round()}%',
       onTap: onTap,
-      compact: true,
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         crossAxisAlignment: CrossAxisAlignment.start,

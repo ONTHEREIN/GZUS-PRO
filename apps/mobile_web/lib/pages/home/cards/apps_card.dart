@@ -14,7 +14,7 @@ class AppsLargeCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return _AppsCard(apps: apps, onTap: onTap, maxItems: 8);
+    return _AppsCard(apps: apps, onTap: onTap, maxItems: 6);
   }
 }
 
@@ -38,33 +38,26 @@ class AppsSmallCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final visible = apps.take(3).toList();
+    final app = apps.firstOrNull;
     return HomeCardShell(
       title: '服务',
       icon: Icons.apps,
+      density: HomeCardDensity.small,
       badge: '${apps.length}',
       onTap: onTap,
-      compact: true,
-      child: visible.isEmpty
+      child: app == null
           ? const Center(child: Text('暂无'))
-          : Row(
-              mainAxisAlignment: MainAxisAlignment.spaceAround,
+          : Column(
+              mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                for (final app in visible)
-                  Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const IconBadge(
-                          icon: Icons.dashboard_customize, size: 28),
-                      const SizedBox(height: 4),
-                      Text(
-                        app.title,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontSize: 11),
-                      ),
-                    ],
-                  ),
+                const IconBadge(icon: Icons.dashboard_customize, size: 28),
+                const SizedBox(height: 4),
+                Text(
+                  app.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 12),
+                ),
               ],
             ),
     );
@@ -88,6 +81,7 @@ class _AppsCard extends StatelessWidget {
     return HomeCardShell(
       title: '常用服务',
       icon: Icons.apps,
+      density: maxItems == 6 ? HomeCardDensity.large : HomeCardDensity.medium,
       badge: '${apps.length} 个',
       onTap: onTap,
       child: visible.isEmpty
