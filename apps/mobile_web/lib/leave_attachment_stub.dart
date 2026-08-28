@@ -1,19 +1,18 @@
-import 'dart:typed_data';
-
 import 'package:image_picker/image_picker.dart';
 
-class PickedAttachment {
-  const PickedAttachment({required this.name, required this.bytes});
+import 'leave_attachment_models.dart';
 
-  final String name;
-  final Uint8List bytes;
-}
+export 'leave_attachment_models.dart';
 
-Future<PickedAttachment?> pickLeaveAttachment() async {
+Future<List<PickedAttachment>> pickLeaveAttachments() async {
   final picker = ImagePicker();
-  final pickedFile = await picker.pickImage(source: ImageSource.gallery);
-  if (pickedFile == null) return null;
-
-  final bytes = await pickedFile.readAsBytes();
-  return PickedAttachment(name: pickedFile.name, bytes: bytes);
+  final pickedFiles = await picker.pickMultiImage();
+  return Future.wait(
+    pickedFiles.map(
+      (pickedFile) async => PickedAttachment(
+        name: pickedFile.name,
+        bytes: await pickedFile.readAsBytes(),
+      ),
+    ),
+  );
 }

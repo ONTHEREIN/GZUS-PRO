@@ -20,3 +20,4 @@
 **/libs/**/libvmservice_snapshot.so
 
 /signing/debug/
+/signing/release/

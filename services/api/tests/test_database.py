@@ -63,6 +63,20 @@ def test_ensure_columns_adds_missing_column():
     assert column_names == {"id", "label"}
 
 
+def test_session_compatibility_migration_adds_persistent_session_columns():
+    database.init_db()
+    engine = database.get_sync_engine()
+    with engine.begin() as connection:
+        connection.exec_driver_sql("CREATE TABLE legacy_app_sessions (id VARCHAR(64) PRIMARY KEY)")
+
+    database._ensure_columns(engine, "legacy_app_sessions", database._APP_SESSION_COMPAT_COLUMNS)
+
+    column_names = {
+        column["name"] for column in inspect(engine).get_columns("legacy_app_sessions")
+    }
+    assert set(database._APP_SESSION_COMPAT_COLUMNS).issubset(column_names)
+
+
 def test_ensure_columns_raises_when_table_is_missing():
     database.init_db()
     engine = database.get_sync_engine()

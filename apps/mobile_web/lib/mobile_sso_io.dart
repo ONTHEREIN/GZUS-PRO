@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -6,6 +7,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 import 'api_client.dart';
+import 'mobile_sso_cookies.dart';
 
 const _desktopBrowserUserAgent =
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
@@ -15,9 +17,7 @@ Future<bool> openAuthenticatedEhallUrl(
   BuildContext context,
   String url, {
   String? fillScript,
-  ApiClient? api,
-  String? attachmentName,
-  Uint8List? attachmentBytes,
+  required ApiClient api,
 }) async {
   final uri = Uri.tryParse(url);
   if (uri == null) return false;
@@ -28,8 +28,6 @@ Future<bool> openAuthenticatedEhallUrl(
         initialUrl: url,
         fillScript: fillScript,
         api: api,
-        attachmentName: attachmentName,
-        attachmentBytes: attachmentBytes,
       ),
     ),
   );
@@ -43,17 +41,13 @@ Future<void> clearMobileSsoCookies() {
 class _EhallWebViewPage extends StatefulWidget {
   const _EhallWebViewPage({
     required this.initialUrl,
+    required this.api,
     this.fillScript,
-    this.api,
-    this.attachmentName,
-    this.attachmentBytes,
   });
 
   final String initialUrl;
   final String? fillScript;
-  final ApiClient? api;
-  final String? attachmentName;
-  final Uint8List? attachmentBytes;
+  final ApiClient api;
 
   @override
   State<_EhallWebViewPage> createState() => _EhallWebViewPageState();
@@ -66,6 +60,8 @@ class _EhallWebViewPageState extends State<_EhallWebViewPage> {
   bool scriptInjected = false;
   bool scriptApplied = false;
   String? loadError;
+  String? _pendingUserLoginToken;
+  Uri? _pendingTargetUrl;
 
   @override
   void initState() {
@@ -79,8 +75,9 @@ class _EhallWebViewPageState extends State<_EhallWebViewPage> {
             loading = true;
             loadError = null;
           }),
-          onPageFinished: (_) {
+          onPageFinished: (url) {
             setState(() => loading = false);
+            unawaited(_handlePageFinished(url));
             _injectFillScript();
           },
           onWebResourceError: (webError) {
@@ -125,21 +122,6 @@ class _EhallWebViewPageState extends State<_EhallWebViewPage> {
       return;
     }
     try {
-      if (widget.api != null &&
-          widget.attachmentName != null &&
-          widget.attachmentBytes != null) {
-        final uploaded = await _uploadAttachmentFromLoadedForm();
-        if (!uploaded) {
-          if (!mounted) return;
-          setState(() {
-            loadError = '附件上传失败，已停止自动办理';
-          });
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('附件上传失败，未点击办理')),
-          );
-          return;
-        }
-      }
       await controller.runJavaScript(script);
       scriptApplied = true;
       if (mounted) setState(() => loadError = null);
@@ -152,57 +134,6 @@ class _EhallWebViewPageState extends State<_EhallWebViewPage> {
         const SnackBar(content: Text('自动填表脚本执行失败，请复制脚本手动执行')),
       );
     }
-  }
-
-  Future<bool> _uploadAttachmentFromLoadedForm() async {
-    final fields = await _readLeaveUploadFields();
-    if (fields == null || fields.docUnid.isEmpty) return false;
-    try {
-      return await widget.api!.uploadLeaveAttachment(
-        docUnid: fields.docUnid,
-        processId: fields.processId,
-        nodeName: fields.nodeName,
-        localStore: fields.localStore,
-        attachmentName: widget.attachmentName!,
-        attachmentBytes: widget.attachmentBytes!,
-      );
-    } catch (_) {
-      return false;
-    }
-  }
-
-  Future<_LeaveUploadFields?> _readLeaveUploadFields() async {
-    for (var attempt = 0; attempt < 30; attempt++) {
-      await Future<void>.delayed(const Duration(milliseconds: 500));
-      try {
-        final raw = await controller.runJavaScriptReturningResult(r"""
-(() => JSON.stringify({
-  docUnid: document.getElementById('WF_DocUnid')?.value || '',
-  processId: document.getElementById('WF_Processid')?.value || '',
-  nodeName: document.getElementById('WF_CurrentNodeName')?.value || '申请人',
-  localStore: document.getElementById('localStore') ? '1' : '0'
-}))()
-""");
-        final decoded = _decodeWebViewJson(raw);
-        if (decoded == null) continue;
-        final fields = _LeaveUploadFields.fromJson(decoded);
-        if (fields.docUnid.isNotEmpty) return fields;
-      } catch (_) {}
-    }
-    return null;
-  }
-
-  Map<String, dynamic>? _decodeWebViewJson(Object raw) {
-    try {
-      var text = raw.toString();
-      if (text.startsWith('"') && text.endsWith('"')) {
-        text = jsonDecode(text) as String;
-      }
-      final decoded = jsonDecode(text);
-      if (decoded is Map<String, dynamic>) return decoded;
-      if (decoded is Map) return decoded.cast<String, dynamic>();
-    } catch (_) {}
-    return null;
   }
 
   Future<bool> _waitForLeaveForm() async {
@@ -226,22 +157,89 @@ class _EhallWebViewPageState extends State<_EhallWebViewPage> {
   Future<void> _loadInitialUrl() async {
     final uri = Uri.tryParse(widget.initialUrl);
     if (uri == null || uri.host.isEmpty) return;
-    await _injectEhallCookies(widget.api?.ehallCookies, uri);
-    if (_isGzusHost(uri.host) && widget.fillScript == null) {
-      await _primeEhallAuthToken(widget.api?.ehallAuthToken);
+    await _injectSchoolCookies(widget.api, uri);
+    final authToken = widget.api.ehallAuthToken;
+    if (isEhallHost(uri.host) &&
+        widget.fillScript == null &&
+        authToken != null &&
+        authToken.isNotEmpty) {
+      // 先在 ehall 同源页面写入前端登录态，避免业务页首次加载即跳转登录。
+      _pendingUserLoginToken = authToken;
+      _pendingTargetUrl = uri;
+      await _loadUrl(Uri.parse('https://ehall.gzus.edu.cn/'));
+      _schedulePrimeFallback();
+      return;
     }
-    await controller.loadRequest(uri);
+    await _loadUrl(uri);
   }
 
-  Future<void> _injectEhallCookies(
+  Future<void> _handlePageFinished(String urlString) async {
+    final token = _pendingUserLoginToken;
+    if (token == null) return;
+    final uri = Uri.tryParse(urlString);
+    if (uri == null || !isEhallHost(uri.host)) return;
+    _pendingUserLoginToken = null;
+    final target = _pendingTargetUrl;
+    _pendingTargetUrl = null;
+    await _writeUserLoginToken(token);
+    if (target != null) {
+      await _loadUrl(target);
+    }
+  }
+
+  /// 若 ehall 首页长时间未完成（例如被重定向到统一认证），仍继续打开目标页。
+  void _schedulePrimeFallback() {
+    unawaited(Future<void>.delayed(const Duration(seconds: 8), () async {
+      if (!mounted || _pendingUserLoginToken == null) return;
+      final target = _pendingTargetUrl;
+      _pendingUserLoginToken = null;
+      _pendingTargetUrl = null;
+      if (target != null) {
+        await _loadUrl(target);
+      }
+    }));
+  }
+
+  Future<void> _loadUrl(Uri uri) async {
+    final authToken = widget.api.ehallAuthToken;
+    final headers = <String, String>{
+      if (isEhallHost(uri.host) && authToken != null && authToken.isNotEmpty)
+        'Authorization': authToken,
+    };
+    try {
+      await controller.loadRequest(uri, headers: headers);
+    } catch (_) {
+      // 加载失败统一由 onWebResourceError 提示，页内可随时跳转外部浏览器。
+    }
+  }
+
+  Future<void> _writeUserLoginToken(String authToken) async {
+    try {
+      await controller.runJavaScript('''
+(() => {
+  try {
+    const payload = JSON.stringify({ tokenId: ${jsonEncode(authToken)} });
+    sessionStorage.setItem('userLogin', payload);
+    localStorage.setItem('userLogin', payload);
+  } catch (e) {}
+})()
+''');
+    } catch (_) {}
+  }
+
+  Future<void> _injectSchoolCookies(ApiClient api, Uri targetUri) async {
+    await _injectCookieHeader(api.ehallCookies, ehallCookieDomains(targetUri));
+    await _injectCookieHeader(api.jwxtCookies, jwxtCookieDomains(targetUri));
+  }
+
+  Future<void> _injectCookieHeader(
     String? header,
-    Uri targetUri,
+    List<String> domains,
   ) async {
-    if (!_isGzusHost(targetUri.host)) return;
     if (header == null || header.isEmpty) return;
-    final cookies = _parseCookieHeader(header);
+    final cookies = parseCookieHeader(header);
     if (cookies.isEmpty) return;
-    for (final domain in _cookieDomainsFor(targetUri)) {
+    for (final domain in domains) {
       for (final entry in cookies.entries) {
         await cookieManager.setCookie(
           WebViewCookie(
@@ -255,54 +253,9 @@ class _EhallWebViewPageState extends State<_EhallWebViewPage> {
     }
   }
 
-  List<String> _cookieDomainsFor(Uri targetUri) {
-    final host = targetUri.host.toLowerCase();
-    final domains = <String>{host};
-    if (_isGzusHost(host)) {
-      domains
-        ..add('ehall.gzus.edu.cn')
-        ..add('gzus.edu.cn')
-        ..add('.gzus.edu.cn');
-    }
-    return domains.toList(growable: false);
-  }
-
-  bool _isGzusHost(String host) {
-    final normalized = host.toLowerCase();
-    return normalized == 'gzus.edu.cn' || normalized.endsWith('.gzus.edu.cn');
-  }
-
-  Future<void> _primeEhallAuthToken(String? authToken) async {
-    if (authToken == null || authToken.isEmpty) return;
-    try {
-      await controller.loadRequest(Uri.parse('https://ehall.gzus.edu.cn/'));
-      await controller.runJavaScript('''
-(() => {
-  try {
-    const existing = sessionStorage.getItem('userLogin');
-    if (!existing) {
-      sessionStorage.setItem('userLogin', JSON.stringify({ tokenId: ${jsonEncode(authToken)} }));
-    }
-  } catch (e) {}
-})()
-''');
-    } catch (_) {}
-  }
-
-  Map<String, String> _parseCookieHeader(String header) {
-    final cookies = <String, String>{};
-    for (final part in header.split(';')) {
-      final trimmed = part.trim();
-      final separator = trimmed.indexOf('=');
-      if (separator <= 0 || separator == trimmed.length - 1) continue;
-      cookies[trimmed.substring(0, separator)] =
-          trimmed.substring(separator + 1);
-    }
-    return cookies;
-  }
-
   Future<void> _openInExternalBrowser() async {
-    final uri = Uri.tryParse(widget.initialUrl);
+    final currentUrl = await controller.currentUrl();
+    final uri = Uri.tryParse(currentUrl ?? widget.initialUrl);
     if (uri == null) return;
     await launchUrl(uri, mode: LaunchMode.externalApplication);
   }
@@ -335,6 +288,11 @@ class _EhallWebViewPageState extends State<_EhallWebViewPage> {
                 ),
               ),
             ),
+          IconButton(
+            tooltip: '浏览器打开',
+            onPressed: _openInExternalBrowser,
+            icon: const Icon(Icons.open_in_new),
+          ),
         ],
       ),
       body: Column(
@@ -365,26 +323,4 @@ class _EhallWebViewPageState extends State<_EhallWebViewPage> {
       ),
     );
   }
-}
-
-class _LeaveUploadFields {
-  const _LeaveUploadFields({
-    required this.docUnid,
-    required this.processId,
-    required this.nodeName,
-    required this.localStore,
-  });
-
-  factory _LeaveUploadFields.fromJson(Map<String, dynamic> json) =>
-      _LeaveUploadFields(
-        docUnid: json['docUnid'] as String? ?? '',
-        processId: json['processId'] as String? ?? '',
-        nodeName: json['nodeName'] as String? ?? '申请人',
-        localStore: json['localStore'] as String? ?? '0',
-      );
-
-  final String docUnid;
-  final String processId;
-  final String nodeName;
-  final String localStore;
 }

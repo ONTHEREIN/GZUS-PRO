@@ -1,7 +1,10 @@
+from datetime import datetime, timedelta, timezone
+
 from fastapi.testclient import TestClient
 
+from app.academic_period import now_shanghai
 from app.config import get_settings
-from app.database import EcardBinding, get_sync_session_factory
+from app.database import EcardBinding, EcardPowerConsumption, get_sync_session_factory
 from app.ecard_client import EcardClient, EcardConfigurationError, EcardRoomRef, calc_sign
 from app.jobs import ecard_reminder_message
 from app.main import app
@@ -284,6 +287,9 @@ def test_power_consumption_uses_daily_details():
                 "title": "剩余 159.13 度",
                 "amount": "23.29 度",
                 "time": "2026-06-02",
+                "date": "2026-06-02",
+                "usage": 23.29,
+                "unit": "度",
             }
         ],
     }
@@ -551,6 +557,162 @@ def test_consumption_returns_limited_when_upstream_fails(monkeypatch):
 
     assert response.status_code == 200
     assert response.json() == {"status": "limited", "message": "消费记录暂时不可用", "items": []}
+
+
+def test_consumption_persists_historical_month_and_reuses_room_cache(monkeypatch):
+    session = AppSession(id="consumption-cache", client=FakeSchoolClient(), student_name="测试用户")
+    monkeypatch.setattr(app.state.sessions, "get", lambda session_id, touch=True: session)
+    monkeypatch.setattr(app.state.sessions, "touch", lambda session_id: None)
+
+    class ConsumptionClient:
+        def __init__(self):
+            self.calls = 0
+
+        def consumption(self, room_ref, month):
+            self.calls += 1
+            return {
+                "status": "ok",
+                "items": [
+                    {
+                        "title": "电费日用",
+                        "amount": "2.5 度",
+                        "time": "2026-01-03",
+                        "date": "2026-01-03",
+                        "usage": 2.5,
+                        "unit": "度",
+                    }
+                ],
+            }
+
+    consumption_client = ConsumptionClient()
+    monkeypatch.setattr(ecard, "_client", lambda: consumption_client)
+    factory = get_sync_session_factory()
+    with factory() as db:
+        db.add(
+            EcardBinding(
+                student_id="20240001",
+                room_id="CGCOMMON1111|1|A2|932",
+                room_display="校本部 A2 A2-932",
+            )
+        )
+        db.commit()
+
+    with TestClient(app) as client:
+        first = client.get("/ecard/consumption?month=2026-01", headers={"X-Session-Id": session.id})
+        second = client.get("/ecard/consumption?month=2026-01", headers={"X-Session-Id": session.id})
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["items"][0]["usage"] == 2.5
+    assert first.json()["cachedAt"]
+    assert consumption_client.calls == 1
+    with factory() as db:
+        assert db.query(EcardPowerConsumption).count() == 1
+
+
+def test_consumption_refreshes_current_month_after_shanghai_day_changes(monkeypatch):
+    session = AppSession(id="consumption-current", client=FakeSchoolClient(), student_name="测试用户")
+    monkeypatch.setattr(app.state.sessions, "get", lambda session_id, touch=True: session)
+    monkeypatch.setattr(app.state.sessions, "touch", lambda session_id: None)
+
+    class ConsumptionClient:
+        def __init__(self):
+            self.calls = 0
+
+        def consumption(self, room_ref, month):
+            self.calls += 1
+            return {
+                "status": "ok",
+                "items": [
+                    {
+                        "title": "电费日用",
+                        "amount": f"{self.calls} 度",
+                        "time": f"{month}-01",
+                        "date": f"{month}-01",
+                        "usage": float(self.calls),
+                        "unit": "度",
+                    }
+                ],
+            }
+
+    consumption_client = ConsumptionClient()
+    monkeypatch.setattr(ecard, "_client", lambda: consumption_client)
+    factory = get_sync_session_factory()
+    with factory() as db:
+        db.add(
+            EcardBinding(
+                student_id="20240001",
+                room_id="CGCOMMON1111|1|A2|932",
+                room_display="校本部 A2 A2-932",
+            )
+        )
+        db.commit()
+
+    month = now_shanghai().strftime("%Y-%m")
+    with TestClient(app) as client:
+        client.get(f"/ecard/consumption?month={month}", headers={"X-Session-Id": session.id})
+        client.get(f"/ecard/consumption?month={month}", headers={"X-Session-Id": session.id})
+        with factory() as db:
+            record = db.query(EcardPowerConsumption).one()
+            record.cached_at = datetime.now(timezone.utc) - timedelta(days=1)
+            db.commit()
+        refreshed = client.get(
+            f"/ecard/consumption?month={month}", headers={"X-Session-Id": session.id}
+        )
+
+    assert consumption_client.calls == 2
+    assert refreshed.json()["items"][0]["usage"] == 2
+
+
+def test_consumption_overview_aggregates_all_cached_months(monkeypatch):
+    session = AppSession(id="consumption-overview", client=FakeSchoolClient(), student_name="测试用户")
+    monkeypatch.setattr(app.state.sessions, "get", lambda session_id, touch=True: session)
+    monkeypatch.setattr(app.state.sessions, "touch", lambda session_id: None)
+    factory = get_sync_session_factory()
+    with factory() as db:
+        db.add(
+            EcardBinding(
+                student_id="20240001",
+                room_id="CGCOMMON1111|1|A2|932",
+                room_display="校本部 A2 A2-932",
+            )
+        )
+        db.add_all(
+            [
+                EcardPowerConsumption(
+                    room_id="CGCOMMON1111|1|A2|932",
+                    month="2026-06",
+                    items_json=(
+                        '[{"date":"2026-06-02","usage":2.0,"unit":"度"},'
+                        '{"date":"2026-06-01","usage":2.0,"unit":"度"},'
+                        '{"date":"2026-06-03","usage":1.0,"unit":"度"}]'
+                    ),
+                ),
+                EcardPowerConsumption(
+                    room_id="CGCOMMON1111|1|A2|932",
+                    month="2026-07",
+                    items_json='[{"date":"2026-07-01","usage":5.0,"unit":"度"}]',
+                ),
+            ]
+        )
+        db.commit()
+
+    with TestClient(app) as client:
+        response = client.get("/ecard/consumption/overview", headers={"X-Session-Id": session.id})
+
+    assert response.status_code == 200
+    months = response.json()["months"]
+    assert [month["month"] for month in months] == ["2026-07", "2026-06"]
+    assert months[1] == {
+        "month": "2026-06",
+        "recordedDays": 3,
+        "totalUsage": 5,
+        "averageDailyUsage": 5 / 3,
+        "peakDate": "2026-06-01",
+        "peakUsage": 2,
+        "unit": "度",
+        "cachedAt": months[1]["cachedAt"],
+    }
 
 
 def test_ecard_reminder_message_levels():

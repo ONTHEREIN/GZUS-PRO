@@ -19,10 +19,9 @@ def _shanghai(
 
 
 def test_academic_period_of_boundaries():
-    # 9 月 1 日 0 点起进入新学年第 1 学期
+    # 8 月 1 日起按即将开学的新学年第 1 学期处理
+    assert academic_period_of(_shanghai(2026, 8, 1, 0)) == (2026, 1)
     assert academic_period_of(_shanghai(2026, 9, 1, 0)) == (2026, 1)
-    # 8 月 31 日仍是上学年第 2 学期
-    assert academic_period_of(_shanghai(2026, 8, 31, 23, 59)) == (2025, 2)
     # 1 月 31 日仍是秋季学期（第 1 学期），学年为上一年
     assert academic_period_of(_shanghai(2027, 1, 31)) == (2026, 1)
     # 2 月 1 日起为第 2 学期
@@ -46,6 +45,12 @@ def test_period_from_first_weeks_hit():
     assert period_from_first_weeks(first_weeks, _shanghai(2027, 2, 15)) == (2026, 1)
     # 第 2 学期开学日命中
     assert period_from_first_weeks(first_weeks, _shanghai(2027, 3, 1)) == (2026, 2)
+
+
+def test_period_from_first_weeks_does_not_roll_back_after_new_academic_year_starts():
+    first_weeks = {"2025-2": "2026-03-02"}
+
+    assert period_from_first_weeks(first_weeks, _shanghai(2026, 8, 28)) is None
 
 
 def test_period_from_first_weeks_overlap_prefers_latest_start():

@@ -1,42 +1,18 @@
 package cn.gzus.pro
 
 import android.app.Application
-import com.tencent.bugly.crashreport.CrashReport
 import com.tencent.upgrade.bean.UpgradeConfig
 import com.tencent.upgrade.core.UpgradeManager
 
 class GzusApplication : Application() {
     companion object {
-        var buglyInitialized = false
-            private set
         var shiplyInitialized = false
             private set
     }
 
     override fun onCreate() {
         super.onCreate()
-        initBugly()
         initShiply()
-    }
-
-    private fun initBugly() {
-        try {
-            val appInfo = packageManager.getApplicationInfo(packageName, android.content.pm.PackageManager.GET_META_DATA)
-            val buglyAppId = appInfo.metaData.getString("BUGLY_APPID") ?: ""
-            val buglyChannel = appInfo.metaData.getString("BUGLY_CHANNEL") ?: "gzus_pro"
-
-            val strategy = CrashReport.UserStrategy(this).apply {
-                appChannel = buglyChannel
-                appVersion = packageManager.getPackageInfo(packageName, 0).versionName
-                isEnableANRCrashMonitor = true
-                isEnableNativeCrashMonitor = false
-            }
-
-            CrashReport.initCrashReport(applicationContext, buglyAppId, false, strategy)
-            buglyInitialized = true
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
     }
 
     private fun initShiply() {
@@ -44,7 +20,7 @@ class GzusApplication : Application() {
             val appInfo = packageManager.getApplicationInfo(packageName, android.content.pm.PackageManager.GET_META_DATA)
             val shiplyAppId = appInfo.metaData.getString("SHIPLY_APP_ID") ?: ""
             val shiplyAppKey = appInfo.metaData.getString("SHIPLY_APP_KEY") ?: ""
-            val appChannel = appInfo.metaData.getString("BUGLY_CHANNEL") ?: "gzus_pro"
+            val appChannel = "gzus_pro"
 
             if (shiplyAppId.isBlank() || shiplyAppKey.isBlank()) return
 

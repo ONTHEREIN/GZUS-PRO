@@ -1,4 +1,4 @@
 """API routes."""
-from app.routes import academic, admin, auth, ecard, ehall, push, settings, weather
+from app.routes import academic, admin, auth, content, ecard, ehall, push, settings, weather
 
-__all__ = ["academic", "admin", "auth", "ecard", "ehall", "push", "settings", "weather"]
+__all__ = ["academic", "admin", "auth", "content", "ecard", "ehall", "push", "settings", "weather"]

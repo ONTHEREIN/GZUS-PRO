@@ -141,11 +141,29 @@ class _ApplicationsPageState extends ConsumerState<ApplicationsPage> {
                             )
                           : LayoutBuilder(
                               builder: (context, constraints) {
-                                final columns = contentGridColumns(
-                                  constraints.maxWidth,
-                                  minTileWidth: 170,
-                                  maxColumns: 4,
-                                );
+                                final columns = constraints.maxWidth < 520
+                                    ? 1
+                                    : contentGridColumns(
+                                        constraints.maxWidth,
+                                        minTileWidth: 170,
+                                        maxColumns: 4,
+                                      );
+                                if (columns == 1) {
+                                  return ListView.separated(
+                                    physics:
+                                        const AlwaysScrollableScrollPhysics(),
+                                    itemCount: filtered.length,
+                                    separatorBuilder: (context, index) =>
+                                        const SizedBox(height: 10),
+                                    itemBuilder: (context, index) =>
+                                        _ApplicationItemTile(
+                                      item: filtered[index],
+                                      api: widget.api,
+                                    ),
+                                  );
+                                }
+                                final textScale =
+                                    MediaQuery.textScalerOf(context).scale(1);
                                 return GridView.builder(
                                   physics:
                                       const AlwaysScrollableScrollPhysics(),
@@ -154,14 +172,14 @@ class _ApplicationsPageState extends ConsumerState<ApplicationsPage> {
                                     crossAxisCount: columns,
                                     crossAxisSpacing: 10,
                                     mainAxisSpacing: 10,
-                                    childAspectRatio: columns == 1
-                                        ? 2.4
-                                        : (columns == 2 ? 1.5 : 1.35),
+                                    mainAxisExtent: 210 * textScale,
                                   ),
                                   itemCount: filtered.length,
                                   itemBuilder: (context, index) =>
                                       _ApplicationItemTile(
-                                          item: filtered[index]),
+                                    item: filtered[index],
+                                    api: widget.api,
+                                  ),
                                 );
                               },
                             ),
@@ -236,9 +254,10 @@ class _ApplicationFilterChips extends StatelessWidget {
 }
 
 class _ApplicationItemTile extends StatelessWidget {
-  const _ApplicationItemTile({required this.item});
+  const _ApplicationItemTile({required this.item, required this.api});
 
   final EhallApplicationItem item;
+  final ApiClient api;
 
   @override
   Widget build(BuildContext context) {
@@ -297,7 +316,7 @@ class _ApplicationItemTile extends StatelessWidget {
       ),
     );
     return ScaleTap(
-      onTap: () => openInAppBrowser(context, item.url),
+      onTap: () => openInAppBrowser(context, item.url, api: api),
       borderRadius: BorderRadius.circular(8),
       child: inner,
     );

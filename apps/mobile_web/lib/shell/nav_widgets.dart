@@ -150,7 +150,8 @@ class AppSidebar extends StatelessWidget {
                               children: [
                                 Text('软帮手',
                                     style: theme.textTheme.titleMedium
-                                        ?.copyWith(fontWeight: FontWeight.w700)),
+                                        ?.copyWith(
+                                            fontWeight: FontWeight.w700)),
                                 const SizedBox(height: 2),
                                 Text('广州软件学院教务助手',
                                     style: theme.textTheme.bodySmall),
@@ -184,7 +185,8 @@ class AppSidebar extends StatelessWidget {
           Expanded(
             child: ListView.separated(
               itemCount: tabs.length,
-              separatorBuilder: (_, __) => const SizedBox(height: GzusSpacing.xs),
+              separatorBuilder: (_, __) =>
+                  const SizedBox(height: GzusSpacing.xs),
               itemBuilder: (context, i) {
                 final tab = tabs[i];
                 final active = i == selected;
@@ -259,110 +261,189 @@ class MobileNavBar extends StatelessWidget {
     required this.tabs,
     required this.selected,
     required this.onChanged,
+    required this.visible,
   });
 
   final List<NavTabConfig> tabs;
   final int selected;
   final ValueChanged<int> onChanged;
+  final bool visible;
 
   @override
   Widget build(BuildContext context) {
     final bottomPadding = MediaQuery.paddingOf(context).bottom;
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-    final isDark = theme.brightness == Brightness.dark;
-    return Padding(
-      padding: EdgeInsets.fromLTRB(
-          GzusSpacing.l, 0, GzusSpacing.l, bottomPadding + GzusSpacing.s),
+    final colorScheme = Theme.of(context).colorScheme;
+    return ValueListenableBuilder<LiquidGlassCapabilities>(
+      valueListenable: LiquidGlassPlatform.capabilities,
+      builder: (context, capabilities, _) {
+        final useNativeTabBar = !kIsWeb &&
+            defaultTargetPlatform == TargetPlatform.iOS &&
+            capabilities.systemGlassSupported &&
+            !capabilities.reduceTransparency;
+        final nativeBottomInset =
+            bottomPadding > 20 ? bottomPadding - 20 : GzusSpacing.s;
+        final dock = Padding(
+          padding: EdgeInsets.fromLTRB(
+              GzusSpacing.m,
+              0,
+              GzusSpacing.m,
+              useNativeTabBar
+                  ? nativeBottomInset
+                  : bottomPadding + GzusSpacing.s),
+          child: SizedBox(
+            height: useNativeTabBar
+                ? _nativeIosLiquidTabBarHeight
+                : _mobileNavBarHeight,
+            child: useNativeTabBar
+                ? NativeIosLiquidTabBar(
+                    tabs: tabs
+                        .map((tab) => NativeLiquidTabBarItem(
+                              title: tab.shortLabel,
+                              systemImageName:
+                                  _nativeSystemImageName(tab.tabId),
+                            ))
+                        .toList(growable: false),
+                    selected: selected,
+                    onChanged: onChanged,
+                    tintColor: colorScheme.primary,
+                  )
+                : _FlutterMobileNavBar(
+                    tabs: tabs,
+                    selected: selected,
+                    onChanged: onChanged,
+                    colorScheme: colorScheme,
+                  ),
+          ),
+        );
+        return AnimatedSize(
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeInOut,
+          alignment: Alignment.bottomCenter,
+          clipBehavior: Clip.hardEdge,
+          child: visible ? dock : const SizedBox.shrink(),
+        );
+      },
+    );
+  }
+}
+
+class _FlutterMobileNavBar extends StatelessWidget {
+  const _FlutterMobileNavBar({
+    required this.tabs,
+    required this.selected,
+    required this.onChanged,
+    required this.colorScheme,
+  });
+
+  final List<NavTabConfig> tabs;
+  final int selected;
+  final ValueChanged<int> onChanged;
+  final ColorScheme colorScheme;
+
+  @override
+  Widget build(BuildContext context) {
+    return LiquidGlassSurface(
+      padding: const EdgeInsets.symmetric(
+          horizontal: GzusSpacing.xs, vertical: GzusSpacing.s),
+      borderRadius: BorderRadius.circular(26),
+      material: LiquidGlassMaterial.regular,
+      semanticsLabel: '底部导航栏',
       child: Container(
-        height: _mobileNavBarHeight,
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(26),
-          boxShadow: [
-            BoxShadow(
-              color: isDark
-                  ? colorScheme.primary.withValues(alpha: 0.16)
-                  : Colors.black.withValues(alpha: 0.10),
-              blurRadius: 24,
-              offset: const Offset(0, 8),
-            ),
-            BoxShadow(
-              color: isDark
-                  ? colorScheme.primary.withValues(alpha: 0.06)
-                  : Colors.black.withValues(alpha: 0.04),
-              blurRadius: 6,
-              offset: const Offset(0, 2),
-            ),
-          ],
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(26),
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-            child: Container(
-              key: const ValueKey('mobile-bottom-nav'),
-              height: _mobileNavBarHeight,
-              padding: const EdgeInsets.symmetric(
-                  horizontal: GzusSpacing.xs, vertical: GzusSpacing.s),
-              decoration: BoxDecoration(
-                color: gzusSurface(context).withValues(alpha: 0.72),
-                borderRadius: BorderRadius.circular(26),
-                border: Border.all(
-                  color: gzusBorder(context).withValues(alpha: 0.5),
+        key: const ValueKey('mobile-bottom-nav'),
+        child: Row(
+          children: [
+            for (var i = 0; i < tabs.length; i++)
+              Expanded(
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(GzusRadii.sm),
+                  onTap: () => onChanged(i),
+                  child: i == selected
+                      ? LiquidGlassSelectionIndicator(
+                          borderRadius: BorderRadius.circular(GzusRadii.sm),
+                          accentColor: colorScheme.primary,
+                          child: _MobileNavItem(
+                            tab: tabs[i],
+                            selected: true,
+                          ),
+                        )
+                      : _MobileNavItem(
+                          tab: tabs[i],
+                          selected: false,
+                        ),
                 ),
               ),
-              child: Row(
-                children: [
-                  for (var i = 0; i < tabs.length; i++)
-                    Expanded(
-                      child: InkWell(
-                        borderRadius: BorderRadius.circular(20),
-                        onTap: () => onChanged(i),
-                        child: Container(
-                          height: double.infinity,
-                          decoration: BoxDecoration(
-                            color: i == selected
-                                ? accentFill(context)
-                                : Colors.transparent,
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(
-                                tabs[i].icon,
-                                size: 24,
-                                color: i == selected
-                                    ? colorScheme.primary
-                                    : colorScheme.onSurfaceVariant,
-                              ),
-                              const SizedBox(height: GzusSpacing.xs),
-                              Text(
-                                tabs[i].shortLabel,
-                                maxLines: 1,
-                                overflow: TextOverflow.clip,
-                                style: theme.textTheme.labelSmall?.copyWith(
-                                  color: i == selected
-                                      ? colorScheme.primary
-                                      : colorScheme.onSurfaceVariant,
-                                  fontWeight: i == selected
-                                      ? FontWeight.w700
-                                      : FontWeight.w500,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-            ),
-          ),
+          ],
         ),
       ),
     );
   }
+}
+
+class _MobileNavItem extends StatelessWidget {
+  const _MobileNavItem({required this.tab, required this.selected});
+
+  final NavTabConfig tab;
+  final bool selected;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final largeText = MediaQuery.textScalerOf(context).scale(1) > 1.3;
+    return Container(
+      height: double.infinity,
+      decoration: BoxDecoration(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(GzusRadii.sm),
+      ),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(
+            tab.icon,
+            size: largeText ? 20 : 24,
+            color:
+                selected ? colorScheme.primary : colorScheme.onSurfaceVariant,
+          ),
+          SizedBox(height: largeText ? 2 : GzusSpacing.xs),
+          Text(
+            tab.shortLabel,
+            maxLines: 1,
+            overflow: TextOverflow.clip,
+            style: theme.textTheme.labelSmall?.copyWith(
+              color:
+                  selected ? colorScheme.primary : colorScheme.onSurfaceVariant,
+              fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+String _nativeSystemImageName(String tabId) {
+  const imageNames = <String, String>{
+    'home': 'house.fill',
+    'info': 'person.text.rectangle',
+    'notices': 'bell.fill',
+    'business': 'square.grid.2x2.fill',
+    'applications': 'square.grid.3x3.fill',
+    'schedule': 'calendar',
+    'leave': 'checklist',
+    'attendance': 'clock.fill',
+    'exams': 'doc.text.fill',
+    'grades': 'graduationcap.fill',
+    'credits': 'books.vertical.fill',
+    'ecard': 'drop.fill',
+    'ftpUpload': 'arrow.up.doc.fill',
+    'more': 'ellipsis.circle.fill',
+  };
+  final imageName = imageNames[tabId];
+  if (imageName == null) {
+    throw ArgumentError.value(tabId, 'tabId', '缺少原生底栏 SF Symbol 映射。');
+  }
+  return imageName;
 }
 
 List<NavTabConfig> _mobileNavTabs(List<NavTabConfig> tabs) {
@@ -376,5 +457,3 @@ List<NavTabConfig> _mobileNavTabs(List<NavTabConfig> tabs) {
   result.add(NavTabConfig.moreTab);
   return result;
 }
-
-

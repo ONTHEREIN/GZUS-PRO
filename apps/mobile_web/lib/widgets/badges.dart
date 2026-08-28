@@ -13,6 +13,7 @@ class StatusPill extends StatelessWidget {
       decoration: BoxDecoration(
         color: color.withValues(alpha: 0.12),
         borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withValues(alpha: 0.22)),
       ),
       child: Text(label,
           maxLines: 1,
@@ -36,11 +37,11 @@ class IconBadge extends StatelessWidget {
       width: size,
       height: size,
       decoration: BoxDecoration(
-        color: colorScheme.primaryContainer,
-        borderRadius: BorderRadius.circular(size >= 38 ? 16 : 12),
+        color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.55),
+        borderRadius: BorderRadius.circular(size >= 38 ? 12 : 8),
+        border: Border.all(color: colorScheme.outlineVariant),
       ),
-      child:
-          Icon(icon, size: size * 0.48, color: colorScheme.onPrimaryContainer),
+      child: Icon(icon, size: size * 0.48, color: colorScheme.primary),
     );
   }
 }
@@ -70,24 +71,41 @@ class MetricPill extends StatelessWidget {
         vertical: dense ? 6 : 9,
       ),
       decoration: BoxDecoration(
-        color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.62),
+        color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.45),
         borderRadius: BorderRadius.circular(dense ? 12 : 16),
+        border: Border.all(color: colorScheme.outlineVariant),
       ),
       child: Row(
         mainAxisSize: width == null ? MainAxisSize.min : MainAxisSize.max,
         children: [
           Icon(icon, size: dense ? 13 : 15, color: colorScheme.primary),
-          SizedBox(width: dense ? 4 : 6),
+          SizedBox(width: dense ? 6 : 8),
           Flexible(
-            child: Text(
-              dense ? '$label$value' : '$label $value',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontSize: dense ? 12 : null,
-                color: colorScheme.onSurface,
-                fontWeight: FontWeight.w600,
-              ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: dense ? 10 : 11,
+                    color: colorScheme.onSurfaceVariant,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                Text(
+                  value,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: dense ? 12 : 14,
+                    color: colorScheme.onSurface,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
             ),
           ),
         ],

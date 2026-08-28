@@ -67,7 +67,7 @@ def ecard_reminder_cron(x_internal_key: str | None = Header(None)) -> dict[str, 
             return {"ok": True, "reason": "ecard not configured", "processed": 0}
         from app.database import EcardBinding, get_sync_session_factory
         from app.jobs import prepare_ecard_reminders
-        from app.push import send_web_push_to_student
+        from app.push import send_push_to_student
 
         processed = 0
         notified = 0
@@ -100,7 +100,7 @@ def ecard_reminder_cron(x_internal_key: str | None = Header(None)) -> dict[str, 
                         "shortCriticalText": "水电",
                     }
                     try:
-                        send_web_push_to_student(binding.student_id, title, body, live_payload)
+                        send_push_to_student(binding.student_id, title, body, live_payload)
                     except RuntimeError:
                         logger.exception("ecard_reminder_push_failed", extra={"student_id": binding.student_id})
                     else:

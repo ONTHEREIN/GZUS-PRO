@@ -23,6 +23,9 @@ class _MarqueeTextState extends State<MarqueeText>
   double _textWidth = 0;
   double _containerWidth = 0;
   bool _needsScroll = false;
+  String? _measuredText;
+  TextStyle? _measuredStyle;
+  bool _measurementScheduled = false;
 
   @override
   void initState() {
@@ -43,50 +46,71 @@ class _MarqueeTextState extends State<MarqueeText>
     super.dispose();
   }
 
-  void _measure() {
+  void _scheduleMeasurement(BuildContext context, double containerWidth) {
+    final changed = _containerWidth != containerWidth ||
+        _measuredText != widget.text ||
+        _measuredStyle != widget.style;
+    if (!changed || _measurementScheduled) return;
+    _containerWidth = containerWidth;
+    _measurementScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _measurementScheduled = false;
+      if (!mounted) return;
+      _measure(context);
+    });
+  }
+
+  void _measure(BuildContext context) {
     final span = TextSpan(text: widget.text, style: widget.style);
-    final tp = TextPainter(text: span, textDirection: TextDirection.ltr)
-      ..layout();
-    _textWidth = tp.width;
-    if (_needsScroll && _textWidth > 0 && _containerWidth > 0) {
-      final distance = _textWidth + 16;
+    final tp = TextPainter(
+      text: span,
+      textDirection: Directionality.of(context),
+    )..layout();
+    final textWidth = tp.width;
+    final needsScroll = textWidth > _containerWidth;
+    _measuredText = widget.text;
+    _measuredStyle = widget.style;
+    if (needsScroll && textWidth > 0 && _containerWidth > 0) {
+      final distance = textWidth + 16;
       final duration = (distance / widget.scrollSpeed * 1000).round();
       _controller.duration = Duration(milliseconds: duration);
       _controller.forward(from: 0);
+    } else {
+      _controller.stop();
     }
+    setState(() {
+      _textWidth = textWidth;
+      _needsScroll = needsScroll;
+    });
   }
 
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        _containerWidth = constraints.maxWidth;
+        _scheduleMeasurement(context, constraints.maxWidth);
+        if (!_needsScroll) {
+          return Text(
+            widget.text,
+            style: widget.style,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          );
+        }
         return ClipRect(
           child: AnimatedBuilder(
             animation: _controller,
+            child: Text(
+              widget.text,
+              style: widget.style,
+              maxLines: 1,
+              softWrap: false,
+            ),
             builder: (context, child) {
-              final span = TextSpan(text: widget.text, style: widget.style);
-              final tp =
-                  TextPainter(text: span, textDirection: TextDirection.ltr)
-                    ..layout();
-              _textWidth = tp.width;
-              _needsScroll = _textWidth > _containerWidth;
-              if (!_needsScroll) {
-                _controller.stop();
-                return Text(widget.text,
-                    style: widget.style,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis);
-              }
-              if (!_controller.isAnimating &&
-                  _controller.status == AnimationStatus.dismissed) {
-                WidgetsBinding.instance.addPostFrameCallback((_) => _measure());
-              }
               final offset = _controller.value * (_textWidth + 16);
               return Transform.translate(
                 offset: Offset(-offset, 0),
-                child: Text(widget.text,
-                    style: widget.style, maxLines: 1, softWrap: false),
+                child: child,
               );
             },
           ),

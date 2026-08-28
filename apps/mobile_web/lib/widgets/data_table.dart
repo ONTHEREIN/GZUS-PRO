@@ -42,7 +42,7 @@ class MobileRecordCard extends StatelessWidget {
           margin: const EdgeInsets.symmetric(vertical: 6),
           decoration: BoxDecoration(
             color: cardColor ?? gzusSurface(context),
-            borderRadius: BorderRadius.circular(compact ? 16 : 20),
+            borderRadius: BorderRadius.circular(GzusRadii.md),
             border: Border.all(color: gzusBorder(context)),
           ),
           child: Padding(

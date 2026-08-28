@@ -9,12 +9,21 @@ if ('serviceWorker' in navigator) {
   });
 }
 
+const serviceWorkerVersion = {{flutter_service_worker_version}};
+const isLocalDevelopment = ['127.0.0.1', 'localhost', '::1'].includes(
+  window.location.hostname,
+);
+
 _flutter.loader.load({
   config: {
     canvasKitBaseUrl: 'canvaskit/',
   },
-  serviceWorkerSettings: {
-    serviceWorkerUrl: 'gzus_pwa_sw.js?v=' + {{flutter_service_worker_version}},
-    serviceWorkerVersion: {{flutter_service_worker_version}},
-  },
+  // `flutter run` 将版本占位符替换为 null。此时若注册 PWA Worker，
+  // 会劫持 DDC 调试模块请求并使 Web 启动卡在加载页。
+  serviceWorkerSettings: serviceWorkerVersion == null || isLocalDevelopment
+      ? undefined
+      : {
+          serviceWorkerUrl: 'gzus_pwa_sw.js?v=' + serviceWorkerVersion,
+          serviceWorkerVersion,
+        },
 });

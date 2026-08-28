@@ -57,6 +57,7 @@ class _NoticesPageState extends ConsumerState<NoticesPage>
       onRefresh: _refreshNotices,
       child: AsyncPanel<List<NoticeItem>>(
         future: noticesFuture,
+        initialData: widget.api.cachedNotices(),
         emptyMessage: '暂无通知',
         onSessionExpired: widget.onSessionExpired,
         builder: (items) => LayoutBuilder(
@@ -98,9 +99,10 @@ class _NoticesPageState extends ConsumerState<NoticesPage>
                                   )
                                 : null,
                             child: NoticeCard(
-                            item: items[index],
-                            resolveUrl: widget.api.resolveMediaUrl,
-                          ),
+                              item: items[index],
+                              api: widget.api,
+                              resolveUrl: widget.api.resolveMediaUrl,
+                            ),
                           ),
                         ),
                       ),
@@ -136,6 +138,7 @@ class _NoticesPageState extends ConsumerState<NoticesPage>
                 separatorBuilder: (_, __) => const SizedBox(height: 10),
                 itemBuilder: (context, index) => NoticeCard(
                   item: items[index],
+                  api: widget.api,
                   resolveUrl: widget.api.resolveMediaUrl,
                 ),
               ),
@@ -155,11 +158,11 @@ class _NoticeDetailContent extends ConsumerStatefulWidget {
   final VoidCallback? onSessionExpired;
 
   @override
-  ConsumerState<_NoticeDetailContent> createState() => _NoticeDetailContentState();
+  ConsumerState<_NoticeDetailContent> createState() =>
+      _NoticeDetailContentState();
 }
 
 class _NoticeDetailContentState extends ConsumerState<_NoticeDetailContent> {
-
   @override
   Widget build(BuildContext context) {
     final coverUrl = _resolveCover();
@@ -247,7 +250,9 @@ class _NoticeDetailContentState extends ConsumerState<_NoticeDetailContent> {
   String? _resolveCover() {
     final cover = widget.item.coverUrl;
     if (cover == null || cover.isEmpty) return null;
-    if (cover.startsWith('http://') || cover.startsWith('https://')) return cover;
+    if (cover.startsWith('http://') || cover.startsWith('https://')) {
+      return cover;
+    }
     return widget.api.resolveMediaUrl(cover);
   }
 }
@@ -292,9 +297,15 @@ class _NoticeCoverImage extends StatelessWidget {
 }
 
 class NoticeCard extends StatelessWidget {
-  const NoticeCard({super.key, required this.item, this.resolveUrl});
+  const NoticeCard({
+    super.key,
+    required this.item,
+    required this.api,
+    this.resolveUrl,
+  });
 
   final NoticeItem item;
+  final ApiClient api;
 
   /// 把相对路径封面（如校历 /admin/notices/1/image）解析为完整 URL。
   final String? Function(String path)? resolveUrl;
@@ -312,7 +323,9 @@ class NoticeCard extends StatelessWidget {
   String? get _coverUrl {
     final cover = item.coverUrl;
     if (cover == null || cover.isEmpty) return null;
-    if (cover.startsWith('http://') || cover.startsWith('https://')) return cover;
+    if (cover.startsWith('http://') || cover.startsWith('https://')) {
+      return cover;
+    }
     return resolveUrl?.call(cover);
   }
 
@@ -416,7 +429,11 @@ class NoticeCard extends StatelessWidget {
               Align(
                 alignment: Alignment.centerRight,
                 child: FilledButton.tonalIcon(
-                  onPressed: () => openInAppBrowser(context, item.url),
+                  onPressed: () => openInAppBrowser(
+                    context,
+                    item.url,
+                    api: api,
+                  ),
                   icon: const Icon(Icons.open_in_new, size: 18),
                   label: const Text('打开通知'),
                 ),

@@ -45,7 +45,8 @@ flutter build apk --dart-define=API_BASE_URL=...
 
 - `API_BASE_URL` defaults to `https://onegzus.onrein.top/api`.
 - On Android, `localhost`/`127.0.0.1` is auto-rewritten to `10.0.2.2` for emulator access.
-- `build_deploy.ps1` auto-increments build number in `pubspec.yaml`, builds APK, and installs via ADB. `-Local` for LAN API, `-Cloud` (default) for production. Also supports `-ApiUrl=<url>`.
+- 版本管理遵循 Flutter 常见的语义版本 + 单调构建号约定：每次实际交付更新都必须递增 `pubspec.yaml` 的构建号（`+BUILD`）；仅在包含实际功能变更或修复时，才按影响范围递增语义版本（`-Patch`、`-Minor` 或 `-Major`）。单纯构建、测试、检查或文档改动不得变更语义版本。
+- `build_deploy.ps1` 调用 `tools/bump_version.ps1` 自动递增构建号并构建、安装 APK；`-Patch`、`-Minor`、`-Major` 同时递增相应语义版本。`-Local` 用于局域网 API，`-Cloud`（默认）用于生产，另支持 `-ApiUrl=<url>`。
 - `restart.ps1` at repo root kills old processes, starts backend, waits for `/health`, then starts Flutter Chrome dev.
 
 ### API backend

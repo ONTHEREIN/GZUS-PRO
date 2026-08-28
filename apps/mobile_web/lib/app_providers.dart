@@ -60,7 +60,8 @@ final noticesProvider =
   return response.data;
 });
 
-final noticeDetailProvider = FutureProvider.family<NoticeDetail, NoticeDetailRequest>(
+final noticeDetailProvider =
+    FutureProvider.family<NoticeDetail, NoticeDetailRequest>(
   (ref, request) async {
     final response = await request.client.fetchNoticeDetail(request.url);
     return response.data;
@@ -80,32 +81,35 @@ class AttendanceRequest {
     required this.client,
     required this.year,
     required this.term,
+    required this.forceRefresh,
   });
 
   final ApiClient client;
   final int year;
   final int term;
+  final bool forceRefresh;
 
   @override
   bool operator ==(Object other) =>
       other is AttendanceRequest &&
       identical(client, other.client) &&
       year == other.year &&
-      term == other.term;
+      term == other.term &&
+      forceRefresh == other.forceRefresh;
 
   @override
-  int get hashCode => Object.hash(identityHashCode(client), year, term);
+  int get hashCode =>
+      Object.hash(identityHashCode(client), year, term, forceRefresh);
 }
 
 final attendanceProvider =
-    FutureProvider.family<AttendanceResponse, AttendanceRequest>(
+    FutureProvider.family<DataResult<AttendanceResponse>, AttendanceRequest>(
   (ref, request) async {
-    final response = await request.client.attendance(
+    return request.client.attendance(
       year: request.year,
       term: request.term,
-      forceRefresh: false,
+      forceRefresh: request.forceRefresh,
     );
-    return response.data;
   },
 );
 

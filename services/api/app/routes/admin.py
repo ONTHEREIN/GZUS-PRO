@@ -13,6 +13,7 @@ from app import wechat_service
 from app.config import get_settings
 from app.database import (
     AdminAuditLog,
+    LoginCarouselSlide,
     AdminNotice,
     AdminUser,
     AppSessionModel,
@@ -36,8 +37,9 @@ ACTIVE_SESSION_WINDOW = timedelta(minutes=25)
 
 _tables_ready = False
 
-# 校历/通知图片上限：3MB（base64 后约 4MB）
-ADMIN_NOTICE_IMAGE_MAX_BYTES = 3 * 1024 * 1024
+# 管理后台图片上限：3MB（base64 后约 4MB）
+ADMIN_IMAGE_MAX_BYTES = 3 * 1024 * 1024
+LOGIN_SLIDE_PUBLISHED_LIMIT = 5
 
 
 def ensure_admin_tables() -> None:
@@ -47,7 +49,12 @@ def ensure_admin_tables() -> None:
     engine = get_sync_engine()
     Base.metadata.create_all(
         engine,
-        tables=[AdminUser.__table__, AdminAuditLog.__table__, AdminNotice.__table__],
+        tables=[
+            AdminUser.__table__,
+            AdminAuditLog.__table__,
+            AdminNotice.__table__,
+            LoginCarouselSlide.__table__,
+        ],
     )
     _seed_owner()
     _tables_ready = True
@@ -599,7 +606,7 @@ def admin_notices_create(
             raw_len = len(base64.b64decode(image_data))
         except Exception as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"图片 base64 解析失败: {exc}")
-        if raw_len > ADMIN_NOTICE_IMAGE_MAX_BYTES:
+        if raw_len > ADMIN_IMAGE_MAX_BYTES:
             raise HTTPException(
                 status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                 detail="图片不能超过 3MB",
@@ -661,7 +668,7 @@ def admin_notices_update(
                 raw_len = len(base64.b64decode(image_data))
             except Exception as exc:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"图片 base64 解析失败: {exc}")
-            if raw_len > ADMIN_NOTICE_IMAGE_MAX_BYTES:
+            if raw_len > ADMIN_IMAGE_MAX_BYTES:
                 raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="图片不能超过 3MB")
             row.image_data = image_data
             row.image_mime = payload.image_mime
@@ -751,6 +758,270 @@ def list_published_admin_notices() -> list[dict]:
             }
             for row in rows
         ]
+
+
+# ─── 登录页轮播管理 ─────────────────────────────────────────────
+
+
+class AdminLoginSlideCreatePayload(BaseModel):
+    title: str = Field(min_length=1, max_length=100)
+    description: str | None = Field(default=None, max_length=500)
+    image_data: str = Field(
+        min_length=1,
+        max_length=6 * 1024 * 1024,
+        validation_alias=AliasChoices("imageData", "image_data"),
+    )
+    image_mime: str = Field(
+        min_length=1,
+        max_length=100,
+        validation_alias=AliasChoices("imageMime", "image_mime"),
+    )
+    published: bool = True
+
+
+class AdminLoginSlideUpdatePayload(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=100)
+    description: str | None = Field(default=None, max_length=500)
+    image_data: str | None = Field(
+        default=None,
+        max_length=6 * 1024 * 1024,
+        validation_alias=AliasChoices("imageData", "image_data"),
+    )
+    image_mime: str | None = Field(
+        default=None,
+        max_length=100,
+        validation_alias=AliasChoices("imageMime", "image_mime"),
+    )
+    published: bool | None = None
+
+
+class AdminLoginSlideOrderPayload(BaseModel):
+    ids: list[int] = Field(min_length=0, max_length=100)
+
+
+def _decode_admin_image(image_data: str, image_mime: str | None) -> tuple[str, str]:
+    """校验并规范化管理员提交的 base64 图片。"""
+    normalized_data = image_data
+    normalized_mime = image_mime
+    if normalized_data.startswith("data:"):
+        header, _, normalized_data = normalized_data.partition(",")
+        if not normalized_data:
+            raise HTTPException(status_code=400, detail="图片 data URL 缺少数据")
+        if normalized_mime is None and ";" in header:
+            normalized_mime = header.split(";", 1)[0].split(":", 1)[-1] or None
+    if normalized_mime is None:
+        raise HTTPException(status_code=400, detail="图片缺少 MIME 类型")
+    try:
+        raw_image = base64.b64decode(normalized_data, validate=True)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="图片 base64 解析失败") from exc
+    if len(raw_image) > ADMIN_IMAGE_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="图片不能超过 3MB")
+    return normalized_data, normalized_mime
+
+
+def _login_slide_to_dict(row: LoginCarouselSlide) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "title": row.title,
+        "description": row.description,
+        "imageUrl": f"/admin/login-slides/{row.id}/image",
+        "imageMime": row.image_mime,
+        "sortOrder": row.sort_order,
+        "published": row.published,
+        "createdAt": row.created_at.isoformat() if row.created_at else None,
+        "updatedAt": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
+def _published_login_slide_count(db) -> int:
+    return db.query(LoginCarouselSlide).filter(LoginCarouselSlide.published.is_(True)).count()
+
+
+def _validate_login_slide_publication(db, published: bool, current_published: bool) -> None:
+    if not published or current_published:
+        return
+    if _published_login_slide_count(db) >= LOGIN_SLIDE_PUBLISHED_LIMIT:
+        raise HTTPException(status_code=400, detail="最多只能发布 5 张登录轮播图")
+
+
+@router.get("/login-slides")
+def admin_login_slides_list(
+    session: AppSession = Depends(require_admin),
+) -> dict[str, Any]:
+    """登录页轮播列表（管理员视角，含未发布内容）。"""
+    ensure_admin_tables()
+    factory = get_sync_session_factory()
+    with factory() as db:
+        rows = (
+            db.query(LoginCarouselSlide)
+            .order_by(LoginCarouselSlide.sort_order.asc(), LoginCarouselSlide.id.asc())
+            .all()
+        )
+        return {"total": len(rows), "items": [_login_slide_to_dict(row) for row in rows]}
+
+
+@router.post("/login-slides", status_code=status.HTTP_201_CREATED)
+def admin_login_slides_create(
+    payload: AdminLoginSlideCreatePayload,
+    request: Request,
+    session: AppSession = Depends(require_admin),
+) -> dict[str, Any]:
+    """新建登录页轮播图。"""
+    ensure_admin_tables()
+    image_data, image_mime = _decode_admin_image(payload.image_data, payload.image_mime)
+    operator_id = student_id_of(session)
+    factory = get_sync_session_factory()
+    with factory() as db:
+        _validate_login_slide_publication(db, payload.published, False)
+        last_slide = (
+            db.query(LoginCarouselSlide)
+            .order_by(LoginCarouselSlide.sort_order.desc(), LoginCarouselSlide.id.desc())
+            .first()
+        )
+        sort_order = 0 if last_slide is None else last_slide.sort_order + 1
+        row = LoginCarouselSlide(
+            title=payload.title,
+            description=payload.description,
+            image_data=image_data,
+            image_mime=image_mime,
+            sort_order=sort_order,
+            published=payload.published,
+        )
+        db.add(row)
+        db.flush()
+        _log_audit(
+            db,
+            operator_id=operator_id,
+            action="create_login_slide",
+            target_type="login_carousel_slide",
+            target_id=str(row.id),
+            detail=payload.title,
+        )
+        db.commit()
+        db.refresh(row)
+        return _login_slide_to_dict(row)
+
+
+@router.put("/login-slides/{slide_id}")
+def admin_login_slides_update(
+    slide_id: int,
+    payload: AdminLoginSlideUpdatePayload,
+    request: Request,
+    session: AppSession = Depends(require_admin),
+) -> dict[str, Any]:
+    """更新登录页轮播图。"""
+    ensure_admin_tables()
+    operator_id = student_id_of(session)
+    factory = get_sync_session_factory()
+    with factory() as db:
+        row = db.query(LoginCarouselSlide).filter(LoginCarouselSlide.id == slide_id).first()
+        if row is None:
+            raise HTTPException(status_code=404, detail="轮播图不存在")
+        next_published = row.published if payload.published is None else payload.published
+        _validate_login_slide_publication(db, next_published, row.published)
+        if payload.title is not None:
+            row.title = payload.title
+        if "description" in payload.model_fields_set:
+            row.description = payload.description
+        if payload.image_data is not None:
+            image_data, image_mime = _decode_admin_image(payload.image_data, payload.image_mime)
+            row.image_data = image_data
+            row.image_mime = image_mime
+        if payload.published is not None:
+            row.published = payload.published
+        row.updated_at = datetime.now(UTC)
+        _log_audit(
+            db,
+            operator_id=operator_id,
+            action="update_login_slide",
+            target_type="login_carousel_slide",
+            target_id=str(row.id),
+            detail=row.title,
+        )
+        db.commit()
+        db.refresh(row)
+        return _login_slide_to_dict(row)
+
+
+@router.put("/login-slides/actions/order")
+def admin_login_slides_order(
+    payload: AdminLoginSlideOrderPayload,
+    request: Request,
+    session: AppSession = Depends(require_admin),
+) -> dict[str, Any]:
+    """按传入顺序重排全部登录轮播图。"""
+    ensure_admin_tables()
+    if len(payload.ids) != len(set(payload.ids)):
+        raise HTTPException(status_code=400, detail="轮播图排序包含重复 ID")
+    operator_id = student_id_of(session)
+    factory = get_sync_session_factory()
+    with factory() as db:
+        rows = db.query(LoginCarouselSlide).order_by(LoginCarouselSlide.id.asc()).all()
+        row_ids = [row.id for row in rows]
+        if set(payload.ids) != set(row_ids):
+            raise HTTPException(status_code=400, detail="轮播图排序必须包含全部现有 ID")
+        rows_by_id = {row.id: row for row in rows}
+        for index, slide_id in enumerate(payload.ids):
+            rows_by_id[slide_id].sort_order = index
+            rows_by_id[slide_id].updated_at = datetime.now(UTC)
+        _log_audit(
+            db,
+            operator_id=operator_id,
+            action="reorder_login_slides",
+            target_type="login_carousel_slide",
+            detail=",".join(str(slide_id) for slide_id in payload.ids),
+        )
+        db.commit()
+        ordered_rows = [rows_by_id[slide_id] for slide_id in payload.ids]
+        return {"total": len(ordered_rows), "items": [_login_slide_to_dict(row) for row in ordered_rows]}
+
+
+@router.delete("/login-slides/{slide_id}")
+def admin_login_slides_delete(
+    slide_id: int,
+    request: Request,
+    session: AppSession = Depends(require_admin),
+) -> dict[str, Any]:
+    """删除登录页轮播图。"""
+    ensure_admin_tables()
+    operator_id = student_id_of(session)
+    factory = get_sync_session_factory()
+    with factory() as db:
+        row = db.query(LoginCarouselSlide).filter(LoginCarouselSlide.id == slide_id).first()
+        if row is None:
+            raise HTTPException(status_code=404, detail="轮播图不存在")
+        title = row.title
+        db.delete(row)
+        _log_audit(
+            db,
+            operator_id=operator_id,
+            action="delete_login_slide",
+            target_type="login_carousel_slide",
+            target_id=str(slide_id),
+            detail=title,
+        )
+        db.commit()
+    return {"ok": True, "id": slide_id}
+
+
+@router.get("/login-slides/{slide_id}/image")
+def admin_login_slide_image(
+    slide_id: int,
+    session: AppSession = Depends(require_admin),
+) -> Response:
+    """管理员预览登录页轮播图图片。"""
+    ensure_admin_tables()
+    factory = get_sync_session_factory()
+    with factory() as db:
+        row = db.query(LoginCarouselSlide).filter(LoginCarouselSlide.id == slide_id).first()
+        if row is None:
+            raise HTTPException(status_code=404, detail="轮播图不存在")
+        try:
+            content = base64.b64decode(row.image_data, validate=True)
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail="轮播图数据损坏") from exc
+    return Response(content=content, media_type=row.image_mime)
 
 
 # ─── 公众号文章管理（同步通道：RSS > 微信公开合集，可插拔） ──────

@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'api_client.dart';
 import 'web_push_service.dart' deferred as web_push_service;
 import 'local_notification_service.dart' deferred as local_notification_service;
 import 'push_service.dart' deferred as push_service;
@@ -77,6 +78,7 @@ class LoginRequiredServices {
   static String? _sessionId;
 
   static Future<void> initialize({
+    required ApiClient api,
     required String apiBaseUrl,
     required String sessionId,
     void Function(Map<String, dynamic>)? onNotificationTap,
@@ -96,7 +98,8 @@ class LoginRequiredServices {
     final future = Future.wait([
       if (!_initialized) _initWebPushService(onNotificationTap),
       if (!_initialized) _initLocalNotificationService(onNotificationTap),
-      if (!_initialized) _initPushService(onNotificationTap),
+      if (!_initialized) _initPushService(api, onNotificationTap),
+      _syncIosPushToken(api),
       if (!_initialized) _initPersistentCache(),
       _initWsService(apiBaseUrl, sessionId),
       if (!_initialized) _initReminderService(),
@@ -133,10 +136,17 @@ class LoginRequiredServices {
   }
 
   static Future<void> _initPushService(
-      void Function(Map<String, dynamic>)? onTap) async {
+      ApiClient api, void Function(Map<String, dynamic>)? onTap) async {
     try {
       await push_service.loadLibrary();
-      await push_service.PushService.init(onTap: onTap);
+      await push_service.PushService.init(api: api, onTap: onTap);
+    } catch (_) {}
+  }
+
+  static Future<void> _syncIosPushToken(ApiClient api) async {
+    try {
+      await push_service.loadLibrary();
+      await push_service.PushService.syncIosPushToken(api);
     } catch (_) {}
   }
 
@@ -213,6 +223,19 @@ class LoginRequiredServices {
     } catch (_) {}
   }
 
+  static Future<void> syncIosPushToken(ApiClient api) async {
+    await push_service.loadLibrary();
+    await push_service.PushService.syncIosPushToken(api);
+  }
+
+  static Future<void> unregisterIosPushToken(
+    ApiClient api,
+    String activeSessionId,
+  ) async {
+    await push_service.loadLibrary();
+    await push_service.PushService.unregisterIosPushToken(api, activeSessionId);
+  }
+
   static Future<void> checkForUpdate() async {
     try {
       await update_service.loadLibrary();
@@ -238,8 +261,7 @@ class LoginRequiredServices {
     dynamic context,
     String url, {
     String? fillScript,
-    dynamic api,
-    String? attachmentName,
+    required ApiClient api,
   }) async {
     try {
       await mobile_sso.loadLibrary();
@@ -248,7 +270,6 @@ class LoginRequiredServices {
         url,
         fillScript: fillScript,
         api: api,
-        attachmentName: attachmentName,
       );
     } catch (_) {
       return false;

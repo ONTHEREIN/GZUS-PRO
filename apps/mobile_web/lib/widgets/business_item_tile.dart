@@ -7,9 +7,10 @@ import 'open_browser.dart';
 import 'scale_tap.dart';
 
 class BusinessItemTile extends StatelessWidget {
-  const BusinessItemTile({super.key, required this.item});
+  const BusinessItemTile({super.key, required this.item, required this.api});
 
   final EhallAffairItem item;
+  final ApiClient api;
 
   @override
   Widget build(BuildContext context) {
@@ -68,7 +69,7 @@ class BusinessItemTile extends StatelessWidget {
       ),
     );
     return ScaleTap(
-      onTap: () => openInAppBrowser(context, item.url),
+      onTap: () => openInAppBrowser(context, item.url, api: api),
       borderRadius: BorderRadius.circular(8),
       child: inner,
     );

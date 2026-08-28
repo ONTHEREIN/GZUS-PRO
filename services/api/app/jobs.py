@@ -9,7 +9,7 @@ from app.config import get_settings
 from app.database import EcardBinding, get_sync_session_factory
 from app.ecard_client import EcardApiError, EcardClient, EcardConfigurationError, EcardRoomRef, safe_float
 from app.notice_utils import merge_notices, notice_key, valid_notice_items
-from app.push import send_web_push_to_student
+from app.push import send_push_to_student
 from app.sessions import student_id_of
 
 __all__ = [
@@ -119,7 +119,7 @@ async def run_notice_poller_once(app) -> None:
             }
             await manager.send_to_session(session_id, message)
             if student_id:
-                send_web_push_to_student(
+                send_push_to_student(
                     student_id,
                     "新通知",
                     title if not body else f"{title}\n{body}",
@@ -338,7 +338,7 @@ async def run_ecard_reminder_once(app) -> None:
                     "progress": progress_current / 100,
                 }
                 await _send_ecard_ws(app, binding.student_id, title, body, summary, live_payload)
-                send_web_push_to_student(
+                send_push_to_student(
                     binding.student_id,
                     title,
                     body,
@@ -494,7 +494,7 @@ async def run_exam_reminder_once(app) -> None:
             if end_time is not None:
                 extras["endTime"] = end_time
             if student_id:
-                send_web_push_to_student(
+                send_push_to_student(
                     student_id,
                     "考试提醒",
                     body,
@@ -568,7 +568,7 @@ async def run_grade_update_once(app) -> None:
             }
             await manager.send_to_session(session_id, payload)
             extras = {key: value for key, value in payload.items() if key not in {"title", "body"}}
-            send_web_push_to_student(student_id, title, body, extras)
+            send_push_to_student(student_id, title, body, extras)
 
     tasks = [
         poll_session(session_id, session)

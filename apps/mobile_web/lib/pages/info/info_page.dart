@@ -5,6 +5,7 @@ import '../../api_client.dart';
 import '../../app_providers.dart';
 import '../../responsive/breakpoints.dart';
 import '../../responsive/sizing.dart';
+import '../../responsive/spacing.dart';
 import '../../widgets/async_panel.dart';
 import '../../widgets/info_tile.dart';
 import '../../widgets/page_panel.dart';
@@ -21,7 +22,6 @@ class InfoPage extends ConsumerStatefulWidget {
 }
 
 class _InfoPageState extends ConsumerState<InfoPage> {
-
   Future<void> _refreshInfo() async {
     ref.invalidate(studentInfoProvider(widget.api));
     await ref.read(studentInfoProvider(widget.api).future);
@@ -34,6 +34,7 @@ class _InfoPageState extends ConsumerState<InfoPage> {
       onRefresh: _refreshInfo,
       child: AsyncPanel<StudentInfo>(
         future: infoFuture,
+        initialData: widget.api.cachedStudentInfo(),
         onSessionExpired: widget.onSessionExpired,
         builder: (info) => LayoutBuilder(
           builder: (context, constraints) {
@@ -48,64 +49,7 @@ class _InfoPageState extends ConsumerState<InfoPage> {
               minSide: 260,
               maxSide: 340,
             );
-            final tiles = [
-              InfoTile(icon: Icons.person, label: '姓名', value: info.name),
-              InfoTile(icon: Icons.badge, label: '学号', value: info.studentId),
-              InfoTile(
-                  icon: Icons.apartment,
-                  label: '学院',
-                  value: info.college ?? '-'),
-              InfoTile(
-                  icon: Icons.school, label: '专业', value: info.major ?? '-'),
-              InfoTile(
-                  icon: Icons.groups,
-                  label: '班级',
-                  value: info.className ?? '-'),
-              InfoTile(
-                  icon: Icons.calendar_today,
-                  label: '年级',
-                  value: info.grade ?? '-'),
-              if (info.gender != null)
-                InfoTile(icon: Icons.wc, label: '性别', value: info.gender!),
-              if (info.idNumber != null)
-                InfoTile(
-                    icon: Icons.credit_card,
-                    label: '证件号码',
-                    value: info.idNumber!),
-              if (info.birthDate != null)
-                InfoTile(
-                    icon: Icons.cake, label: '出生日期', value: info.birthDate!),
-              if (info.ethnicity != null)
-                InfoTile(
-                    icon: Icons.people, label: '民族', value: info.ethnicity!),
-              if (info.politicalStatus != null)
-                InfoTile(
-                    icon: Icons.flag,
-                    label: '政治面貌',
-                    value: info.politicalStatus!),
-              if (info.enrollDate != null)
-                InfoTile(
-                    icon: Icons.event, label: '入学日期', value: info.enrollDate!),
-              if (info.nativePlace != null)
-                InfoTile(
-                    icon: Icons.place, label: '籍贯', value: info.nativePlace!),
-              if (info.studentStatus != null)
-                InfoTile(
-                    icon: Icons.how_to_reg,
-                    label: '学籍状态',
-                    value: info.studentStatus!),
-              if (info.educationLevel != null)
-                InfoTile(
-                    icon: Icons.workspace_premium,
-                    label: '培养层次',
-                    value: info.educationLevel!),
-              if (info.phone != null)
-                InfoTile(icon: Icons.phone, label: '手机号码', value: info.phone!),
-              if (info.email != null)
-                InfoTile(icon: Icons.email, label: '电子邮箱', value: info.email!),
-              if (info.address != null)
-                InfoTile(icon: Icons.home, label: '家庭地址', value: info.address!),
-            ];
+            final sections = _infoSections(info);
             if (wide) {
               return Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -115,30 +59,10 @@ class _InfoPageState extends ConsumerState<InfoPage> {
                     child: PagePanel(
                       title: '个人信息',
                       icon: Icons.badge,
-                      child: Center(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            StudentAvatar(
-                              photoDataUrl: info.photoDataUrl,
-                              name: info.name,
-                            ),
-                            const SizedBox(height: 16),
-                            Text(info.name,
-                                style: const TextStyle(
-                                    fontSize: 18, fontWeight: FontWeight.w700)),
-                            if (info.studentId.isNotEmpty)
-                              Text(info.studentId,
-                                  style: TextStyle(
-                                      color: Theme.of(context)
-                                          .colorScheme
-                                          .onSurfaceVariant)),
-                          ],
-                        ),
-                      ),
+                      child: _IdentitySummary(info: info),
                     ),
                   ),
-                  const SizedBox(width: 12),
+                  const SizedBox(width: GzusSpacing.m),
                   Expanded(
                     child: PagePanel(
                       title: '详细信息',
@@ -146,8 +70,7 @@ class _InfoPageState extends ConsumerState<InfoPage> {
                       expandChild: true,
                       child: SingleChildScrollView(
                         physics: const AlwaysScrollableScrollPhysics(),
-                        child:
-                            Wrap(spacing: 12, runSpacing: 12, children: tiles),
+                        child: _InfoDetails(sections: sections),
                       ),
                     ),
                   ),
@@ -157,31 +80,13 @@ class _InfoPageState extends ConsumerState<InfoPage> {
             return SingleChildScrollView(
               physics: const AlwaysScrollableScrollPhysics(),
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const SizedBox(height: 12),
-                  StudentAvatar(
-                    photoDataUrl: info.photoDataUrl,
-                    name: info.name,
-                  ),
-                  const SizedBox(height: 8),
-                  Text(info.name,
-                      style: const TextStyle(
-                          fontSize: 18, fontWeight: FontWeight.w700)),
-                  if (info.studentId.isNotEmpty)
-                    Text(info.studentId,
-                        style: TextStyle(
-                            color: Theme.of(context)
-                                .colorScheme
-                                .onSurfaceVariant)),
-                  const SizedBox(height: 12),
-                  Wrap(
-                    alignment: WrapAlignment.center,
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: tiles,
-                  ),
-                  const SizedBox(height: 24),
+                  const SizedBox(height: GzusSpacing.m),
+                  _IdentitySummary(info: info),
+                  const SizedBox(height: GzusSpacing.l),
+                  _InfoDetails(sections: sections),
+                  const SizedBox(height: GzusSpacing.xl),
                 ],
               ),
             );
@@ -190,4 +95,268 @@ class _InfoPageState extends ConsumerState<InfoPage> {
       ),
     );
   }
+}
+
+List<_InfoSectionData> _infoSections(StudentInfo info) => [
+      _InfoSectionData(
+        id: 'academic',
+        title: '学籍信息',
+        icon: Icons.school_outlined,
+        fields: [
+          _InfoField(
+              id: 'college',
+              icon: Icons.apartment,
+              label: '学院',
+              value: info.college ?? '-',
+              fullWidth: false),
+          _InfoField(
+              id: 'major',
+              icon: Icons.school,
+              label: '专业',
+              value: info.major ?? '-',
+              fullWidth: false),
+          _InfoField(
+              id: 'class-name',
+              icon: Icons.groups,
+              label: '班级',
+              value: info.className ?? '-',
+              fullWidth: false),
+          _InfoField(
+              id: 'grade',
+              icon: Icons.calendar_today,
+              label: '年级',
+              value: info.grade ?? '-',
+              fullWidth: false),
+          if (info.studentStatus != null)
+            _InfoField(
+                id: 'student-status',
+                icon: Icons.how_to_reg,
+                label: '学籍状态',
+                value: info.studentStatus!,
+                fullWidth: false),
+          if (info.educationLevel != null)
+            _InfoField(
+                id: 'education-level',
+                icon: Icons.workspace_premium,
+                label: '培养层次',
+                value: info.educationLevel!,
+                fullWidth: false),
+          if (info.enrollDate != null)
+            _InfoField(
+                id: 'enroll-date',
+                icon: Icons.event,
+                label: '入学日期',
+                value: info.enrollDate!,
+                fullWidth: false),
+        ],
+      ),
+      _InfoSectionData(
+        id: 'personal',
+        title: '个人资料',
+        icon: Icons.person_outline,
+        fields: [
+          if (info.gender != null)
+            _InfoField(
+                id: 'gender',
+                icon: Icons.wc,
+                label: '性别',
+                value: info.gender!,
+                fullWidth: false),
+          if (info.idNumber != null)
+            _InfoField(
+                id: 'id-number',
+                icon: Icons.credit_card,
+                label: '证件号码',
+                value: info.idNumber!,
+                fullWidth: true),
+          if (info.birthDate != null)
+            _InfoField(
+                id: 'birth-date',
+                icon: Icons.cake,
+                label: '出生日期',
+                value: info.birthDate!,
+                fullWidth: false),
+          if (info.ethnicity != null)
+            _InfoField(
+                id: 'ethnicity',
+                icon: Icons.people,
+                label: '民族',
+                value: info.ethnicity!,
+                fullWidth: false),
+          if (info.politicalStatus != null)
+            _InfoField(
+                id: 'political-status',
+                icon: Icons.flag,
+                label: '政治面貌',
+                value: info.politicalStatus!,
+                fullWidth: false),
+          if (info.nativePlace != null)
+            _InfoField(
+                id: 'native-place',
+                icon: Icons.place,
+                label: '籍贯',
+                value: info.nativePlace!,
+                fullWidth: false),
+        ],
+      ),
+      _InfoSectionData(
+        id: 'contact',
+        title: '联系方式',
+        icon: Icons.contact_phone_outlined,
+        fields: [
+          if (info.phone != null)
+            _InfoField(
+                id: 'phone',
+                icon: Icons.phone,
+                label: '手机号码',
+                value: info.phone!,
+                fullWidth: false),
+          if (info.email != null)
+            _InfoField(
+                id: 'email',
+                icon: Icons.email,
+                label: '电子邮箱',
+                value: info.email!,
+                fullWidth: false),
+          if (info.address != null)
+            _InfoField(
+                id: 'address',
+                icon: Icons.home,
+                label: '家庭地址',
+                value: info.address!,
+                fullWidth: true),
+        ],
+      ),
+    ].where((section) => section.fields.isNotEmpty).toList();
+
+class _IdentitySummary extends StatelessWidget {
+  const _IdentitySummary({required this.info});
+
+  final StudentInfo info;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          StudentAvatar(photoDataUrl: info.photoDataUrl, name: info.name),
+          const SizedBox(height: GzusSpacing.l),
+          Text(info.name,
+              style:
+                  const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+          if (info.studentId.isNotEmpty)
+            Text(info.studentId,
+                style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant)),
+        ],
+      ),
+    );
+  }
+}
+
+class _InfoDetails extends StatelessWidget {
+  const _InfoDetails({required this.sections});
+
+  final List<_InfoSectionData> sections;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (var index = 0; index < sections.length; index++) ...[
+          _InfoSection(section: sections[index]),
+          if (index != sections.length - 1)
+            const SizedBox(height: GzusSpacing.xl),
+        ],
+      ],
+    );
+  }
+}
+
+class _InfoSection extends StatelessWidget {
+  const _InfoSection({required this.section});
+
+  final _InfoSectionData section;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Column(
+      key: Key('info-section-${section.id}'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Icon(section.icon, size: 18, color: colorScheme.primary),
+            const SizedBox(width: GzusSpacing.s),
+            Text(section.title,
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    )),
+          ],
+        ),
+        const SizedBox(height: GzusSpacing.s),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            const spacing = GzusSpacing.s;
+            final columnWidth = (constraints.maxWidth - spacing) / 2;
+            return Wrap(
+              key: Key('info-grid-${section.id}'),
+              spacing: spacing,
+              runSpacing: spacing,
+              children: [
+                for (final field in section.fields)
+                  SizedBox(
+                    key: Key(field.fullWidth
+                        ? 'info-full-${field.id}'
+                        : 'info-tile-${field.id}'),
+                    width: field.fullWidth ? constraints.maxWidth : columnWidth,
+                    child: InfoTile(
+                      label: field.label,
+                      value: field.value,
+                      icon: field.icon,
+                      minWidth: 0,
+                      maxWidth:
+                          field.fullWidth ? constraints.maxWidth : columnWidth,
+                    ),
+                  ),
+              ],
+            );
+          },
+        ),
+      ],
+    );
+  }
+}
+
+class _InfoSectionData {
+  const _InfoSectionData({
+    required this.id,
+    required this.title,
+    required this.icon,
+    required this.fields,
+  });
+
+  final String id;
+  final String title;
+  final IconData icon;
+  final List<_InfoField> fields;
+}
+
+class _InfoField {
+  const _InfoField({
+    required this.id,
+    required this.icon,
+    required this.label,
+    required this.value,
+    required this.fullWidth,
+  });
+
+  final String id;
+  final IconData icon;
+  final String label;
+  final String value;
+  final bool fullWidth;
 }

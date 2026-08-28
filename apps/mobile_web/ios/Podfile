@@ -33,19 +33,10 @@ target 'Runner' do
   use_modular_headers!
 
   flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
-  
-  # Bugly SDK
-  pod 'Bugly'
 end
 
 post_install do |installer|
   installer.pods_project.targets.each do |target|
     flutter_additional_ios_build_settings(target)
-    # Bugly 2.x 仅含真机架构（无 arm64 模拟器 slice），模拟器构建时排除
-    if target.name == 'Bugly'
-      target.build_configurations.each do |config|
-        config.build_settings['EXCLUDED_ARCHS[sdk=iphonesimulator*]'] = 'arm64 x86_64'
-      end
-    end
   end
 end

@@ -40,12 +40,11 @@ class InfoTile extends StatelessWidget {
             maxWidth: maxWidth,
             minHeight: compact ? 76 : 88,
           ),
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 180),
+          child: Container(
             padding: EdgeInsets.all(compact ? 10 : 14),
             decoration: BoxDecoration(
               color: gzusSurface(context),
-              borderRadius: BorderRadius.circular(compact ? 16 : 20),
+              borderRadius: BorderRadius.circular(GzusRadii.md),
               border: Border.all(color: gzusBorder(context)),
             ),
             child: Row(
@@ -103,7 +102,7 @@ class AccentPanel extends StatelessWidget {
           padding: EdgeInsets.all(compact ? 12 : 16),
           decoration: BoxDecoration(
             color: gzusSurfaceSoft(context),
-            borderRadius: BorderRadius.circular(compact ? 16 : 20),
+            borderRadius: BorderRadius.circular(GzusRadii.md),
             border: Border.all(color: gzusBorder(context)),
           ),
           child: child,

@@ -1,7 +1,3 @@
-# Bugly
--dontwarn com.tencent.bugly.**
--keep public class com.tencent.bugly.**{*;}
-
 # Shiply upgrade
 -dontwarn com.tencent.upgrade.**
 -dontwarn com.tencent.shiply.**

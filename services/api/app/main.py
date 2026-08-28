@@ -15,7 +15,7 @@ from app.cache_service import ExamReminderCache, GradeUpdateCache, NoticeCache
 from app.config import get_settings
 from app.database import check_database_ready, get_sync_session_factory, init_db
 from app.rate_limit import limiter
-from app.routes import academic, admin, auth, ecard, ehall, push, settings, weather
+from app.routes import academic, admin, auth, content, ecard, ehall, push, settings, weather
 from app.rsa_keys import rsa_key_manager
 from app.sessions import SessionStore, SessionStoreUnavailableError
 from app.ws import ConnectionManager, ws_router
@@ -63,8 +63,8 @@ def create_app() -> FastAPI:
     cfg = get_settings()
     app = FastAPI(title="软帮手 API", version="0.1.1", lifespan=lifespan)
     app.state.sessions = SessionStore(cfg.session_ttl_seconds, db_factory=get_sync_session_factory)
-    app.state.pending_captcha = {}
     app.state.ly_sso_states = {}
+    app.state.ly_sso_handoffs = {}
     app.state.ws_manager = ConnectionManager()
     app.state.notice_cache = NoticeCache()
     app.state.exam_reminder_cache = ExamReminderCache()
@@ -174,6 +174,7 @@ def create_app() -> FastAPI:
         )
 
     app.include_router(auth.router)
+    app.include_router(content.router)
     app.include_router(academic.router)
     app.include_router(admin.router)
     app.include_router(ehall.router)

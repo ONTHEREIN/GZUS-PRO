@@ -1,7 +1,42 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../api_client.dart';
 import 'empty_state.dart';
+
+String _refreshFailureReason(Object error) {
+  if (error is ApiException) {
+    final message = error.message.trim();
+    final prefix = switch (error.statusCode) {
+      401 => '登录状态失效',
+      429 => '请求过于频繁',
+      502 => '学校系统请求异常',
+      503 => '服务暂时不可用',
+      504 => '上游服务响应超时',
+      _ => null,
+    };
+    if (prefix == null || message.startsWith(prefix)) return message;
+    return '$prefix：$message';
+  }
+  if (error is TimeoutException) {
+    return '客户端等待接口响应超时（已自动重试），请检查网络后重试';
+  }
+  if (error is FormatException) {
+    return '服务器返回的数据格式异常，请稍后重试';
+  }
+  return '发生未预期错误（${error.runtimeType}），请稍后重试';
+}
+
+/// 下拉刷新失败时统一显示具体原因；保留原页面数据，不中断后续操作。
+void showRefreshFailure(BuildContext context, Object error) {
+  final messenger = ScaffoldMessenger.maybeOf(context);
+  if (messenger == null) return;
+  messenger
+    ..hideCurrentSnackBar()
+    ..showSnackBar(
+        SnackBar(content: Text('刷新失败：${_refreshFailureReason(error)}')));
+}
 
 /// 异步面板：支持 stale-while-revalidate。
 ///
@@ -12,12 +47,14 @@ class AsyncPanel<T> extends StatefulWidget {
     super.key,
     required this.future,
     required this.builder,
+    this.initialData,
     this.emptyMessage = '暂无数据',
     this.onSessionExpired,
   });
 
   final Future<T> future;
   final Widget Function(T data) builder;
+  final T? initialData;
   final String emptyMessage;
   final VoidCallback? onSessionExpired;
 
@@ -27,6 +64,12 @@ class AsyncPanel<T> extends StatefulWidget {
 
 class _AsyncPanelState<T> extends State<AsyncPanel<T>> {
   T? _lastData;
+
+  @override
+  void initState() {
+    super.initState();
+    _lastData = widget.initialData;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -101,7 +144,13 @@ class PageRefresh extends StatelessWidget {
     return RefreshIndicator(
       notificationPredicate: (notification) =>
           notification.metrics.axis == Axis.vertical,
-      onRefresh: onRefresh,
+      onRefresh: () async {
+        try {
+          await onRefresh();
+        } catch (error) {
+          if (context.mounted) showRefreshFailure(context, error);
+        }
+      },
       child: child,
     );
   }

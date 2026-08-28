@@ -3,7 +3,20 @@ from __future__ import annotations
 from collections.abc import Mapping
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, Column, DateTime, Float, Integer, String, Text, create_engine, event, inspect, text
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    Float,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    create_engine,
+    event,
+    inspect,
+    text,
+)
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -53,6 +66,20 @@ class WebPushSubscription(Base):
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
+class IosPushToken(Base):
+    __tablename__ = "ios_push_tokens"
+    __table_args__ = (
+        UniqueConstraint("device_token", "environment", name="uq_ios_push_tokens_token_environment"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    student_id = Column(String(100), nullable=False, index=True)
+    device_token = Column(String(512), nullable=False)
+    environment = Column(String(20), nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+
+
 class DataCache(Base):
     __tablename__ = "data_cache"
 
@@ -63,6 +90,21 @@ class DataCache(Base):
     params_hash = Column(String(64), nullable=False, default="")
     response_json = Column(Text, nullable=False)
     cached_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class EcardPowerConsumption(Base):
+    """按宿舍与月份共享的电费每日用电记录。"""
+
+    __tablename__ = "ecard_power_consumptions"
+    __table_args__ = (
+        UniqueConstraint("room_id", "month", name="uq_ecard_power_consumptions_room_month"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    room_id = Column(String(200), nullable=False, index=True)
+    month = Column(String(7), nullable=False, index=True)
+    items_json = Column(Text, nullable=False)
+    cached_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
 
 
 class StaffMember(Base):
@@ -95,6 +137,9 @@ class AppSessionModel(Base):
     is_admin = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
     last_active_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    # 兼容早期推送会话表：已改用 web_push_subscriptions，但旧库仍保留非空平台列。
+    push_registration_id = Column(String(500), nullable=True)
+    push_platform = Column(String(20), nullable=False, default="legacy")
     jwxt_cookies = Column(Text, nullable=True)
     ehall_cookies = Column(Text, nullable=True)
     ehall_auth_token = Column(Text, nullable=True)
@@ -218,9 +263,38 @@ class AdminNotice(Base):
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
+class LoginCarouselSlide(Base):
+    """登录页轮播内容，由管理员维护并在未登录状态下公开读取。"""
+
+    __tablename__ = "login_carousel_slides"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    title = Column(String(100), nullable=False)
+    description = Column(String(500), nullable=True)
+    image_data = Column(Text, nullable=False)
+    image_mime = Column(String(100), nullable=False)
+    sort_order = Column(Integer, nullable=False, default=0)
+    published = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
 _engine = None
 _session_factory = None
 _db_initialized = False
+
+_APP_SESSION_COMPAT_COLUMNS: dict[str, str] = {
+    "student_account": "VARCHAR(100)",
+    "is_admin": "BOOLEAN NOT NULL DEFAULT FALSE",
+    "push_registration_id": "VARCHAR(500)",
+    "push_platform": "VARCHAR(20) NOT NULL DEFAULT 'legacy'",
+    "jwxt_cookies": "TEXT",
+    "ehall_cookies": "TEXT",
+    "ehall_auth_token": "TEXT",
+    "encrypted_credentials": "TEXT",
+    "revoked_at": "TIMESTAMP",
+    "revoked_reason": "VARCHAR(100)",
+}
 
 
 def _resolve_sync_url(raw_url: str) -> str:
@@ -351,12 +425,7 @@ def init_db():
 
     # Lightweight migration: add columns that exist in the model but might not
     # exist in the database yet (e.g., added after initial deployment).
-    _ensure_columns(engine, "app_sessions", {
-        "student_account": "VARCHAR(100)",
-        "is_admin": "BOOLEAN",
-        "revoked_at": "TIMESTAMP",
-        "revoked_reason": "VARCHAR(100)",
-    })
+    _ensure_columns(engine, "app_sessions", _APP_SESSION_COMPAT_COLUMNS)
     _ensure_columns(engine, "ecard_bindings", {
         "hot_water_balance_cache": "FLOAT",
         "hot_water_cache_at": "TIMESTAMP",

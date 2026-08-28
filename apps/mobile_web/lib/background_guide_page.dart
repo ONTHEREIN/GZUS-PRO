@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -9,13 +7,22 @@ import 'gzus_design.dart';
 import 'permission_service.dart';
 import 'responsive/spacing.dart';
 import 'background_service.dart';
+import 'services_deferred.dart';
 import 'web_push_service.dart';
 
 class BackgroundGuidePage extends StatefulWidget {
-  const BackgroundGuidePage({super.key, required this.api, this.onComplete});
+  const BackgroundGuidePage({
+    super.key,
+    required this.api,
+    this.onComplete,
+    this.currentStep,
+    this.totalSteps,
+  });
 
   final ApiClient api;
   final VoidCallback? onComplete;
+  final int? currentStep;
+  final int? totalSteps;
 
   @override
   State<BackgroundGuidePage> createState() => _BackgroundGuidePageState();
@@ -40,6 +47,11 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
 
   /// 防抖：上次 resume 时间戳，跳过 1 秒内的重复回调
   int _lastResumeMs = 0;
+
+  bool get _isAndroid =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+
+  bool get _isIos => !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
 
   @override
   void initState() {
@@ -110,15 +122,14 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
         webSub = results[1] as bool;
         final supported = results[2] as bool;
         final config = results[3] as Map<String, dynamic>?;
-        webEnabled =
-            supported && config != null && config['enabled'] == true;
-      } else {
+        webEnabled = supported && config != null && config['enabled'] == true;
+      } else if (_isAndroid) {
         final futures = <Future<bool>>[
           PermissionService.checkAutoStart(),
           PermissionService.checkBatteryOptimization(),
           PermissionService.checkNotificationPermission(),
         ];
-        if (Platform.isAndroid) {
+        if (_isAndroid) {
           futures.add(PermissionService.checkExactAlarmPermission());
         }
         final results = await Future.wait(futures).timeout(
@@ -127,9 +138,13 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
         autoStart = results[0];
         battery = results[1];
         notif = results[2];
-        if (Platform.isAndroid && results.length > 3) {
+        if (_isAndroid && results.length > 3) {
           alarm = results[3];
         }
+      } else if (_isIos) {
+        notif = await PermissionService.checkNotificationPermission().timeout(
+          const Duration(seconds: 5),
+        );
       }
     } catch (_) {
       // 超时或异常：保持现有状态，不清零
@@ -152,10 +167,12 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
 
   bool get _allGranted => kIsWeb
       ? (_notificationGranted && (!_webPushEnabled || _webPushSubscribed))
-      : (_autoStartGranted &&
-          _batteryOptimizationDisabled &&
-          _notificationGranted &&
-          (!Platform.isAndroid || _exactAlarmGranted));
+      : _isIos
+          ? _notificationGranted
+          : (_autoStartGranted &&
+              _batteryOptimizationDisabled &&
+              _notificationGranted &&
+              (!_isAndroid || _exactAlarmGranted));
 
   Future<void> _openAutoStart() async {
     await PermissionService.openAutoStartSettings();
@@ -206,7 +223,14 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
         return;
       }
     } else {
-      await PermissionService.requestNotificationPermission();
+      final granted = await PermissionService.requestNotificationPermission();
+      if (granted && _isIos) {
+        try {
+          await LoginRequiredServices.syncIosPushToken(widget.api);
+        } catch (error) {
+          debugPrint('iOS 推送令牌同步失败: error=${error.runtimeType}');
+        }
+      }
     }
     // 权限未授予（或非 Web 平台），静默刷新状态
     _refreshPermissions();
@@ -221,8 +245,7 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
       await webPush.init();
       final config = await _fetchWebPushConfig();
       bool subscribed = false;
-      final pushEnabled =
-          config != null && config['enabled'] == true;
+      final pushEnabled = config != null && config['enabled'] == true;
       if (pushEnabled) {
         final publicKey = config['publicKey'] as String?;
         if (publicKey != null && publicKey.isNotEmpty) {
@@ -259,7 +282,7 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool('background_guide_completed', true);
-      if (!kIsWeb) {
+      if (_isAndroid) {
         await prefs.setBool('foreground_service_enabled', true);
         await prefs.setBool('hide_from_recents', _hideFromRecents);
         if (_hideFromRecents) {
@@ -285,7 +308,7 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool('background_guide_completed', true);
-      if (!kIsWeb) {
+      if (_isAndroid) {
         await prefs.setBool('foreground_service_enabled', true);
         await BackgroundService.enableForegroundService(
           apiBaseUrl: widget.api.baseUrl,
@@ -306,6 +329,8 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
+    final currentStep = widget.currentStep ?? 2;
+    final totalSteps = widget.totalSteps ?? 2;
     return Scaffold(
       appBar: AppBar(
         automaticallyImplyLeading: false,
@@ -315,239 +340,232 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(GzusSpacing.l),
           child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // 步骤指示器
-                    Row(
-                      children: [
-                        Container(
-                          width: 12,
-                          height: 12,
-                          decoration: BoxDecoration(
-                            color: colorScheme.primary,
-                            shape: BoxShape.circle,
-                          ),
-                        ),
-                        const SizedBox(width: GzusSpacing.s),
-                        Expanded(
-                          child: Container(
-                            height: 4,
-                            decoration: BoxDecoration(
-                              color: colorScheme.primaryContainer,
-                              borderRadius: BorderRadius.circular(2),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: GzusSpacing.s),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 10, vertical: 5),
-                          decoration: BoxDecoration(
-                            color: colorScheme.primaryContainer,
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: Text(
-                            '步骤 2 / 2',
-                            style: Theme.of(context)
-                                .textTheme
-                                .labelSmall
-                                ?.copyWith(
-                                  color: colorScheme.onPrimaryContainer,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                          ),
-                        ),
-                      ],
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // 步骤指示器
+              Row(
+                children: [
+                  Container(
+                    width: 12,
+                    height: 12,
+                    decoration: BoxDecoration(
+                      color: colorScheme.primary,
+                      shape: BoxShape.circle,
                     ),
-                    const SizedBox(height: GzusSpacing.xl),
-                    // 欢迎头部
-                    Row(
-                      children: [
-                        Hero(
-                          tag: 'app-logo',
-                          child: Container(
-                            width: 52,
-                            height: 52,
-                            decoration: BoxDecoration(
-                              color: colorScheme.primary,
-                              borderRadius: BorderRadius.circular(16),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: colorScheme.primary
-                                      .withValues(alpha: 0.25),
-                                  blurRadius: 16,
-                                  offset: const Offset(0, 6),
-                                ),
-                              ],
-                            ),
-                            child: ClipRRect(
-                              borderRadius: BorderRadius.circular(16),
-                              child: Image.asset(
-                                'assets/icon.png',
-                                fit: BoxFit.cover,
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: GzusSpacing.m),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                '优化推送体验',
-                                style: GzusTextStyles.pageTitle(context),
-                              ),
-                              const SizedBox(height: GzusSpacing.xs),
-                              Text(
-                                '完成最后一步，及时收到教务提醒',
-                                style: Theme.of(context)
-                                    .textTheme
-                                    .bodyMedium
-                                    ?.copyWith(
-                                      color: colorScheme.onSurfaceVariant,
-                                    ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: GzusSpacing.xl),
-                    Container(
-                      padding: const EdgeInsets.all(GzusSpacing.l),
+                  ),
+                  const SizedBox(width: GzusSpacing.s),
+                  Expanded(
+                    child: Container(
+                      height: 4,
                       decoration: BoxDecoration(
-                        color: colorScheme.tertiaryContainer
-                            .withValues(alpha: 0.5),
-                        borderRadius: BorderRadius.circular(24),
+                        color: colorScheme.primaryContainer,
+                        borderRadius: BorderRadius.circular(2),
                       ),
-                      child: Row(
-                        children: [
-                          Icon(
-                            Icons.info_outline,
-                            color: colorScheme.onTertiaryContainer,
+                    ),
+                  ),
+                  const SizedBox(width: GzusSpacing.s),
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: colorScheme.primaryContainer,
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(
+                      '步骤 $currentStep / $totalSteps',
+                      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                            color: colorScheme.onPrimaryContainer,
+                            fontWeight: FontWeight.w600,
                           ),
-                          const SizedBox(width: GzusSpacing.m),
-                          Expanded(
-                            child: Text(
-                              kIsWeb
-                                  ? '为了确保您能及时收到教务通知，请完成以下配置。'
-                                  : '为了确保您能及时收到教务通知和课程提醒，请完成以下权限配置。',
-                              style: TextStyle(
-                                color: colorScheme.onTertiaryContainer,
-                              ),
-                            ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: GzusSpacing.xl),
+              // 欢迎头部
+              Row(
+                children: [
+                  Hero(
+                    tag: 'app-logo',
+                    child: Container(
+                      width: 52,
+                      height: 52,
+                      decoration: BoxDecoration(
+                        color: colorScheme.primary,
+                        borderRadius: BorderRadius.circular(16),
+                        boxShadow: [
+                          BoxShadow(
+                            color: colorScheme.primary.withValues(alpha: 0.25),
+                            blurRadius: 16,
+                            offset: const Offset(0, 6),
                           ),
                         ],
                       ),
-                    ),
-                    const SizedBox(height: GzusSpacing.xl),
-                    if (!kIsWeb) ...[
-                      _PermissionCard(
-                        icon: Icons.power_settings_new,
-                        title: '自启动权限',
-                        description: '允许应用在开机时自动启动',
-                        isGranted: _autoStartGranted,
-                        checking: _checking,
-                        onAction: _openAutoStart,
-                        actionLabel: '打开设置',
-                      ),
-                      const SizedBox(height: GzusSpacing.m),
-                      _PermissionCard(
-                        icon: Icons.battery_charging_full,
-                        title: '电池优化',
-                        description: '关闭电池优化以保持后台运行',
-                        isGranted: _batteryOptimizationDisabled,
-                        checking: _checking,
-                        onAction: _openBatteryOptimization,
-                        actionLabel: '关闭优化',
-                      ),
-                      const SizedBox(height: GzusSpacing.m),
-                      if (Platform.isAndroid) ...[
-                        _PermissionCard(
-                          icon: Icons.alarm,
-                          title: '精确闹钟',
-                          description: '允许按课程时间准点触发上下课提醒',
-                          isGranted: _exactAlarmGranted,
-                          checking: _checking,
-                          onAction: _openExactAlarm,
-                          actionLabel: '去授权',
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(16),
+                        child: Image.asset(
+                          'assets/icon.png',
+                          fit: BoxFit.cover,
                         ),
-                        const SizedBox(height: GzusSpacing.m),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: GzusSpacing.m),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '优化推送体验',
+                          style: GzusTextStyles.pageTitle(context),
+                        ),
+                        const SizedBox(height: GzusSpacing.xs),
+                        Text(
+                          '完成最后一步，及时收到教务提醒',
+                          style:
+                              Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                    color: colorScheme.onSurfaceVariant,
+                                  ),
+                        ),
                       ],
-                    ],
-                    _PermissionCard(
-                      icon: Icons.notifications,
-                      title: '通知权限',
-                      description: kIsWeb ? '允许浏览器发送通知提醒' : '允许发送通知提醒',
-                      isGranted: _notificationGranted,
-                      checking: _checking,
-                      onAction: _requestNotification,
-                      actionLabel: '授予权限',
                     ),
-                    if (kIsWeb &&
-                        _webPushEnabled &&
-                        _notificationGranted &&
-                        !_webPushSubscribed &&
-                        !_checking) ...[
-                      const SizedBox(height: GzusSpacing.m),
-                      Container(
-                        padding: const EdgeInsets.all(GzusSpacing.l),
-                        decoration: BoxDecoration(
-                          color:
-                              colorScheme.errorContainer.withValues(alpha: 0.5),
-                          borderRadius: BorderRadius.circular(22),
-                        ),
-                        child: Row(
-                          children: [
-                            Icon(Icons.warning_amber_rounded,
-                                color: colorScheme.onErrorContainer),
-                            const SizedBox(width: GzusSpacing.m),
-                            Expanded(
-                              child: Text(
-                                '推送订阅未完成，可能无法收到通知',
-                                style: TextStyle(
-                                    color: colorScheme.onErrorContainer),
-                              ),
-                            ),
-                            OutlinedButton(
-                              onPressed: _retryWebPushSubscribe,
-                              child: const Text('重试'),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                    if (!kIsWeb && Platform.isAndroid) ...[
-                      const SizedBox(height: GzusSpacing.xl),
-                      SwitchListTile(
-                        title: const Text('在最近任务中隐藏应用'),
-                        subtitle: const Text('开启后可防止他人看到您正在使用此应用'),
-                        value: _hideFromRecents,
-                        onChanged: (value) {
-                          setState(() => _hideFromRecents = value);
-                        },
-                      ),
-                    ],
-                    const SizedBox(height: GzusSpacing.xxl),
-                    SizedBox(
-                      width: double.infinity,
-                      height: 50,
-                      child: FilledButton(
-                        onPressed: _allGranted ? _complete : null,
-                        child: const Text('已完成配置'),
-                      ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: GzusSpacing.xl),
+              Container(
+                padding: const EdgeInsets.all(GzusSpacing.l),
+                decoration: BoxDecoration(
+                  color: colorScheme.tertiaryContainer.withValues(alpha: 0.5),
+                  borderRadius: BorderRadius.circular(24),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.info_outline,
+                      color: colorScheme.onTertiaryContainer,
                     ),
-                    const SizedBox(height: GzusSpacing.m),
-                    Center(
-                      child: TextButton(
-                        onPressed: _skip,
-                        child: const Text('暂不配置'),
+                    const SizedBox(width: GzusSpacing.m),
+                    Expanded(
+                      child: Text(
+                        kIsWeb
+                            ? '为了确保您能及时收到教务通知，请完成以下配置。'
+                            : _isIos
+                                ? '允许通知后，您可以在后台及时收到教务提醒。'
+                                : '为了确保您能及时收到教务通知和课程提醒，请完成以下权限配置。',
+                        style: TextStyle(
+                          color: colorScheme.onTertiaryContainer,
+                        ),
                       ),
                     ),
                   ],
                 ),
               ),
+              const SizedBox(height: GzusSpacing.xl),
+              if (_isAndroid) ...[
+                _PermissionCard(
+                  icon: Icons.power_settings_new,
+                  title: '自启动权限',
+                  description: '允许应用在开机时自动启动',
+                  isGranted: _autoStartGranted,
+                  checking: _checking,
+                  onAction: _openAutoStart,
+                  actionLabel: '打开设置',
+                ),
+                const SizedBox(height: GzusSpacing.m),
+                _PermissionCard(
+                  icon: Icons.battery_charging_full,
+                  title: '电池优化',
+                  description: '关闭电池优化以保持后台运行',
+                  isGranted: _batteryOptimizationDisabled,
+                  checking: _checking,
+                  onAction: _openBatteryOptimization,
+                  actionLabel: '关闭优化',
+                ),
+                const SizedBox(height: GzusSpacing.m),
+                if (_isAndroid) ...[
+                  _PermissionCard(
+                    icon: Icons.alarm,
+                    title: '精确闹钟',
+                    description: '允许按课程时间准点触发上下课提醒',
+                    isGranted: _exactAlarmGranted,
+                    checking: _checking,
+                    onAction: _openExactAlarm,
+                    actionLabel: '去授权',
+                  ),
+                  const SizedBox(height: GzusSpacing.m),
+                ],
+              ],
+              _PermissionCard(
+                icon: Icons.notifications,
+                title: '通知权限',
+                description: kIsWeb ? '允许浏览器发送通知提醒' : '允许发送通知提醒',
+                isGranted: _notificationGranted,
+                checking: _checking,
+                onAction: _requestNotification,
+                actionLabel: '授予权限',
+              ),
+              if (kIsWeb &&
+                  _webPushEnabled &&
+                  _notificationGranted &&
+                  !_webPushSubscribed &&
+                  !_checking) ...[
+                const SizedBox(height: GzusSpacing.m),
+                Container(
+                  padding: const EdgeInsets.all(GzusSpacing.l),
+                  decoration: BoxDecoration(
+                    color: colorScheme.errorContainer.withValues(alpha: 0.5),
+                    borderRadius: BorderRadius.circular(22),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.warning_amber_rounded,
+                          color: colorScheme.onErrorContainer),
+                      const SizedBox(width: GzusSpacing.m),
+                      Expanded(
+                        child: Text(
+                          '推送订阅未完成，可能无法收到通知',
+                          style: TextStyle(color: colorScheme.onErrorContainer),
+                        ),
+                      ),
+                      OutlinedButton(
+                        onPressed: _retryWebPushSubscribe,
+                        child: const Text('重试'),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+              if (_isAndroid) ...[
+                const SizedBox(height: GzusSpacing.xl),
+                SwitchListTile(
+                  title: const Text('在最近任务中隐藏应用'),
+                  subtitle: const Text('开启后可防止他人看到您正在使用此应用'),
+                  value: _hideFromRecents,
+                  onChanged: (value) {
+                    setState(() => _hideFromRecents = value);
+                  },
+                ),
+              ],
+              const SizedBox(height: GzusSpacing.xxl),
+              SizedBox(
+                width: double.infinity,
+                height: 50,
+                child: FilledButton(
+                  onPressed: _allGranted ? _complete : null,
+                  child: const Text('已完成配置'),
+                ),
+              ),
+              const SizedBox(height: GzusSpacing.m),
+              Center(
+                child: TextButton(
+                  onPressed: _skip,
+                  child: const Text('暂不配置'),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

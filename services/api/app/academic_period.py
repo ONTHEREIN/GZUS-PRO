@@ -1,8 +1,8 @@
 """学年/学期判定与开学日期推导的单一事实来源。
 
 规则（与前端 `schedule_utils.dart` 保持一致）：
-- 月份启发式：9-12 月、1 月 → 第 1 学期（秋）；2-8 月 → 第 2 学期（春）。
-  学年从 9 月跨年（9 月起的学年号 = 当前自然年）。
+- 月份启发式：8-12 月、1 月 → 第 1 学期（秋）；2-7 月 → 第 2 学期（春）。
+  学年从 8 月跨年（8 月起的学年号 = 当前自然年），暑假按即将开学处理。
 - 若已保存各学期开学日期（first_weeks，键 "{year}-{term}"），可用
   `period_from_first_weeks` 按日期区间反推当前学期，比启发式更贴合真实校历。
 
@@ -29,9 +29,9 @@ def now_shanghai() -> datetime:
 
 
 def academic_period_of(dt: datetime) -> tuple[int, int]:
-    """按月份启发式推导 (学年, 学期)；9-12 月/1 月为第 1 学期，2-8 月为第 2 学期。"""
-    academic_year = dt.year if dt.month >= 9 else dt.year - 1
-    academic_term = 1 if dt.month >= 9 or dt.month <= 1 else 2
+    """按月份启发式推导 (学年, 学期)；8-12 月/1 月为第 1 学期，2-7 月为第 2 学期。"""
+    academic_year = dt.year if dt.month >= 8 else dt.year - 1
+    academic_term = 1 if dt.month >= 8 or dt.month == 1 else 2
     return academic_year, academic_term
 
 
@@ -63,16 +63,20 @@ def period_from_first_weeks(
     """用已保存的开学日期反推当前学期。
 
     学期区间为 [开学周一, 开学周一 + 30 周)；相邻学期区间可能重叠，多个命中时
-    取开学日期最新者；无命中或数据缺失返回 None（调用方回退月份启发式）。
+    取开学日期最新者。新学年已开始时，不允许上学年的遗留记录回退学期；无命中或
+    数据缺失返回 None（调用方回退月份启发式）。
     """
     target = dt or now_shanghai()
     today = target.date()
+    current_academic_year, _ = academic_period_of(target)
     best: tuple[date, int, int] | None = None
     for key, value in first_weeks.items():
         parsed = _parse_first_week_entry(str(key), str(value))
         if parsed is None:
             continue
         year, term, start = parsed
+        if year < current_academic_year:
+            continue
         if start <= today < start + _TERM_WEEK_DELTA and (best is None or start > best[0]):
             best = (start, year, term)
     if best is None:

@@ -10,12 +10,13 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.academic_period import now_shanghai
-from app.database import DataCache, EcardBinding, get_sync_session_factory
+from app.database import DataCache, EcardBinding, EcardPowerConsumption, get_sync_session_factory
 from app.ecard_client import EcardApiError, EcardClient, EcardConfigurationError, EcardRoomRef
 from app.routes.deps import require_session
 from app.schemas import (
     EcardBindingRequest,
     EcardConsumptionResponse,
+    EcardConsumptionOverviewResponse,
     EcardReminderRequest,
     EcardRoomItem,
     EcardSummary,
@@ -39,6 +40,7 @@ _rooms_cache_at: float = 0.0
 _ROOMS_CACHE_TTL = 3600  # seconds
 _ROOMS_PERSISTENT_CACHE_KEY = "ecard_rooms_all"
 _ROOMS_PERSISTENT_TTL = 24 * 3600
+_POWER_CONSUMPTION_LOCKS = tuple(threading.Lock() for _ in range(64))
 _SUMMARY_CACHE_FIELDS = {
     "powerBalance",
     "powerUnit",
@@ -499,7 +501,11 @@ def update_reminder(
         return _summary_from_binding(binding, student_id)
 
 
-@router.get("/consumption", response_model=EcardConsumptionResponse)
+@router.get(
+    "/consumption",
+    response_model=EcardConsumptionResponse,
+    response_model_exclude_none=True,
+)
 def consumption(
     month: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}$"),
     session: AppSession = Depends(require_session),
@@ -511,16 +517,138 @@ def consumption(
     query_month = month or now_shanghai().strftime("%Y-%m")
     if not re.fullmatch(r"\d{4}-\d{2}", query_month):
         raise HTTPException(status_code=400, detail="月份格式应为 yyyy-mm")
-    try:
-        return _client().consumption(EcardRoomRef.from_id(binding.room_id), query_month)
-    except EcardConfigurationError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except EcardApiError as exc:
-        logger.warning(
-            "ecard: consumption unavailable for student=%s month=%s: %s",
-            student_id,
-            query_month,
-            exc,
-            exc_info=True,
+    with _power_consumption_lock(binding.room_id, query_month):
+        cached = _power_consumption_for(binding.room_id, query_month)
+        current_month = now_shanghai().strftime("%Y-%m")
+        if cached is not None and (
+            query_month != current_month or _cached_on_shanghai_day(cached.cached_at)
+        ):
+            return _consumption_response(cached)
+        try:
+            data = _client().consumption(EcardRoomRef.from_id(binding.room_id), query_month)
+            return _save_power_consumption(binding.room_id, query_month, data)
+        except EcardConfigurationError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except EcardApiError as exc:
+            logger.warning(
+                "ecard: consumption unavailable for student=%s month=%s: %s",
+                student_id,
+                query_month,
+                exc,
+                exc_info=True,
+            )
+            return {"status": "limited", "message": "消费记录暂时不可用", "items": []}
+
+
+@router.get("/consumption/overview", response_model=EcardConsumptionOverviewResponse)
+def consumption_overview(
+    session: AppSession = Depends(require_session),
+) -> dict[str, Any]:
+    student_id, _ = _student_info(session)
+    binding = _binding_for(student_id)
+    if binding is None:
+        return {"status": "limited", "message": "请先绑定宿舍。", "months": []}
+    factory = get_sync_session_factory()
+    with factory() as db:
+        records = (
+            db.query(EcardPowerConsumption)
+            .filter(EcardPowerConsumption.room_id == binding.room_id)
+            .order_by(EcardPowerConsumption.month.desc())
+            .all()
         )
-        return {"status": "limited", "message": "消费记录暂时不可用", "items": []}
+        return {"status": "ok", "months": [_monthly_overview(record) for record in records]}
+
+
+def _power_consumption_for(room_id: str, month: str) -> EcardPowerConsumption | None:
+    factory = get_sync_session_factory()
+    with factory() as db:
+        return (
+            db.query(EcardPowerConsumption)
+            .filter(
+                EcardPowerConsumption.room_id == room_id,
+                EcardPowerConsumption.month == month,
+            )
+            .first()
+        )
+
+
+def _power_consumption_lock(room_id: str, month: str) -> threading.Lock:
+    return _POWER_CONSUMPTION_LOCKS[hash((room_id, month)) % len(_POWER_CONSUMPTION_LOCKS)]
+
+
+def _cached_on_shanghai_day(cached_at: datetime) -> bool:
+    if cached_at.tzinfo is None:
+        cached_at = cached_at.replace(tzinfo=timezone.utc)
+    return cached_at.astimezone(now_shanghai().tzinfo).date() == now_shanghai().date()
+
+
+def _consumption_response(record: EcardPowerConsumption) -> dict[str, Any]:
+    try:
+        items = json.loads(record.items_json)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"电费消费记录缓存损坏：room_id={record.room_id} month={record.month}"
+        ) from exc
+    if not isinstance(items, list):
+        raise RuntimeError(f"电费消费记录缓存格式无效：room_id={record.room_id} month={record.month}")
+    return {"status": "ok", "items": items, "cachedAt": record.cached_at.isoformat()}
+
+
+def _save_power_consumption(room_id: str, month: str, data: dict[str, Any]) -> dict[str, Any]:
+    items = data.get("items")
+    if not isinstance(items, list):
+        raise RuntimeError(f"一卡通消费记录格式无效：room_id={room_id} month={month}")
+    now = datetime.now(timezone.utc)
+    serialized_items = json.dumps(items, ensure_ascii=False)
+    factory = get_sync_session_factory()
+    with factory() as db:
+        record = (
+            db.query(EcardPowerConsumption)
+            .filter(
+                EcardPowerConsumption.room_id == room_id,
+                EcardPowerConsumption.month == month,
+            )
+            .first()
+        )
+        if record is None:
+            record = EcardPowerConsumption(
+                room_id=room_id,
+                month=month,
+                items_json=serialized_items,
+                cached_at=now,
+            )
+            db.add(record)
+        else:
+            record.items_json = serialized_items
+            record.cached_at = now
+        db.commit()
+        db.refresh(record)
+        return _consumption_response(record)
+
+
+def _monthly_overview(record: EcardPowerConsumption) -> dict[str, Any]:
+    response = _consumption_response(record)
+    numeric_items = [
+        item
+        for item in response["items"]
+        if isinstance(item, dict)
+        and isinstance(item.get("usage"), (int, float))
+        and isinstance(item.get("date"), str)
+        and item["date"]
+    ]
+    if not numeric_items:
+        raise RuntimeError(
+            f"电费消费记录缺少可统计用电量：room_id={record.room_id} month={record.month}"
+        )
+    peak = min(numeric_items, key=lambda item: (-float(item["usage"]), item["date"]))
+    total_usage = sum(float(item["usage"]) for item in numeric_items)
+    return {
+        "month": record.month,
+        "recordedDays": len(numeric_items),
+        "totalUsage": total_usage,
+        "averageDailyUsage": total_usage / len(numeric_items),
+        "peakDate": peak["date"],
+        "peakUsage": float(peak["usage"]),
+        "unit": str(peak.get("unit") or "度"),
+        "cachedAt": record.cached_at.isoformat(),
+    }

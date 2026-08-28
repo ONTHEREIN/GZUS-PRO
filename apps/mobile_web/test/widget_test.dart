@@ -5,12 +5,16 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gzus_pro_mobile_web/main.dart';
 import 'package:gzus_pro_mobile_web/api_client.dart';
 import 'package:gzus_pro_mobile_web/live_activity_service.dart';
+import 'package:gzus_pro_mobile_web/pages/ecard/ecard_page.dart';
 import 'package:gzus_pro_mobile_web/pages/exams/exams_page.dart';
+import 'package:gzus_pro_mobile_web/pages/login/login_page.dart';
 import 'package:gzus_pro_mobile_web/reminder_service.dart';
+import 'package:gzus_pro_mobile_web/schedule_utils.dart';
 import 'package:gzus_pro_mobile_web/widgets/async_panel.dart';
 import 'package:gzus_pro_mobile_web/ws_service.dart';
 import 'package:http/http.dart' as http;
@@ -73,6 +77,103 @@ void main() {
     expect(
       WsService.buildWsUrlForTest('http://127.0.0.1:8000/api', 'sid'),
       'ws://127.0.0.1:8000/api/ws/notifications?sessionId=sid',
+    );
+  });
+
+  test(
+      'electricity consumption requests the selected month and parses overview',
+      () async {
+    String? requestedMonth;
+    final api = ApiClient(
+      baseUrl: 'https://api.example.test',
+      httpClient: MockClient((request) async {
+        if (request.url.path == '/ecard/consumption') {
+          requestedMonth = request.url.queryParameters['month'];
+          return http.Response(
+            jsonEncode({
+              'status': 'ok',
+              'cachedAt': '2026-06-03T08:00:00+08:00',
+              'items': [
+                {
+                  'title': '剩余 100 度',
+                  'amount': '2.5 度',
+                  'time': '2026-06-03',
+                  'date': '2026-06-03',
+                  'usage': 2.5,
+                  'unit': '度',
+                }
+              ],
+            }),
+            200,
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        if (request.url.path == '/ecard/consumption/overview') {
+          return http.Response(
+            jsonEncode({
+              'status': 'ok',
+              'months': [
+                {
+                  'month': '2026-06',
+                  'recordedDays': 3,
+                  'totalUsage': 8.5,
+                  'averageDailyUsage': 2.83,
+                  'peakDate': '2026-06-03',
+                  'peakUsage': 4.0,
+                  'unit': '度',
+                  'cachedAt': '2026-06-03T08:00:00+08:00',
+                }
+              ],
+            }),
+            200,
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        return http.Response('not found', 404);
+      }),
+    );
+
+    final consumption = await api.ecardConsumption(month: '2026-06');
+    final overview = await api.ecardConsumptionOverview();
+
+    expect(requestedMonth, '2026-06');
+    expect(consumption.items.single.usage, 2.5);
+    expect(overview.months.single.peakDate, '2026-06-03');
+  });
+
+  test('electricity consumption supports every requested sort order', () {
+    final items = [
+      EcardConsumptionItem.fromJson({
+        'title': '6 月 1 日',
+        'date': '2026-06-01',
+        'usage': 1.0,
+      }),
+      EcardConsumptionItem.fromJson({
+        'title': '6 月 2 日',
+        'date': '2026-06-02',
+        'usage': 4.0,
+      }),
+    ];
+
+    expect(
+      sortEcardConsumptionItems(items, EcardConsumptionSort.dateNewest)
+          .map((item) => item.title),
+      ['6 月 2 日', '6 月 1 日'],
+    );
+    expect(
+      sortEcardConsumptionItems(items, EcardConsumptionSort.dateOldest)
+          .map((item) => item.title),
+      ['6 月 1 日', '6 月 2 日'],
+    );
+    expect(
+      sortEcardConsumptionItems(items, EcardConsumptionSort.usageHighest)
+          .map((item) => item.title),
+      ['6 月 2 日', '6 月 1 日'],
+    );
+    expect(
+      sortEcardConsumptionItems(items, EcardConsumptionSort.usageLowest)
+          .map((item) => item.title),
+      ['6 月 1 日', '6 月 2 日'],
     );
   });
 
@@ -450,7 +551,7 @@ void main() {
     expect(result.data.name, '本地学生');
     expect(result.source.isOffline, isTrue);
     expect(result.source.needsRelogin, isTrue);
-    expect(result.source.displayText, '教务系统会话已失效，请重新登录');
+    expect(result.source.displayText, '登录状态已失效，请重新登录');
   });
 
   test('api requests do not wait for warmup', () async {
@@ -530,6 +631,7 @@ void main() {
       'auth.studentId': '2024000000',
       'auth.ehallCookies': 'cookie',
       'auth.ehallAuthToken': 'token',
+      'auth.jwxtCookies': 'jwxt-cookie',
       'auth.loginMethod': 'password',
       'auth.credentialToken': 'credential',
       'auth.account': '2024000000',
@@ -548,6 +650,7 @@ void main() {
     expect(api.sessionId, isNull);
     expect(prefs.getString('auth.sessionId'), isNull);
     expect(prefs.getString('auth.credentialToken'), isNull);
+    expect(prefs.getString('auth.jwxtCookies'), isNull);
     expect(prefs.getString('auth.account'), isNull);
     expect(prefs.getBool('auth.rememberPassword'), isNull);
   });
@@ -621,7 +724,28 @@ void main() {
     );
   });
 
-  test('session cleanup keeps the active session id after local clear', () async {
+  test('loadSavedCredentials restores school cookies', () async {
+    FlutterSecureStorage.setMockInitialValues({
+      'auth.jwxtCookies': 'jwxt-cookie',
+      'auth.ehallCookies': 'ehall-cookie',
+      'auth.ehallAuthToken': 'ehall-token',
+    });
+    SharedPreferences.setMockInitialValues({'auth.account': '2024000000'});
+    debugEnableSchoolDirectForTests = true;
+    addTearDown(() => debugEnableSchoolDirectForTests = false);
+    final api = ApiClient(httpClient: MockClient((request) async {
+      return http.Response('not found', 404);
+    }));
+
+    await api.loadSavedCredentials();
+
+    expect(api.jwxtCookies, 'jwxt-cookie');
+    expect(api.ehallCookies, 'ehall-cookie');
+    expect(api.ehallAuthToken, 'ehall-token');
+  });
+
+  test('session cleanup keeps the active session id after local clear',
+      () async {
     SharedPreferences.setMockInitialValues({});
     final requestedPaths = <String>[];
     final api = ApiClient(
@@ -728,23 +852,24 @@ void main() {
     await tester.pumpWidget(const OneGzusApp());
     await tester.pumpAndSettle();
 
-    expect(find.text('软帮手'), findsOneWidget);
-    expect(find.text('一键登录'), findsOneWidget);
-    expect(find.text('办事大厅一键登录'), findsOneWidget);
-    expect(find.text('教务系统'), findsWidgets);
+    expect(find.text('软帮手'), findsNWidgets(2));
+    expect(find.text('一键登录'), findsNothing);
+    expect(find.text('办事大厅一键登录'), findsNothing);
+    expect(find.text('账号密码登录'), findsOneWidget);
   });
 
-  testWidgets('mobile sso is enabled without account', (tester) async {
+  testWidgets('account password login requires an account', (tester) async {
     SharedPreferences.setMockInitialValues({'auth.agreedToTerms': true});
 
     await tester.pumpWidget(const OneGzusApp());
     await tester.pumpAndSettle();
 
-    final ssoButton = tester.widget<FilledButton>(
-      find.widgetWithText(FilledButton, '办事大厅一键登录'),
-    );
-    expect(ssoButton.onPressed, isNotNull);
-    expect(find.text('请先输入学号'), findsNothing);
+    final loginButton = find.widgetWithText(FilledButton, '账号密码登录');
+    await tester.ensureVisible(loginButton);
+    await tester.tap(loginButton);
+    await tester.pump();
+
+    expect(find.text('请输入学号'), findsNWidgets(2));
   });
 
   testWidgets('login page fits mobile viewport', (tester) async {
@@ -756,9 +881,88 @@ void main() {
     await tester.pumpWidget(const OneGzusApp());
     await tester.pumpAndSettle();
 
-    expect(find.text('软帮手'), findsOneWidget);
-    expect(find.text('办事大厅一键登录'), findsOneWidget);
+    expect(find.text('软帮手'), findsNWidgets(2));
+    expect(find.text('账号密码登录'), findsOneWidget);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('login page uses split layout on desktop', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    tester.view.physicalSize = const Size(1200, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: LoginPage(
+          api: _loginPageApi(),
+          onLoggedIn: (_) {},
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('login-split-layout')), findsOneWidget);
+    expect(
+        find.byKey(const ValueKey('login-carousel-fallback')), findsOneWidget);
+    expect(find.byType(TextField), findsNWidgets(2));
+  });
+
+  testWidgets('login page keeps password controls available on mobile',
+      (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: LoginPage(
+          api: _loginPageApi(),
+          onLoggedIn: (_) {},
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('login-stacked-layout')), findsOneWidget);
+    expect(find.byKey(const ValueKey('login-carousel')), findsOneWidget);
+    final passwordField = find.byType(TextField).at(1);
+    expect(tester.widget<TextField>(passwordField).obscureText, isTrue);
+
+    await tester.tap(find.byKey(const ValueKey('login-password-visibility')));
+    await tester.pump();
+    expect(tester.widget<TextField>(passwordField).obscureText, isFalse);
+  });
+
+  testWidgets('login carousel automatically advances and supports swiping',
+      (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    tester.view.physicalSize = const Size(1200, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: LoginPage(
+          api: _loginPageApiWithSlides(),
+          onLoggedIn: (_) {},
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('第一张'), findsOneWidget);
+    await tester.drag(
+      find.byKey(const ValueKey('login-carousel')),
+      const Offset(-600, 0),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('第二张'), findsOneWidget);
+
+    await tester.pump(const Duration(seconds: 6));
+    await tester.pumpAndSettle();
+    expect(find.text('第一张'), findsOneWidget);
   });
 
   testWidgets('dashboard uses bottom tabs on mobile', (tester) async {
@@ -785,6 +989,26 @@ void main() {
     expect(find.text('首页'), findsWidgets);
     expect(find.text('下一节课'), findsOneWidget);
     expect(find.text('今日时间线'), findsOneWidget);
+    expect(find.byKey(const ValueKey('home-card-下一节课')), findsOneWidget);
+  });
+
+  testWidgets(
+      'mobile dashboard content clears the top system inset on every tab',
+      (tester) async {
+    tester.view.padding = const FakeViewPadding(top: 24, bottom: 34);
+    await _pumpDashboard(tester, const Size(390, 844));
+
+    for (final label in ['首页', '信息', '应用', '课表', '更多']) {
+      await tester.tap(find.text(label).last);
+      await tester.pumpAndSettle();
+
+      final contentTop = tester
+          .getTopLeft(find.byKey(const ValueKey('mobile-dashboard-content')))
+          .dy;
+      expect(contentTop, greaterThanOrEqualTo(32),
+          reason: '$label 内容应位于状态栏安全区下方');
+      expect(tester.takeException(), isNull);
+    }
   });
 
   testWidgets('today timeline fits dense desktop home grid with large text',
@@ -866,7 +1090,8 @@ void main() {
     }
   });
 
-  testWidgets('AsyncPanel keeps old data during silent refresh', (tester) async {
+  testWidgets('AsyncPanel keeps old data during silent refresh',
+      (tester) async {
     final first = Completer<String>();
     final second = Completer<String>();
     final failing = Completer<String>();
@@ -948,6 +1173,30 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('iOS 主界面从左边缘右滑按 Tab 访问历史返回', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    try {
+      await _pumpDashboard(tester, const Size(390, 844));
+      await tester.tap(find.text('课表').last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('更多').last);
+      await tester.pumpAndSettle();
+
+      await _swipeFromLeftEdge(tester);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('schedule-tools-button')),
+        findsOneWidget,
+      );
+
+      await _swipeFromLeftEdge(tester);
+      await tester.pumpAndSettle();
+      expect(find.text('下一节课'), findsOneWidget);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
   testWidgets('home widget guide explains setup and examples', (tester) async {
     await _pumpDashboard(tester, const Size(1180, 820), hideEcard: true);
 
@@ -985,8 +1234,11 @@ void main() {
 
   testWidgets('schedule remembers first week and opens compact tools',
       (tester) async {
+    final now = DateTime.now();
+    final period = academicPeriodOf(now);
+    final startText = dateText(mondayOf(now));
     SharedPreferences.setMockInitialValues({
-      'schedule.2025.2.firstWeekStart': '2026-02-16',
+      'schedule.${period.$1}.${period.$2}.firstWeekStart': startText,
       'schedule.autoWeek': true,
     });
     tester.view.physicalSize = const Size(390, 844);
@@ -1009,14 +1261,15 @@ void main() {
     await tester.tap(find.text('课表').last);
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('首周2026-02-16'), findsOneWidget);
+    expect(find.text('首周'), findsOneWidget);
+    expect(find.text(startText), findsOneWidget);
     expect(find.byKey(const ValueKey('schedule-tools-button')), findsOneWidget);
 
     await tester.tap(find.byKey(const ValueKey('schedule-tools-button')));
     await tester.pumpAndSettle();
 
     expect(find.text('课表工具'), findsWidgets);
-    expect(find.text('2026-02-16'), findsOneWidget);
+    expect(find.text(startText), findsNWidgets(2));
     expect(tester.takeException(), isNull);
   });
 
@@ -1164,6 +1417,13 @@ Future<void> _pumpDashboard(
   addTearDown(() => debugHideEcardForTests = false);
   addTearDown(() => debugDisableEcardDirectForTests = false);
   addTearDown(LiveActivityController.instance.resetForTest);
+  const homeWidgetChannel = MethodChannel('cn.gzus.pro/home_widgets');
+  TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+      .setMockMethodCallHandler(homeWidgetChannel, (call) async => null);
+  addTearDown(() {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(homeWidgetChannel, null);
+  });
   SharedPreferences.setMockInitialValues({});
   tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1;
@@ -1185,6 +1445,58 @@ Future<void> _pumpDashboard(
     ),
   );
   await tester.pumpAndSettle();
+}
+
+Future<void> _swipeFromLeftEdge(WidgetTester tester) async {
+  final gesture = await tester.startGesture(const Offset(10, 360));
+  await gesture.moveBy(const Offset(100, 0));
+  await gesture.up();
+}
+
+ApiClient _loginPageApi() {
+  return ApiClient(
+    baseUrl: 'https://api.example.test',
+    httpClient: MockClient((request) async {
+      if (request.url.path == '/content/login-slides') {
+        return http.Response('[]', 200,
+            headers: {'content-type': 'application/json'});
+      }
+      return http.Response('not found', 404);
+    }),
+  );
+}
+
+ApiClient _loginPageApiWithSlides() {
+  return ApiClient(
+    baseUrl: 'https://api.example.test',
+    httpClient: MockClient((request) async {
+      if (request.url.path == '/content/login-slides') {
+        return http.Response(
+          jsonEncode([
+            {
+              'id': 1,
+              'title': '第一张',
+              'description': '第一张文案',
+              'imageUrl': '/content/login-slides/1/image',
+            },
+            {
+              'id': 2,
+              'title': '第二张',
+              'description': '第二张文案',
+              'imageUrl': '/content/login-slides/2/image',
+            },
+          ]),
+          200,
+          headers: {'content-type': 'application/json'},
+        );
+      }
+      if (request.url.path.startsWith('/content/login-slides/')) {
+        return http.Response.bytes(const [0], 200,
+            headers: {'content-type': 'image/png'});
+      }
+      return http.Response('not found', 404);
+    }),
+  );
 }
 
 ApiClient _mockApi({
@@ -1305,9 +1617,15 @@ ApiClient _mockApi({
                   }
                 ],
               },
-              'ecard': {'status': 'empty', 'data': {'status': 'not_bound'}},
+              'ecard': {
+                'status': 'empty',
+                'data': {'status': 'not_bound'}
+              },
               'apps': {'status': 'empty', 'data': []},
-              'progress': {'status': 'empty', 'data': {'items': []}},
+              'progress': {
+                'status': 'empty',
+                'data': {'items': []}
+              },
               'weather': {'status': 'empty', 'data': null},
             },
           };
@@ -1454,9 +1772,35 @@ ApiClient _mockApi({
           break;
         case '/ecard/consumption':
           body = {
-            'status': 'limited',
-            'message': '一卡通流水接口受限',
-            'items': [],
+            'status': 'ok',
+            'cachedAt': '2026-06-03T08:00:00+08:00',
+            'items': [
+              {
+                'title': '剩余 100 度',
+                'amount': '2.5 度',
+                'time': '2026-06-03',
+                'date': '2026-06-03',
+                'usage': 2.5,
+                'unit': '度',
+              }
+            ],
+          };
+          break;
+        case '/ecard/consumption/overview':
+          body = {
+            'status': 'ok',
+            'months': [
+              {
+                'month': '2026-06',
+                'recordedDays': 3,
+                'totalUsage': 8.5,
+                'averageDailyUsage': 2.83,
+                'peakDate': '2026-06-03',
+                'peakUsage': 4.0,
+                'unit': '度',
+                'cachedAt': '2026-06-03T08:00:00+08:00',
+              }
+            ],
           };
           break;
         case '/ehall/affairs':

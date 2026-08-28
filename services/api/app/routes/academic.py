@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -8,7 +9,11 @@ from typing import TypeVar
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 
-from app.cache_service import load_and_get_cached_at, save_cache
+from app.cache_service import (
+    ACADEMIC_CACHE_MAX_AGE_SECONDS,
+    load_and_get_cached_at,
+    save_cache,
+)
 from app.notice_utils import merge_notices, valid_notice_items
 from app.routes.deps import require_session
 from app.schemas import (
@@ -29,6 +34,35 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["academic"])
 
 T = TypeVar("T")
+
+_DASHBOARD_MODULE_TIMEOUT_SECONDS = 8.0
+
+_DASHBOARD_MODULE_LABELS = {
+    "me": "个人信息",
+    "schedule": "课表",
+    "notices": "通知",
+    "attendance": "考勤",
+    "credits": "学分",
+    "grades": "成绩",
+    "exams": "考试",
+    "apps": "常用服务",
+    "progress": "业务进度",
+}
+
+
+def _academic_upstream_error_detail(exc: Exception) -> str:
+    """将教务系统故障转换为可行动、但不泄露内部实现的提示。"""
+    text = str(exc).lower()
+    if "timeout" in text or "超时" in text:
+        return "学校教务系统响应超时（已自动重试），请稍后再试"
+    if "connect" in text or "连接" in text:
+        return "无法连接学校教务系统，请检查网络后稍后重试"
+    if "json" in text or "数据格式" in text or "parse" in text:
+        return "学校教务系统返回的数据格式异常，请稍后重试"
+    match = re.search(r"\b([45]\d{2})\b", text)
+    if match is not None:
+        return f"学校教务系统暂时不可用（上游 HTTP {match.group(1)}），请稍后重试"
+    return "学校教务系统请求失败（未返回可用数据），请稍后重试"
 
 
 def _dashboard_module(name: str, call: Callable[[], T], *, empty) -> dict:
@@ -73,7 +107,40 @@ def _dashboard_ehall_module(call: Callable[[], T], *, empty) -> dict:
         }
 
 
+async def _run_dashboard_module(
+    name: str,
+    empty: T,
+    call: Callable[[], dict],
+) -> tuple[str, dict]:
+    """在独立线程中加载一个首页模块，并限制其最长等待时间。"""
+    started = time.perf_counter()
+    try:
+        module = await asyncio.wait_for(
+            asyncio.to_thread(call),
+            timeout=_DASHBOARD_MODULE_TIMEOUT_SECONDS,
+        )
+        return name, module
+    except TimeoutError:
+        logger.warning(
+            "dashboard_module_timeout",
+            extra={
+                "dashboard_module": name,
+                "timeout_seconds": _DASHBOARD_MODULE_TIMEOUT_SECONDS,
+            },
+        )
+        return name, {
+            "status": "error",
+            "data": empty,
+            "source": "api",
+            "error": (
+                f"{_DASHBOARD_MODULE_LABELS.get(name, name)}模块加载超过 "
+                f"{_DASHBOARD_MODULE_TIMEOUT_SECONDS:g} 秒，请稍后重试"
+            ),
+            "durationMs": round((time.perf_counter() - started) * 1000),
+        }
 def _get_student_id(session: AppSession) -> str:
+    if session.student_account:
+        return session.student_account
     client = session.client
     if client is None:
         logger.error("academic: session.client is None for session %s", session.id[:8])
@@ -110,7 +177,7 @@ def _run_academic_call(call: Callable[[], T]) -> T:
         )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="学校系统暂时不可用，请稍后重试",
+            detail=_academic_upstream_error_detail(exc),
         ) from exc
 
 
@@ -119,6 +186,7 @@ async def _run_with_cache_fallback(
     student_id: str,
     call: Callable[[], T],
     params: dict | None = None,
+    cache_max_age_seconds: int | None = None,
 ) -> JSONResponse | T:
     loop = asyncio.get_event_loop()
     try:
@@ -129,11 +197,19 @@ async def _run_with_cache_fallback(
             logger.warning("Failed to save cache for resource=%s", resource, exc_info=True)
         return result
     except HTTPException as exc:
-        if exc.status_code == status.HTTP_401_UNAUTHORIZED:
+        if (
+            exc.status_code == status.HTTP_401_UNAUTHORIZED
+            and resource not in {"exams", "attendance"}
+        ):
             raise
         try:
             cached, cached_at = await loop.run_in_executor(
-                None, load_and_get_cached_at, student_id, resource, params,
+                None,
+                load_and_get_cached_at,
+                student_id,
+                resource,
+                params,
+                cache_max_age_seconds,
             )
         except Exception:
             logger.warning("Failed to load cache for resource=%s", resource, exc_info=True)
@@ -178,7 +254,11 @@ async def exams(
     student_id = _get_student_id(session)
     params = {"year": year, "term": term} if year or term else None
     return await _run_with_cache_fallback(
-        "exams", student_id, lambda: session.client.get_exams(year, term), params,
+        "exams",
+        student_id,
+        lambda: session.client.get_exams(year, term),
+        params,
+        ACADEMIC_CACHE_MAX_AGE_SECONDS,
     )
 
 
@@ -210,7 +290,13 @@ async def attendance(
         items = session.client.get_attendance(year, term)
         return AttendanceResponse(status="ok", items=items)
 
-    return await _run_with_cache_fallback("attendance", student_id, call, params)
+    return await _run_with_cache_fallback(
+        "attendance",
+        student_id,
+        call,
+        params,
+        ACADEMIC_CACHE_MAX_AGE_SECONDS,
+    )
 
 
 @router.get("/credits", response_model=list[CreditItem])
@@ -236,27 +322,42 @@ async def dashboard(
     """
     trace_id = request.headers.get("X-GZUS-Trace-Id") or f"api-{int(time.time() * 1000)}"
 
-    def build() -> dict:
-        modules = {
-            "me": _dashboard_module(
+    ehall_client = getattr(session, "ehall_client", None)
+    module_jobs = [
+        _run_dashboard_module(
+            "me",
+            {},
+            lambda: _dashboard_module(
                 "me",
                 session.client.get_info if session.client else dict,
                 empty={},
             ),
-            "schedule": _dashboard_module(
+        ),
+        _run_dashboard_module(
+            "schedule",
+            [],
+            lambda: _dashboard_module(
                 "schedule",
                 lambda: session.client.get_schedule(year, term) if session.client else [],
                 empty=[],
             ),
-            "notices": _dashboard_module(
+        ),
+        _run_dashboard_module(
+            "notices",
+            [],
+            lambda: _dashboard_module(
                 "notices",
                 lambda: _merged_public_notices(
                     session.client.get_notices() if session.client else [],
-                    getattr(session, "ehall_client", None),
+                    ehall_client,
                 ),
                 empty=[],
             ),
-            "attendance": _dashboard_module(
+        ),
+        _run_dashboard_module(
+            "attendance",
+            {"status": "empty", "items": []},
+            lambda: _dashboard_module(
                 "attendance",
                 lambda: {
                     "status": "ok",
@@ -266,47 +367,66 @@ async def dashboard(
                 else {"status": "empty", "items": []},
                 empty={"status": "empty", "items": []},
             ),
-            "credits": _dashboard_module(
+        ),
+        _run_dashboard_module(
+            "credits",
+            [],
+            lambda: _dashboard_module(
                 "credits",
                 session.client.get_credits if session.client else list,
                 empty=[],
             ),
-            "grades": _dashboard_module(
+        ),
+        _run_dashboard_module(
+            "grades",
+            [],
+            lambda: _dashboard_module(
                 "grades",
                 lambda: session.client.get_grades(year, term) if session.client else [],
                 empty=[],
             ),
-            "exams": _dashboard_module(
+        ),
+        _run_dashboard_module(
+            "exams",
+            [],
+            lambda: _dashboard_module(
                 "exams",
                 lambda: session.client.get_exams(year, term) if session.client else [],
                 empty=[],
             ),
-            "ecard": {
-                "status": "empty",
-                "data": {"status": "not_bound"},
-                "source": "api",
-                "durationMs": 0,
-            },
-            "weather": {
-                "status": "empty",
-                "data": None,
-                "source": "client",
-                "durationMs": 0,
-            },
-        }
-        ehall_client = getattr(session, "ehall_client", None)
-        modules["apps"] = _dashboard_ehall_module(
-            lambda: ehall_client.get_applications() if ehall_client else [],
-            empty=[],
-        )
-        modules["progress"] = _dashboard_ehall_module(
-            lambda: ehall_client.get_progress_overview() if ehall_client else {"items": []},
-            empty={"items": []},
-        )
-        return modules
-
-    loop = asyncio.get_event_loop()
-    modules = await loop.run_in_executor(None, build)
+        ),
+        _run_dashboard_module(
+            "apps",
+            [],
+            lambda: _dashboard_ehall_module(
+                lambda: ehall_client.get_applications() if ehall_client else [],
+                empty=[],
+            ),
+        ),
+        _run_dashboard_module(
+            "progress",
+            {"items": []},
+            lambda: _dashboard_ehall_module(
+                lambda: ehall_client.get_progress_overview()
+                if ehall_client
+                else {"items": []},
+                empty={"items": []},
+            ),
+        ),
+    ]
+    modules = dict(await asyncio.gather(*module_jobs))
+    modules["ecard"] = {
+        "status": "empty",
+        "data": {"status": "not_bound"},
+        "source": "api",
+        "durationMs": 0,
+    }
+    modules["weather"] = {
+        "status": "empty",
+        "data": None,
+        "source": "client",
+        "durationMs": 0,
+    }
     return {
         "status": "ok",
         "generatedAt": datetime.now(UTC).isoformat(),

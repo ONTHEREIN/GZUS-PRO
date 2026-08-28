@@ -91,8 +91,7 @@ class _FtpUploadPageState extends State<FtpUploadPage> {
         title: '作业上传',
         icon: Icons.upload_file,
         expandChild: true,
-        child:
-            EmptyState(message: 'Web 端无法直连 FTP，请使用 Android App 并连接学校内网或 VPN。'),
+        child: EmptyState(message: 'Web 端无法直连 FTP，请改用原生客户端并连接学校内网或 VPN。'),
       );
     }
 
@@ -158,7 +157,7 @@ class _FtpUploadPageState extends State<FtpUploadPage> {
         final cards = [
           _FtpStatusCard(
             title: '平台',
-            value: 'Android',
+            value: FtpUploadService.platformLabel,
             detail: '客户端直连 FTP',
             icon: Icons.phone_android,
             color: scheme.primary,

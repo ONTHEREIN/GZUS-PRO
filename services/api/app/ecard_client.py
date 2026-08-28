@@ -446,17 +446,21 @@ def _format_value(value: Any, unit: str) -> str | None:
     return f"{value} {unit}".strip()
 
 
-def _public_power_daily_item(item: Any, unit: str) -> dict[str, str]:
+def _public_power_daily_item(item: Any, unit: str) -> dict[str, Any]:
     if not isinstance(item, dict):
-        return {"title": str(item), "amount": "", "time": ""}
-    daily_used = str(item.get("dailyUsed") or "")
-    left_used = str(item.get("leftUsed") or "")
-    left_free = str(item.get("leftFree") or "")
+        return {"title": str(item), "amount": "", "time": "", "date": "", "usage": None, "unit": unit}
+    daily_used = str(item.get("dailyUsed") if item.get("dailyUsed") is not None else "")
+    left_used = str(item.get("leftUsed") if item.get("leftUsed") is not None else "")
+    left_free = str(item.get("leftFree") if item.get("leftFree") is not None else "")
+    date_time = str(item.get("dateTime") if item.get("dateTime") is not None else "")
     details = [f"剩余 {left_used} {unit}".strip()] if left_used else []
     if left_free:
         details.append(f"免费额 {left_free} {unit}".strip())
     return {
         "title": " · ".join(details) or "电费日用",
         "amount": f"{daily_used} {unit}".strip() if daily_used else "",
-        "time": str(item.get("dateTime") or ""),
+        "time": date_time,
+        "date": date_time[:10],
+        "usage": safe_float(item.get("dailyUsed")),
+        "unit": unit,
     }

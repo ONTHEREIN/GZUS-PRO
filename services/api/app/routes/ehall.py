@@ -1,5 +1,6 @@
 import base64
 import logging
+import re
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
@@ -11,6 +12,7 @@ from app.leave_service import (
     build_leave_preview,
     leave_days,
 )
+from app.jwxt.normalizers import normalize_schedule_course
 from app.routes.deps import require_session
 from app.school_client import AuthenticationError, MissingProxySlotError
 from app.schemas import (
@@ -18,6 +20,8 @@ from app.schemas import (
     EhallApplicationItem,
     EhallProgressOverview,
     LeaveAttachmentUploadRequest,
+    LeaveAttachmentItem,
+    LEAVE_ATTACHMENT_MAX_BYTES,
     LeaveFillRequest,
     LeaveFillResponse,
     LeavePreviewRequest,
@@ -30,6 +34,19 @@ from app.staff_service import ensure_staff_loaded, resolve_teacher
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/ehall", tags=["ehall"])
+
+
+def _ehall_upstream_error_detail(exc: Exception) -> str:
+    """返回办事大厅故障的明确提示，不透出内部响应内容。"""
+    text = str(exc).lower()
+    if "timeout" in text or "超时" in text:
+        return "办事大厅响应超时，请稍后再试"
+    if "connect" in text or "连接" in text:
+        return "无法连接办事大厅，请检查网络后稍后重试"
+    match = re.search(r"\b([45]\d{2})\b", text)
+    if match is not None:
+        return f"办事大厅暂时不可用（上游 HTTP {match.group(1)}），请稍后重试"
+    return "办事大厅请求失败（未返回可用数据），请稍后重试"
 
 
 def _get_student_id(session: AppSession) -> str:
@@ -74,7 +91,7 @@ def _with_cache_fallback(resource: str, student_id: str, call):
 
 def _load_leave_courses(payload: LeavePreviewRequest, session: AppSession) -> list[dict]:
     if payload.courses:
-        return payload.courses
+        return [normalize_schedule_course(course) for course in payload.courses]
 
     if session.client is None:
         logger.error("ehall: session.client is None for session %s (leave courses)", session.id[:8])
@@ -91,7 +108,7 @@ def _load_leave_courses(payload: LeavePreviewRequest, session: AppSession) -> li
             save_cache(student_id, "schedule", courses, params)
         except Exception:
             logger.warning("Failed to save schedule cache for leave preview", exc_info=True)
-        return courses
+        return [normalize_schedule_course(course) for course in courses]
     except (AuthenticationError, MissingProxySlotError):
         raise
     except Exception as exc:
@@ -108,11 +125,25 @@ def _load_leave_courses(payload: LeavePreviewRequest, session: AppSession) -> li
             cached, cached_at = None, None
         if isinstance(cached, list):
             logger.info("Using cached schedule for leave preview, cached_at=%s", cached_at)
-            return cached
+            return [normalize_schedule_course(course) for course in cached]
         raise HTTPException(
             status_code=status.HTTP_424_FAILED_DEPENDENCY,
             detail="课表暂时无法获取，请先刷新课表后再匹配课程",
         ) from exc
+
+
+def _decode_leave_attachments(attachments: list[LeaveAttachmentItem]) -> list[tuple[str, bytes]]:
+    decoded: list[tuple[str, bytes]] = []
+    total_bytes = 0
+    for attachment in attachments:
+        content = base64.b64decode(attachment.attachment_content_base64, validate=True)
+        if not content:
+            raise ValueError(f"附件不能为空: {attachment.attachment_name}")
+        total_bytes += len(content)
+        if total_bytes > LEAVE_ATTACHMENT_MAX_BYTES:
+            raise ValueError("图片总大小不能超过 7 MB")
+        decoded.append((attachment.attachment_name, content))
+    return decoded
 
 
 @router.get("/tasks", response_model=list[NoticeItem])
@@ -156,7 +187,7 @@ def affairs(session: AppSession = Depends(require_session)) -> list[dict]:
         logger.warning("ehall affairs unavailable: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-            detail="办事大厅数据获取失败，请稍后重试",
+            detail=_ehall_upstream_error_detail(exc),
         ) from exc
 
 
@@ -188,7 +219,7 @@ def applications(session: AppSession = Depends(require_session)) -> list[dict]:
         logger.warning("ehall applications unavailable: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-            detail="办事大厅数据获取失败，请稍后重试",
+            detail=_ehall_upstream_error_detail(exc),
         ) from exc
 
 
@@ -333,21 +364,22 @@ def leave_fill(
         handler_script = None
         if not unmatched_teachers and matched_teachers:
             handler_script = build_leave_handler_script(matched_teachers)
-        content = base64.b64decode(payload.attachment_content_base64)
+        attachments = _decode_leave_attachments(payload.attachments)
         result = ehall_client.fill_leave_application(
             start_date=payload.start_date,
             end_date=payload.end_date,
             leave_days=leave_days(payload.start_date, payload.end_date),
             reason=payload.reason,
             courses=preview["items"],
-            attachment_name=payload.attachment_name,
-            attachment_content=content,
+            attachments=attachments,
         )
+        uploaded_count = int(result.get("attachmentUploadedCount", 0))
+        attachment_total = int(result.get("attachmentTotal", len(attachments)))
         return {
             "status": "needs_manual" if unmatched_teachers else result.get("status", "needs_manual"),
             "message": "请选择任课教师经办人"
             if unmatched_teachers
-            else "已生成请假单并上传附件，打开后将自动办理并停在提交前",
+            else result.get("message", "已生成请假单并上传附件，打开后将自动办理并停在提交前"),
             "items": preview["items"],
             "unmatchedTeachers": unmatched_teachers,
             "matchedTeachers": matched_teachers,
@@ -356,6 +388,8 @@ def leave_fill(
             "fillScript": result.get("fillScript") or fill_script,
             "handlerScript": result.get("handlerScript") or handler_script,
             "attachmentUploaded": bool(result.get("attachmentUploaded")),
+            "attachmentUploadedCount": uploaded_count,
+            "attachmentTotal": attachment_total,
         }
     except EhallAuthenticationError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc

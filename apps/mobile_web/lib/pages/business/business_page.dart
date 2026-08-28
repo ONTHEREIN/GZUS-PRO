@@ -118,7 +118,11 @@ class _BusinessProgressSectionState
                     children: [
                       for (final item in filtered.take(5))
                         InkWell(
-                          onTap: () => openInAppBrowser(context, item.url),
+                          onTap: () => openInAppBrowser(
+                            context,
+                            item.url,
+                            api: widget.api,
+                          ),
                           child: ProgressMiniRow(item: item),
                         ),
                     ],
@@ -221,6 +225,8 @@ class _BusinessPageState extends ConsumerState<BusinessPage> {
                               minTileWidth: 170,
                               maxColumns: 4,
                             );
+                            final textScale =
+                                MediaQuery.textScalerOf(context).scale(1);
                             return GridView.builder(
                               physics: const AlwaysScrollableScrollPhysics(),
                               gridDelegate:
@@ -228,13 +234,13 @@ class _BusinessPageState extends ConsumerState<BusinessPage> {
                                 crossAxisCount: columns,
                                 crossAxisSpacing: 10,
                                 mainAxisSpacing: 10,
-                                childAspectRatio: columns == 1
-                                    ? 2.2
-                                    : (columns == 2 ? 1.45 : 1.35),
+                                mainAxisExtent: 210 * textScale,
                               ),
                               itemCount: filtered.length,
-                              itemBuilder: (context, index) =>
-                                  BusinessItemTile(item: filtered[index]),
+                              itemBuilder: (context, index) => BusinessItemTile(
+                                item: filtered[index],
+                                api: widget.api,
+                              ),
                             );
                           },
                         ),

@@ -5,7 +5,8 @@ const _cacheVersion = 1;
 const _versionKey = 'cache_version';
 
 class CacheResult<T> {
-  CacheResult({required this.data, required this.cachedAt, required this.fromCache});
+  CacheResult(
+      {required this.data, required this.cachedAt, required this.fromCache});
 
   final T data;
   final DateTime? cachedAt;
@@ -41,7 +42,8 @@ class PersistentCache {
     await _prefs!.setString(_timeKey(key), now);
   }
 
-  CacheResult<T>? get<T>(String key, T Function(Map<String, dynamic>) fromJson) {
+  CacheResult<T>? get<T>(
+      String key, T Function(Map<String, dynamic>) fromJson) {
     if (_prefs == null) return null;
     final jsonStr = _prefs!.getString(_dataKey(key));
     if (jsonStr == null) return null;
@@ -56,7 +58,8 @@ class PersistentCache {
     }
   }
 
-  CacheResult<List<T>>? getList<T>(String key, T Function(Map<String, dynamic>) fromJson) {
+  CacheResult<List<T>>? getList<T>(
+      String key, T Function(Map<String, dynamic>) fromJson) {
     if (_prefs == null) return null;
     final jsonStr = _prefs!.getString(_dataKey(key));
     if (jsonStr == null) return null;
@@ -67,7 +70,8 @@ class PersistentCache {
           .map((item) => fromJson(item as Map<String, dynamic>))
           .toList();
       final cachedAt = timeStr != null ? DateTime.tryParse(timeStr) : null;
-      return CacheResult<List<T>>(data: items, cachedAt: cachedAt, fromCache: true);
+      return CacheResult<List<T>>(
+          data: items, cachedAt: cachedAt, fromCache: true);
     } on Exception {
       return null;
     }
@@ -104,6 +108,42 @@ class PersistentCache {
       if (key.startsWith(prefix)) {
         await _prefs!.remove(key);
       }
+    }
+  }
+
+  static Future<void> migrateNamespace({
+    required String fromNamespace,
+    required String toNamespace,
+  }) async {
+    if (fromNamespace == toNamespace) return;
+    final prefs = await SharedPreferences.getInstance();
+    final sourcePrefix = 'pcache_${fromNamespace}_';
+    final destinationPrefix = 'pcache_${toNamespace}_';
+    final sourceKeys = prefs
+        .getKeys()
+        .where((key) => key.startsWith(sourcePrefix))
+        .toList(growable: false);
+
+    for (final sourceKey in sourceKeys) {
+      final suffix = sourceKey.substring(sourcePrefix.length);
+      final destinationKey = '$destinationPrefix$suffix';
+      if (!prefs.containsKey(destinationKey)) {
+        final value = prefs.get(sourceKey);
+        if (value is String) {
+          await prefs.setString(destinationKey, value);
+        } else if (value is bool) {
+          await prefs.setBool(destinationKey, value);
+        } else if (value is int) {
+          await prefs.setInt(destinationKey, value);
+        } else if (value is double) {
+          await prefs.setDouble(destinationKey, value);
+        } else if (value is List<String>) {
+          await prefs.setStringList(destinationKey, value);
+        } else {
+          throw StateError('缓存键 $sourceKey 的类型不受支持');
+        }
+      }
+      await prefs.remove(sourceKey);
     }
   }
 

@@ -34,7 +34,7 @@ class _AutoLeavePageState extends State<AutoLeavePage> {
   late final TextEditingController _startController;
   late final TextEditingController _endController;
   final _reasonController = TextEditingController();
-  PickedAttachment? _attachment;
+  final List<PickedAttachment> _attachments = [];
   LeavePreviewResponse? _preview;
   LeaveFillResponse? _fillResult;
   List<Map<String, dynamic>>? _scheduleCourses;
@@ -115,10 +115,12 @@ class _AutoLeavePageState extends State<AutoLeavePage> {
                         ),
                       ),
                       OutlinedButton(
-                        onPressed: _chooseAttachment,
+                        onPressed: _chooseAttachments,
                         child: IconLabel(
                           icon: Icons.image,
-                          label: _attachment?.name ?? '选择图片',
+                          label: _attachments.isEmpty
+                              ? '选择图片'
+                              : '添加图片（${_attachments.length}/$leaveAttachmentMaximumCount）',
                         ),
                       ),
                       FilledButton(
@@ -131,7 +133,7 @@ class _AutoLeavePageState extends State<AutoLeavePage> {
                       FilledButton.tonal(
                         onPressed: preview == null ||
                                 missing ||
-                                _attachment == null ||
+                                _attachments.isEmpty ||
                                 _reasonController.text.trim().isEmpty ||
                                 _filling
                             ? null
@@ -146,6 +148,24 @@ class _AutoLeavePageState extends State<AutoLeavePage> {
                 },
               ),
             ),
+            if (_attachments.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final attachment in _attachments)
+                    InputChip(
+                      avatar: const Icon(Icons.image_outlined, size: 18),
+                      label: Text(
+                        '${attachment.name}（${_attachmentSizeText(attachment.bytes.length)}）',
+                      ),
+                      onDeleted: () =>
+                          setState(() => _attachments.remove(attachment)),
+                    ),
+                ],
+              ),
+            ],
             if (_error != null) ...[
               const SizedBox(height: 10),
               Text(_error!,
@@ -156,7 +176,6 @@ class _AutoLeavePageState extends State<AutoLeavePage> {
               _LeaveResultBanner(
                 result: _fillResult!,
                 api: widget.api,
-                attachment: _attachment,
               ),
               if (_fillResult!.teacherCandidates.isNotEmpty) ...[
                 const SizedBox(height: 10),
@@ -194,10 +213,21 @@ class _AutoLeavePageState extends State<AutoLeavePage> {
     );
   }
 
-  Future<void> _chooseAttachment() async {
-    final picked = await pickLeaveAttachment();
-    if (!mounted || picked == null) return;
-    setState(() => _attachment = picked);
+  Future<void> _chooseAttachments() async {
+    final picked = await pickLeaveAttachments();
+    if (!mounted || picked.isEmpty) return;
+    final nextAttachments = [..._attachments, ...picked];
+    final validationError = validateLeaveAttachments(nextAttachments);
+    if (validationError != null) {
+      setState(() => _error = validationError);
+      return;
+    }
+    setState(() {
+      _attachments
+        ..clear()
+        ..addAll(nextAttachments);
+      _error = null;
+    });
   }
 
   Future<void> _loadPreview() async {
@@ -218,7 +248,9 @@ class _AutoLeavePageState extends State<AutoLeavePage> {
           term: widget.term,
         ))
             .data
-            .raw;
+            .items
+            .map((item) => item.toJson())
+            .toList();
       } catch (_) {
         courses = const [];
       }
@@ -245,8 +277,12 @@ class _AutoLeavePageState extends State<AutoLeavePage> {
 
   Future<void> _fillLeave({bool useTeacherSelections = false}) async {
     final range = _parseRange();
-    final attachment = _attachment;
-    if (range == null || attachment == null) return;
+    final attachments = List<PickedAttachment>.from(_attachments);
+    final validationError = validateLeaveAttachments(attachments);
+    if (range == null || validationError != null) {
+      if (validationError != null) setState(() => _error = validationError);
+      return;
+    }
     final teacherHandlers = useTeacherSelections
         ? _teacherSelections.entries
             .map(
@@ -272,8 +308,7 @@ class _AutoLeavePageState extends State<AutoLeavePage> {
         endDate: range.$2,
         firstWeekStart: mondayOf(widget.firstWeekStart),
         reason: _reasonController.text.trim(),
-        attachmentName: attachment.name,
-        attachmentBytes: attachment.bytes,
+        attachments: attachments,
         teacherHandlers: teacherHandlers,
         courses: _scheduleCourses ?? const [],
       );
@@ -496,12 +531,10 @@ class _LeaveResultBanner extends StatelessWidget {
   const _LeaveResultBanner({
     required this.result,
     required this.api,
-    required this.attachment,
   });
 
   final LeaveFillResponse result;
   final ApiClient api;
-  final PickedAttachment? attachment;
 
   @override
   Widget build(BuildContext context) {
@@ -538,8 +571,6 @@ class _LeaveResultBanner extends StatelessWidget {
                   result.formUrl!,
                   fillScript: script,
                   api: api,
-                  attachmentName: attachment?.name,
-                  attachmentBytes: attachment?.bytes,
                 );
               },
               child: Text(script == null ? '打开' : '打开并填到提交前'),
@@ -548,6 +579,11 @@ class _LeaveResultBanner extends StatelessWidget {
       ),
     );
   }
+}
+
+String _attachmentSizeText(int bytes) {
+  if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+  return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
 }
 
 class _InfoChip extends StatelessWidget {

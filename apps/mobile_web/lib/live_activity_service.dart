@@ -2,7 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
-import 'gzus_design.dart';
+import 'widgets/liquid_glass.dart';
 
 typedef LiveActivityOpenHandler = void Function(LiveActivityEvent event);
 
@@ -244,15 +244,28 @@ class _LiveActivityIslandState extends State<LiveActivityIsland> {
   @override
   void initState() {
     super.initState();
-    _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted) setState(() => _now = DateTime.now());
-    });
+    widget.controller.state.addListener(_syncTicker);
+    _syncTicker();
   }
 
   @override
   void dispose() {
+    widget.controller.state.removeListener(_syncTicker);
     _ticker?.cancel();
     super.dispose();
+  }
+
+  void _syncTicker() {
+    final needsTicker = widget.controller.state.value.event?.isTimer ?? false;
+    if (!needsTicker) {
+      _ticker?.cancel();
+      _ticker = null;
+      return;
+    }
+    if (_ticker != null) return;
+    _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() => _now = DateTime.now());
+    });
   }
 
   @override
@@ -335,28 +348,33 @@ class _IslandSurface extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final color = _eventColor(theme.colorScheme);
-    final dark = theme.brightness == Brightness.dark;
+    final duration = MediaQuery.disableAnimationsOf(context)
+        ? Duration.zero
+        : const Duration(milliseconds: 280);
     return Material(
       color: Colors.transparent,
       elevation: 14,
-      shadowColor: Colors.black.withValues(alpha: dark ? 0.38 : 0.16),
       borderRadius: BorderRadius.circular(expanded ? 26 : 999),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 280),
-        curve: Curves.easeOutCubic,
+      child: LiquidGlassSurface(
         padding: EdgeInsets.all(expanded ? 12 : 8),
-        decoration: BoxDecoration(
-          color: dark
-              ? const Color(0xFF101318).withValues(alpha: 0.96)
-              : gzusSurface(context).withValues(alpha: 0.96),
-          borderRadius: BorderRadius.circular(expanded ? 26 : 999),
-          border: Border.all(
-            color: color.withValues(alpha: dark ? 0.32 : 0.18),
+        borderRadius: BorderRadius.circular(expanded ? 26 : 999),
+        material: LiquidGlassMaterial.regular,
+        semanticsLabel: '即时提醒',
+        child: AnimatedContainer(
+          duration: duration,
+          curve: Curves.easeOutCubic,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(expanded ? 26 : 999),
+            border: Border.all(
+              color: color.withValues(
+                alpha: theme.brightness == Brightness.dark ? 0.32 : 0.18,
+              ),
+            ),
           ),
+          child: expanded
+              ? _expandedContent(context, color)
+              : _compactContent(context, color),
         ),
-        child: expanded
-            ? _expandedContent(context, color)
-            : _compactContent(context, color),
       ),
     );
   }

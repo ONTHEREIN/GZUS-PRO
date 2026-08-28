@@ -8,7 +8,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../api_client.dart';
 import '../../app_providers.dart';
 import '../../schedule_utils.dart';
-import '../../local_notification_service.dart' deferred as local_notification_service;
+import '../../local_notification_service.dart'
+    deferred as local_notification_service;
 import '../../widgets/async_panel.dart';
 import '../../widgets/badges.dart';
 import '../../widgets/empty_state.dart';
@@ -42,16 +43,26 @@ class _AttendancePageState extends ConsumerState<AttendancePage>
   DateTime? _selectedAttendanceDate;
   Set<String> _highlightedAttendanceKeys = {};
   String? _processedAttendanceSignature;
+  bool _forceRefresh = false;
 
   AttendanceRequest get _request => AttendanceRequest(
         client: widget.api,
         year: widget.year,
         term: widget.term,
+        forceRefresh: _forceRefresh,
       );
 
   Future<void> _refreshAttendance() async {
-    ref.invalidate(attendanceProvider(_request));
-    await ref.read(attendanceProvider(_request).future);
+    setState(() => _forceRefresh = true);
+    final request = _request;
+    ref.invalidate(attendanceProvider(request));
+    try {
+      await ref.read(attendanceProvider(request).future);
+    } catch (error) {
+      if (mounted) showRefreshFailure(context, error);
+    } finally {
+      if (mounted) setState(() => _forceRefresh = false);
+    }
   }
 
   @override
@@ -70,6 +81,22 @@ class _AttendancePageState extends ConsumerState<AttendancePage>
     };
     return '${labels[_sortField] ?? ''}${_sortDescending ? '↓' : '↑'}';
   }
+
+  Widget _sourceHint(DataSourceInfo source) => Container(
+        margin: const EdgeInsets.only(bottom: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.tertiaryContainer,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Text(
+          source.displayText,
+          style: TextStyle(
+            fontSize: 12,
+            color: Theme.of(context).colorScheme.onTertiaryContainer,
+          ),
+        ),
+      );
 
   List<AttendanceItem> _applyFilterSort(List<AttendanceItem> items) {
     var filtered = items;
@@ -209,11 +236,20 @@ class _AttendancePageState extends ConsumerState<AttendancePage>
   @override
   Widget build(BuildContext context) {
     final attendanceFuture = ref.watch(attendanceProvider(_request).future);
-    return AsyncPanel<AttendanceResponse>(
+    return AsyncPanel<DataResult<AttendanceResponse>>(
       future: attendanceFuture,
+      initialData:
+          widget.api.cachedAttendance(year: widget.year, term: widget.term) ==
+                  null
+              ? null
+              : DataResult(
+                  data: widget.api
+                      .cachedAttendance(year: widget.year, term: widget.term)!,
+                ),
       onSessionExpired: widget.onSessionExpired,
-      builder: (data) => LayoutBuilder(
+      builder: (result) => LayoutBuilder(
         builder: (context, constraints) {
+          final data = result.data;
           _queueAttendanceDiffCheck(data.items);
           final compact = constraints.maxWidth < 640;
           if (data.items.isEmpty) {
@@ -225,8 +261,9 @@ class _AttendancePageState extends ConsumerState<AttendancePage>
                 onRefresh: _refreshAttendance,
                 child: ListView(
                   physics: const AlwaysScrollableScrollPhysics(),
-                  children: const [
-                    SizedBox(
+                  children: [
+                    if (result.source.isStale) _sourceHint(result.source),
+                    const SizedBox(
                       height: 260,
                       child: EmptyState(message: '暂无考勤记录'),
                     ),
@@ -248,6 +285,7 @@ class _AttendancePageState extends ConsumerState<AttendancePage>
               child: ListView(
                 physics: const AlwaysScrollableScrollPhysics(),
                 children: [
+                  if (result.source.isStale) _sourceHint(result.source),
                   AttendanceOverview(items: data.items),
                   const SizedBox(height: 12),
                   _buildToolbar(data.items),

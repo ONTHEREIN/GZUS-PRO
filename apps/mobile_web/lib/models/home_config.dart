@@ -3,15 +3,20 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../test_flags.dart';
 
-/// 首页模块在 Dashboard 中的视觉分量。
+/// 首页模块在 Bento Grid 中的视觉分量。
+///
+/// 布局规则：页面基于 2 列网格。
+/// - large：占 2 列 × 2 行（整宽、信息最全）。
+/// - medium：占 1 列 × 2 行（半宽）。
+/// - small：占 1 列 × 1 行（半宽、高度折半）。
 enum HomeModuleSize {
-  /// 通宽大卡片，单列独占一行，用于最重要/信息密度高的模块。
-  featured,
+  /// 大模块：占满整宽，信息密度最高。
+  large,
 
-  /// 半宽卡片，一行两个，用于常规数据模块。
+  /// 中模块：半宽，约为大模块一半的宽度。
   medium,
 
-  /// 紧凑磁贴，一行多个或作为小卡片，用于入口型/轻量模块。
+  /// 小模块：半宽、高度折半，用于轻量入口或摘要。
   small,
 }
 
@@ -20,7 +25,7 @@ class HomeModuleConfig {
     this.id,
     this.label,
     this.icon, {
-    this.size = HomeModuleSize.medium,
+    this.size = HomeModuleSize.large,
   });
 
   final String id;
@@ -32,18 +37,19 @@ class HomeModuleConfig {
 class HomePreferences {
   static const orderKey = 'home.moduleOrder';
   static const hiddenKey = 'home.hiddenModules';
+  static const sizesKey = 'home.moduleSizes';
   static const defaultModules = [
-    // featured：时间敏感、信息密度高
+    // large：时间敏感、信息密度高
     HomeModuleConfig('nextClass', '下一节课', Icons.watch_later,
-        size: HomeModuleSize.featured),
+        size: HomeModuleSize.large),
     HomeModuleConfig('todayTimeline', '今日时间线', Icons.view_timeline,
-        size: HomeModuleSize.featured),
+        size: HomeModuleSize.large),
     HomeModuleConfig('examCountdown', '考试倒计时', Icons.timer,
-        size: HomeModuleSize.featured),
+        size: HomeModuleSize.large),
     HomeModuleConfig('weekGrid', '周课表', Icons.grid_view,
-        size: HomeModuleSize.featured),
+        size: HomeModuleSize.large),
 
-    // medium：常规数据卡片
+    // medium：常规数据卡片，默认半宽
     HomeModuleConfig('grades', '本学期成绩', Icons.school,
         size: HomeModuleSize.medium),
     HomeModuleConfig('attendance', '考勤统计', Icons.fact_check,
@@ -59,13 +65,12 @@ class HomePreferences {
     HomeModuleConfig('dailyCourses', '今日课程', Icons.format_list_bulleted,
         size: HomeModuleSize.medium),
 
-    // small：轻量入口/信息
+    // small：轻量入口/信息摘要
     HomeModuleConfig('weather', '今日天气', Icons.wb_sunny,
         size: HomeModuleSize.small),
     HomeModuleConfig('profile', '个人资料', Icons.badge,
         size: HomeModuleSize.small),
-    HomeModuleConfig('apps', '常用服务', Icons.apps,
-        size: HomeModuleSize.small),
+    HomeModuleConfig('apps', '常用服务', Icons.apps, size: HomeModuleSize.small),
   ];
 
   static List<HomeModuleConfig> get availableModules =>
@@ -87,19 +92,39 @@ class HomePreferences {
     return (prefs.getStringList(hiddenKey) ?? const []).toSet();
   }
 
+  static Future<Map<String, HomeModuleSize>> loadSizes() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getStringList(sizesKey) ?? const [];
+    final result = <String, HomeModuleSize>{};
+    for (final entry in raw) {
+      final parts = entry.split(':');
+      if (parts.length != 2) continue;
+      final size =
+          HomeModuleSize.values.where((v) => v.name == parts[1]).firstOrNull;
+      if (size != null) result[parts[0]] = size;
+    }
+    return result;
+  }
+
   static Future<void> save({
     required List<String> order,
     required Set<String> hidden,
+    required Map<String, HomeModuleSize> sizes,
   }) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setStringList(orderKey, _normalizeOrder(order));
     await prefs.setStringList(hiddenKey, hidden.toList());
+    await prefs.setStringList(
+      sizesKey,
+      sizes.entries.map((e) => '${e.key}:${e.value.name}').toList(),
+    );
   }
 
   static Future<void> reset() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(orderKey);
     await prefs.remove(hiddenKey);
+    await prefs.remove(sizesKey);
   }
 
   static List<String> _normalizeOrder(List<String> value) {
@@ -114,6 +139,17 @@ class HomePreferences {
     return result;
   }
 
-  static HomeModuleConfig configFor(String id) =>
-      availableModules.firstWhere((item) => item.id == id);
+  static HomeModuleConfig configFor(
+    String id, {
+    HomeModuleSize? overrideSize,
+  }) {
+    final base = availableModules.firstWhere((item) => item.id == id);
+    if (overrideSize == null || overrideSize == base.size) return base;
+    return HomeModuleConfig(
+      base.id,
+      base.label,
+      base.icon,
+      size: overrideSize,
+    );
+  }
 }

@@ -30,15 +30,23 @@ abstract final class GzusSpacing {
 abstract final class GzusInsets {
   const GzusInsets._();
 
+  /// 页面壳与一级内容共用的水平 gutter。
+  ///
+  /// 标题横幅、页面内容和首页模块必须从同一条垂直基线开始，避免在
+  /// 外层与组件内部重复叠加水平留白。
+  static double contentGutter(BuildContext context) {
+    return responsiveValue<double>(
+      context.gzusBreakpoint,
+      compact: GzusSpacing.m,
+      medium: GzusSpacing.l,
+      expanded: GzusSpacing.xl,
+      large: GzusSpacing.xxl,
+    );
+  }
+
   /// 页面级水平内边距。
   static EdgeInsetsGeometry page(BuildContext context) {
-    return responsiveValue<EdgeInsets>(
-      context.gzusBreakpoint,
-      compact: const EdgeInsets.symmetric(horizontal: GzusSpacing.m),
-      medium: const EdgeInsets.symmetric(horizontal: GzusSpacing.l),
-      expanded: const EdgeInsets.symmetric(horizontal: GzusSpacing.xl),
-      large: const EdgeInsets.symmetric(horizontal: GzusSpacing.xxl),
-    );
+    return EdgeInsets.symmetric(horizontal: contentGutter(context));
   }
 
   /// 页面内容区顶部内边距（兼顾标题栏/横幅）。

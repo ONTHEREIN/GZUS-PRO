@@ -59,6 +59,10 @@ class ProxyOnlyUser:
             return FakeResponse({"items": [{"kcmc": "高等数学", "cs_01": 8, "totalresult": 8}]})
         if "kbcx" in url_or_endpoint:
             return FakeResponse({"kbList": [{"kcmc": "高等数学", "jcs": "1-2", "xqj": 1}]})
+        if "cjcx" in url_or_endpoint:
+            return FakeResponse(
+                {"items": [{"kcmc": "高等数学", "cj": "95", "xf": "4", "jd": "4.5"}]}
+            )
         return FakeResponse({"items": [{"kcmc": "高等数学", "zwh": "10"}]})
 
 
@@ -103,8 +107,25 @@ class CookieSchoolClient:
 
 
 class InvalidJsonResponse:
+    def __init__(self, text="服务暂时不可用"):
+        self.text = text
+
     def json(self):
         raise JSONDecodeError("Expecting value", "Internal Server Error", 0)
+
+
+class RecordingHttpxResponse(FakeResponse):
+    def raise_for_status(self):
+        return None
+
+
+class RecordingHttpxClient:
+    def __init__(self):
+        self.calls = []
+
+    def request(self, method, url, **kwargs):
+        self.calls.append((method, url, kwargs))
+        return RecordingHttpxResponse({"items": []})
 
 
 def test_normalize_student_info_from_school_fields():
@@ -251,6 +272,27 @@ def test_endpoint_from_url_normalizes_same_origin_urls():
     )
 
 
+def test_endpoint_from_url_collapses_repeated_jwglxt_prefix():
+    client = SchoolSdkClient("https://jwxt.gzus.edu.cn/jwglxt")
+
+    endpoint = client._endpoint_from_url("/jwglxt/jwglxt/xtgl/index_cxDbsy.html")
+
+    assert endpoint == "/jwglxt/xtgl/index_cxDbsy.html"
+
+
+def test_httpx_proxy_collapses_repeated_jwglxt_prefix():
+    httpx_client = RecordingHttpxClient()
+    client = SchoolSdkClient(
+        "https://jwxt.gzus.edu.cn/jwglxt", httpx_client=httpx_client
+    )
+
+    client._proxy_response("GET", "/jwglxt/jwglxt/xtgl/index_cxDbsy.html")
+
+    assert httpx_client.calls[0][1] == (
+        "https://jwxt.gzus.edu.cn/jwglxt/xtgl/index_cxDbsy.html"
+    )
+
+
 def test_missing_exam_sdk_method_uses_proxy_request_slot():
     client = SchoolSdkClient("https://jwxt.seig.edu.cn/jwglxt")
     user = ProxyOnlyUser()
@@ -260,6 +302,23 @@ def test_missing_exam_sdk_method_uses_proxy_request_slot():
 
     assert user.calls[0][1] == "/jwglxt/kwgl/kscx_cxXsksxxIndex.html"
     assert items[0]["courseName"] == "高等数学"
+
+
+def test_grades_use_authenticated_proxy_request():
+    user = ProxyOnlyUser()
+    client = SchoolSdkClient("https://jwxt.seig.edu.cn/jwglxt")
+    client._client = user
+    client._account = "20240001"
+
+    grades = client.get_grades("2025", "2")
+
+    assert grades[0]["courseName"] == "高等数学"
+    assert grades[0]["score"] == "95"
+    call = user.calls[0]
+    assert call[1] == "/jwglxt/cjcx/cjcx_cxDgXscj.html"
+    assert call[2]["params"] == {"doType": "query", "gnmkdm": "N305005", "su": "20240001"}
+    assert call[2]["data"]["xnm"] == "2025"
+    assert call[2]["data"]["xqm"] == "12"
 
 
 def test_attendance_and_credits_use_proxy_request():
@@ -402,16 +461,22 @@ def test_get_info_fetches_photo_with_normalized_student_id(monkeypatch):
     assert photo_call[2]["params"]["xh_id"] == "NEY250101"
 
 
-def test_proxy_json_decode_failure_becomes_authentication_error():
+def test_proxy_json_decode_failure_becomes_upstream_error():
     client = SchoolSdkClient("https://jwxt.seig.edu.cn/jwglxt")
     client._proxy_response = lambda *args, **kwargs: InvalidJsonResponse()
 
-    try:
+    with pytest.raises(RuntimeError, match="非 JSON"):
         client._proxy_json("GET", "/jwglxt/kbcx/xskbcx_cxXsKb.html")
-    except AuthenticationError as exc:
-        assert str(exc) == "教务系统会话已失效，请重新登录"
-    else:
-        raise AssertionError("expected AuthenticationError")
+
+
+def test_proxy_json_login_page_remains_authentication_error():
+    client = SchoolSdkClient("https://jwxt.seig.edu.cn/jwglxt")
+    client._proxy_response = lambda *args, **kwargs: InvalidJsonResponse(
+        '<html><form action="login_slogin.html"><input type="password"/></form></html>'
+    )
+
+    with pytest.raises(AuthenticationError, match="登录状态已失效"):
+        client._proxy_json("GET", "/jwglxt/kbcx/xskbcx_cxXsKb.html")
 
 
 def test_extract_notice_sections_panel_structure():
@@ -464,7 +529,7 @@ def test_query_notices_detects_login_page():
         client.get_notices()
         raise AssertionError("expected AuthenticationError")
     except AuthenticationError as exc:
-        assert "会话已失效" in str(exc)
+        assert "登录状态已失效" in str(exc)
 
 
 def test_query_notices_raises_missing_proxy_slot():
@@ -542,4 +607,4 @@ def test_get_notice_detail_detects_login_page():
         client.get_notice_detail("https://jwxt.seig.edu.cn/jwglxt/notice/1.html")
         raise AssertionError("expected AuthenticationError")
     except AuthenticationError as exc:
-        assert "会话已失效" in str(exc)
+        assert "登录状态已失效" in str(exc)

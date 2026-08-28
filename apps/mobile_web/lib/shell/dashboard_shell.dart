@@ -1,12 +1,18 @@
 // 导航壳主体（自 main.dart 拆分）：响应式阈值常量 + DashboardShell 及其状态、
-// _OfflineBanner/_PasswordLoginBanner/CaptchaImage 等壳级私有部件。
+// _OfflineBanner 等壳级私有部件。
 // part of main.dart 共享同一 library，私有符号互通、无需搬运 import。
 part of '../main.dart';
 
 const _mobileBreakpoint = 720.0;
 const _compactNavBreakpoint = 1024.0;
 const _mobileNavBarHeight = 68.0;
+const _nativeIosLiquidTabBarHeight = 80.0;
 const _mobileMainNavLimit = 4;
+const _mobileContentBottomGap = 10.0;
+const _iosBackGestureEdgeWidth = 24.0;
+const _iosBackGestureMinDistance = 72.0;
+const _homeGreetingCollapseDistance = 72.0;
+const _maxResidentTabPages = 3;
 
 class DashboardShell extends StatefulWidget {
   const DashboardShell({
@@ -20,7 +26,6 @@ class DashboardShell extends StatefulWidget {
     this.onSeedColorChanged,
     this.onSettingsPressed,
     this.dataSource = const DataSourceInfo(),
-    this.loginMethod,
     this.cloudFirstWeeks = const {},
     this.cloudAutoWeek,
     this.isAdmin = false,
@@ -37,9 +42,6 @@ class DashboardShell extends StatefulWidget {
   final VoidCallback? onSettingsPressed;
   final DataSourceInfo dataSource;
 
-  /// 登录方式: "password" = 教务系统账密登录, "sso" = 办事大厅一键登录
-  final String? loginMethod;
-
   /// 云端同步的各学期开学日期（键 "{year}-{term}"），本地缺失时兜底
   final Map<String, String> cloudFirstWeeks;
 
@@ -49,9 +51,6 @@ class DashboardShell extends StatefulWidget {
   /// 管理后台身份（由 /admin/me 确认后传入，用于「更多」页显示管理入口）
   final bool isAdmin;
   final bool isOwner;
-
-  /// 账密登录时无法使用的功能 tabId 列表（依赖办事大厅 ehall 会话）
-  bool get isPasswordLogin => loginMethod == 'password';
 
   @override
   State<DashboardShell> createState() => _DashboardShellState();
@@ -113,67 +112,6 @@ class _OfflineBanner extends StatelessWidget {
   }
 }
 
-class _PasswordLoginBanner extends StatelessWidget {
-  const _PasswordLoginBanner({required this.onLogout});
-
-  final VoidCallback onLogout;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(
-          horizontal: GzusSpacing.m, vertical: GzusSpacing.s),
-      color: theme.colorScheme.errorContainer,
-      child: Row(
-        children: [
-          Icon(Icons.warning_amber_rounded,
-              size: 16, color: theme.colorScheme.onErrorContainer),
-          const SizedBox(width: GzusSpacing.s),
-          Expanded(
-            child: Text(
-              '账密登录模式，部分功能不可用，建议退出后使用一键登录',
-              style: TextStyle(
-                fontSize: 11,
-                color: theme.colorScheme.onErrorContainer,
-              ),
-            ),
-          ),
-          const SizedBox(width: GzusSpacing.xs),
-          GestureDetector(
-            onTap: onLogout,
-            child: Text(
-              '退出',
-              style: TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w600,
-                color: theme.colorScheme.onErrorContainer,
-                decoration: TextDecoration.underline,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class CaptchaImage extends StatelessWidget {
-  const CaptchaImage({super.key, required this.source});
-
-  final String source;
-
-  @override
-  Widget build(BuildContext context) {
-    if (source.startsWith('data:image')) {
-      final data = source.substring(source.indexOf(',') + 1);
-      return Image.memory(base64Decode(data), height: 56, fit: BoxFit.contain);
-    }
-    return Image.network(source, height: 56, fit: BoxFit.contain);
-  }
-}
-
 class _DashboardShellState extends State<DashboardShell> {
   int index = 0;
   late int year;
@@ -181,16 +119,22 @@ class _DashboardShellState extends State<DashboardShell> {
   late DateTime firstWeekStart;
   late int currentWeek;
   bool autoWeek = true;
+
   /// 用户是否手动切换过学期（切换后启动时的自动校正不再覆盖）。
   bool _userPinnedPeriod = false;
+
   /// 启动时的学期自动校正是否已执行过（只跑一次）。
   bool _periodAutoCorrected = false;
   List<NavTabConfig> _navBarTabs = NavTabConfig.defaultTabs;
   String? _highlightCourse;
   String? _overrideTabId;
+  final List<String> _tabHistory = [];
+  int? _iosBackGesturePointer;
+  Offset? _iosBackGestureStart;
   DateTime? _lastBackTime;
   bool _autoHideNavBar = true;
   final ValueNotifier<bool> _navBarVisible = ValueNotifier(true);
+  final ValueNotifier<double> _homeHeaderScrollProgress = ValueNotifier(0);
   bool _sidebarCollapsed = false;
   double _lastScrollOffset = 0;
 
@@ -200,6 +144,8 @@ class _DashboardShellState extends State<DashboardShell> {
   final Map<String, GlobalKey> _pageKeys = {};
   final Set<String> _visitedTabs = {};
   final Map<String, DateTime> _lastSilentRefresh = {};
+  final List<String> _residentTabs = ['home'];
+
   /// 页面参数代数：学年/学期/周次等参数变化时 +1，
   /// 触发缓存页面重建 widget 实例（GlobalKey 保证 State 不销毁，走 didUpdateWidget）。
   int _pageGeneration = 0;
@@ -213,7 +159,8 @@ class _DashboardShellState extends State<DashboardShell> {
     year = period.$1;
     term = period.$2;
     firstWeekStart = defaultFirstWeekStart(year, term);
-    currentWeek = weekFromDate(firstWeekStart, DateTime.now(), clampToTerm: true);
+    currentWeek =
+        weekFromDate(firstWeekStart, DateTime.now(), clampToTerm: true);
     HomeWidgetBridge.setLaunchHandler(_handleWidgetLaunch);
     NotificationOpenBridge.setOpenTabHandler(_navigateToTab);
     LiveActivityController.instance.onOpen = _handleLiveActivityOpen;
@@ -229,20 +176,12 @@ class _DashboardShellState extends State<DashboardShell> {
     NotificationOpenBridge.setOpenTabHandler(null);
     LiveActivityController.instance.onOpen = null;
     _navBarVisible.dispose();
+    _homeHeaderScrollProgress.dispose();
     super.dispose();
   }
 
-  @override
-  void didUpdateWidget(covariant DashboardShell oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.loginMethod != widget.loginMethod) {
-      _navBarTabs = _filterRestrictedTabs(_navBarTabs);
-      if (index >= _navBarTabs.length) index = 0;
-      _pageGeneration++;
-    }
-  }
-
   bool _onScrollNotification(ScrollNotification notification) {
+    _updateHomeHeaderScrollProgress(notification);
     if (!_autoHideNavBar) return false;
     if (notification is ScrollUpdateNotification) {
       final currentOffset = notification.metrics.pixels;
@@ -263,6 +202,33 @@ class _DashboardShellState extends State<DashboardShell> {
     return false;
   }
 
+  double _mobileContentBottomInset(BuildContext context, bool navBarVisible) {
+    if (!navBarVisible) return _mobileContentBottomGap;
+    return MediaQuery.paddingOf(context).bottom +
+        _mobileNavBarHeight +
+        GzusSpacing.s +
+        _mobileContentBottomGap;
+  }
+
+  void _updateHomeHeaderScrollProgress(ScrollNotification notification) {
+    if (_activeTabId != 'home' ||
+        notification.depth != 0 ||
+        notification.metrics.axis != Axis.vertical) {
+      return;
+    }
+    final progress =
+        (notification.metrics.pixels.clamp(0.0, _homeGreetingCollapseDistance) /
+                _homeGreetingCollapseDistance)
+            .toDouble();
+    if ((_homeHeaderScrollProgress.value - progress).abs() < 0.001) return;
+    _homeHeaderScrollProgress.value = progress;
+  }
+
+  void _resetHomeHeaderScrollProgress() {
+    if (_homeHeaderScrollProgress.value == 0) return;
+    _homeHeaderScrollProgress.value = 0;
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_navBarTabs.isNotEmpty && index >= _navBarTabs.length) index = 0;
@@ -273,20 +239,7 @@ class _DashboardShellState extends State<DashboardShell> {
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
         if (didPop) return;
-        if (_overrideTabId != null) {
-          final backTabId =
-              _navBarTabs.isNotEmpty && index < _navBarTabs.length
-                  ? _navBarTabs[index].tabId
-                  : null;
-          setState(() => _overrideTabId = null);
-          if (backTabId != null) _activateTab(backTabId);
-          return;
-        }
-        if (index != 0) {
-          setState(() => index = 0);
-          if (_navBarTabs.isNotEmpty) _activateTab(_navBarTabs[0].tabId);
-          return;
-        }
+        if (_goBackInTabHistory()) return;
         final now = DateTime.now();
         if (_lastBackTime != null &&
             now.difference(_lastBackTime!).inSeconds < 2) {
@@ -320,79 +273,125 @@ class _DashboardShellState extends State<DashboardShell> {
             final mobileSelected =
                 activeMobileIndex >= 0 ? activeMobileIndex : moreMobileIndex;
             if (compact) {
-              return Stack(
+              return _withIosBackGesture(Stack(
                 children: [
-                  Column(
-                    children: [
-                      _OfflineBanner(source: widget.dataSource),
-                      if (widget.isPasswordLogin)
-                        _PasswordLoginBanner(onLogout: widget.onLogout),
-                      SafeArea(
-                        bottom: false,
-                        child: Padding(
-                          padding: const EdgeInsets.fromLTRB(
-                              GzusSpacing.l,
-                              GzusSpacing.m,
-                              GzusSpacing.l,
-                              GzusSpacing.s),
-                          child: Row(
-                            children: [
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      '你好，${widget.studentName ?? '软帮手'}',
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .titleLarge,
+                  Positioned.fill(
+                    child:
+                        LiquidGlassAmbientBackdrop(seedColor: widget.seedColor),
+                  ),
+                  SafeArea(
+                    bottom: false,
+                    child: Column(
+                      children: [
+                        _OfflineBanner(source: widget.dataSource),
+                        if (activeTabId == 'home')
+                          ValueListenableBuilder<double>(
+                            valueListenable: _homeHeaderScrollProgress,
+                            builder: (context, progress, _) {
+                              final visibleFraction = 1 - progress;
+                              return ClipRect(
+                                child: Align(
+                                  key: const ValueKey('mobile-home-greeting'),
+                                  alignment: Alignment.topCenter,
+                                  heightFactor: visibleFraction,
+                                  child: IgnorePointer(
+                                    ignoring: progress >= 1,
+                                    child: ExcludeSemantics(
+                                      excluding: progress >= 1,
+                                      child: Opacity(
+                                        opacity: visibleFraction,
+                                        child: Padding(
+                                          padding: EdgeInsets.fromLTRB(
+                                            GzusInsets.contentGutter(context),
+                                            GzusSpacing.m,
+                                            GzusInsets.contentGutter(context),
+                                            GzusSpacing.s,
+                                          ),
+                                          child: Row(
+                                            children: [
+                                              Expanded(
+                                                child: Column(
+                                                  crossAxisAlignment:
+                                                      CrossAxisAlignment.start,
+                                                  children: [
+                                                    Text(
+                                                      '你好，${widget.studentName ?? '软帮手'}',
+                                                      maxLines: 1,
+                                                      overflow:
+                                                          TextOverflow.ellipsis,
+                                                      style: Theme.of(context)
+                                                          .textTheme
+                                                          .titleLarge,
+                                                    ),
+                                                    const SizedBox(height: 2),
+                                                    Text(
+                                                      '$year-${term == 1 ? '第一学期' : '第二学期'} · 第 $currentWeek 周',
+                                                      style: Theme.of(context)
+                                                          .textTheme
+                                                          .bodySmall,
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                              if (widget.isAdmin)
+                                                IconButton(
+                                                  onPressed:
+                                                      widget.onSettingsPressed,
+                                                  icon: const Icon(Icons
+                                                      .admin_panel_settings),
+                                                  tooltip: '管理后台',
+                                                ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
                                     ),
-                                    const SizedBox(height: 2),
-                                    Text(
-                                      '$year-${term == 1 ? '第一学期' : '第二学期'} · 第 $currentWeek 周',
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .bodySmall,
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                        Expanded(
+                          child: ValueListenableBuilder<bool>(
+                            valueListenable: _navBarVisible,
+                            builder: (context, visible, _) {
+                              final navBarVisible = !_autoHideNavBar || visible;
+                              return NotificationListener<ScrollNotification>(
+                                onNotification: _onScrollNotification,
+                                child: AnimatedPadding(
+                                  duration: const Duration(milliseconds: 200),
+                                  curve: Curves.easeInOut,
+                                  padding: EdgeInsets.fromLTRB(
+                                    GzusInsets.contentGutter(context),
+                                    8,
+                                    GzusInsets.contentGutter(context),
+                                    _mobileContentBottomInset(
+                                      context,
+                                      navBarVisible,
                                     ),
-                                  ],
+                                  ),
+                                  child: Theme(
+                                    data: Theme.of(context).copyWith(
+                                      scaffoldBackgroundColor:
+                                          Colors.transparent,
+                                    ),
+                                    child: KeyedSubtree(
+                                      key: const ValueKey(
+                                        'mobile-dashboard-content',
+                                      ),
+                                      child: _CenteredPage(
+                                        maxWidth: 720,
+                                        child: _buildPageStack(activeTabId),
+                                      ),
+                                    ),
+                                  ),
                                 ),
-                              ),
-                              if (widget.isAdmin)
-                                IconButton(
-                                  onPressed: widget.onSettingsPressed,
-                                  icon: const Icon(Icons.admin_panel_settings),
-                                  tooltip: '管理后台',
-                                ),
-                            ],
+                              );
+                            },
                           ),
                         ),
-                      ),
-                      Expanded(
-                        child: NotificationListener<ScrollNotification>(
-                          onNotification: _onScrollNotification,
-                          child: SafeArea(
-                            top: false,
-                            bottom: false,
-                            child: Padding(
-                              padding: EdgeInsets.fromLTRB(
-                                  10,
-                                  8,
-                                  10,
-                                  _autoHideNavBar
-                                      ? 10
-                                      : MediaQuery.paddingOf(context).bottom +
-                                          10),
-                              child: _CenteredPage(
-                                maxWidth: 720,
-                                child: _buildPageStack(activeTabId),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                   Positioned(
                     bottom: 0,
@@ -402,31 +401,16 @@ class _DashboardShellState extends State<DashboardShell> {
                       valueListenable: _navBarVisible,
                       builder: (context, visible, _) {
                         final show = !_autoHideNavBar || visible;
-                        final bottomPadding =
-                            MediaQuery.paddingOf(context).bottom;
-                        return AnimatedContainer(
-                          duration: const Duration(milliseconds: 200),
-                          curve: Curves.easeInOut,
-                          height: show
-                              ? _mobileNavBarHeight + bottomPadding + 16
-                              : 0,
-                          clipBehavior: Clip.none,
-                          child: MobileNavBar(
-                            tabs: mobileTabs,
-                            selected:
-                                mobileSelected.clamp(0, mobileTabs.length - 1),
-                            onChanged: (value) async {
-                              _navBarVisible.value = true;
-                              final selectedTab = mobileTabs[value];
-                              final fullIndex = _navBarTabs.indexWhere(
-                                  (t) => t.tabId == selectedTab.tabId);
-                              _activateTab(selectedTab.tabId);
-                              setState(() {
-                                index = fullIndex >= 0 ? fullIndex : index;
-                                _overrideTabId = null;
-                              });
-                            },
-                          ),
+                        return MobileNavBar(
+                          tabs: mobileTabs,
+                          selected:
+                              mobileSelected.clamp(0, mobileTabs.length - 1),
+                          visible: show,
+                          onChanged: (value) async {
+                            _navBarVisible.value = true;
+                            final selectedTab = mobileTabs[value];
+                            _navigateToTab(selectedTab.tabId);
+                          },
                         );
                       },
                     ),
@@ -435,11 +419,15 @@ class _DashboardShellState extends State<DashboardShell> {
                     controller: LiveActivityController.instance,
                   ),
                 ],
-              );
+              ));
             }
             final dense = constraints.maxWidth < _compactNavBreakpoint;
-            return Stack(
+            return _withIosBackGesture(Stack(
               children: [
+                Positioned.fill(
+                  child:
+                      LiquidGlassAmbientBackdrop(seedColor: widget.seedColor),
+                ),
                 Row(
                   children: [
                     AppSidebar(
@@ -452,23 +440,19 @@ class _DashboardShellState extends State<DashboardShell> {
                       },
                       onChanged: (value) async {
                         _navBarVisible.value = true;
-                        _activateTab(_navBarTabs[value].tabId);
-                        setState(() {
-                          index = value;
-                          _overrideTabId = null;
-                        });
+                        _navigateToTab(_navBarTabs[value].tabId);
                       },
                     ),
                     Expanded(
                       child: Column(
                         children: [
                           _OfflineBanner(source: widget.dataSource),
-                          if (widget.isPasswordLogin)
-                            _PasswordLoginBanner(onLogout: widget.onLogout),
                           Expanded(
                             child: SafeArea(
                               child: Padding(
-                                padding: EdgeInsets.all(dense ? 16 : 24),
+                                padding: EdgeInsets.all(
+                                  GzusInsets.contentGutter(context),
+                                ),
                                 child: NotificationListener<ScrollNotification>(
                                   onNotification: _onScrollNotification,
                                   child: _CenteredPage(
@@ -488,7 +472,7 @@ class _DashboardShellState extends State<DashboardShell> {
                   controller: LiveActivityController.instance,
                 ),
               ],
-            );
+            ));
           },
         ),
       ),
@@ -523,31 +507,37 @@ class _DashboardShellState extends State<DashboardShell> {
     }
   }
 
-  /// 账密登录时过滤掉依赖办事大厅的功能标签
   List<NavTabConfig> _filterRestrictedTabs(List<NavTabConfig> tabs) {
     return tabs
         .where((t) => !hideEcardOnCurrentPlatform || t.tabId != 'ecard')
-        .where((t) =>
-            !widget.isPasswordLogin ||
-            !passwordRestrictedTabs.contains(t.tabId))
         .toList();
   }
 
   /// 惰性保活页面栈：页面首次激活时才构建，之后常驻 IndexedStack 不销毁；
   /// 切换 Tab 只换 index，激活的子页淡入。
   Widget _buildPageStack(String? activeTabId) {
+    if (activeTabId == null) return const SizedBox.shrink();
+    _retainTab(activeTabId);
     final children = <Widget>[
-      for (final tab in _navBarTabs)
-        _pageSlot(tab.tabId, active: tab.tabId == activeTabId),
+      for (final tabId in _residentTabs)
+        _pageSlot(tabId, active: tabId == activeTabId),
     ];
-    var activeIndex = _navBarTabs.indexWhere((t) => t.tabId == activeTabId);
-    if (_overrideTabId != null &&
-        !_navBarTabs.any((t) => t.tabId == _overrideTabId)) {
-      children.add(_pageSlot(_overrideTabId!, active: true));
-      activeIndex = children.length - 1;
-    }
-    if (activeIndex < 0) activeIndex = 0;
+    final activeIndex = _residentTabs.indexOf(activeTabId);
     return IndexedStack(index: activeIndex, children: children);
+  }
+
+  /// 保留当前和最近访问的少量页面，限制重页面、定时器和滚动树无限累积。
+  void _retainTab(String tabId) {
+    _residentTabs.remove(tabId);
+    _residentTabs.add(tabId);
+    while (_residentTabs.length > _maxResidentTabPages) {
+      final evictedTabId = _residentTabs.removeAt(0);
+      _pageCache.remove(evictedTabId);
+      _pageKeys.remove(evictedTabId);
+      _pageGen.remove(evictedTabId);
+      _visitedTabs.remove(evictedTabId);
+      _lastSilentRefresh.remove(evictedTabId);
+    }
   }
 
   /// 单个页面的保活槽位：未访问时用占位符，访问后缓存页面实例；
@@ -564,11 +554,14 @@ class _DashboardShellState extends State<DashboardShell> {
     }
     return KeyedSubtree(
       key: key,
-      child: AnimatedOpacity(
-        opacity: active ? 1 : 0,
-        duration: const Duration(milliseconds: 250),
-        curve: Curves.easeOutCubic,
-        child: child,
+      child: TickerMode(
+        enabled: active,
+        child: AnimatedOpacity(
+          opacity: active ? 1 : 0,
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOutCubic,
+          child: child,
+        ),
       ),
     );
   }
@@ -587,6 +580,8 @@ class _DashboardShellState extends State<DashboardShell> {
   /// Tab 激活：首次访问由 initState 自行拉取；再次访问且距上次超过 60 秒时
   /// 触发页面静默刷新（显示旧数据、后台拉新）。
   void _activateTab(String tabId) {
+    if (tabId != 'home') _resetHomeHeaderScrollProgress();
+    _retainTab(tabId);
     final firstVisit = !_visitedTabs.contains(tabId);
     _visitedTabs.add(tabId);
     if (firstVisit) return;
@@ -609,7 +604,7 @@ class _DashboardShellState extends State<DashboardShell> {
           firstWeekStart: firstWeekStart,
           onNavigate: _navigateToTab,
           onSessionExpired: widget.onLogout,
-          loginMethod: widget.loginMethod,
+          headerScrollProgress: _homeHeaderScrollProgress,
           studentName: widget.studentName,
           studentId: widget.api.studentId,
         );
@@ -658,12 +653,16 @@ class _DashboardShellState extends State<DashboardShell> {
         return ExamsPage(
             api: widget.api,
             periods: _allAcademicPeriods(),
+            year: year,
+            term: term,
             onSessionExpired: widget.onLogout,
             highlightCourse: _highlightCourse);
       case 'grades':
         return GradesPage(
             api: widget.api,
             periods: _allAcademicPeriods(),
+            year: year,
+            term: term,
             onSessionExpired: widget.onLogout,
             onNavigateToExam: (courseName) {
               setState(() {
@@ -706,9 +705,10 @@ class _DashboardShellState extends State<DashboardShell> {
             autoHideNavBar: _autoHideNavBar,
             onAutoHideNavBarChanged: (v) async {
               await NavPreferences.saveAutoHideNavBar(v);
+              if (!mounted) return;
+              _navBarVisible.value = true;
               setState(() => _autoHideNavBar = v);
             },
-            loginMethod: widget.loginMethod,
             onShowBackgroundGuide: widget.onSettingsPressed,
             isAdmin: widget.isAdmin,
             isOwner: widget.isOwner);
@@ -719,11 +719,9 @@ class _DashboardShellState extends State<DashboardShell> {
 
   void _navigateToTab(String tabId) {
     if (hideEcardOnCurrentPlatform && tabId == 'ecard') return;
-    // 账密登录时阻止导航到受限功能
-    if (widget.isPasswordLogin &&
-        passwordRestrictedTabs.contains(tabId)) {
-      return;
-    }
+    final activeTabId = _activeTabId;
+    if (activeTabId == tabId) return;
+    _recordTabHistory(activeTabId);
     _activateTab(tabId);
     final idx = _navBarTabs.indexWhere((t) => t.tabId == tabId);
     if (idx >= 0) {
@@ -740,6 +738,77 @@ class _DashboardShellState extends State<DashboardShell> {
     setState(() {
       _overrideTabId = tabId;
     });
+  }
+
+  String? get _activeTabId {
+    if (_overrideTabId != null) return _overrideTabId;
+    if (_navBarTabs.isEmpty || index >= _navBarTabs.length) return null;
+    return _navBarTabs[index].tabId;
+  }
+
+  Widget _withIosBackGesture(Widget child) {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.iOS) return child;
+    return Listener(
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: _handleIosBackGestureStart,
+      onPointerMove: _handleIosBackGestureMove,
+      onPointerUp: _clearIosBackGesture,
+      onPointerCancel: _clearIosBackGesture,
+      child: child,
+    );
+  }
+
+  bool get _isIosBackGestureEnabled =>
+      !kIsWeb &&
+      defaultTargetPlatform == TargetPlatform.iOS &&
+      _tabHistory.isNotEmpty;
+
+  void _handleIosBackGestureStart(PointerDownEvent event) {
+    if (!_isIosBackGestureEnabled ||
+        event.localPosition.dx > _iosBackGestureEdgeWidth) {
+      return;
+    }
+    _iosBackGesturePointer = event.pointer;
+    _iosBackGestureStart = event.localPosition;
+  }
+
+  void _handleIosBackGestureMove(PointerMoveEvent event) {
+    if (event.pointer != _iosBackGesturePointer ||
+        _iosBackGestureStart == null) {
+      return;
+    }
+    final delta = event.localPosition - _iosBackGestureStart!;
+    if (delta.dx < _iosBackGestureMinDistance ||
+        delta.dx.abs() <= delta.dy.abs()) {
+      return;
+    }
+    _clearIosBackGesture(event);
+    _goBackInTabHistory();
+  }
+
+  void _clearIosBackGesture(PointerEvent event) {
+    if (event.pointer != _iosBackGesturePointer) return;
+    _iosBackGesturePointer = null;
+    _iosBackGestureStart = null;
+  }
+
+  void _recordTabHistory(String? tabId) {
+    if (tabId == null || tabId.isEmpty) return;
+    if (_tabHistory.isNotEmpty && _tabHistory.last == tabId) return;
+    _tabHistory.add(tabId);
+  }
+
+  bool _goBackInTabHistory() {
+    if (_tabHistory.isEmpty) return false;
+    final tabId = _tabHistory.removeLast();
+    _activateTab(tabId);
+    final idx = _navBarTabs.indexWhere((tab) => tab.tabId == tabId);
+    _navBarVisible.value = true;
+    setState(() {
+      index = idx >= 0 ? idx : index;
+      _overrideTabId = idx >= 0 ? null : tabId;
+    });
+    return true;
   }
 
   Future<void> _consumeWidgetLaunch() async {
@@ -760,7 +829,7 @@ class _DashboardShellState extends State<DashboardShell> {
     }
     final url = event.url;
     if (url != null && url.isNotEmpty) {
-      unawaited(openInAppBrowser(context, url));
+      unawaited(openInAppBrowser(context, url, api: widget.api));
     }
   }
 
@@ -783,8 +852,7 @@ class _DashboardShellState extends State<DashboardShell> {
     final savedAuto =
         prefs.getBool('schedule.autoWeek') ?? widget.cloudAutoWeek ?? autoWeek;
     final defaultStart = defaultFirstWeekStart(loadYear, loadTerm);
-    final parsedStart =
-        DateTime.tryParse(firstWeekText ?? cloudText ?? '');
+    final parsedStart = DateTime.tryParse(firstWeekText ?? cloudText ?? '');
     final start = parsedStart ?? defaultStart;
     final savedWeek = prefs.getInt(_settingsKey(loadYear, loadTerm, 'week'));
     if (!mounted || loadYear != year || loadTerm != term) return;
@@ -793,27 +861,27 @@ class _DashboardShellState extends State<DashboardShell> {
       autoWeek = savedAuto;
       currentWeek = savedAuto
           ? weekFromDate(start, DateTime.now(), clampToTerm: true)
-          : (savedWeek ?? weekFromDate(start, DateTime.now(), clampToTerm: true));
+          : (savedWeek ??
+              weekFromDate(start, DateTime.now(), clampToTerm: true));
     });
   }
 
   /// 启动时用已保存的开学日期反推当前学期并自动校正一次（best-effort）。
-  /// 云端缺失时回退本地 SharedPreferences；用户手动切换过学期后不再校正。
+  /// 本地和云端记录同时参与判断，本地优先，避免本地刚更新时被云端旧记录覆盖；
+  /// 用户手动切换过学期后不再校正。
   Future<void> _autoCorrectPeriodOnce() async {
     if (_periodAutoCorrected) return;
     _periodAutoCorrected = true;
     final firstWeeks = Map<String, String>.from(widget.cloudFirstWeeks);
-    if (firstWeeks.isEmpty) {
-      final prefs = await SharedPreferences.getInstance();
-      for (final key in prefs.getKeys()) {
-        const prefix = 'schedule.';
-        const suffix = '.firstWeekStart';
-        if (!key.startsWith(prefix) || !key.endsWith(suffix)) continue;
-        final value = prefs.getString(key);
-        if (value == null || value.isEmpty) continue;
-        final mid = key.substring(prefix.length, key.length - suffix.length);
-        firstWeeks[mid.replaceAll('.', '-')] = value;
-      }
+    final prefs = await SharedPreferences.getInstance();
+    for (final key in prefs.getKeys()) {
+      const prefix = 'schedule.';
+      const suffix = '.firstWeekStart';
+      if (!key.startsWith(prefix) || !key.endsWith(suffix)) continue;
+      final value = prefs.getString(key);
+      if (value == null || value.isEmpty) continue;
+      final mid = key.substring(prefix.length, key.length - suffix.length);
+      firstWeeks[mid.replaceAll('.', '-')] = value;
     }
     final resolved = academicPeriodFromFirstWeeks(firstWeeks, DateTime.now());
     if (resolved == null || resolved == (year, term)) return;
@@ -822,7 +890,8 @@ class _DashboardShellState extends State<DashboardShell> {
       year = resolved.$1;
       term = resolved.$2;
       firstWeekStart = defaultFirstWeekStart(year, term);
-      currentWeek = weekFromDate(firstWeekStart, DateTime.now(), clampToTerm: true);
+      currentWeek =
+          weekFromDate(firstWeekStart, DateTime.now(), clampToTerm: true);
       _pageGeneration++;
     });
     _loadScheduleSettings();
@@ -859,7 +928,8 @@ class _DashboardShellState extends State<DashboardShell> {
       year = nextYear;
       term = nextTerm;
       firstWeekStart = defaultFirstWeekStart(nextYear, nextTerm);
-      currentWeek = weekFromDate(firstWeekStart, DateTime.now(), clampToTerm: true);
+      currentWeek =
+          weekFromDate(firstWeekStart, DateTime.now(), clampToTerm: true);
       _pageGeneration++;
     });
     _loadScheduleSettings();
@@ -870,7 +940,9 @@ class _DashboardShellState extends State<DashboardShell> {
     final monday = mondayOf(value);
     setState(() {
       firstWeekStart = monday;
-      if (autoWeek) currentWeek = weekFromDate(monday, DateTime.now(), clampToTerm: true);
+      if (autoWeek) {
+        currentWeek = weekFromDate(monday, DateTime.now(), clampToTerm: true);
+      }
       _pageGeneration++;
     });
     _saveScheduleSettings();
@@ -888,7 +960,10 @@ class _DashboardShellState extends State<DashboardShell> {
   void _setAutoWeek(bool value) {
     setState(() {
       autoWeek = value;
-      if (value) currentWeek = weekFromDate(firstWeekStart, DateTime.now(), clampToTerm: true);
+      if (value) {
+        currentWeek =
+            weekFromDate(firstWeekStart, DateTime.now(), clampToTerm: true);
+      }
       _pageGeneration++;
     });
     _saveScheduleSettings();

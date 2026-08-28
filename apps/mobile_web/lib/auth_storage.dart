@@ -4,11 +4,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 class SensitiveAuthState {
   const SensitiveAuthState({
     required this.credentialToken,
+    required this.jwxtCookies,
     required this.ehallCookies,
     required this.ehallAuthToken,
   });
 
   final String? credentialToken;
+  final String? jwxtCookies;
   final String? ehallCookies;
   final String? ehallAuthToken;
 }
@@ -18,6 +20,7 @@ class AuthStorage {
 
   static const FlutterSecureStorage _secureStorage = FlutterSecureStorage();
   static const String _credentialTokenKey = 'auth.credentialToken';
+  static const String _jwxtCookiesKey = 'auth.jwxtCookies';
   static const String _ehallCookiesKey = 'auth.ehallCookies';
   static const String _ehallAuthTokenKey = 'auth.ehallAuthToken';
 
@@ -41,13 +44,19 @@ class AuthStorage {
     await _removeLegacyValues([_credentialTokenKey]);
   }
 
-  Future<void> saveEhallAuth(
+  Future<void> saveSchoolAuth(
+    String? jwxtCookies,
     String? ehallCookies,
     String? ehallAuthToken,
   ) async {
+    await _writeOptional(_jwxtCookiesKey, jwxtCookies);
     await _writeOptional(_ehallCookiesKey, ehallCookies);
     await _writeOptional(_ehallAuthTokenKey, ehallAuthToken);
-    await _removeLegacyValues([_ehallCookiesKey, _ehallAuthTokenKey]);
+    await _removeLegacyValues([
+      _jwxtCookiesKey,
+      _ehallCookiesKey,
+      _ehallAuthTokenKey,
+    ]);
   }
 
   Future<SensitiveAuthState> load() async {
@@ -56,6 +65,7 @@ class AuthStorage {
       prefs,
       _credentialTokenKey,
     );
+    final jwxtCookies = await _readAndMigrate(prefs, _jwxtCookiesKey);
     final ehallCookies = await _readAndMigrate(prefs, _ehallCookiesKey);
     final ehallAuthToken = await _readAndMigrate(
       prefs,
@@ -63,6 +73,7 @@ class AuthStorage {
     );
     return SensitiveAuthState(
       credentialToken: credentialToken,
+      jwxtCookies: jwxtCookies,
       ehallCookies: ehallCookies,
       ehallAuthToken: ehallAuthToken,
     );
@@ -71,6 +82,7 @@ class AuthStorage {
   Future<void> clear() async {
     for (final key in [
       _credentialTokenKey,
+      _jwxtCookiesKey,
       _ehallCookiesKey,
       _ehallAuthTokenKey,
     ]) {
@@ -78,6 +90,7 @@ class AuthStorage {
     }
     await _removeLegacyValues([
       _credentialTokenKey,
+      _jwxtCookiesKey,
       _ehallCookiesKey,
       _ehallAuthTokenKey,
     ]);

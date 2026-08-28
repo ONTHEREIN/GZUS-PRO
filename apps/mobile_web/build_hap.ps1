@@ -53,8 +53,20 @@ if (-not $sdkHome) {
 $env:HOS_SDK_HOME = $sdkHome
 $env:DEVECO_SDK_HOME = $sdkHome
 
-$signingPassword = 'GzusDebugSigningPassword20260620!X'
-$signingDir = Join-Path $PSScriptRoot 'ohos' 'signing' 'debug'
+if ($Mode -eq 'release') {
+    $signingDir = Join-Path $PSScriptRoot 'ohos' 'signing' 'release'
+    $appCertName = 'app-release-cert.cer'
+    $profileName = 'app-release-profile.p7b'
+    $keystoreName = 'release.p12'
+    $keyAlias = 'release-key'
+} else {
+    $signingDir = Join-Path $PSScriptRoot 'ohos' 'signing' 'debug'
+    $signingPassword = 'GzusDebugSigningPassword20260620!X'
+    $appCertName = 'app-debug-cert.cer'
+    $profileName = 'debug-profile.p7b'
+    $keystoreName = 'debug-app.p12'
+    $keyAlias = 'debug-app-key'
+}
 $signedHap = Join-Path $PSScriptRoot 'build' 'ohos' 'outputs' 'default' 'entry-default-signed.hap'
 $unsignedHap = Join-Path $PSScriptRoot 'ohos' 'entry' 'build' 'default' 'outputs' 'default' 'entry-default-unsigned.hap'
 $verifyCertChain = Join-Path (Split-Path -Parent $signedHap) 'outCertChain.cer'
@@ -130,7 +142,7 @@ function Write-DebugProfile {
   "bundle-info": {
     "developer-id": "GZUS",
     "development-certificate": "$cert",
-    "bundle-name": "cn.gzus.pro.ohos",
+    "bundle-name": "cn.gzus.pro.hos",
     "apl": "normal",
     "app-feature": "hos_normal_app"
   },
@@ -162,6 +174,11 @@ function Ensure-LocalSigningMaterials {
             $hasAll = $false
             break
         }
+    }
+    $bundleName = 'cn.gzus.pro.hos'
+    $profileJson = Join-Path $signingDir 'debug-profile.json'
+    if ($hasAll -and (Test-Path $profileJson) -and ((Get-Content -Raw -Path $profileJson) -notmatch [regex]::Escape($bundleName))) {
+        $hasAll = $false
     }
     if ($hasAll) {
         return
@@ -225,13 +242,24 @@ function Sign-Hap {
     }
 
     Write-Host "==> 正在签名 HAP..." -ForegroundColor Cyan
-    Invoke-SignTool sign-app -mode localSign -keyAlias debug-app-key -keyPwd $signingPassword -appCertFile (Join-Path $signingDir 'app-debug-cert.cer') -profileFile (Join-Path $signingDir 'debug-profile.p7b') -inFile $unsignedHap -signAlg SHA256withECDSA -keystoreFile (Join-Path $signingDir 'debug-app.p12') -keystorePwd $signingPassword -outFile $signedHap -compatibleVersion 12 -signCode 1
+    Invoke-SignTool sign-app -mode localSign -keyAlias $keyAlias -keyPwd $signingPassword -appCertFile (Join-Path $signingDir $appCertName) -profileFile (Join-Path $signingDir $profileName) -inFile $unsignedHap -signAlg SHA256withECDSA -keystoreFile (Join-Path $signingDir $keystoreName) -keystorePwd $signingPassword -outFile $signedHap -compatibleVersion 12 -signCode 1
     Invoke-SignTool verify-app -inFile $signedHap -outCertChain $verifyCertChain -outProfile $verifyProfile
 }
 
 Set-Location $PSScriptRoot
 
-Ensure-LocalSigningMaterials
+if ($Mode -eq 'debug') {
+    Ensure-LocalSigningMaterials
+} else {
+    $requiredRelease = @('release.p12', 'app-release-cert.cer', 'app-release-profile.p7b', 'keystore-password.txt')
+    foreach ($name in $requiredRelease) {
+        $path = Join-Path $signingDir $name
+        if (-not (Test-Path $path)) {
+            throw "缺少 release 签名材料: $path"
+        }
+    }
+    $signingPassword = (Get-Content -Raw -Path (Join-Path $signingDir 'keystore-password.txt')).Trim()
+}
 
 Write-Host "==> 正在获取 Flutter 依赖..." -ForegroundColor Cyan
 flutter pub get

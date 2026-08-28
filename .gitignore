@@ -78,6 +78,9 @@ ui*.xml
 phone_ui_*.xml
 widget_*.xml
 widget_*.focus.txt
+!apps/mobile_web/android/app/src/main/res/layout/widget_*.xml
+!apps/mobile_web/android/app/src/main/res/drawable/widget_*.xml
+!apps/mobile_web/android/app/src/main/res/xml/widget_*.xml
 
 # Test / debug artifacts
 login_test.json

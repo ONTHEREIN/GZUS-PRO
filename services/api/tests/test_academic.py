@@ -1,6 +1,10 @@
+import time
+from datetime import datetime, timedelta, timezone
+
 from fastapi.testclient import TestClient
 
 from app.config import get_settings
+from app.database import DataCache, get_sync_session_factory
 from app.main import create_app
 from app.school_client import AuthenticationError
 
@@ -48,7 +52,43 @@ class FakeClient:
 
 class ExpiredClient(FakeClient):
     def get_schedule(self, year, term):
-        raise AuthenticationError("教务系统会话已失效，请重新登录")
+        raise AuthenticationError("登录状态已失效，请重新登录")
+
+
+class SlowDashboardClient(FakeClient):
+    def get_info(self):
+        time.sleep(0.2)
+        return super().get_info()
+
+    def get_schedule(self, year, term):
+        time.sleep(0.2)
+        return super().get_schedule(year, term)
+
+    def get_exams(self, year, term):
+        time.sleep(0.2)
+        return super().get_exams(year, term)
+
+    def get_grades(self, year, term):
+        time.sleep(0.2)
+        return super().get_grades(year, term)
+
+    def get_attendance(self, year, term):
+        time.sleep(0.2)
+        return super().get_attendance(year, term)
+
+    def get_credits(self):
+        time.sleep(0.2)
+        return super().get_credits()
+
+    def get_notices(self):
+        time.sleep(0.2)
+        return super().get_notices()
+
+
+class TimedOutScheduleClient(FakeClient):
+    def get_schedule(self, year, term):
+        time.sleep(0.1)
+        return super().get_schedule(year, term)
 
 
 class FakeEhallClient:
@@ -127,6 +167,34 @@ def test_attendance_and_credits():
     assert attendance["items"][0]["normal"] == 10
     assert credits[0]["totalCredit"] == "120"
     assert notices[0]["title"] == "测试通知"
+
+
+def test_dashboard_runs_modules_in_parallel():
+    app = create_app()
+    session = app.state.sessions.create(SlowDashboardClient(), "测试学生")
+    client = TestClient(app)
+
+    started = time.monotonic()
+    response = client.get("/dashboard?year=2025&term=2&week=3", headers={"X-Session-Id": session.id})
+    duration = time.monotonic() - started
+
+    assert response.status_code == 200
+    assert duration < 0.8
+    assert response.json()["modules"]["schedule"]["status"] == "ok"
+
+
+def test_dashboard_returns_module_error_before_client_timeout(monkeypatch):
+    monkeypatch.setattr("app.routes.academic._DASHBOARD_MODULE_TIMEOUT_SECONDS", 0.01)
+    app = create_app()
+    session = app.state.sessions.create(TimedOutScheduleClient(), "测试学生")
+    client = TestClient(app)
+
+    response = client.get("/dashboard?year=2025&term=2&week=3", headers={"X-Session-Id": session.id})
+
+    assert response.status_code == 200
+    schedule = response.json()["modules"]["schedule"]
+    assert schedule["status"] == "error"
+    assert schedule["error"] == "课表模块加载超过 0.01 秒，请稍后重试"
 
 
 def test_notices_merge_ehall_tasks():
@@ -214,7 +282,7 @@ def test_ehall_affairs_route_returns_504_when_upstream_fails():
     response = client.get("/ehall/affairs", headers={"X-Session-Id": session.id})
 
     assert response.status_code == 504
-    assert response.json()["detail"] == "办事大厅数据获取失败，请稍后重试"
+    assert response.json()["detail"] == "办事大厅请求失败（未返回可用数据），请稍后重试"
 
 
 def test_ehall_applications_route_returns_504_when_upstream_fails():
@@ -229,7 +297,7 @@ def test_ehall_applications_route_returns_504_when_upstream_fails():
     response = client.get("/ehall/applications", headers={"X-Session-Id": session.id})
 
     assert response.status_code == 504
-    assert response.json()["detail"] == "办事大厅数据获取失败，请稍后重试"
+    assert response.json()["detail"] == "办事大厅请求失败（未返回可用数据），请稍后重试"
 
 
 def test_academic_authentication_error_returns_json_401():
@@ -240,7 +308,7 @@ def test_academic_authentication_error_returns_json_401():
     response = client.get("/schedule", headers={"X-Session-Id": session.id})
 
     assert response.status_code == 401
-    assert response.json()["detail"] == "教务系统会话已失效，请重新登录"
+    assert response.json()["detail"] == "登录状态已失效，请重新登录"
 
 
 def test_notice_detail_route():
@@ -287,6 +355,12 @@ class AuthFailClient(FakeClient):
     def get_schedule(self, year, term):
         raise AuthenticationError("会话已失效")
 
+    def get_exams(self, year, term):
+        raise AuthenticationError("会话已失效")
+
+    def get_attendance(self, year, term):
+        raise AuthenticationError("会话已失效")
+
 
 def test_cache_fallback_on_502():
     app = create_app()
@@ -315,6 +389,51 @@ def test_cache_fallback_on_502():
         assert credits_resp.status_code == 200
         assert credits_resp.headers.get("X-Data-Source") == "cache"
         assert credits_resp.json()[0]["totalCredit"] == "120"
+
+
+def test_academic_cache_fallback_on_school_session_expiry():
+    app = create_app()
+    with TestClient(app) as client:
+        ok_session = app.state.sessions.create(FakeClient(), "测试学生")
+        headers = {"X-Session-Id": ok_session.id}
+        assert client.get("/exams?year=2025&term=1", headers=headers).status_code == 200
+        assert client.get("/attendance?year=2025&term=1", headers=headers).status_code == 200
+
+        expired_session = app.state.sessions.create(AuthFailClient(), "测试学生")
+        expired_headers = {"X-Session-Id": expired_session.id}
+        exams_response = client.get("/exams?year=2025&term=1", headers=expired_headers)
+        attendance_response = client.get(
+            "/attendance?year=2025&term=1", headers=expired_headers
+        )
+
+        assert exams_response.status_code == 200
+        assert exams_response.headers["X-Data-Source"] == "cache"
+        assert exams_response.json()[0]["courseName"] == "高等数学"
+        assert attendance_response.status_code == 200
+        assert attendance_response.headers["X-Data-Source"] == "cache"
+        assert attendance_response.json()["items"][0]["courseName"] == "高等数学"
+
+
+def test_academic_cache_expires_after_one_semester():
+    app = create_app()
+    with TestClient(app) as client:
+        ok_session = app.state.sessions.create(FakeClient(), "测试学生")
+        headers = {"X-Session-Id": ok_session.id}
+        assert client.get("/exams?year=2025&term=1", headers=headers).status_code == 200
+
+        Session = get_sync_session_factory()
+        with Session() as database_session:
+            entry = database_session.query(DataCache).one()
+            entry.cached_at = datetime.now(timezone.utc) - timedelta(days=181)
+            database_session.commit()
+
+        expired_session = app.state.sessions.create(AuthFailClient(), "测试学生")
+        response = client.get(
+            "/exams?year=2025&term=1",
+            headers={"X-Session-Id": expired_session.id},
+        )
+
+        assert response.status_code == 401
 
 
 class FailingClientNoAccount(FakeClient):
@@ -353,6 +472,7 @@ def test_no_cache_returns_502():
 
         resp = client.get("/me", headers=headers)
         assert resp.status_code == 502
+        assert resp.json()["detail"] == "学校教务系统暂时不可用（上游 HTTP 502），请稍后重试"
 
 
 def test_401_not_cached():

@@ -109,6 +109,14 @@ def test_create_revokes_existing_session_for_same_account():
     assert second_row.revoked_at is None
 
 
+def test_create_populates_legacy_push_platform_column():
+    store = SessionStore(ttl_seconds=7200)
+
+    session = store.create(_Client("20240001"), student_account="20240001")
+
+    assert _get_row(session.id).push_platform == "legacy"
+
+
 def test_create_clears_legacy_persisted_login_credentials():
     first_store = SessionStore(ttl_seconds=7200)
     first = first_store.create(_Client("20240001"), student_account="20240001")

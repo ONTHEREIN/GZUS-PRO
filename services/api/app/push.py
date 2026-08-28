@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 from app.config import get_settings
 from app.database import WebPushSubscription, get_sync_session_factory
+from app.apns_service import send_apns_to_student
 
 logger = logging.getLogger(__name__)
 
@@ -72,3 +73,9 @@ def send_web_push_to_student(student_id: str, title: str, body: str, extras: dic
                     logger.error(f"Web push failed for {sub.endpoint[:30]}: {e}")
             except Exception as e:
                 logger.error(f"Unexpected error sending web push: {e}")
+
+
+def send_push_to_student(student_id: str, title: str, body: str, extras: dict | None = None) -> None:
+    """向同一学生的 Web Push 与 iOS APNs 设备投递通知。"""
+    send_web_push_to_student(student_id, title, body, extras)
+    send_apns_to_student(student_id, title, body, extras)

@@ -46,10 +46,12 @@ class ProgressCategoryTile extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
       decoration: BoxDecoration(
-        color: isActive
-            ? cs.primaryContainer.withValues(alpha: 0.75)
-            : cs.surfaceContainerHighest.withValues(alpha: 0.62),
+        color: cs.surfaceContainerHighest.withValues(alpha: 0.38),
         borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color:
+              isActive ? cs.primary.withValues(alpha: 0.34) : cs.outlineVariant,
+        ),
       ),
       child: Center(
         child: FittedBox(
@@ -62,7 +64,7 @@ class ProgressCategoryTile extends StatelessWidget {
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
-                  color: isActive ? cs.onPrimaryContainer : cs.onSurfaceVariant,
+                  color: cs.onSurfaceVariant,
                   fontSize: 12,
                   fontWeight: FontWeight.w700,
                 ),
@@ -73,7 +75,7 @@ class ProgressCategoryTile extends StatelessWidget {
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
-                  color: isActive ? cs.onPrimaryContainer : cs.onSurfaceVariant,
+                  color: isActive ? cs.primary : cs.onSurfaceVariant,
                   fontSize: 16,
                   fontWeight: FontWeight.w900,
                 ),
@@ -114,8 +116,7 @@ class ProgressMiniRow extends StatelessWidget {
                 flex: 2,
                 child: Align(
                   alignment: Alignment.centerRight,
-                  child:
-                      StatusPill(label: item.statusLabel, color: cs.primary),
+                  child: StatusPill(label: item.statusLabel, color: cs.primary),
                 ),
               ),
             ],

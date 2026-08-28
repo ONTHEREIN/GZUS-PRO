@@ -3,12 +3,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../api_client.dart';
 import '../../app_providers.dart';
+import '../../gzus_design.dart';
 import '../../responsive/breakpoints.dart';
 import '../../responsive/sizing.dart';
+import '../../responsive/spacing.dart';
 import '../../widgets/async_panel.dart';
-import '../../widgets/badges.dart';
-import '../../widgets/data_table.dart';
-import '../../widgets/info_tile.dart';
 import '../../widgets/page_panel.dart';
 import '../../widgets/page_silent_refresh.dart';
 
@@ -42,6 +41,7 @@ class _CreditsPageState extends ConsumerState<CreditsPage>
       onRefresh: _refreshCredits,
       child: AsyncPanel<List<CreditItem>>(
         future: creditsFuture,
+        initialData: widget.api.cachedCredits(),
         onSessionExpired: widget.onSessionExpired,
         builder: (items) => LayoutBuilder(
           builder: (context, constraints) {
@@ -67,28 +67,43 @@ class _CreditsPageState extends ConsumerState<CreditsPage>
                       icon: Icons.auto_stories,
                       child: Column(
                         children: [
-                          for (final item in items) ...[
-                            _CreditOverviewCard(item: item),
-                            if (item != items.last) const SizedBox(height: 12),
+                          for (var index = 0;
+                              index < items.length;
+                              index++) ...[
+                            _CreditProgressCard(
+                              item: items[index],
+                              index: index,
+                              showDetails: false,
+                            ),
+                            if (index != items.length - 1)
+                              const SizedBox(height: GzusSpacing.m),
                           ],
                         ],
                       ),
                     ),
                   ),
-                  const SizedBox(width: 12),
+                  const SizedBox(width: GzusSpacing.m),
                   Expanded(
                     child: PagePanel(
-                      title: '学分统计',
+                      title: '分类明细',
                       icon: Icons.auto_stories,
                       expandChild: true,
                       child: SingleChildScrollView(
                         physics: const AlwaysScrollableScrollPhysics(),
                         child: Column(
                           children: [
-                            for (final item in items)
+                            for (var index = 0; index < items.length; index++)
                               Padding(
-                                padding: const EdgeInsets.only(bottom: 12),
-                                child: CreditCard(item: item),
+                                padding: EdgeInsets.only(
+                                  bottom: index == items.length - 1
+                                      ? GzusSpacing.none
+                                      : GzusSpacing.m,
+                                ),
+                                child: _CreditDetailsCard(
+                                  item: items[index],
+                                  index: index,
+                                  showTitle: true,
+                                ),
                               ),
                           ],
                         ),
@@ -106,10 +121,18 @@ class _CreditsPageState extends ConsumerState<CreditsPage>
                 physics: const AlwaysScrollableScrollPhysics(),
                 child: Column(
                   children: [
-                    for (final item in items)
+                    for (var index = 0; index < items.length; index++)
                       Padding(
-                        padding: const EdgeInsets.only(bottom: 12),
-                        child: CreditCard(item: item),
+                        padding: EdgeInsets.only(
+                          bottom: index == items.length - 1
+                              ? GzusSpacing.none
+                              : GzusSpacing.m,
+                        ),
+                        child: _CreditProgressCard(
+                          item: items[index],
+                          index: index,
+                          showDetails: true,
+                        ),
                       ),
                   ],
                 ),
@@ -122,136 +145,343 @@ class _CreditsPageState extends ConsumerState<CreditsPage>
   }
 }
 
-class _CreditOverviewCard extends StatelessWidget {
-  const _CreditOverviewCard({required this.item});
+class _CreditProgressCard extends StatelessWidget {
+  const _CreditProgressCard({
+    required this.item,
+    required this.index,
+    required this.showDetails,
+  });
+
   final CreditItem item;
+  final int index;
+  final bool showDetails;
 
   @override
   Widget build(BuildContext context) {
-    final expected =
-        item.requiredExpected + item.electiveExpected + item.otherExpected;
-    final earned = item.requiredEarned + item.electiveEarned + item.otherEarned;
-    final totalExpected =
-        item.totalExpected == 0 ? expected : item.totalExpected;
-    final totalEarned = item.totalEarned == 0 ? earned : item.totalEarned;
-    final progress = expected <= 0 ? 0.0 : (earned / expected).clamp(0.0, 1.0);
+    final totals = _creditTotals(item);
+    final colorScheme = Theme.of(context).colorScheme;
+    return Card(
+      key: Key('credit-primary-$index'),
+      clipBehavior: Clip.antiAlias,
+      child: Padding(
+        padding: GzusInsets.card(context),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              _creditTitle(item),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w800,
+                  ),
+            ),
+            const SizedBox(height: GzusSpacing.l),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Expanded(
+                  child: _CreditMetric(
+                    label: '已修学分',
+                    value: _creditNumber(totals.earned),
+                    alignEnd: false,
+                  ),
+                ),
+                Container(width: 1, height: 38, color: gzusBorder(context)),
+                Expanded(
+                  child: _CreditMetric(
+                    label: '应修学分',
+                    value: _creditNumber(totals.expected),
+                    alignEnd: true,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: GzusSpacing.m),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text('完成进度', style: GzusTextStyles.metricLabel(context)),
+                Text(
+                  '${(totals.progress * 100).toStringAsFixed(0)}%',
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        color: colorScheme.primary,
+                        fontWeight: FontWeight.w800,
+                      ),
+                ),
+              ],
+            ),
+            const SizedBox(height: GzusSpacing.s),
+            LinearProgressIndicator(
+              key: Key('credit-total-progress-$index'),
+              value: totals.progress,
+              minHeight: 8,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            if (showDetails) ...[
+              const SizedBox(height: GzusSpacing.l),
+              _CreditDetails(item: item, index: index),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _CreditDetailsCard extends StatelessWidget {
+  const _CreditDetailsCard({
+    required this.item,
+    required this.index,
+    required this.showTitle,
+  });
+
+  final CreditItem item;
+  final int index;
+  final bool showTitle;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      key: Key('credit-details-$index'),
+      child: Padding(
+        padding: GzusInsets.card(context),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (showTitle) ...[
+              Text(
+                _creditTitle(item),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w800,
+                    ),
+              ),
+              const SizedBox(height: GzusSpacing.l),
+            ],
+            _CreditDetails(item: item, index: index),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _CreditDetails extends StatelessWidget {
+  const _CreditDetails({required this.item, required this.index});
+
+  final CreditItem item;
+  final int index;
+
+  @override
+  Widget build(BuildContext context) {
+    final metrics = _creditSupplementaryMetrics(item);
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text(
-          '${item.name ?? '-'} · ${item.major ?? '-'}',
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+        if (metrics.isNotEmpty) ...[
+          LayoutBuilder(
+            builder: (context, constraints) {
+              const spacing = GzusSpacing.s;
+              final metricWidth = (constraints.maxWidth - spacing) / 2;
+              return Wrap(
+                spacing: spacing,
+                runSpacing: spacing,
+                children: [
+                  for (final metric in metrics)
+                    SizedBox(
+                      width: metricWidth,
+                      child: _SupplementaryMetric(metric: metric),
+                    ),
+                ],
+              );
+            },
+          ),
+          const SizedBox(height: GzusSpacing.l),
+        ],
+        Text('分类完成情况', style: GzusTextStyles.cardTitle(context)),
+        const SizedBox(height: GzusSpacing.m),
+        _CreditCategoryProgress(
+          key: Key('credit-category-required-$index'),
+          label: '必修',
+          earned: item.requiredEarned,
+          expected: item.requiredExpected,
         ),
-        const SizedBox(height: 8),
-        Row(
-          children: [
-            Expanded(
-                child: Text('已修 ${totalEarned.toStringAsFixed(1)}',
-                    style: const TextStyle(fontSize: 13))),
-            Text('应修 ${totalExpected.toStringAsFixed(1)}',
-                style: const TextStyle(fontSize: 13)),
-          ],
+        const SizedBox(height: GzusSpacing.m),
+        _CreditCategoryProgress(
+          key: Key('credit-category-elective-$index'),
+          label: '选修',
+          earned: item.electiveEarned,
+          expected: item.electiveExpected,
         ),
-        const SizedBox(height: 4),
-        LinearProgressIndicator(value: progress),
-        const SizedBox(height: 6),
-        Wrap(
-          spacing: 8,
-          runSpacing: 4,
-          children: [
-            InfoTile(
-                icon: Icons.check,
-                label: '必修',
-                value: '${item.requiredEarned}/${item.requiredExpected}'),
-            InfoTile(
-                icon: Icons.book,
-                label: '选修',
-                value: '${item.electiveEarned}/${item.electiveExpected}'),
-          ],
+        const SizedBox(height: GzusSpacing.m),
+        _CreditCategoryProgress(
+          key: Key('credit-category-other-$index'),
+          label: '其他',
+          earned: item.otherEarned,
+          expected: item.otherExpected,
         ),
       ],
     );
   }
 }
 
-class CreditCard extends StatelessWidget {
-  const CreditCard({super.key, required this.item});
+class _CreditMetric extends StatelessWidget {
+  const _CreditMetric({
+    required this.label,
+    required this.value,
+    required this.alignEnd,
+  });
 
-  final CreditItem item;
+  final String label;
+  final String value;
+  final bool alignEnd;
 
   @override
   Widget build(BuildContext context) {
-    final expected =
-        item.requiredExpected + item.electiveExpected + item.otherExpected;
-    final earned = item.requiredEarned + item.electiveEarned + item.otherEarned;
-    final totalExpected =
-        item.totalExpected == 0 ? expected : item.totalExpected;
-    final totalEarned = item.totalEarned == 0 ? earned : item.totalEarned;
-    final progress = expected <= 0 ? 0.0 : (earned / expected).clamp(0.0, 1.0);
-    return Card(
-      clipBehavior: Clip.antiAlias,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                const IconBadge(icon: Icons.auto_stories, size: 36),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    '${item.name ?? '-'} · ${item.major ?? '-'}',
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 12,
-              runSpacing: 8,
-              children: [
-                InfoTile(
-                    icon: Icons.verified,
-                    label: '培养方案总学分',
-                    value: item.totalCredit ?? '-'),
-                InfoTile(
-                    icon: Icons.check_circle,
-                    label: '已修学分',
-                    value: totalEarned.toStringAsFixed(2)),
-                InfoTile(
-                    icon: Icons.list,
-                    label: '应修合计',
-                    value: totalExpected.toStringAsFixed(2)),
-                InfoTile(
-                    icon: Icons.auto_stories,
-                    label: '选课学分',
-                    value: item.selectedCredit ?? '-'),
-              ],
-            ),
-            const SizedBox(height: 12),
-            LinearProgressIndicator(value: progress),
-            const SizedBox(height: 12),
-            SimpleTable(
-              headers: const ['类别', '应修', '实修'],
-              rows: [
-                ['必修', '${item.requiredExpected}', '${item.requiredEarned}'],
-                ['选修', '${item.electiveExpected}', '${item.electiveEarned}'],
-                ['其他', '${item.otherExpected}', '${item.otherEarned}'],
-                ['合计', '$expected', '$earned'],
-              ],
-            ),
-          ],
+    final alignment =
+        alignEnd ? CrossAxisAlignment.end : CrossAxisAlignment.start;
+    return Column(
+      crossAxisAlignment: alignment,
+      children: [
+        Text(label, style: GzusTextStyles.metricLabel(context)),
+        const SizedBox(height: GzusSpacing.xs),
+        Text(
+          value,
+          style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                fontWeight: FontWeight.w800,
+              ),
         ),
+      ],
+    );
+  }
+}
+
+class _SupplementaryMetric extends StatelessWidget {
+  const _SupplementaryMetric({required this.metric});
+
+  final _CreditMetricData metric;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(GzusSpacing.s),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(GzusRadius.sm),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(metric.label, style: GzusTextStyles.metricLabel(context)),
+          const SizedBox(height: GzusSpacing.xs),
+          Text(
+            metric.value,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: GzusTextStyles.metricValue(context),
+          ),
+        ],
       ),
     );
   }
+}
+
+class _CreditCategoryProgress extends StatelessWidget {
+  const _CreditCategoryProgress({
+    super.key,
+    required this.label,
+    required this.earned,
+    required this.expected,
+  });
+
+  final String label;
+  final double earned;
+  final double expected;
+
+  @override
+  Widget build(BuildContext context) {
+    final progress =
+        expected <= 0 ? 0.0 : (earned / expected).clamp(0.0, 1.0).toDouble();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Text(label, style: GzusTextStyles.bodyEmphasis(context)),
+            const Spacer(),
+            Text(
+              '${_creditNumber(earned)} / ${_creditNumber(expected)}',
+              style: GzusTextStyles.statisticLabel(context),
+            ),
+          ],
+        ),
+        const SizedBox(height: GzusSpacing.s),
+        LinearProgressIndicator(
+          value: progress,
+          minHeight: 6,
+          borderRadius: BorderRadius.circular(6),
+        ),
+      ],
+    );
+  }
+}
+
+_CreditTotals _creditTotals(CreditItem item) {
+  final expected =
+      item.requiredExpected + item.electiveExpected + item.otherExpected;
+  final earned = item.requiredEarned + item.electiveEarned + item.otherEarned;
+  final totalExpected = item.totalExpected == 0 ? expected : item.totalExpected;
+  final totalEarned = item.totalEarned == 0 ? earned : item.totalEarned;
+  final progress = totalExpected <= 0
+      ? 0.0
+      : (totalEarned / totalExpected).clamp(0.0, 1.0).toDouble();
+  return _CreditTotals(
+      expected: totalExpected, earned: totalEarned, progress: progress);
+}
+
+List<_CreditMetricData> _creditSupplementaryMetrics(CreditItem item) {
+  final metrics = <_CreditMetricData>[];
+  if (_hasCreditValue(item.totalCredit)) {
+    metrics.add(
+        _CreditMetricData(label: '培养方案总学分', value: item.totalCredit!.trim()));
+  }
+  if (_hasCreditValue(item.selectedCredit)) {
+    metrics.add(
+        _CreditMetricData(label: '选课学分', value: item.selectedCredit!.trim()));
+  }
+  return metrics;
+}
+
+bool _hasCreditValue(String? value) => value != null && value.trim().isNotEmpty;
+
+String _creditNumber(double value) => value.toStringAsFixed(1);
+
+String _creditTitle(CreditItem item) {
+  final name = item.name?.trim() ?? '';
+  final major = item.major?.trim() ?? '';
+  if (name.isNotEmpty && major.isNotEmpty) return '$name · $major';
+  if (major.isNotEmpty) return major;
+  if (name.isNotEmpty) return name;
+  return '学分统计';
+}
+
+class _CreditTotals {
+  const _CreditTotals({
+    required this.expected,
+    required this.earned,
+    required this.progress,
+  });
+
+  final double expected;
+  final double earned;
+  final double progress;
+}
+
+class _CreditMetricData {
+  const _CreditMetricData({required this.label, required this.value});
+
+  final String label;
+  final String value;
 }

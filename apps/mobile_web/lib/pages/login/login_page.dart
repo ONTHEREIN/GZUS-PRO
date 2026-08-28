@@ -1,19 +1,17 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../api_client.dart';
-import '../../browser_redirect.dart';
 import '../../gzus_design.dart';
 import '../../responsive/spacing.dart';
 import '../../test_flags.dart';
 import '../../widgets/icon_label.dart';
+import '../../widgets/liquid_glass.dart';
 
 class LoginPage extends StatefulWidget {
   const LoginPage({
@@ -36,15 +34,19 @@ class _LoginPageState extends State<LoginPage>
   final accountController = TextEditingController();
   final passwordController = TextEditingController();
   final passwordFocusNode = FocusNode();
+  final _carouselController = PageController();
   bool loading = false;
   bool rememberPassword = true;
   bool agreedToTerms = false;
+  bool passwordVisible = false;
   String? error;
   String _appVersion = '';
   String _appBuild = '';
+  int _carouselIndex = 0;
+  int _carouselSlideCount = 0;
+  Timer? _carouselTimer;
+  late final Future<List<LoginCarouselSlide>> _carouselSlidesFuture;
 
-  /// 当前登录模式：'sso' = 办事大厅一键登录（推荐），'password' = 教务系统账密登录
-  String loginMode = 'sso';
   late final _appearController = AnimationController(
     vsync: this,
     duration: const Duration(milliseconds: 500),
@@ -61,6 +63,7 @@ class _LoginPageState extends State<LoginPage>
     unawaited(_loadSavedLoginForm());
     unawaited(_loadAgreementState());
     unawaited(_loadVersionInfo());
+    _carouselSlidesFuture = widget.api.loginCarouselSlides();
     _appearController.forward();
   }
 
@@ -111,6 +114,8 @@ class _LoginPageState extends State<LoginPage>
   @override
   void dispose() {
     _appearController.dispose();
+    _carouselTimer?.cancel();
+    _carouselController.dispose();
     accountController.dispose();
     passwordController.dispose();
     passwordFocusNode.dispose();
@@ -118,203 +123,146 @@ class _LoginPageState extends State<LoginPage>
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => _buildRedesignedLogin(context);
+
+  Widget buildLegacyLogin(BuildContext context) {
     return Scaffold(
-      body: LayoutBuilder(
-        builder: (context, constraints) {
-          final compact = constraints.maxWidth < _mobileBreakpoint;
-          return SafeArea(
-            child: SingleChildScrollView(
-              keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-              padding: EdgeInsets.fromLTRB(
-                compact ? 14 : 24,
-                compact ? 18 : 40,
-                compact ? 14 : 24,
-                24 + MediaQuery.viewInsetsOf(context).bottom,
-              ),
-              child: FadeTransition(
-                opacity: _appearAnim,
-                child: SlideTransition(
-                  position: Tween<Offset>(
-                    begin: const Offset(0, 0.06),
-                    end: Offset.zero,
-                  ).animate(_appearAnim),
-                  child: Center(
-                    child: ConstrainedBox(
-                      constraints:
-                          BoxConstraints(maxWidth: compact ? 460 : 420),
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: gzusSurface(context),
-                          borderRadius: BorderRadius.circular(GzusRadii.xl),
-                          border: Border.all(color: gzusBorder(context)),
-                          boxShadow: gzusShadow(context),
-                        ),
-                        child: Padding(
-                          padding: EdgeInsets.all(compact ? 22 : 30),
-                          child: AutofillGroup(
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Hero(
-                                      tag: 'app-logo',
-                                      child: Container(
-                                        width: compact ? 48 : 56,
-                                        height: compact ? 48 : 56,
-                                        decoration: BoxDecoration(
-                                          color: Theme.of(context)
-                                              .colorScheme
-                                              .primary,
-                                          borderRadius:
-                                              BorderRadius.circular(16),
-                                          boxShadow: [
-                                            BoxShadow(
-                                              color: Theme.of(context)
-                                                  .colorScheme
-                                                  .primary
-                                                  .withValues(alpha: 0.25),
-                                              blurRadius: 18,
-                                              offset: const Offset(0, 8),
-                                            ),
-                                          ],
-                                        ),
-                                        child: ClipRRect(
-                                          borderRadius:
-                                              BorderRadius.circular(16),
-                                          child: Image.asset(
-                                            'assets/icon.png',
-                                            fit: BoxFit.cover,
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                    SizedBox(height: compact ? 18 : 22),
-                                    Text(
-                                      '软帮手',
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .headlineMedium,
-                                    ),
-                                    const SizedBox(height: GzusSpacing.xs),
-                                    Text(
-                                      '广州软件学院教务助手',
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .bodyMedium
-                                          ?.copyWith(
-                                            color: Theme.of(context)
-                                                .colorScheme
-                                                .onSurfaceVariant,
-                                          ),
-                                    ),
-                                    const SizedBox(height: GzusSpacing.l),
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 12,
-                                        vertical: 8,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: gzusSurfaceSoft(context),
-                                        borderRadius: BorderRadius.circular(12),
-                                        border: Border.all(
-                                            color: gzusBorder(context)),
-                                      ),
-                                      child: Row(
-                                        children: [
-                                          Icon(
-                                            Icons.lock_outline,
-                                            size: 16,
+      body: Stack(
+        children: [
+          Positioned.fill(
+            child: LiquidGlassAmbientBackdrop(
+              seedColor: Theme.of(context).colorScheme.primary,
+            ),
+          ),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final compact = constraints.maxWidth < _mobileBreakpoint;
+              return SafeArea(
+                child: SingleChildScrollView(
+                  keyboardDismissBehavior:
+                      ScrollViewKeyboardDismissBehavior.onDrag,
+                  padding: EdgeInsets.fromLTRB(
+                    compact ? 14 : 24,
+                    compact ? 18 : 40,
+                    compact ? 14 : 24,
+                    24 + MediaQuery.viewInsetsOf(context).bottom,
+                  ),
+                  child: FadeTransition(
+                    opacity: _appearAnim,
+                    child: SlideTransition(
+                      position: Tween<Offset>(
+                        begin: const Offset(0, 0.06),
+                        end: Offset.zero,
+                      ).animate(_appearAnim),
+                      child: Center(
+                        child: ConstrainedBox(
+                          constraints:
+                              BoxConstraints(maxWidth: compact ? 460 : 420),
+                          child: LiquidGlassSurface(
+                            padding: EdgeInsets.all(compact ? 22 : 30),
+                            borderRadius: BorderRadius.circular(GzusRadii.xl),
+                            material: LiquidGlassMaterial.regular,
+                            semanticsLabel: '登录卡片',
+                            child: AutofillGroup(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Hero(
+                                        tag: 'app-logo',
+                                        child: Container(
+                                          width: compact ? 48 : 56,
+                                          height: compact ? 48 : 56,
+                                          decoration: BoxDecoration(
                                             color: Theme.of(context)
                                                 .colorScheme
                                                 .primary,
+                                            borderRadius:
+                                                BorderRadius.circular(16),
+                                            boxShadow: [
+                                              BoxShadow(
+                                                color: Theme.of(context)
+                                                    .colorScheme
+                                                    .primary
+                                                    .withValues(alpha: 0.25),
+                                                blurRadius: 18,
+                                                offset: const Offset(0, 8),
+                                              ),
+                                            ],
                                           ),
-                                          const SizedBox(width: GzusSpacing.s),
-                                          Expanded(
-                                            child: Text(
-                                              hideEcardOnCurrentPlatform
-                                                  ? '登录后自动同步课表、考勤、成绩与通知'
-                                                  : '登录后自动同步课表、考勤、成绩、通知与生活缴费',
-                                              style: Theme.of(context)
-                                                  .textTheme
-                                                  .bodySmall,
+                                          child: ClipRRect(
+                                            borderRadius:
+                                                BorderRadius.circular(16),
+                                            child: Image.asset(
+                                              'assets/icon.png',
+                                              fit: BoxFit.cover,
                                             ),
                                           ),
-                                        ],
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                SizedBox(height: compact ? 20 : 24),
-                                Row(
-                                  children: [
-                                    Expanded(
-                                      child: SegmentedButton<String>(
-                                        segments: const [
-                                          ButtonSegment(
-                                            value: 'sso',
-                                            label: Text('一键登录'),
-                                            icon: Icon(Icons.flash_on),
-                                          ),
-                                          ButtonSegment(
-                                            value: 'password',
-                                            label: Text('教务系统'),
-                                            icon: Icon(Icons.password),
-                                          ),
-                                        ],
-                                        selected: {loginMode},
-                                        onSelectionChanged: (selection) {
-                                          if (selection.isEmpty) return;
-                                          setState(() {
-                                            loginMode = selection.first;
-                                            error = null;
-                                          });
-                                        },
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                SizedBox(height: compact ? 20 : 24),
-                                if (loginMode == 'sso') ...[
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 12,
-                                      vertical: 10,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: GzusColors.greenSoft,
-                                      borderRadius: BorderRadius.circular(12),
-                                      border: Border.all(
-                                        color: GzusColors.green.withValues(
-                                            alpha: 0.20),
-                                      ),
-                                    ),
-                                    child: Row(
-                                      children: [
-                                        const Icon(
-                                          Icons.verified_user,
-                                          size: 18,
-                                          color: GzusColors.green,
                                         ),
-                                        const SizedBox(width: GzusSpacing.s),
-                                        Expanded(
-                                          child: Text(
-                                            '跳转学校统一身份认证，无需在本应用输入密码',
-                                            style: Theme.of(context)
-                                                .textTheme
-                                                .bodySmall
-                                                ?.copyWith(
-                                                  color: GzusColors.green,
-                                                ),
-                                          ),
+                                      ),
+                                      SizedBox(height: compact ? 18 : 22),
+                                      Text(
+                                        '软帮手',
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .headlineMedium,
+                                      ),
+                                      const SizedBox(height: GzusSpacing.xs),
+                                      Text(
+                                        '广州软件学院教务助手',
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .bodyMedium
+                                            ?.copyWith(
+                                              color: Theme.of(context)
+                                                  .colorScheme
+                                                  .onSurfaceVariant,
+                                            ),
+                                      ),
+                                      const SizedBox(height: GzusSpacing.l),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 12,
+                                          vertical: 8,
                                         ),
-                                      ],
-                                    ),
+                                        decoration: BoxDecoration(
+                                          color: gzusSurfaceSoft(context),
+                                          borderRadius:
+                                              BorderRadius.circular(12),
+                                          border: Border.all(
+                                              color: gzusBorder(context)),
+                                        ),
+                                        child: Row(
+                                          children: [
+                                            Icon(
+                                              Icons.lock_outline,
+                                              size: 16,
+                                              color: Theme.of(context)
+                                                  .colorScheme
+                                                  .primary,
+                                            ),
+                                            const SizedBox(
+                                                width: GzusSpacing.s),
+                                            Expanded(
+                                              child: Text(
+                                                hideEcardOnCurrentPlatform
+                                                    ? '登录后自动同步课表、考勤、成绩与通知'
+                                                    : '登录后自动同步课表、考勤、成绩、通知与生活缴费',
+                                                style: Theme.of(context)
+                                                    .textTheme
+                                                    .bodySmall,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
                                   ),
-                                ] else ...[
+                                  SizedBox(height: compact ? 20 : 24),
                                   TextField(
                                     controller: accountController,
                                     decoration: const InputDecoration(
@@ -344,18 +292,17 @@ class _LoginPageState extends State<LoginPage>
                                     textInputAction: TextInputAction.done,
                                     onSubmitted: _submitFromKeyboard,
                                   ),
-                                ],
-                                if (loginMode == 'password')
                                   InkWell(
                                     borderRadius:
                                         BorderRadius.circular(GzusRadii.sm),
                                     onTap: loading
                                         ? null
-                                        : () => setState(() => rememberPassword =
-                                            !rememberPassword),
+                                        : () => setState(() =>
+                                            rememberPassword =
+                                                !rememberPassword),
                                     child: Padding(
-                                      padding:
-                                          const EdgeInsets.symmetric(vertical: 4),
+                                      padding: const EdgeInsets.symmetric(
+                                          vertical: 4),
                                       child: Row(
                                         children: [
                                           Checkbox(
@@ -371,157 +318,153 @@ class _LoginPageState extends State<LoginPage>
                                       ),
                                     ),
                                   ),
-                                InkWell(
-                                  borderRadius:
-                                      BorderRadius.circular(GzusRadii.sm),
-                                  onTap: loading
-                                      ? null
-                                      : () => setState(
-                                          () => agreedToTerms = !agreedToTerms),
-                                  child: Padding(
-                                    padding:
-                                        const EdgeInsets.symmetric(vertical: 4),
-                                    child: Row(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.center,
-                                      children: [
-                                        Checkbox(
-                                          value: agreedToTerms,
-                                          onChanged: loading
-                                              ? null
-                                              : (value) => setState(() =>
-                                                  agreedToTerms =
-                                                      value ?? false),
-                                        ),
-                                        Expanded(
-                                          child: RichText(
-                                            text: TextSpan(
-                                              style: Theme.of(context)
-                                                  .textTheme
-                                                  .bodySmall
-                                                  ?.copyWith(
-                                                    color: Theme.of(context)
-                                                        .colorScheme
-                                                        .onSurface,
+                                  InkWell(
+                                    borderRadius:
+                                        BorderRadius.circular(GzusRadii.sm),
+                                    onTap: loading
+                                        ? null
+                                        : () => setState(() =>
+                                            agreedToTerms = !agreedToTerms),
+                                    child: Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                          vertical: 4),
+                                      child: Row(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.center,
+                                        children: [
+                                          Checkbox(
+                                            value: agreedToTerms,
+                                            onChanged: loading
+                                                ? null
+                                                : (value) => setState(() =>
+                                                    agreedToTerms =
+                                                        value ?? false),
+                                          ),
+                                          Expanded(
+                                            child: RichText(
+                                              text: TextSpan(
+                                                style: Theme.of(context)
+                                                    .textTheme
+                                                    .bodySmall
+                                                    ?.copyWith(
+                                                      color: Theme.of(context)
+                                                          .colorScheme
+                                                          .onSurface,
+                                                    ),
+                                                children: [
+                                                  const TextSpan(
+                                                      text: '我已阅读并同意'),
+                                                  TextSpan(
+                                                    text: '《用户服务协议》',
+                                                    style: TextStyle(
+                                                      color: Theme.of(context)
+                                                          .colorScheme
+                                                          .primary,
+                                                      decoration: TextDecoration
+                                                          .underline,
+                                                    ),
+                                                    recognizer:
+                                                        TapGestureRecognizer()
+                                                          ..onTap = () =>
+                                                              _showAgreement(
+                                                                context,
+                                                                title: '用户服务协议',
+                                                                type: 'terms',
+                                                              ),
                                                   ),
-                                              children: [
-                                                const TextSpan(text: '我已阅读并同意'),
-                                                TextSpan(
-                                                  text: '《用户服务协议》',
-                                                  style: TextStyle(
-                                                    color: Theme.of(context)
-                                                        .colorScheme
-                                                        .primary,
-                                                    decoration: TextDecoration
-                                                        .underline,
+                                                  const TextSpan(text: ' 和 '),
+                                                  TextSpan(
+                                                    text: '《隐私政策》',
+                                                    style: TextStyle(
+                                                      color: Theme.of(context)
+                                                          .colorScheme
+                                                          .primary,
+                                                      decoration: TextDecoration
+                                                          .underline,
+                                                    ),
+                                                    recognizer:
+                                                        TapGestureRecognizer()
+                                                          ..onTap = () =>
+                                                              _showAgreement(
+                                                                context,
+                                                                title: '隐私政策',
+                                                                type: 'privacy',
+                                                              ),
                                                   ),
-                                                  recognizer:
-                                                      TapGestureRecognizer()
-                                                        ..onTap = () =>
-                                                            _showAgreement(
-                                                              context,
-                                                              title: '用户服务协议',
-                                                              type: 'terms',
-                                                            ),
-                                                ),
-                                                const TextSpan(text: ' 和 '),
-                                                TextSpan(
-                                                  text: '《隐私政策》',
-                                                  style: TextStyle(
-                                                    color: Theme.of(context)
-                                                        .colorScheme
-                                                        .primary,
-                                                    decoration: TextDecoration
-                                                        .underline,
-                                                  ),
-                                                  recognizer:
-                                                      TapGestureRecognizer()
-                                                        ..onTap = () =>
-                                                            _showAgreement(
-                                                              context,
-                                                              title: '隐私政策',
-                                                              type: 'privacy',
-                                                            ),
-                                                ),
-                                              ],
+                                                ],
+                                              ),
                                             ),
                                           ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ),
-                                SizedBox(height: compact ? 16 : 18),
-                                SizedBox(
-                                  height: compact ? 56 : 60,
-                                  child: FilledButton(
-                                    onPressed: (loading || !agreedToTerms)
-                                        ? null
-                                        : loginMode == 'sso'
-                                            ? _startSsoLogin
-                                            : _login,
-                                    child: IconLabel(
-                                      icon: loginMode == 'sso'
-                                          ? Icons.flash_on
-                                          : Icons.login,
-                                      label: loading
-                                          ? '登录中...'
-                                          : loginMode == 'sso'
-                                              ? '办事大厅一键登录'
-                                              : '教务系统登录',
-                                      centered: true,
-                                    ),
-                                  ),
-                                ),
-                                if (error != null) ...[
-                                  const SizedBox(height: GzusSpacing.l),
-                                  Card(
-                                    color: Theme.of(context)
-                                        .colorScheme
-                                        .errorContainer,
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                    child: Padding(
-                                      padding: const EdgeInsets.all(GzusSpacing.l),
-                                      child: Column(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          Icon(Icons.error_outline,
-                                              size: 48,
-                                              color: Theme.of(context)
-                                                  .colorScheme
-                                                  .onErrorContainer),
-                                          const SizedBox(height: GzusSpacing.m),
-                                          Text(error!,
-                                              textAlign: TextAlign.center,
-                                              style: TextStyle(
-                                                  color: Theme.of(context)
-                                                      .colorScheme
-                                                      .onErrorContainer)),
                                         ],
                                       ),
                                     ),
                                   ),
-                                ],
-                                if (_appVersion.isNotEmpty) ...[
-                                  const SizedBox(height: GzusSpacing.xl),
-                                  Center(
-                                    child: Text(
-                                      'v$_appVersion (build $_appBuild)',
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .bodySmall
-                                          ?.copyWith(
-                                            color: Theme.of(context)
-                                                .colorScheme
-                                                .onSurfaceVariant
-                                                .withValues(alpha: 0.45),
-                                          ),
+                                  SizedBox(height: compact ? 16 : 18),
+                                  SizedBox(
+                                    height: compact ? 56 : 60,
+                                    child: FilledButton(
+                                      onPressed: (loading || !agreedToTerms)
+                                          ? null
+                                          : _login,
+                                      child: IconLabel(
+                                        icon: Icons.login,
+                                        label: loading ? '登录中...' : '账号密码登录',
+                                        centered: true,
+                                      ),
                                     ),
                                   ),
+                                  if (error != null) ...[
+                                    const SizedBox(height: GzusSpacing.l),
+                                    Card(
+                                      color: Theme.of(context)
+                                          .colorScheme
+                                          .errorContainer,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                      child: Padding(
+                                        padding:
+                                            const EdgeInsets.all(GzusSpacing.l),
+                                        child: Column(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Icon(Icons.error_outline,
+                                                size: 48,
+                                                color: Theme.of(context)
+                                                    .colorScheme
+                                                    .onErrorContainer),
+                                            const SizedBox(
+                                                height: GzusSpacing.m),
+                                            Text(error!,
+                                                textAlign: TextAlign.center,
+                                                style: TextStyle(
+                                                    color: Theme.of(context)
+                                                        .colorScheme
+                                                        .onErrorContainer)),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                  if (_appVersion.isNotEmpty) ...[
+                                    const SizedBox(height: GzusSpacing.xl),
+                                    Center(
+                                      child: Text(
+                                        'v$_appVersion (build $_appBuild)',
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .bodySmall
+                                            ?.copyWith(
+                                              color: Theme.of(context)
+                                                  .colorScheme
+                                                  .onSurfaceVariant
+                                                  .withValues(alpha: 0.45),
+                                            ),
+                                      ),
+                                    ),
+                                  ],
                                 ],
-                              ],
+                              ),
                             ),
                           ),
                         ),
@@ -529,45 +472,509 @@ class _LoginPageState extends State<LoginPage>
                     ),
                   ),
                 ),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRedesignedLogin(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return Scaffold(
+      backgroundColor: Colors.transparent,
+      extendBody: true,
+      body: Stack(
+        children: [
+          Positioned.fill(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    scheme.primary.withValues(alpha: dark ? 0.26 : 0.12),
+                    Theme.of(context).scaffoldBackgroundColor,
+                    scheme.tertiary.withValues(alpha: dark ? 0.18 : 0.08),
+                  ],
+                ),
               ),
             ),
+          ),
+          Positioned.fill(
+            child: LiquidGlassAmbientBackdrop(
+              seedColor: Theme.of(context).colorScheme.primary,
+            ),
+          ),
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final split = constraints.maxWidth >= _splitLoginBreakpoint;
+              final compact = constraints.maxWidth < _mobileBreakpoint;
+              final mobileCarouselHeight = MediaQuery.textScalerOf(context)
+                  .scale(164)
+                  .clamp(164.0, 240.0)
+                  .toDouble();
+              final form = LiquidGlassSurface(
+                padding: EdgeInsets.all(compact ? 22 : 30),
+                borderRadius: BorderRadius.circular(GzusRadii.xl),
+                material: LiquidGlassMaterial.regular,
+                semanticsLabel: '登录表单',
+                child: _buildLoginForm(context, compact),
+              );
+              return SafeArea(
+                child: SingleChildScrollView(
+                  keyboardDismissBehavior:
+                      ScrollViewKeyboardDismissBehavior.onDrag,
+                  padding: EdgeInsets.fromLTRB(
+                    compact ? 14 : 24,
+                    compact ? 18 : 40,
+                    compact ? 14 : 24,
+                    24 + MediaQuery.viewInsetsOf(context).bottom,
+                  ),
+                  child: FadeTransition(
+                    opacity: _appearAnim,
+                    child: SlideTransition(
+                      position: Tween<Offset>(
+                        begin: const Offset(0, 0.06),
+                        end: Offset.zero,
+                      ).animate(_appearAnim),
+                      child: Center(
+                        child: ConstrainedBox(
+                          constraints: BoxConstraints(
+                            maxWidth: split ? 1160 : 480,
+                          ),
+                          child: split
+                              ? SizedBox(
+                                  key: const ValueKey('login-split-layout'),
+                                  height: 620,
+                                  child: Row(
+                                    children: [
+                                      Expanded(
+                                        flex: 13,
+                                        child: _buildCarousel(
+                                          context,
+                                          compact: false,
+                                        ),
+                                      ),
+                                      const SizedBox(width: GzusSpacing.l),
+                                      SizedBox(width: 410, child: form),
+                                    ],
+                                  ),
+                                )
+                              : Column(
+                                  key: const ValueKey('login-stacked-layout'),
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: [
+                                    SizedBox(
+                                      height:
+                                          compact ? mobileCarouselHeight : 196,
+                                      child: _buildCarousel(
+                                        context,
+                                        compact: true,
+                                      ),
+                                    ),
+                                    const SizedBox(height: GzusSpacing.l),
+                                    form,
+                                  ],
+                                ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCarousel(BuildContext context, {required bool compact}) {
+    return ClipRRect(
+      key: const ValueKey('login-carousel'),
+      borderRadius: BorderRadius.circular(GzusRadii.xl),
+      child: FutureBuilder<List<LoginCarouselSlide>>(
+        future: _carouselSlidesFuture,
+        builder: (context, snapshot) {
+          final slides = snapshot.data ?? const <LoginCarouselSlide>[];
+          _configureCarousel(slides.length);
+          if (slides.isEmpty) {
+            return _buildCarouselFallback(context, compact);
+          }
+          return Stack(
+            fit: StackFit.expand,
+            children: [
+              PageView.builder(
+                controller: _carouselController,
+                itemCount: slides.length,
+                onPageChanged: (index) =>
+                    setState(() => _carouselIndex = index),
+                itemBuilder: (context, index) => _buildSlide(
+                  context,
+                  slide: slides[index],
+                  compact: compact,
+                ),
+              ),
+              Positioned(
+                right: compact ? 14 : 22,
+                bottom: compact ? 12 : 20,
+                child: Row(
+                  children: [
+                    for (var index = 0; index < slides.length; index++)
+                      AnimatedContainer(
+                        duration: const Duration(milliseconds: 180),
+                        width: index == _carouselIndex ? 18 : 6,
+                        height: 6,
+                        margin: const EdgeInsets.only(left: 6),
+                        decoration: BoxDecoration(
+                          color: index == _carouselIndex
+                              ? Colors.white
+                              : Colors.white.withValues(alpha: 0.48),
+                          borderRadius: BorderRadius.circular(99),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ],
           );
         },
       ),
     );
   }
 
-  Future<void> _startSsoLogin() async {
-    if (loading) return;
-    if (!agreedToTerms) {
-      setState(() => error = '请先阅读并同意《用户服务协议》和《隐私政策》');
-      return;
-    }
-    setState(() {
-      loading = true;
-      error = null;
+  Widget _buildSlide(
+    BuildContext context, {
+    required LoginCarouselSlide slide,
+    required bool compact,
+  }) {
+    final primary = Theme.of(context).colorScheme.primary;
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        Image.network(
+          widget.api.resolveMediaUrl(slide.imageUrl),
+          fit: BoxFit.cover,
+          errorBuilder: (_, __, ___) => ColoredBox(color: primary),
+        ),
+        DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                Colors.black.withValues(alpha: 0.05),
+                Colors.black.withValues(alpha: 0.72),
+              ],
+            ),
+          ),
+        ),
+        Positioned(
+          left: compact ? 18 : 36,
+          right: compact ? 18 : 36,
+          bottom: compact ? 28 : 46,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                slide.title,
+                maxLines: compact ? 1 : 2,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                      color: Colors.white,
+                      fontSize: compact ? 19 : 29,
+                    ),
+              ),
+              if (slide.description case final description?) ...[
+                const SizedBox(height: GzusSpacing.xs),
+                Text(
+                  description,
+                  maxLines: compact ? 2 : 3,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: Colors.white.withValues(alpha: 0.88),
+                      ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCarouselFallback(BuildContext context, bool compact) {
+    final scheme = Theme.of(context).colorScheme;
+    return DecoratedBox(
+      key: const ValueKey('login-carousel-fallback'),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [scheme.primary, scheme.primaryContainer],
+        ),
+      ),
+      child: Padding(
+        padding: EdgeInsets.all(compact ? 18 : 36),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisAlignment: MainAxisAlignment.end,
+          children: [
+            Row(
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: Image.asset('assets/icon.png', width: 38, height: 38),
+                ),
+                const SizedBox(width: GzusSpacing.s),
+                Text(
+                  '软帮手',
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        color: Colors.white,
+                      ),
+                ),
+              ],
+            ),
+            const SizedBox(height: GzusSpacing.m),
+            Text(
+              '让校园信息，更有条理。',
+              style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                    color: Colors.white,
+                    fontSize: compact ? 20 : 30,
+                  ),
+            ),
+            const SizedBox(height: GzusSpacing.xs),
+            Text(
+              hideEcardOnCurrentPlatform
+                  ? '课表、考勤、成绩与通知，一处查看。'
+                  : '课表、考勤、成绩、通知与生活缴费，一处查看。',
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: Colors.white.withValues(alpha: 0.86),
+                  ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLoginForm(BuildContext context, bool compact) {
+    final scheme = Theme.of(context).colorScheme;
+    return AutofillGroup(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: Image.asset('assets/icon.png', width: 42, height: 42),
+              ),
+              const SizedBox(width: GzusSpacing.s),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('软帮手', style: Theme.of(context).textTheme.titleMedium),
+                    Text('广州软件学院教务助手',
+                        style: Theme.of(context).textTheme.bodySmall),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: GzusSpacing.l),
+          Text('登录账户', style: Theme.of(context).textTheme.headlineSmall),
+          const SizedBox(height: GzusSpacing.xs),
+          Text(
+            '使用学校统一身份认证账号与密码登录。',
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  color: scheme.onSurfaceVariant,
+                ),
+          ),
+          const SizedBox(height: GzusSpacing.l),
+          TextField(
+            controller: accountController,
+            decoration: const InputDecoration(
+              labelText: '学号',
+              hintText: '请输入学号',
+              prefixIcon: Icon(Icons.person_outline),
+            ),
+            autofillHints: const [AutofillHints.username, AutofillHints.email],
+            textInputAction: TextInputAction.next,
+            onSubmitted: (_) => passwordFocusNode.requestFocus(),
+          ),
+          const SizedBox(height: GzusSpacing.m),
+          TextField(
+            controller: passwordController,
+            focusNode: passwordFocusNode,
+            decoration: InputDecoration(
+              labelText: '教务系统密码',
+              hintText: '请输入密码',
+              prefixIcon: const Icon(Icons.lock_outline),
+              suffixIcon: IconButton(
+                key: const ValueKey('login-password-visibility'),
+                tooltip: passwordVisible ? '隐藏密码' : '显示密码',
+                onPressed: () =>
+                    setState(() => passwordVisible = !passwordVisible),
+                icon: Icon(passwordVisible
+                    ? Icons.visibility_off_outlined
+                    : Icons.visibility_outlined),
+              ),
+            ),
+            obscureText: !passwordVisible,
+            autofillHints: const [AutofillHints.password],
+            textInputAction: TextInputAction.done,
+            onSubmitted: _submitFromKeyboard,
+          ),
+          InkWell(
+            borderRadius: BorderRadius.circular(GzusRadii.sm),
+            onTap: loading
+                ? null
+                : () => setState(() => rememberPassword = !rememberPassword),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Row(
+                children: [
+                  Checkbox(
+                    value: rememberPassword,
+                    onChanged: loading
+                        ? null
+                        : (value) =>
+                            setState(() => rememberPassword = value ?? true),
+                  ),
+                  const Expanded(child: Text('记住学号并自动登录')),
+                ],
+              ),
+            ),
+          ),
+          InkWell(
+            borderRadius: BorderRadius.circular(GzusRadii.sm),
+            onTap: loading
+                ? null
+                : () => setState(() => agreedToTerms = !agreedToTerms),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Row(
+                children: [
+                  Checkbox(
+                    value: agreedToTerms,
+                    onChanged: loading
+                        ? null
+                        : (value) =>
+                            setState(() => agreedToTerms = value ?? false),
+                  ),
+                  Expanded(child: _buildAgreementText(context)),
+                ],
+              ),
+            ),
+          ),
+          SizedBox(height: compact ? 16 : 18),
+          SizedBox(
+            height: compact ? 56 : 60,
+            child: FilledButton(
+              onPressed: loading || !agreedToTerms ? null : _login,
+              child: IconLabel(
+                icon: Icons.login,
+                label: loading ? '登录中...' : '账号密码登录',
+                centered: true,
+              ),
+            ),
+          ),
+          if (error != null) ...[
+            const SizedBox(height: GzusSpacing.m),
+            Semantics(
+              liveRegion: true,
+              child: Container(
+                padding: const EdgeInsets.all(GzusSpacing.m),
+                decoration: BoxDecoration(
+                  color: scheme.errorContainer,
+                  borderRadius: BorderRadius.circular(GzusRadii.md),
+                ),
+                child: Text(
+                  error!,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: scheme.onErrorContainer),
+                ),
+              ),
+            ),
+          ],
+          if (_appVersion.isNotEmpty) ...[
+            const SizedBox(height: GzusSpacing.l),
+            Center(
+              child: Text(
+                'v$_appVersion (build $_appBuild)',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: scheme.onSurfaceVariant.withValues(alpha: 0.45),
+                    ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAgreementText(BuildContext context) {
+    final style = Theme.of(context).textTheme.bodySmall?.copyWith(
+          color: Theme.of(context).colorScheme.onSurface,
+        );
+    final linkStyle = TextStyle(
+      color: Theme.of(context).colorScheme.primary,
+      decoration: TextDecoration.underline,
+    );
+    return RichText(
+      text: TextSpan(
+        style: style,
+        children: [
+          const TextSpan(text: '我已阅读并同意'),
+          TextSpan(
+            text: '《用户服务协议》',
+            style: linkStyle,
+            recognizer: TapGestureRecognizer()
+              ..onTap = () => _showAgreement(
+                    context,
+                    title: '用户服务协议',
+                    type: 'terms',
+                  ),
+          ),
+          const TextSpan(text: ' 和 '),
+          TextSpan(
+            text: '《隐私政策》',
+            style: linkStyle,
+            recognizer: TapGestureRecognizer()
+              ..onTap = () => _showAgreement(
+                    context,
+                    title: '隐私政策',
+                    type: 'privacy',
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _configureCarousel(int slideCount) {
+    if (_carouselSlideCount == slideCount) return;
+    _carouselSlideCount = slideCount;
+    _carouselIndex = 0;
+    _carouselTimer?.cancel();
+    if (slideCount < 2) return;
+    _carouselTimer = Timer.periodic(const Duration(seconds: 6), (_) {
+      if (!mounted || !_carouselController.hasClients) return;
+      final nextIndex = (_carouselIndex + 1) % slideCount;
+      _carouselController.animateToPage(
+        nextIndex,
+        duration: const Duration(milliseconds: 420),
+        curve: Curves.easeOutCubic,
+      );
     });
-    try {
-      final current = currentBrowserUrl();
-      final uri = Uri.parse(current);
-      final cleanQuery = Map<String, String>.from(uri.queryParameters)
-        ..remove('ssoCode')
-        ..remove('ssoError');
-      final returnUrl = uri
-          .replace(queryParameters: cleanQuery.isEmpty ? null : cleanQuery)
-          .toString();
-      final url = widget.api.lySsoStartUrl(returnUrl: returnUrl);
-      if (kIsWeb) {
-        redirectTo(url);
-      } else {
-        final uri = Uri.parse(url);
-        await launchUrl(uri, mode: LaunchMode.inAppBrowserView);
-      }
-    } catch (exc) {
-      setState(() => error = '无法启动统一身份认证：$exc');
-    } finally {
-      if (mounted) setState(() => loading = false);
-    }
   }
 
   Future<void> _login() async {
@@ -613,7 +1020,6 @@ class _LoginPageState extends State<LoginPage>
         sessionId: result.sessionId,
         studentName: result.studentName,
         studentId: result.studentId,
-        loginMethod: 'password',
         credentialToken: result.credentialToken,
         ehallCookies: result.ehallCookies,
         ehallAuthToken: result.ehallAuthToken,
@@ -632,55 +1038,56 @@ class _LoginPageState extends State<LoginPage>
     required String title,
     required String type,
   }) {
-    showModalBottomSheet(
+    showLiquidGlassModalBottomSheet<void>(
       context: context,
-      isScrollControlled: true,
-      useSafeArea: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
       builder: (sheetContext) => DraggableScrollableSheet(
         initialChildSize: 0.85,
         minChildSize: 0.4,
         maxChildSize: 0.95,
         expand: false,
-        builder: (_, scrollController) => Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: GzusSpacing.m),
-              child: Container(
-                width: 36,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: Theme.of(context)
-                      .colorScheme
-                      .onSurfaceVariant
-                      .withValues(alpha: 0.3),
-                  borderRadius: BorderRadius.circular(2),
+        builder: (_, scrollController) => LiquidGlassSurface(
+          padding: EdgeInsets.zero,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+          material: LiquidGlassMaterial.regular,
+          semanticsLabel: title,
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: GzusSpacing.m),
+                child: Container(
+                  width: 36,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Theme.of(context)
+                        .colorScheme
+                        .onSurfaceVariant
+                        .withValues(alpha: 0.3),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
                 ),
               ),
-            ),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: GzusSpacing.xl),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(title, style: Theme.of(context).textTheme.titleLarge),
-                  IconButton(
-                    icon: const Icon(Icons.close),
-                    onPressed: () => Navigator.of(sheetContext).pop(),
-                  ),
-                ],
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: GzusSpacing.xl),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(title, style: Theme.of(context).textTheme.titleLarge),
+                    IconButton(
+                      icon: const Icon(Icons.close),
+                      onPressed: () => Navigator.of(sheetContext).pop(),
+                    ),
+                  ],
+                ),
               ),
-            ),
-            const Divider(),
-            Expanded(
-              child: _AgreementContent(
-                type: type,
-                scrollController: scrollController,
+              const Divider(),
+              Expanded(
+                child: _AgreementContent(
+                  type: type,
+                  scrollController: scrollController,
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -744,7 +1151,7 @@ class _AgreementContent extends StatelessWidget {
 所有通信使用HTTPS/TLS加密。日志不输出密码、Cookie等敏感信息。每位用户只能访问自己的教务数据。
 
 五、第三方SDK
-本应用集成了Bugly（腾讯崩溃监控）和Shiply（腾讯热更新与配置下发），仅收集设备型号、系统版本、崩溃日志等设备层面信息。
+本应用集成了Shiply（腾讯热更新与配置下发），仅收集设备型号、系统版本等设备层面信息。
 
 六、您的权利
 您有权查看、更正、删除数据，可随时退出登录或卸载应用。退出登录后所有本地存储数据将被清除。
@@ -774,3 +1181,4 @@ class _AgreementContent extends StatelessWidget {
 // 登录页自身的移动端宽度阈值（与 shell 的 _mobileBreakpoint 同值，但分属不同
 // library，避免跨文件私有符号耦合；后续可统一迁到 responsive/breakpoints.dart）。
 const _mobileBreakpoint = 720.0;
+const _splitLoginBreakpoint = 960.0;

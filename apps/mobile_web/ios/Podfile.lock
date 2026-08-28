@@ -1,23 +1,22 @@
 PODS:
-  - Bugly (2.6.1)
   - Flutter (1.0.0)
+  - flutter_web_auth_2 (3.0.0):
+    - Flutter
 
 DEPENDENCIES:
-  - Bugly
   - Flutter (from `Flutter`)
-
-SPEC REPOS:
-  trunk:
-    - Bugly
+  - flutter_web_auth_2 (from `.symlinks/plugins/flutter_web_auth_2/ios`)
 
 EXTERNAL SOURCES:
   Flutter:
     :path: Flutter
+  flutter_web_auth_2:
+    :path: ".symlinks/plugins/flutter_web_auth_2/ios"
 
 SPEC CHECKSUMS:
-  Bugly: 217ac2ce5f0f2626d43dbaa4f70764c953a26a31
   Flutter: cabc95a1d2626b1b06e7179b784ebcf0c0cde467
+  flutter_web_auth_2: 5c8d9dcd7848b5a9efb086d24e7a9adcae979c80
 
-PODFILE CHECKSUM: c68699f3895cc9dc4738a38acdb80f99520fb480
+PODFILE CHECKSUM: c77cec6f46a21703c3893195deed2d4620fcf099
 
 COCOAPODS: 1.17.0

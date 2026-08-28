@@ -102,6 +102,7 @@ def normalize_student_info(value: Any) -> dict:
 
 def normalize_schedule_course(value: Any) -> dict:
     data = as_dict(value)
+    original_raw = data.get("raw") if isinstance(data.get("raw"), dict) else data
     start_section, end_section = parse_section_range(
         pick(data, "startSection", "start_section", "jc_start", "ksjc", "jcs", "jc")
     )
@@ -117,7 +118,7 @@ def normalize_schedule_course(value: Any) -> dict:
         "endSection": explicit_end_section or end_section,
         "weeks": pick(data, "weeks", "zcd", "week"),
         "kcbmc": pick(data, "kcbmc"),
-        "raw": data,
+        "raw": original_raw,
     }
 
 

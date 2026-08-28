@@ -498,18 +498,16 @@ class CasAutoLogin:
 
         jwxt_host = urlparse(self._service_url).hostname or "jwxt.seig.edu.cn"
 
-        # Fetch JWXT cookies and ehall session in parallel
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-
         t_finalize = time.time()
         jwxt_cookies = ""
         ehall_cookies = None
         ehall_token = None
 
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
         with ThreadPoolExecutor(max_workers=2) as executor:
             futures = {}
 
-            # Task 1: Follow service ticket for JWXT cookies
             def _fetch_jwxt():
                 self._follow_service_ticket(client, redirect_url)
                 cookies = self._extract_cookies_for_hosts(client, [jwxt_host])
@@ -521,7 +519,6 @@ class CasAutoLogin:
                         cookies = self._extract_cookies_for_hosts(client, [jwxt_host])
                 return cookies
 
-            # Task 2: Get ehall session
             def _fetch_ehall():
                 return self._get_ehall_session(client, tgt)
 

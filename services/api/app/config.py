@@ -51,6 +51,11 @@ class Settings(BaseSettings):
     web_push_vapid_public_key: str = ""
     web_push_vapid_private_key: str = ""
     web_push_vapid_subject: str = "mailto:example@example.com"
+    # APNs Token-based 鉴权。私钥使用单行 Base64，避免 PEM 多行环境变量在 systemd 中失真。
+    apns_key_id: str = ""
+    apns_team_id: str = ""
+    apns_key_p8_base64: str = ""
+    apns_bundle_id: str = "cn.gzus.pro"
     app_latest_version: str = "0.1.1"
     app_latest_build: str = "4"
     app_min_supported_version: str = "0.0.1"

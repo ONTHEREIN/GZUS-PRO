@@ -29,6 +29,7 @@ def _production_env(monkeypatch):
     monkeypatch.setenv("FRONTEND_BASE_URL", "https://app.example.test")
     monkeypatch.delenv("RSA_PRIVATE_KEY", raising=False)
     monkeypatch.delenv("RSA_PRIVATE_KEY_PEM", raising=False)
+    monkeypatch.setenv("RSA_PRIVATE_KEY_PEM", "")
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()

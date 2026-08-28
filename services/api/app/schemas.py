@@ -1,10 +1,14 @@
 from typing import Any, Literal
 from datetime import date
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
 
-class LoginRequest(BaseModel):
+LEAVE_ATTACHMENT_MAX_COUNT = 5
+LEAVE_ATTACHMENT_MAX_BYTES = 7 * 1024 * 1024
+
+
+class CredentialLoginRequest(BaseModel):
     account: str = Field(
         min_length=1,
         validation_alias=AliasChoices("account", "studentId", "student_id", "username"),
@@ -27,13 +31,21 @@ class LoginRequest(BaseModel):
         raise ValueError("必须提供 password 或 encryptedPassword")
 
 
-class CaptchaRequest(BaseModel):
-    captcha_token: str = Field(alias="captchaToken", min_length=1)
-    code: str = Field(min_length=1)
-
-
 class SsoCompleteRequest(BaseModel):
     sso_code: str = Field(alias="ssoCode", min_length=1)
+
+
+class NativeSsoStartRequest(BaseModel):
+    verifier: str = Field(min_length=32, max_length=256)
+
+
+class NativeSsoStartResponse(BaseModel):
+    authorization_url: str = Field(alias="authorizationUrl")
+
+
+class NativeSsoCompleteRequest(BaseModel):
+    code: str = Field(min_length=32, max_length=256)
+    verifier: str = Field(min_length=32, max_length=256)
 
 
 class EcardBindingRequest(BaseModel):
@@ -107,21 +119,40 @@ class EcardConsumptionItem(BaseModel):
     title: str
     amount: str = ""
     time: str = ""
+    date: str = ""
+    usage: float | None = None
+    unit: str = "度"
 
 
 class EcardConsumptionResponse(BaseModel):
     status: Literal["ok", "limited"]
     message: str | None = None
     items: list[EcardConsumptionItem] = []
+    cached_at: str | None = Field(default=None, alias="cachedAt")
+
+
+class EcardConsumptionMonthOverview(BaseModel):
+    month: str
+    recorded_days: int = Field(alias="recordedDays")
+    total_usage: float = Field(alias="totalUsage")
+    average_daily_usage: float = Field(alias="averageDailyUsage")
+    peak_date: str = Field(alias="peakDate")
+    peak_usage: float = Field(alias="peakUsage")
+    unit: str = "度"
+    cached_at: str = Field(alias="cachedAt")
+
+
+class EcardConsumptionOverviewResponse(BaseModel):
+    status: Literal["ok", "limited"]
+    message: str | None = None
+    months: list[EcardConsumptionMonthOverview] = []
 
 
 class AuthResponse(BaseModel):
-    status: Literal["ok", "captcha_required"]
+    status: Literal["ok"]
     session_id: str | None = Field(default=None, alias="sessionId")
     student_name: str | None = Field(default=None, alias="studentName")
-    student_id: str | None = Field(default=None, alias="studentId")
-    captcha_token: str | None = Field(default=None, alias="captchaToken")
-    captcha_image: str | None = Field(default=None, alias="captchaImage")
+    student_id: str = Field(alias="studentId")
     credential_token: str | None = Field(default=None, alias="credentialToken")
     jwxt_cookies: str | None = Field(default=None, alias="jwxtCookies")
     ehall_cookies: str | None = Field(default=None, alias="ehallCookies")
@@ -306,11 +337,46 @@ class TeacherHandlerSelection(BaseModel):
     course_name: str | None = Field(default=None, alias="courseName")
 
 
-class LeaveFillRequest(LeavePreviewRequest):
-    reason: str = Field(min_length=1)
+class LeaveAttachmentItem(BaseModel):
     attachment_name: str = Field(alias="attachmentName", min_length=1)
     attachment_content_base64: str = Field(alias="attachmentContentBase64", min_length=1)
+
+
+class LeaveFillRequest(LeavePreviewRequest):
+    reason: str = Field(min_length=1)
+    attachments: list[LeaveAttachmentItem] = Field(default_factory=list, max_length=LEAVE_ATTACHMENT_MAX_COUNT)
+    attachment_name: str | None = Field(default=None, alias="attachmentName", min_length=1)
+    attachment_content_base64: str | None = Field(
+        default=None, alias="attachmentContentBase64", min_length=1
+    )
     teacher_handlers: list[TeacherHandlerSelection] = Field(default=[], alias="teacherHandlers")
+
+    @model_validator(mode="before")
+    @classmethod
+    def convert_legacy_attachment(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        if value.get("attachments"):
+            return value
+        attachment_name = value.get("attachmentName")
+        attachment_content = value.get("attachmentContentBase64")
+        if attachment_name is None or attachment_content is None:
+            return value
+        return {
+            **value,
+            "attachments": [
+                {
+                    "attachmentName": attachment_name,
+                    "attachmentContentBase64": attachment_content,
+                }
+            ],
+        }
+
+    @model_validator(mode="after")
+    def require_attachments(self) -> "LeaveFillRequest":
+        if not self.attachments:
+            raise ValueError("请至少上传一张图片")
+        return self
 
 
 class LeaveAttachmentUploadRequest(BaseModel):
@@ -370,10 +436,12 @@ class LeaveFillResponse(BaseModel):
     fill_script: str | None = Field(default=None, alias="fillScript")
     handler_script: str | None = Field(default=None, alias="handlerScript")
     attachment_uploaded: bool = Field(default=False, alias="attachmentUploaded")
+    attachment_uploaded_count: int = Field(default=0, alias="attachmentUploadedCount")
+    attachment_total: int = Field(default=0, alias="attachmentTotal")
 
 
-class AutoLoginRequest(LoginRequest):
-    """自动登录请求与账密登录字段一致，复用 LoginRequest 的字段与解密逻辑。"""
+class AutoLoginRequest(CredentialLoginRequest):
+    """统一认证账号密码登录请求。"""
 
 
 class WebPushKeys(BaseModel):
@@ -390,6 +458,13 @@ class WebPushSubscriptionRequest(BaseModel):
 class WebPushConfigResponse(BaseModel):
     enabled: bool
     publicKey: str | None = None
+
+
+class IosPushTokenRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    device_token: str = Field(alias="deviceToken", min_length=32, max_length=512, pattern=r"^[A-Fa-f0-9]+$")
+    environment: Literal["sandbox", "production"]
 
 
 class ScheduleSettingsUpdate(BaseModel):

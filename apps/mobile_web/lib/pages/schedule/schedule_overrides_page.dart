@@ -4,6 +4,7 @@ import '../../api_client.dart';
 import '../../models/schedule_override.dart';
 import '../../widgets/badges.dart';
 import '../../widgets/empty_state.dart';
+import '../../widgets/floating_page_scaffold.dart';
 
 /// 课表「本地调课」管理页：列出本学期全部本地调课条目，可新增/编辑/删除。
 /// 仅存本机（SharedPreferences），保存后通过 [onChanged] 通知课表页刷新。
@@ -19,6 +20,7 @@ class ScheduleOverridesPage extends StatefulWidget {
 
   final int year;
   final int term;
+
   /// 叠加后的课表（含本地条目），用于匹配下拉与条目展示。
   final List<ScheduleCourse> items;
   final int currentWeek;
@@ -62,8 +64,7 @@ class _ScheduleOverridesPageState extends State<ScheduleOverridesPage> {
   }
 
   Future<void> _deleteOverride(ScheduleOverride override) async {
-    final list =
-        _overrides.where((o) => o.id != override.id).toList();
+    final list = _overrides.where((o) => o.id != override.id).toList();
     await ScheduleOverrideStore.save(widget.year, widget.term, list);
     if (!mounted) return;
     setState(() => _overrides = list);
@@ -83,11 +84,11 @@ class _ScheduleOverridesPageState extends State<ScheduleOverridesPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('本地调课'),
-        centerTitle: false,
-      ),
+    return FloatingPageScaffold(
+      title: '本地调课',
+      icon: Icons.edit_calendar,
+      actions: const [],
+      bottom: null,
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _openEditor(),
         icon: const Icon(Icons.add),
@@ -229,8 +230,7 @@ String _matchKeyLabel(String? matchKey) {
   return matchKey;
 }
 
-String _overrideSubtitle(
-    ScheduleOverride override, ScheduleCourse? match) {
+String _overrideSubtitle(ScheduleOverride override, ScheduleCourse? match) {
   final weeks = override.weeks?.trim();
   if (override.isHide) {
     return '停课周次：${(weeks == null || weeks.isEmpty) ? '全部周' : weeks}';
@@ -238,8 +238,7 @@ String _overrideSubtitle(
   final course = override.course;
   if (course == null) return '';
   final newTime = _courseTimeText(course);
-  final matchTime =
-      match != null ? _courseTimeText(match) : null;
+  final matchTime = match != null ? _courseTimeText(match) : null;
   if (override.isReplace && matchTime != null && matchTime != newTime) {
     return '原 $matchTime → $newTime';
   }
@@ -422,9 +421,8 @@ class _OverrideEditorSheetState extends State<_OverrideEditorSheet> {
         name: _nameCtrl.text.trim().isEmpty
             ? (_matchCourse?.name ?? '未命名')
             : _nameCtrl.text.trim(),
-        teacher: _teacherCtrl.text.trim().isEmpty
-            ? null
-            : _teacherCtrl.text.trim(),
+        teacher:
+            _teacherCtrl.text.trim().isEmpty ? null : _teacherCtrl.text.trim(),
         classroom: _classroomCtrl.text.trim().isEmpty
             ? null
             : _classroomCtrl.text.trim(),
@@ -457,8 +455,8 @@ class _OverrideEditorSheetState extends State<_OverrideEditorSheet> {
     return SafeArea(
       child: ConstrainedBox(
         constraints: BoxConstraints(
-          maxHeight: (MediaQuery.sizeOf(context).height * 0.9)
-              .clamp(420.0, 860.0),
+          maxHeight:
+              (MediaQuery.sizeOf(context).height * 0.9).clamp(420.0, 860.0),
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -469,8 +467,7 @@ class _OverrideEditorSheetState extends State<_OverrideEditorSheet> {
                 width: 36,
                 height: 4,
                 decoration: BoxDecoration(
-                  color:
-                      colorScheme.onSurfaceVariant.withValues(alpha: 0.25),
+                  color: colorScheme.onSurfaceVariant.withValues(alpha: 0.25),
                   borderRadius: BorderRadius.circular(2),
                 ),
               ),
@@ -631,7 +628,8 @@ class _OverrideEditorSheetState extends State<_OverrideEditorSheet> {
                               ],
                               onChanged: (value) => setState(() {
                                 _startSection = value;
-                                if (_endSection == null || _endSection! < (value ?? 0)) {
+                                if (_endSection == null ||
+                                    _endSection! < (value ?? 0)) {
                                   _endSection = value;
                                 }
                               }),
@@ -688,8 +686,7 @@ class _OverrideEditorSheetState extends State<_OverrideEditorSheet> {
                         labelText: _kind == _OverrideKind.hide
                             ? '停课周次（留空=全部周）'
                             : '周次（可选）',
-                        hintText:
-                            '如 8、1-16、1-16周(单)；留空表示全部周',
+                        hintText: '如 8、1-16、1-16周(单)；留空表示全部周',
                         prefixIcon: const Icon(Icons.date_range),
                       ),
                     ),
@@ -774,8 +771,9 @@ class _MoveToDaySheetState extends State<_MoveToDaySheet> {
     final course = widget.course;
     final start = course.startSection;
     final end = course.endSection ?? start;
-    final sectionText =
-        start == null ? '节次待定' : '第$start-${(end != null && end >= start) ? end : start}节';
+    final sectionText = start == null
+        ? '节次待定'
+        : '第$start-${(end != null && end >= start) ? end : start}节';
     final metaParts = [
       if (sourceWeekday != null && sourceWeekday >= 1 && sourceWeekday <= 7)
         '周${'一二三四五六日'[sourceWeekday - 1]}',
@@ -797,8 +795,7 @@ class _MoveToDaySheetState extends State<_MoveToDaySheet> {
                   width: 36,
                   height: 4,
                   decoration: BoxDecoration(
-                    color:
-                        colorScheme.onSurfaceVariant.withValues(alpha: 0.25),
+                    color: colorScheme.onSurfaceVariant.withValues(alpha: 0.25),
                     borderRadius: BorderRadius.circular(2),
                   ),
                 ),

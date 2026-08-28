@@ -392,7 +392,7 @@ def test_ehall_client_detects_login_page(monkeypatch):
         client.get_notice_items(page_size=1)
 
 
-def test_fill_leave_application_uploads_attachment(monkeypatch):
+def test_fill_leave_application_uploads_all_attachments(monkeypatch):
     requests = []
 
     class FakeResponse:
@@ -439,16 +439,42 @@ def test_fill_leave_application_uploads_attachment(monkeypatch):
         leave_days=1,
         reason="事假",
         courses=[{"teacher": "张老师"}],
-        attachment_name="note.txt",
-        attachment_content=b"ok",
+        attachments=[("note-a.txt", b"first"), ("note-b.txt", b"second")],
     )
 
-    upload = requests[1]
+    first_upload = requests[1]
+    second_upload = requests[2]
     assert result["status"] == "filled"
     assert result["attachmentUploaded"] is True
-    assert upload[1] == "bpm/rule"
-    assert upload[2]["wf_num"] == "R_S004_B002"
-    assert upload[3]["DocUnid"] == "doc-1"
-    assert upload[3]["Processid"] == "proc-1"
-    assert upload[3]["FdName"] == "file1"
-    assert upload[4]["file"][0] == "note.txt"
+    assert result["attachmentUploadedCount"] == 2
+    assert result["attachmentTotal"] == 2
+    assert first_upload[1] == "bpm/rule"
+    assert first_upload[2]["wf_num"] == "R_S004_B002"
+    assert first_upload[3]["DocUnid"] == "doc-1"
+    assert first_upload[3]["Processid"] == "proc-1"
+    assert first_upload[3]["FdName"] == "file1"
+    assert first_upload[4]["file"][0] == "note-a.txt"
+    assert second_upload[4]["file"][0] == "note-b.txt"
+
+
+def test_leave_attachment_upload_continues_after_partial_failure(monkeypatch):
+    client = EhallClient("https://ehall.gzus.edu.cn", "JSESSIONID=abc")
+    uploaded_names = []
+
+    def upload_attachment(**kwargs):
+        attachment_name = kwargs["attachment_name"]
+        uploaded_names.append(attachment_name)
+        return attachment_name != "failed.jpg"
+
+    monkeypatch.setattr(client, "upload_leave_attachment", upload_attachment)
+    uploaded_count = client._upload_leave_attachments_from_form(
+        '<input id="WF_DocUnid" value="doc-1">',
+        attachments=[
+            ("first.jpg", b"first"),
+            ("failed.jpg", b"failed"),
+            ("last.jpg", b"last"),
+        ],
+    )
+
+    assert uploaded_count == 2
+    assert uploaded_names == ["first.jpg", "failed.jpg", "last.jpg"]

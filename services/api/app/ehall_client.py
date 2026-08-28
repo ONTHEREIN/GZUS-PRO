@@ -311,8 +311,7 @@ class EhallClient:
         leave_days: int,
         reason: str,
         courses: list[dict],
-        attachment_name: str,
-        attachment_content: bytes,
+        attachments: list[tuple[str, bytes]],
     ) -> dict:
         """Best-effort server-side fill hook for the official Linkey BPM form.
 
@@ -348,42 +347,51 @@ class EhallClient:
                 "formUrl": form_url,
                 "unmatchedTeachers": _teacher_names(courses),
             }
-        attachment_uploaded = self._upload_leave_attachment_from_form(
+        uploaded_count = self._upload_leave_attachments_from_form(
             response.text,
-            attachment_name=attachment_name,
-            attachment_content=attachment_content,
+            attachments=attachments,
         )
+        attachment_total = len(attachments)
+        attachment_uploaded = uploaded_count == attachment_total
         return {
             "status": "filled" if attachment_uploaded else "needs_manual",
-            "message": "已上传附件；请在办事大厅表单页执行填表脚本并检查提交"
+            "message": f"已上传 {uploaded_count} 张附件；请在办事大厅表单页执行填表脚本并检查提交"
             if attachment_uploaded
-            else "已生成请假数据；请在办事大厅表单页执行填表脚本，再手动上传附件",
+            else (
+                f"已上传 {uploaded_count}/{attachment_total} 张附件；"
+                "请在办事大厅表单页执行填表脚本，再手动上传剩余附件"
+            ),
             "formUrl": str(response.url),
             "unmatchedTeachers": _teacher_names(courses),
             "attachmentUploaded": attachment_uploaded,
+            "attachmentUploadedCount": uploaded_count,
+            "attachmentTotal": attachment_total,
         }
 
-    def _upload_leave_attachment_from_form(
+    def _upload_leave_attachments_from_form(
         self,
         form_html: str,
         *,
-        attachment_name: str,
-        attachment_content: bytes,
-    ) -> bool:
+        attachments: list[tuple[str, bytes]],
+    ) -> int:
         doc_unid = _input_value(form_html, "WF_DocUnid")
-        if not doc_unid or not attachment_content:
-            return False
+        if not doc_unid:
+            return 0
         process_id = _input_value(form_html, "WF_Processid") or LEAVE_WORKFLOW_PROCESS_ID
         node_name = _input_value(form_html, "WF_CurrentNodeName") or "申请人"
         local_store = "1" if _input_value(form_html, "localStore") else "0"
-        return self.upload_leave_attachment(
-            doc_unid=doc_unid,
-            process_id=process_id,
-            node_name=node_name,
-            local_store=local_store,
-            attachment_name=attachment_name,
-            attachment_content=attachment_content,
-        )
+        uploaded_count = 0
+        for attachment_name, attachment_content in attachments:
+            if self.upload_leave_attachment(
+                doc_unid=doc_unid,
+                process_id=process_id,
+                node_name=node_name,
+                local_store=local_store,
+                attachment_name=attachment_name,
+                attachment_content=attachment_content,
+            ):
+                uploaded_count += 1
+        return uploaded_count
 
     def upload_leave_attachment(
         self,

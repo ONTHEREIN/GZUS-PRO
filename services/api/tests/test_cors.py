@@ -8,7 +8,7 @@ def test_localhost_random_port_preflight_is_allowed():
     client = TestClient(create_app())
 
     response = client.options(
-        "/auth/login",
+        "/auth/auto-login",
         headers={
             "Origin": "http://localhost:19231",
             "Access-Control-Request-Method": "POST",
@@ -59,7 +59,9 @@ def test_ly_sso_start_sanitizes_external_return_url():
     )
 
     assert response.status_code in {302, 307}
-    assert list(app.state.ly_sso_states.values()) == [get_settings().frontend_base_url]
+    pending = list(app.state.ly_sso_states.values())
+    assert len(pending) == 1
+    assert pending[0].return_url == get_settings().frontend_base_url
 
 
 def test_ly_sso_callback_rejects_unknown_state():

@@ -19,9 +19,13 @@ class DataSourceInfo {
   final bool needsRelogin;
 
   String get displayText {
-    if (needsRelogin) return '教务系统会话已失效，请重新登录';
+    if (needsRelogin) return '登录状态已失效，请重新登录';
     if (fromLocalCache) return isOffline ? '离线缓存' : '本地缓存';
-    if (fromCache) return '更新失败，显示上次数据';
+    if (fromCache) {
+      final cached = cachedAt;
+      if (cached == null) return '服务端缓存数据';
+      return '服务端缓存 · ${cached.toLocal().toString().substring(0, 16)}';
+    }
     return '';
   }
 
@@ -104,8 +108,8 @@ class DashboardSnapshot {
     }
     return DashboardSnapshot(
       status: json['status'] as String? ?? 'ok',
-      generatedAt: json['generatedAt'] as String? ??
-          DateTime.now().toIso8601String(),
+      generatedAt:
+          json['generatedAt'] as String? ?? DateTime.now().toIso8601String(),
       modules: modules,
       traceId: json['traceId'] as String?,
     );
@@ -182,9 +186,6 @@ class LoginResult {
     this.sessionId,
     this.studentName,
     this.studentId,
-    this.captchaToken,
-    this.captchaImage,
-    this.loginMethod,
     this.credentialToken,
     this.jwxtCookies,
     this.ehallCookies,
@@ -197,9 +198,6 @@ class LoginResult {
         sessionId: json['sessionId'] as String?,
         studentName: json['studentName'] as String?,
         studentId: json['studentId'] as String?,
-        captchaToken: json['captchaToken'] as String?,
-        captchaImage: json['captchaImage'] as String?,
-        loginMethod: json['loginMethod'] as String?,
         credentialToken: json['credentialToken'] as String?,
         jwxtCookies:
             json['jwxtCookies'] as String? ?? json['cookies'] as String?,
@@ -212,11 +210,6 @@ class LoginResult {
   final String? sessionId;
   final String? studentName;
   final String? studentId;
-  final String? captchaToken;
-  final String? captchaImage;
-
-  /// 登录方式: "password" 表示教务系统账密登录, "sso" 表示办事大厅一键登录
-  final String? loginMethod;
 
   /// 用于自动重新登录的凭证令牌
   final String? credentialToken;
@@ -230,6 +223,41 @@ class LoginResult {
 
   /// 管理后台标记：学号在 admin_users 白名单中时为 true。
   final bool? isAdmin;
+}
+
+class LoginCarouselSlide {
+  const LoginCarouselSlide({
+    required this.id,
+    required this.title,
+    required this.imageUrl,
+    required this.published,
+    required this.sortOrder,
+    this.description,
+  });
+
+  factory LoginCarouselSlide.fromJson(Map<String, dynamic> json) {
+    final id = json['id'];
+    final title = json['title'];
+    final imageUrl = json['imageUrl'];
+    if (id is! num || title is! String || imageUrl is! String) {
+      throw FormatException('登录轮播数据格式错误: $json');
+    }
+    return LoginCarouselSlide(
+      id: id.toInt(),
+      title: title,
+      description: json['description'] as String?,
+      imageUrl: imageUrl,
+      published: json['published'] as bool? ?? true,
+      sortOrder: (json['sortOrder'] as num?)?.toInt() ?? 0,
+    );
+  }
+
+  final int id;
+  final String title;
+  final String? description;
+  final String imageUrl;
+  final bool published;
+  final int sortOrder;
 }
 
 class StudentInfo {
@@ -859,6 +887,9 @@ class LeaveFillResponse {
                 .map((item) => TeacherCandidateGroup.fromJson(item))
                 .toList(),
         attachmentUploaded = json['attachmentUploaded'] as bool? ?? false,
+        attachmentUploadedCount =
+            (json['attachmentUploadedCount'] as num?)?.toInt() ?? 0,
+        attachmentTotal = (json['attachmentTotal'] as num?)?.toInt() ?? 0,
         items = (json['items'] as List<dynamic>? ?? const [])
             .whereType<Map<String, dynamic>>()
             .map((item) => LeaveCourseItem.fromJson(item))
@@ -873,6 +904,8 @@ class LeaveFillResponse {
   final List<MatchedTeacherItem> matchedTeachers;
   final List<TeacherCandidateGroup> teacherCandidates;
   final bool attachmentUploaded;
+  final int attachmentUploadedCount;
+  final int attachmentTotal;
   final List<LeaveCourseItem> items;
 
   String? get combinedScript {
@@ -1255,6 +1288,7 @@ class EcardConsumptionResponse {
   EcardConsumptionResponse.fromJson(Map<String, dynamic> json)
       : status = json['status'] as String? ?? 'limited',
         message = json['message'] as String?,
+        cachedAt = json['cachedAt'] as String?,
         items = (json['items'] as List<dynamic>? ?? const [])
             .whereType<Map<String, dynamic>>()
             .map((item) => EcardConsumptionItem.fromJson(item))
@@ -1262,6 +1296,7 @@ class EcardConsumptionResponse {
 
   final String status;
   final String? message;
+  final String? cachedAt;
   final List<EcardConsumptionItem> items;
 }
 
@@ -1269,11 +1304,52 @@ class EcardConsumptionItem {
   EcardConsumptionItem.fromJson(Map<String, dynamic> json)
       : title = json['title'] as String? ?? '',
         amount = json['amount'] as String? ?? '',
-        time = json['time'] as String? ?? '';
+        time = json['time'] as String? ?? '',
+        date = json['date'] as String? ?? '',
+        usage = _doubleFromJson(json['usage']),
+        unit = json['unit'] as String? ?? '度';
 
   final String title;
   final String amount;
   final String time;
+  final String date;
+  final double? usage;
+  final String unit;
+}
+
+class EcardConsumptionOverviewResponse {
+  EcardConsumptionOverviewResponse.fromJson(Map<String, dynamic> json)
+      : status = json['status'] as String? ?? 'limited',
+        message = json['message'] as String?,
+        months = (json['months'] as List<dynamic>? ?? const [])
+            .whereType<Map<String, dynamic>>()
+            .map((item) => EcardConsumptionMonthOverview.fromJson(item))
+            .toList();
+
+  final String status;
+  final String? message;
+  final List<EcardConsumptionMonthOverview> months;
+}
+
+class EcardConsumptionMonthOverview {
+  EcardConsumptionMonthOverview.fromJson(Map<String, dynamic> json)
+      : month = json['month'] as String? ?? '',
+        recordedDays = (json['recordedDays'] as num?)?.toInt() ?? 0,
+        totalUsage = _doubleFromJson(json['totalUsage']) ?? 0,
+        averageDailyUsage = _doubleFromJson(json['averageDailyUsage']) ?? 0,
+        peakDate = json['peakDate'] as String? ?? '',
+        peakUsage = _doubleFromJson(json['peakUsage']) ?? 0,
+        unit = json['unit'] as String? ?? '度',
+        cachedAt = json['cachedAt'] as String? ?? '';
+
+  final String month;
+  final int recordedDays;
+  final double totalUsage;
+  final double averageDailyUsage;
+  final String peakDate;
+  final double peakUsage;
+  final String unit;
+  final String cachedAt;
 }
 
 double? _doubleFromJson(dynamic value) {

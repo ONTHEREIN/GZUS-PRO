@@ -7,8 +7,9 @@ void main() {
       expect(academicPeriodOf(DateTime(2026, 9, 1)), (2026, 1));
     });
 
-    test('8月31日仍是上学年第2学期', () {
-      expect(academicPeriodOf(DateTime(2026, 8, 31, 23, 59)), (2025, 2));
+    test('8月起进入即将开学的新学年第一学期', () {
+      expect(academicPeriodOf(DateTime(2026, 8, 1)), (2026, 1));
+      expect(academicPeriodOf(DateTime(2026, 8, 31, 23, 59)), (2026, 1));
     });
 
     test('1月31日仍是秋季学期（第1学期）', () {
@@ -21,6 +22,22 @@ void main() {
 
     test('春季学期中段', () {
       expect(academicPeriodOf(DateTime(2027, 6, 15)), (2026, 2));
+    });
+  });
+
+  group('onboardingAcademicPeriodOf 首次导入预填', () {
+    test('1月仍预填上一学年第一学期', () {
+      expect(onboardingAcademicPeriodOf(DateTime(2027, 1, 31)), (2026, 1));
+    });
+
+    test('2月至7月预填当前学年第二学期', () {
+      expect(onboardingAcademicPeriodOf(DateTime(2027, 2, 1)), (2026, 2));
+      expect(onboardingAcademicPeriodOf(DateTime(2027, 7, 31)), (2026, 2));
+    });
+
+    test('8月起预填即将开始的第一学期', () {
+      expect(onboardingAcademicPeriodOf(DateTime(2027, 8, 1)), (2027, 1));
+      expect(onboardingAcademicPeriodOf(DateTime(2027, 9, 1)), (2027, 1));
     });
   });
 
@@ -52,6 +69,16 @@ void main() {
       expect(
         academicPeriodFromFirstWeeks(firstWeeks, DateTime(2027, 2, 15)),
         (2026, 1),
+      );
+    });
+
+    test('新学年开始后不回退到上学年的春季学期', () {
+      expect(
+        academicPeriodFromFirstWeeks(
+          {'2025-2': '2026-03-02'},
+          DateTime(2026, 8, 28),
+        ),
+        isNull,
       );
     });
 

@@ -1,10 +1,9 @@
-import 'dart:convert';
-
+import 'dart:async';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
-import 'package:share_plus/share_plus.dart';
 
 import '../../api_client.dart';
+import '../../calendar_import.dart';
 import '../../models/grade_models.dart';
 import '../../ics_download.dart' deferred as ics_download;
 import '../../responsive/breakpoints.dart';
@@ -20,11 +19,15 @@ class ExamsPage extends StatefulWidget {
       {super.key,
       required this.api,
       required this.periods,
+      required this.year,
+      required this.term,
       this.onSessionExpired,
       this.highlightCourse});
 
   final ApiClient api;
   final List<AcademicPeriod> periods;
+  final int year;
+  final int term;
   final VoidCallback? onSessionExpired;
   final String? highlightCourse;
 
@@ -41,6 +44,10 @@ class _ExamsPageState extends State<ExamsPage>
   late String _periodsSignature;
   final ScrollController _scrollController = ScrollController();
   bool _hasScrolledToHighlight = false;
+  int _loadGeneration = 0;
+  bool _isLoadingHistory = false;
+  final Set<AcademicPeriod> _failedPeriods = {};
+  DataSourceInfo? _staleSource;
 
   @override
   void initState() {
@@ -56,7 +63,10 @@ class _ExamsPageState extends State<ExamsPage>
   void didUpdateWidget(ExamsPage oldWidget) {
     super.didUpdateWidget(oldWidget);
     final nextSignature = periodSignature(widget.periods);
-    if (oldWidget.api != widget.api || nextSignature != _periodsSignature) {
+    if (oldWidget.api != widget.api ||
+        nextSignature != _periodsSignature ||
+        oldWidget.year != widget.year ||
+        oldWidget.term != widget.term) {
       _periodsSignature = nextSignature;
       _examsFuture = _loadExams();
     }
@@ -138,94 +148,122 @@ class _ExamsPageState extends State<ExamsPage>
                   children: [
                     SizedBox(
                       width: pane.side,
-                      child: Column(
-                        children: [
-                          Align(
-                            alignment: Alignment.centerLeft,
-                            child: SizedBox(
-                              width: 160,
-                              child: DropdownMenu<String>(
-                                initialSelection: sortMode,
-                                enableSearch: false,
-                                requestFocusOnTap: false,
-                                onSelected: (value) {
-                                  if (value != null) {
-                                    setState(() => sortMode = value);
-                                  }
-                                },
-                                dropdownMenuEntries: const [
-                                  DropdownMenuEntry(
-                                      value: 'term', label: '按学期排列'),
-                                  DropdownMenuEntry(
-                                      value: 'time', label: '按时间排列'),
-                                ],
-                              ),
-                            ),
-                          ),
-                          if (sortMode == 'term')
+                      child: SingleChildScrollView(
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            if (_hasLoadStatus) _loadStatus(context),
                             Align(
                               alignment: Alignment.centerLeft,
-                              child: IconButton(
-                                icon: Icon(sortAscending
-                                    ? Icons.arrow_upward
-                                    : Icons.arrow_downward),
-                                tooltip: sortAscending ? '正序' : '倒序',
-                                onPressed: () => setState(
-                                    () => sortAscending = !sortAscending),
+                              child: SizedBox(
+                                width: 160,
+                                child: DropdownMenu<String>(
+                                  initialSelection: sortMode,
+                                  enableSearch: false,
+                                  requestFocusOnTap: false,
+                                  onSelected: (value) {
+                                    if (value != null) {
+                                      setState(() => sortMode = value);
+                                    }
+                                  },
+                                  dropdownMenuEntries: const [
+                                    DropdownMenuEntry(
+                                        value: 'term', label: '按学期排列'),
+                                    DropdownMenuEntry(
+                                        value: 'time', label: '按时间排列'),
+                                  ],
+                                ),
                               ),
                             ),
-                          const SizedBox(height: 8),
-                          Align(
-                            alignment: Alignment.centerLeft,
-                            child: TextButton(
-                              onPressed: items.isEmpty || _exporting
-                                  ? null
-                                  : () async {
-                                      setState(() => _exporting = true);
-                                      try {
-                                        final year = widget.periods.first.year;
-                                        final term = widget.periods.first.term;
-                                        final ics = generateExamIcs(
-                                            exams: items,
-                                            year: year,
-                                            term: term);
-                                        if (kIsWeb) {
-                                          await ics_download.loadLibrary();
-                                          ics_download.downloadIcs(
-                                              ics, '考试_${year}_$term.ics');
-                                        } else {
-                                          await Share.shareXFiles(
-                                            [
-                                              XFile.fromData(utf8.encode(ics),
-                                                  name: '考试_${year}_$term.ics',
-                                                  mimeType: 'text/calendar')
-                                            ],
-                                            text: '考试_${year}_$term.ics',
-                                          );
+                            if (sortMode == 'term')
+                              Align(
+                                alignment: Alignment.centerLeft,
+                                child: IconButton(
+                                  icon: Icon(sortAscending
+                                      ? Icons.arrow_upward
+                                      : Icons.arrow_downward),
+                                  tooltip: sortAscending ? '正序' : '倒序',
+                                  onPressed: () => setState(
+                                      () => sortAscending = !sortAscending),
+                                ),
+                              ),
+                            const SizedBox(height: 8),
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: TextButton(
+                                onPressed: items.isEmpty || _exporting
+                                    ? null
+                                    : () async {
+                                        final messenger =
+                                            ScaffoldMessenger.maybeOf(context);
+                                        setState(() => _exporting = true);
+                                        try {
+                                          final year =
+                                              widget.periods.first.year;
+                                          final term =
+                                              widget.periods.first.term;
+                                          final ics = generateExamIcs(
+                                              exams: items,
+                                              year: year,
+                                              term: term);
+                                          if (kIsWeb) {
+                                            await ics_download.loadLibrary();
+                                            await ics_download.downloadIcs(
+                                                ics, '考试_${year}_$term.ics');
+                                          } else {
+                                            final events = examCalendarEvents(
+                                                exams: items,
+                                                year: year,
+                                                term: term);
+                                            final added =
+                                                await CalendarImportService
+                                                    .importEvents(events);
+                                            if (mounted) {
+                                              messenger?.showSnackBar(
+                                                SnackBar(
+                                                  content: Text(
+                                                      '已向系统日历导入 $added 场考试'),
+                                                  duration: const Duration(
+                                                      seconds: 2),
+                                                ),
+                                              );
+                                            }
+                                          }
+                                        } on CalendarImportException catch (e) {
+                                          if (mounted) {
+                                            messenger?.showSnackBar(
+                                              SnackBar(
+                                                content:
+                                                    Text('日历导入失败：${e.message}'),
+                                              ),
+                                            );
+                                          }
+                                        } finally {
+                                          if (mounted) {
+                                            setState(() => _exporting = false);
+                                          }
                                         }
-                                      } finally {
-                                        if (mounted) {
-                                          setState(() => _exporting = false);
-                                        }
-                                      }
-                                    },
-                              child: IconLabel(
-                                icon: Icons.event_available,
-                                label: _exporting ? '导出中...' : '导入至日历',
+                                      },
+                                child: IconLabel(
+                                  icon: Icons.event_available,
+                                  label: _exporting ? '导出中...' : '导入至日历',
+                                ),
                               ),
                             ),
-                          ),
-                          const SizedBox(height: 12),
-                          if (sortMode == 'term')
-                            for (final entry in _groupedSections(items).entries)
-                              ListTile(
-                                dense: true,
-                                title: Text(entry.key,
-                                    style: const TextStyle(fontSize: 14)),
-                                trailing: Text('${entry.value.length}场',
-                                    style: const TextStyle(fontSize: 13)),
-                              ),
-                        ],
+                            const SizedBox(height: 12),
+                            if (sortMode == 'term')
+                              for (final entry
+                                  in _groupedSections(items).entries)
+                                ListTile(
+                                  dense: true,
+                                  title: Text(entry.key,
+                                      style: const TextStyle(fontSize: 14)),
+                                  trailing: Text('${entry.value.length}场',
+                                      style: const TextStyle(fontSize: 13)),
+                                ),
+                          ],
+                        ),
                       ),
                     ),
                     const SizedBox(width: 12),
@@ -252,9 +290,13 @@ class _ExamsPageState extends State<ExamsPage>
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
+                    if (_hasLoadStatus) _loadStatus(context),
                     Align(
                       alignment: Alignment.centerLeft,
-                      child: Row(
+                      child: Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        crossAxisAlignment: WrapCrossAlignment.center,
                         children: [
                           SizedBox(
                             width: 160,
@@ -284,11 +326,12 @@ class _ExamsPageState extends State<ExamsPage>
                               onPressed: () => setState(
                                   () => sortAscending = !sortAscending),
                             ),
-                          const Spacer(),
                           TextButton(
                             onPressed: items.isEmpty || _exporting
                                 ? null
                                 : () async {
+                                    final messenger =
+                                        ScaffoldMessenger.maybeOf(context);
                                     setState(() => _exporting = true);
                                     try {
                                       final year = widget.periods.first.year;
@@ -297,16 +340,34 @@ class _ExamsPageState extends State<ExamsPage>
                                           exams: items, year: year, term: term);
                                       if (kIsWeb) {
                                         await ics_download.loadLibrary();
-                                        ics_download.downloadIcs(
+                                        await ics_download.downloadIcs(
                                             ics, '考试_${year}_$term.ics');
                                       } else {
-                                        await Share.shareXFiles(
-                                          [
-                                            XFile.fromData(utf8.encode(ics),
-                                                name: '考试_${year}_$term.ics',
-                                                mimeType: 'text/calendar')
-                                          ],
-                                          text: '考试_${year}_$term.ics',
+                                        final events = examCalendarEvents(
+                                            exams: items,
+                                            year: year,
+                                            term: term);
+                                        final added =
+                                            await CalendarImportService
+                                                .importEvents(events);
+                                        if (mounted) {
+                                          messenger?.showSnackBar(
+                                            SnackBar(
+                                              content:
+                                                  Text('已向系统日历导入 $added 场考试'),
+                                              duration:
+                                                  const Duration(seconds: 2),
+                                            ),
+                                          );
+                                        }
+                                      }
+                                    } on CalendarImportException catch (e) {
+                                      if (mounted) {
+                                        messenger?.showSnackBar(
+                                          SnackBar(
+                                            content:
+                                                Text('日历导入失败：${e.message}'),
+                                          ),
                                         );
                                       }
                                     } finally {
@@ -348,35 +409,142 @@ class _ExamsPageState extends State<ExamsPage>
   }
 
   Future<void> _refreshExams() async {
-    setState(() => _examsFuture = _loadExams(forceRefresh: true));
+    setState(() {
+      _examsFuture = _loadExams(forceRefresh: true);
+    });
     await _examsFuture;
   }
 
   @override
   void silentRefresh() {
     if (!mounted) return;
-    setState(() => _examsFuture = _loadExams());
+    setState(() {
+      _examsFuture = _loadExams();
+    });
   }
 
   Future<List<PeriodExam>> _loadExams({bool forceRefresh = false}) async {
-    final results = await Future.wait([
-      for (final period in widget.periods)
-        widget.api
-            .exams(
-              year: period.year,
-              term: period.term,
-              forceRefresh: forceRefresh,
-            )
-            .then(
-              (result) => [
-                for (final item in result.data) PeriodExam(period, item),
-              ],
-            )
-            .catchError((_) => <PeriodExam>[]),
-    ]);
-    final exams = results.expand((items) => items).toList();
+    final generation = ++_loadGeneration;
+    _failedPeriods.clear();
+    _staleSource = null;
+    _isLoadingHistory = false;
+    final periods = _prioritizedPeriods();
+    if (periods.isEmpty) return const [];
+    final current = await _loadPeriod(periods.first, forceRefresh);
+    if (!mounted || generation != _loadGeneration) return current.items;
+    _recordSource(current.source);
+    final exams = _prepareExams(current.items);
+    if (periods.length > 1) {
+      _isLoadingHistory = true;
+      unawaited(_loadHistory(
+        periods: periods.skip(1).toList(growable: false),
+        initialExams: exams,
+        forceRefresh: forceRefresh,
+        generation: generation,
+      ));
+    }
+    return exams;
+  }
+
+  List<AcademicPeriod> _prioritizedPeriods() {
+    final current = AcademicPeriod(widget.year, widget.term);
+    final history = widget.periods
+        .where((period) =>
+            period.year != current.year || period.term != current.term)
+        .toList(growable: false)
+      ..sort((left, right) =>
+          periodSortValue(right).compareTo(periodSortValue(left)));
+    return [current, ...history];
+  }
+
+  Future<_PeriodExamResult> _loadPeriod(
+    AcademicPeriod period,
+    bool forceRefresh,
+  ) async {
+    final result = await widget.api.exams(
+      year: period.year,
+      term: period.term,
+      forceRefresh: forceRefresh,
+    );
+    return _PeriodExamResult(
+      items: [for (final item in result.data) PeriodExam(period, item)],
+      source: result.source,
+    );
+  }
+
+  Future<void> _loadHistory({
+    required List<AcademicPeriod> periods,
+    required List<PeriodExam> initialExams,
+    required bool forceRefresh,
+    required int generation,
+  }) async {
+    var exams = [...initialExams];
+    for (final period in periods) {
+      try {
+        final loaded = await _loadPeriod(period, forceRefresh);
+        if (!mounted || generation != _loadGeneration) return;
+        _recordSource(loaded.source);
+        exams = _prepareExams([...exams, ...loaded.items]);
+      } catch (_) {
+        if (!mounted || generation != _loadGeneration) return;
+        _failedPeriods.add(period);
+      }
+      if (!mounted || generation != _loadGeneration) return;
+      setState(() {
+        _examsFuture = Future.value(exams);
+      });
+    }
+    if (!mounted || generation != _loadGeneration) return;
+    setState(() => _isLoadingHistory = false);
+  }
+
+  void _recordSource(DataSourceInfo source) {
+    if (source.isStale) _staleSource = source;
+  }
+
+  Widget _loadStatus(BuildContext context) {
+    final source = _staleSource;
+    final parts = <String>[
+      if (source != null) source.displayText,
+      if (_isLoadingHistory) '正在加载历史学期',
+      if (_failedPeriods.isNotEmpty) '${_failedPeriods.length} 个学期暂未加载',
+    ];
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.tertiaryContainer,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              parts.join(' · '),
+              style: TextStyle(
+                fontSize: 12,
+                color: Theme.of(context).colorScheme.onTertiaryContainer,
+              ),
+            ),
+          ),
+          if (_failedPeriods.isNotEmpty)
+            TextButton(
+              onPressed: _refreshExams,
+              child: const Text('重试'),
+            ),
+        ],
+      ),
+    );
+  }
+
+  bool get _hasLoadStatus =>
+      _isLoadingHistory || _failedPeriods.isNotEmpty || _staleSource != null;
+
+  List<PeriodExam> _prepareExams(List<PeriodExam> exams) {
+    final prepared = [...exams];
     final byCourse = <String, List<PeriodExam>>{};
-    for (final exam in exams) {
+    for (final exam in prepared) {
       final key = courseKey(exam.exam.courseName);
       if (key.isEmpty) continue;
       byCourse.putIfAbsent(key, () => []).add(exam);
@@ -393,7 +561,9 @@ class _ExamsPageState extends State<ExamsPage>
         }
       }
     }
-    return sortMode == 'term' ? _sortedByTerm(exams) : _sortedByTime(exams);
+    return sortMode == 'term'
+        ? _sortedByTerm(prepared)
+        : _sortedByTime(prepared);
   }
 
   List<PeriodExam> _sortedByTerm(List<PeriodExam> items) {
@@ -417,6 +587,13 @@ class _ExamsPageState extends State<ExamsPage>
     }
     return sections;
   }
+}
+
+class _PeriodExamResult {
+  const _PeriodExamResult({required this.items, required this.source});
+
+  final List<PeriodExam> items;
+  final DataSourceInfo source;
 }
 
 class ExamTermSections extends StatelessWidget {
@@ -482,10 +659,17 @@ class ExamTable extends StatelessWidget {
                             size: 16,
                             color: Theme.of(context).colorScheme.primary),
                         const SizedBox(width: 4),
-                        Text(item.exam.time ?? '-',
+                        Expanded(
+                          child: Text(
+                            item.exam.time ?? '-',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                             style: TextStyle(
-                                color: Theme.of(context).colorScheme.primary,
-                                fontWeight: FontWeight.bold)),
+                              color: Theme.of(context).colorScheme.primary,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
                       ],
                     ),
                     const SizedBox(height: 4),
@@ -495,10 +679,17 @@ class ExamTable extends StatelessWidget {
                             size: 16,
                             color: Theme.of(context).colorScheme.tertiary),
                         const SizedBox(width: 4),
-                        Text(item.exam.location ?? '-',
+                        Expanded(
+                          child: Text(
+                            item.exam.location ?? '-',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                             style: TextStyle(
-                                color: Theme.of(context).colorScheme.tertiary,
-                                fontWeight: FontWeight.bold)),
+                              color: Theme.of(context).colorScheme.tertiary,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
                       ],
                     ),
                   ],

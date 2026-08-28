@@ -1,21 +1,47 @@
+from dataclasses import dataclass
+from hashlib import sha256
+from hmac import compare_digest
+from secrets import token_urlsafe
+from urllib.parse import parse_qsl, quote as url_quote, urlencode, urlparse, urlsplit, urlunsplit
+
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
-from pydantic import BaseModel
-from urllib.parse import quote as url_quote, urlparse
 import logging
 import time
-import uuid
 
 from app.rsa_keys import rsa_key_manager
 from app.config import get_settings
 from app.ehall_client import EhallClient
 from app.rate_limit import limiter
-from app.schemas import AuthResponse, AutoLoginRequest, CaptchaRequest, LoginRequest, ReloginRequest, SsoCompleteRequest
-from app.school_client import AuthenticationError, CaptchaRequired, SchoolSdkClient
+from app.schemas import (
+    AuthResponse,
+    AutoLoginRequest,
+    NativeSsoCompleteRequest,
+    NativeSsoStartRequest,
+    NativeSsoStartResponse,
+    ReloginRequest,
+    SsoCompleteRequest,
+)
+from app.school_client import AuthenticationError, SchoolSdkClient
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+_NATIVE_SSO_CALLBACK_URL = "cn.gzus.pro://sso/callback"
+
+
+@dataclass(frozen=True)
+class PendingLySso:
+    return_url: str
+    expires_at: float
+    verifier_hash: str | None
+
+
+@dataclass(frozen=True)
+class PendingLySsoHandoff:
+    ticket: str
+    expires_at: float
+    verifier_hash: str
 
 
 @router.get("/public-key")
@@ -24,10 +50,6 @@ def get_public_key() -> dict:
         "publicKey": rsa_key_manager.get_public_key_pem(),
         "keyId": rsa_key_manager.get_key_id(),
     }
-
-
-class LySsoStartRequest(BaseModel):
-    return_url: str = ""
 
 
 def _origin(url: str) -> str:
@@ -52,6 +74,59 @@ def _safe_return_url(return_url: str) -> str:
     return settings.frontend_base_url
 
 
+def _sso_return_url(return_url: str, ticket: str) -> str:
+    """将一次性 CAS ticket 传回前端，并覆盖可能残留的旧登录参数。"""
+    parsed = urlsplit(return_url)
+    query = [(key, value) for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+             if key not in {"ssoCode", "ssoError"}]
+    query.append(("ssoCode", ticket))
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(query), parsed.fragment))
+
+
+def _native_sso_return_url(code: str) -> str:
+    parsed = urlsplit(_NATIVE_SSO_CALLBACK_URL)
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode({"code": code}), ""))
+
+
+def _hash_verifier(verifier: str) -> str:
+    return sha256(verifier.encode("utf-8")).hexdigest()
+
+
+def _purge_expired_sso_entries(request: Request, now: float) -> None:
+    states: dict[str, PendingLySso] = request.app.state.ly_sso_states
+    handoffs: dict[str, PendingLySsoHandoff] = request.app.state.ly_sso_handoffs
+    for state, pending in list(states.items()):
+        if pending.expires_at <= now:
+            del states[state]
+    for code, handoff in list(handoffs.items()):
+        if handoff.expires_at <= now:
+            del handoffs[code]
+
+
+def _create_cas_sso_url(state: str) -> str:
+    settings = get_settings()
+    callback = f"{settings.public_api_base_url}/auth/ly/callback"
+    callback_with_state = f"{callback}?{urlencode({'state': state})}"
+    return f"{settings.cas_login_url}?service={url_quote(callback_with_state, safe='')}"
+
+
+def _create_pending_sso(
+    request: Request,
+    return_url: str,
+    verifier_hash: str | None,
+) -> str:
+    settings = get_settings()
+    now = time.monotonic()
+    _purge_expired_sso_entries(request, now)
+    state = token_urlsafe(32)
+    request.app.state.ly_sso_states[state] = PendingLySso(
+        return_url=return_url,
+        expires_at=now + settings.sso_ttl_seconds,
+        verifier_hash=verifier_hash,
+    )
+    return _create_cas_sso_url(state)
+
+
 def _build_client(request: Request) -> SchoolSdkClient:
     settings = get_settings()
     return SchoolSdkClient(settings.jw_base_url, timeout_seconds=settings.request_timeout_seconds)
@@ -61,101 +136,20 @@ def _should_return_jwxt_cookies(request: Request) -> bool:
     return (request.headers.get("x-client-platform") or "").lower() in {"android", "ios"}
 
 
-@router.post("/login", response_model=AuthResponse)
-@limiter.limit("10/minute")
-def login(payload: LoginRequest, request: Request) -> dict:
-    client = _build_client(request)
-    sessions = request.app.state.sessions
-    pending_captcha = request.app.state.pending_captcha
-
-    try:
-        password = payload.resolve_password()
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
-
-    try:
-        student_name = client.login(payload.account, password)
-    except CaptchaRequired as exc:
-        token = exc.challenge.token or "captcha"
-        pending_captcha[token] = (client, payload.account)
-        return {
-            "status": "captcha_required",
-            "captchaToken": token,
-            "captchaImage": exc.challenge.image or "",
-        }
-    except AuthenticationError as exc:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc))
-
-    session = sessions.create(
-        client,
-        student_name or payload.account,
-        student_account=payload.account,
-    )
-    response = {
-        "status": "ok",
-        "sessionId": session.id,
-        "studentName": student_name,
-        "studentId": None,
-    }
-    if _should_return_jwxt_cookies(request):
-        response["jwxtCookies"] = client.get_jwxt_cookies_string()
-    return response
-
-
-def _try_get_student_id(client) -> str | None:
-    try:
-        info = client.get_info()
-        if isinstance(info, dict):
-            return info.get("studentId") or info.get("student_id") or info.get("xh")
-    except Exception:
-        pass
-    return None
-
-
-@router.post("/captcha", response_model=AuthResponse)
-@limiter.limit("10/minute")
-def submit_captcha(payload: CaptchaRequest, request: Request) -> dict:
-    sessions = request.app.state.sessions
-    pending_captcha = request.app.state.pending_captcha
-
-    pending = pending_captcha.pop(payload.captcha_token, None)
-    if isinstance(pending, tuple):
-        client, account = pending
-    else:
-        client, account = pending, None
-    if client is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="验证码会话已过期")
-
-    try:
-        student_name = client.submit_captcha(payload.code)
-    except AuthenticationError as exc:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc))
-
-    session = sessions.create(client, student_name, student_account=account)
-    response = {
-        "status": "ok",
-        "sessionId": session.id,
-        "studentName": student_name,
-        "studentId": None,
-    }
-    if _should_return_jwxt_cookies(request):
-        response["jwxtCookies"] = client.get_jwxt_cookies_string()
-    return response
-
-
 @router.get("/ly/start")
 def ly_sso_start(return_url: str = "", request: Request = None):
-    settings = get_settings()
-    state = uuid.uuid4().hex
-    request.app.state.ly_sso_states[state] = _safe_return_url(return_url)
-    callback = f"{settings.public_api_base_url}/auth/ly/callback"
-    encoded_callback = url_quote(callback, safe="")
-    sso_url = (
-        f"{settings.cas_login_url}"
-        f"?service={encoded_callback}"
-        f"&state={state}"
+    return RedirectResponse(url=_create_pending_sso(request, _safe_return_url(return_url), None))
+
+
+@router.post("/ly/native-start", response_model=NativeSsoStartResponse)
+@limiter.limit("10/minute")
+def ly_native_sso_start(payload: NativeSsoStartRequest, request: Request) -> dict[str, str]:
+    authorization_url = _create_pending_sso(
+        request,
+        _NATIVE_SSO_CALLBACK_URL,
+        _hash_verifier(payload.verifier),
     )
-    return RedirectResponse(url=sso_url)
+    return {"authorizationUrl": authorization_url}
 
 
 @router.get("/ly/callback")
@@ -163,14 +157,41 @@ def ly_sso_callback(ticket: str = "", state: str = "", request: Request = None):
     if not ticket:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="缺少 ticket")
     settings = get_settings()
-    if not state or state not in request.app.state.ly_sso_states:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="SSO state 无效")
-    return_url = request.app.state.ly_sso_states.pop(state, settings.frontend_base_url)
-    return RedirectResponse(url=return_url)
+    now = time.monotonic()
+    _purge_expired_sso_entries(request, now)
+    pending: PendingLySso | None = request.app.state.ly_sso_states.pop(state, None)
+    if pending is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="SSO state 无效或已过期")
+    if pending.verifier_hash is None:
+        return RedirectResponse(url=_sso_return_url(pending.return_url, ticket))
+    code = token_urlsafe(32)
+    request.app.state.ly_sso_handoffs[code] = PendingLySsoHandoff(
+        ticket=ticket,
+        expires_at=now + settings.sso_ttl_seconds,
+        verifier_hash=pending.verifier_hash,
+    )
+    return RedirectResponse(url=_native_sso_return_url(code))
 
 
 @router.post("/ly/complete", response_model=AuthResponse)
 def ly_sso_complete(payload: SsoCompleteRequest, request: Request) -> dict:
+    return _complete_sso_ticket(payload.sso_code, request)
+
+
+@router.post("/ly/native-complete", response_model=AuthResponse)
+@limiter.limit("10/minute")
+def ly_native_sso_complete(payload: NativeSsoCompleteRequest, request: Request) -> dict:
+    now = time.monotonic()
+    _purge_expired_sso_entries(request, now)
+    handoff: PendingLySsoHandoff | None = request.app.state.ly_sso_handoffs.pop(payload.code, None)
+    if handoff is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="认证凭证无效或已过期")
+    if not compare_digest(handoff.verifier_hash, _hash_verifier(payload.verifier)):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="认证校验失败，请重新登录")
+    return _complete_sso_ticket(handoff.ticket, request)
+
+
+def _complete_sso_ticket(ticket: str, request: Request) -> dict:
     """Complete SSO login by exchanging the CAS service ticket for JWXT cookies.
 
     The sso_code from the frontend is a CAS Service Ticket, NOT a cookie.
@@ -181,7 +202,6 @@ def ly_sso_complete(payload: SsoCompleteRequest, request: Request) -> dict:
 
     sessions = request.app.state.sessions
     settings = get_settings()
-    ticket = payload.sso_code
 
     if not ticket:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="缺少 SSO 凭证")
@@ -231,8 +251,30 @@ def ly_sso_complete(payload: SsoCompleteRequest, request: Request) -> dict:
     except AuthenticationError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc))
 
-    session = sessions.create(client, student_name)
-    return {"status": "ok", "sessionId": session.id, "studentName": student_name, "studentId": None}
+    try:
+        info = client.get_info()
+        student_id = info.get("studentId")
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="无法确认登录学号，请重新登录",
+        ) from exc
+    if not isinstance(student_id, str) or not student_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="统一认证未返回有效学号，请重新登录",
+        )
+
+    session = sessions.create(client, student_name, student_account=student_id)
+    response = {
+        "status": "ok",
+        "sessionId": session.id,
+        "studentName": student_name,
+        "studentId": student_id,
+    }
+    if _should_return_jwxt_cookies(request):
+        response["jwxtCookies"] = client.get_jwxt_cookies_string()
+    return response
 
 
 @router.post("/relogin", response_model=AuthResponse)
@@ -304,7 +346,7 @@ def relogin(payload: ReloginRequest, request: Request) -> dict:
         "status": "ok",
         "sessionId": session.id,
         "studentName": student_name,
-        "studentId": None,
+        "studentId": account,
         "credentialToken": payload.credential_token,
         "ehallCookies": result.ehall_cookies,
         "ehallAuthToken": result.ehall_auth_token,
@@ -387,7 +429,7 @@ def auto_login(payload: AutoLoginRequest, request: Request) -> dict:
         "status": "ok",
         "sessionId": session.id,
         "studentName": student_name,
-        "studentId": None,
+        "studentId": payload.account,
         "credentialToken": cred_token,
         "ehallCookies": result.ehall_cookies,
         "ehallAuthToken": result.ehall_auth_token,

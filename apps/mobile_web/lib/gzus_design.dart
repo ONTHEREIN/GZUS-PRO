@@ -68,16 +68,6 @@ class GzusColors {
     '石墨',
   ];
 
-  /// 模块语义色：用于首页各模块图标背景、左侧色条等。
-  static const moduleSchedule = blue;
-  static const moduleGrades = green;
-  static const moduleAttendance = amber;
-  static const moduleEcard = teal;
-  static const moduleExams = red;
-  static const moduleNotices = purple;
-  static const moduleApplications = indigo;
-  static const moduleCredits = rose;
-
   /// 返回某个主题色的柔和背景色（浅色模式用）。
   static Color softColorOf(Color color) {
     final map = <Color, Color>{
@@ -99,8 +89,8 @@ class GzusRadii {
 
   static const sm = 12.0;
   static const md = 16.0;
-  static const lg = 20.0;
-  static const xl = 24.0;
+  static const lg = 16.0;
+  static const xl = 20.0;
 }
 
 ThemeData gzusTheme(Brightness brightness,
@@ -321,17 +311,17 @@ Color gzusSurfaceElevated(BuildContext context) {
       : GzusColors.surface;
 }
 
-/// 柔和投影：浅色模式下用黑色半透明，深色模式下用主色微光避免阴影不可见。
+/// 仅用于登录框、弹层等需要与页面背景分离的浮层。
+/// 页面内的信息分区使用边框，不依赖阴影制造层级。
 List<BoxShadow> gzusShadow(BuildContext context, {bool elevated = false}) {
   final dark = Theme.of(context).brightness == Brightness.dark;
-  final primary = Theme.of(context).colorScheme.primary;
   return [
     BoxShadow(
       color: dark
-          ? primary.withValues(alpha: elevated ? 0.18 : 0.08)
-          : Colors.black.withValues(alpha: elevated ? 0.10 : 0.05),
-      blurRadius: elevated ? 32 : 28,
-      offset: const Offset(0, 16),
+          ? Colors.black.withValues(alpha: elevated ? 0.28 : 0.18)
+          : Colors.black.withValues(alpha: elevated ? 0.08 : 0.035),
+      blurRadius: elevated ? 16 : 10,
+      offset: Offset(0, elevated ? 8 : 4),
     ),
   ];
 }

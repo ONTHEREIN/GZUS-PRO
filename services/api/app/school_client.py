@@ -12,7 +12,7 @@ from urllib.parse import urljoin, urlparse
 # 学年/学期判定已抽到 academic_period.py（上海时区），此处保留 re-export 兼容旧调用。
 from app.academic_period import default_academic_period  # noqa: F401
 from app.jwxt.normalizers import (
-    ensure_grade_list,
+    ensure_grade_list,  # noqa: F401
     ensure_list,
     extract_credit_items,
     normalize_attendance_item,
@@ -62,6 +62,9 @@ EXAM_URL = "/jwglxt/kwgl/kscx_cxXsksxxIndex.html"
 EXAM_GNMKDM = "N358105"
 
 SCHEDULE_URL = "/jwglxt/kbcx/xskbcx_cxXsKb.html"
+
+GRADE_URL = "/jwglxt/cjcx/cjcx_cxDgXscj.html"
+GRADE_GNMKDM = "N305005"
 
 ATTENDANCE_URL = "/jwglxt/jxdmgl/jxdmqkcx_cxJxdmqkcxIndex.html"
 ATTENDANCE_GNMKDM = "N254315"
@@ -139,7 +142,7 @@ class SchoolSdkClient:
         except Exception as exc:  # noqa: BLE001 - third-party SDK exceptions are not stable.
             if self._looks_like_captcha(exc):
                 raise CaptchaRequired(CaptchaChallenge(token="", image="", client=self)) from exc
-            raise AuthenticationError("教务系统登录失败") from exc
+            raise AuthenticationError("统一认证登录失败") from exc
         name = self._extract_student_name(result)
         if name:
             self._student_name = name
@@ -559,8 +562,8 @@ class SchoolSdkClient:
 
     def get_grades(self, year: str | None, term: str | None) -> list[dict]:
         year, term = default_academic_period(year, term)
-        result = self._call_first(["get_score", "get_scores", "get_grades"], year, term)
-        return [normalize_grade_item(item) for item in ensure_grade_list(result)]
+        result = self._query_grades_via_proxy(year, term)
+        return [normalize_grade_item(item) for item in ensure_list(result.get("items", []))]
 
     def get_attendance(self, year: str | None, term: str | None) -> list[dict]:
         year, term = default_academic_period(year, term)
@@ -734,6 +737,24 @@ class SchoolSdkClient:
             },
         )
 
+    def _query_grades_via_proxy(self, year: int, term: int) -> dict:
+        return self._proxy_json(
+            "POST",
+            GRADE_URL,
+            params={"doType": "query", "gnmkdm": GRADE_GNMKDM, "su": self._account or ""},
+            data={
+                "xnm": str(year),
+                "xqm": TERM_TO_XQM.get(term, ""),
+                "_search": "false",
+                "nd": str(int(time.time() * 1000)),
+                "queryModel.showCount": "500",
+                "queryModel.currentPage": "1",
+                "queryModel.sortName": "",
+                "queryModel.sortOrder": "asc",
+                "time": "4",
+            },
+        )
+
     def _query_attendance(self, year: int, term: int) -> list[dict]:
         all_items: list[dict] = []
         current_page = 1
@@ -808,7 +829,7 @@ class SchoolSdkClient:
             has_login_page_marker = bool(re.search(r'<input[^>]*type\s*=\s*["\']password["\']', html_lower))
         if has_login_page_marker:
             logger.warning("Notices news page appears to be a login page, session may be expired")
-            raise AuthenticationError("教务系统会话已失效，请重新登录")
+            raise AuthenticationError("登录状态已失效，请重新登录")
         sections = extract_notice_sections(html, news_page_url)
         logger.info("Parsed %d notice sections from news page", len(sections))
         all_items: list[dict] = []
@@ -923,7 +944,7 @@ class SchoolSdkClient:
         if not has_login_page_marker:
             has_login_page_marker = bool(re.search(r'<input[^>]*type\s*=\s*["\']password["\']', html_lower))
         if has_login_page_marker:
-            raise AuthenticationError("教务系统会话已失效，请重新登录")
+            raise AuthenticationError("登录状态已失效，请重新登录")
         return extract_notice_detail(html, url)
 
     def _endpoint_from_url(self, url: str) -> str:
@@ -939,10 +960,23 @@ class SchoolSdkClient:
             raise ValueError(f"不支持的通知链接协议: {parsed.scheme or '(空)'}")
         if parsed.netloc and parsed.netloc != base.netloc:
             raise ValueError(f"跨域通知链接被拒绝: {parsed.netloc}")
-        endpoint = parsed.path or "/"
+        endpoint = self._normalize_jwxt_endpoint(parsed.path or "/")
         if parsed.query:
             endpoint = f"{endpoint}?{parsed.query}"
         return endpoint
+
+    def _normalize_jwxt_endpoint(self, endpoint: str) -> str:
+        """规范化同源 JWXT 路径，确保基路径仅出现一次。"""
+        path = endpoint if endpoint.startswith("/") else f"/{endpoint}"
+        prefix = urlparse(self.base_url).path.rstrip("/")
+        if not prefix:
+            return path
+        duplicate_prefix = f"{prefix}{prefix}/"
+        while path.startswith(duplicate_prefix):
+            path = f"{prefix}/{path[len(duplicate_prefix):]}"
+        if path != prefix and not path.startswith(f"{prefix}/"):
+            return f"{prefix}/{path.lstrip('/')}"
+        return path
 
     @staticmethod
     def _response_text(response: Any) -> str:
@@ -1031,12 +1065,11 @@ class SchoolSdkClient:
                 "proxy_json: response for %s %s appears to be a login page (session expired)",
                 method, url_or_endpoint,
             )
-            raise AuthenticationError("教务系统会话已失效，请重新登录")
+            raise AuthenticationError("登录状态已失效，请重新登录")
         try:
             return response.json()
         except JSONDecodeError as exc:
-            # Fallback: if JSON parse fails, still treat as session expiry
-            raise AuthenticationError("教务系统会话已失效，请重新登录") from exc
+            raise RuntimeError("教务系统返回了非 JSON 数据，请稍后重试") from exc
 
     def _proxy_response(self, method: str, url_or_endpoint: str, **kwargs: Any) -> Any:
         if self._httpx_client is not None:
@@ -1053,12 +1086,13 @@ class SchoolSdkClient:
                     "proxy_response: SDK exception suggests session expired for %s %s: %s",
                     method, url_or_endpoint, exc,
                 )
-                raise AuthenticationError("教务系统会话已失效，请重新登录") from exc
+                raise AuthenticationError("登录状态已失效，请重新登录") from exc
             raise
 
     def _proxy_via_httpx(self, method: str, url_or_endpoint: str, **kwargs: Any) -> Any:
         origin = self._jwxt_origin()
-        full_url = origin + (url_or_endpoint if url_or_endpoint.startswith("/") else "/" + url_or_endpoint)
+        endpoint = self._normalize_jwxt_endpoint(url_or_endpoint)
+        full_url = origin + endpoint
         request_kwargs: dict[str, Any] = {}
         params = kwargs.get("params")
         if params:
@@ -1134,7 +1168,7 @@ class SchoolSdkClient:
                     import time as _time
                     _time.sleep(wait)
                     continue
-                raise AuthenticationError("教务系统会话已失效，请重新登录") from exc
+                raise AuthenticationError("登录状态已失效，请重新登录") from exc
 
     @staticmethod
     def _looks_like_captcha(exc: Exception) -> bool:

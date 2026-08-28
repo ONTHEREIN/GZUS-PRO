@@ -70,10 +70,6 @@ android {
     packaging {
         jniLibs {
             useLegacyPackaging = false
-            excludes += setOf(
-                "**/libBugly.so",
-                "**/libBugly_Native.so"
-            )
             if (buildingRelease) {
                 excludes += setOf(
                 "lib/x86_64/*.so",
@@ -88,7 +84,6 @@ dependencies {
     implementation("commons-net:commons-net:3.11.1")
     implementation("com.tencent.shiply:upgrade:2.2.2")
     implementation("com.tencent.shiply:upgrade-ui:2.2.2")
-    implementation("com.tencent.bugly:crashreport:4.1.9.3")
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
 }
 

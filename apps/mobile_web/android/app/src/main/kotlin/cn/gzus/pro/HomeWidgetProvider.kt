@@ -85,12 +85,10 @@ open class HomeWidgetProvider : AppWidgetProvider() {
 
             views.setImageViewResource(R.id.widget_icon, R.drawable.widget_icon_next)
             views.setTextViewText(R.id.widget_header_title, data.headerTitle)
-            views.setTextViewText(R.id.widget_badge, data.badge)
             views.setTextViewText(R.id.widget_course_name, data.title)
             views.setTextViewText(R.id.widget_time, data.meta)
             views.setTextViewText(R.id.widget_location, data.classroom)
             views.setTextViewText(R.id.widget_teacher, data.teacher)
-            views.setInt(R.id.widget_content_block, "setBackgroundResource", R.drawable.widget_content_block_background)
 
             if (data.classroom.isNullOrBlank()) {
                 views.setViewVisibility(R.id.widget_location_row, View.GONE)
@@ -124,7 +122,6 @@ open class HomeWidgetProvider : AppWidgetProvider() {
             }
             views.setImageViewResource(R.id.widget_icon, iconRes)
             views.setTextViewText(R.id.widget_header_title, data.headerTitle)
-            views.setTextViewText(R.id.widget_badge, data.badge)
             views.setTextViewText(R.id.widget_content_title, data.title)
             views.setTextViewText(R.id.widget_meta, data.meta)
             views.setTextViewText(R.id.widget_detail, data.detail)
@@ -143,7 +140,6 @@ open class HomeWidgetProvider : AppWidgetProvider() {
 
             views.setImageViewResource(R.id.widget_icon, R.drawable.widget_icon_today)
             views.setTextViewText(R.id.widget_header_title, data.headerTitle)
-            views.setTextViewText(R.id.widget_badge, data.badge)
             views.setOnClickPendingIntent(R.id.widget_root, openAppIntent(context, data.tab, "today"))
 
             // Bind ListView with RemoteAdapter
@@ -175,7 +171,6 @@ open class HomeWidgetProvider : AppWidgetProvider() {
 
             views.setImageViewResource(R.id.widget_icon, R.drawable.widget_icon_progress)
             views.setTextViewText(R.id.widget_header_title, data.headerTitle)
-            views.setTextViewText(R.id.widget_badge, data.badge)
             views.setOnClickPendingIntent(R.id.widget_root, openAppIntent(context, data.tab, "progress"))
 
             // Bind ListView with RemoteAdapter
@@ -206,7 +201,6 @@ open class HomeWidgetProvider : AppWidgetProvider() {
 
             views.setImageViewResource(R.id.widget_icon, R.drawable.widget_icon_utilities)
             views.setTextViewText(R.id.widget_header_title, "生活缴费")
-            views.setTextViewText(R.id.widget_badge, "生活缴费")
             views.setTextViewText(R.id.widget_cold_water, prefText(prefs, "utilityColdWater", "-"))
             views.setTextViewText(R.id.widget_hot_water, prefText(prefs, "utilityHotWater", "-"))
             views.setTextViewText(R.id.widget_electricity, prefText(prefs, "utilityElectricity", "-"))
@@ -219,7 +213,6 @@ open class HomeWidgetProvider : AppWidgetProvider() {
             return when (kind) {
                 "today" -> WidgetData(
                     headerTitle = "今日课表",
-                    badge = "今日课表",
                     title = prefText(prefs, "todayTitle", "今日课表"),
                     meta = prefText(prefs, "todayMeta", "课程提醒"),
                     detail = readList(prefs.getString("todayItems", "[]")).joinToString("\n").ifBlank { "暂无课程" },
@@ -227,7 +220,6 @@ open class HomeWidgetProvider : AppWidgetProvider() {
                 )
                 "utilities" -> WidgetData(
                     headerTitle = "生活缴费",
-                    badge = "生活缴费",
                     title = prefText(prefs, "utilityTitle", "水电费余额"),
                     meta = prefText(prefs, "utilityMeta", "暂无数据"),
                     detail = prefText(prefs, "utilityDetail", "点击查看生活缴费"),
@@ -235,7 +227,6 @@ open class HomeWidgetProvider : AppWidgetProvider() {
                 )
                 "progress" -> WidgetData(
                     headerTitle = "办事大厅",
-                    badge = "办事大厅",
                     title = prefText(prefs, "progressTitle", "业务进度"),
                     meta = prefText(prefs, "progressMeta", "暂无业务进度"),
                     detail = prefText(prefs, "progressDetail", "点击查看办事大厅"),
@@ -243,7 +234,6 @@ open class HomeWidgetProvider : AppWidgetProvider() {
                 )
                 else -> WidgetData(
                     headerTitle = "下一节课",
-                    badge = "下一节课",
                     title = prefText(prefs, "nextTitle", "下一节课"),
                     meta = prefText(prefs, "nextTime", "暂无数据"),
                     detail = prefText(prefs, "nextDetail", "点击查看课表"),
@@ -291,7 +281,6 @@ open class HomeWidgetProvider : AppWidgetProvider() {
 
 data class WidgetData(
     val headerTitle: String,
-    val badge: String,
     val title: String,
     val meta: String,
     val detail: String,

@@ -1,6 +1,7 @@
 package cn.gzus.pro
 
 import android.content.ComponentName
+import android.content.ContentValues
 import android.content.Intent
 import android.app.AlarmManager
 import android.content.pm.PackageManager
@@ -12,10 +13,10 @@ import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
 import android.provider.Settings
+import android.provider.CalendarContract
 import androidx.annotation.NonNull
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import com.tencent.bugly.crashreport.CrashReport
 import com.tencent.upgrade.bean.UpgradeStrategy
 import com.tencent.upgrade.callback.UpgradeStrategyRequestCallback
 import com.tencent.upgrade.core.DefaultUpgradeStrategyRequestCallback
@@ -28,15 +29,17 @@ import org.json.JSONArray
 
 class MainActivity : FlutterActivity() {
     private val PERMISSIONS_CHANNEL = "cn.gzus.pro/permissions"
-    private val BUGLY_CHANNEL = "cn.gzus.pro/bugly"
     private val HOME_WIDGETS_CHANNEL = "cn.gzus.pro/home_widgets"
     private val PUSH_CHANNEL = "cn.gzus.pro/push"
     private val LIVE_UPDATE_CHANNEL = "cn.gzus.pro/live_update"
     private val FTP_CHANNEL = "cn.gzus.pro/ftp"
     private val UPGRADE_CHANNEL = "cn.gzus.pro/upgrade"
+    private val CALENDAR_CHANNEL = "cn.gzus.pro/calendar"
     private var pendingInitialTab: String? = null
     private var pendingWidgetKind: String? = null
     private var homeWidgetsChannel: MethodChannel? = null
+    private var pendingCalendarResult: MethodChannel.Result? = null
+    private var pendingCalendarEvents: List<Map<*, *>>? = null
     
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -133,6 +136,37 @@ class MainActivity : FlutterActivity() {
                         result.error("LOCATION_PERMISSION_DENIED", "定位权限未授予", null)
                     } catch (e: Exception) {
                         result.error("LOCATION_ERROR", e.message, null)
+                    }
+                }
+                else -> result.notImplemented()
+            }
+        }
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CALENDAR_CHANNEL).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "importEvents" -> {
+                    try {
+                        val events = (call.argument<List<*>>("events") ?: emptyList<Any>())
+                            .filterIsInstance<Map<*, *>>()
+                        if (events.isEmpty()) {
+                            result.success(0)
+                            return@setMethodCallHandler
+                        }
+                        if (hasCalendarPermission()) {
+                            insertCalendarEvents(events, result)
+                        } else {
+                            pendingCalendarResult = result
+                            pendingCalendarEvents = events
+                            ActivityCompat.requestPermissions(
+                                this,
+                                arrayOf(
+                                    android.Manifest.permission.READ_CALENDAR,
+                                    android.Manifest.permission.WRITE_CALENDAR,
+                                ),
+                                CALENDAR_PERMISSION_REQUEST_CODE,
+                            )
+                        }
+                    } catch (e: Exception) {
+                        result.error("CALENDAR_ERROR", e.message ?: "导入日历失败", null)
                     }
                 }
                 else -> result.notImplemented()
@@ -331,8 +365,6 @@ class MainActivity : FlutterActivity() {
         }
         schedulePendingWidgetLaunch()
         
-        // Bugly channel
-        setupBuglyChannel(flutterEngine)
         setupUpgradeChannel(flutterEngine)
     }
 
@@ -450,7 +482,118 @@ class MainActivity : FlutterActivity() {
         permissions: Array<out String>,
         grantResults: IntArray
     ) {
+        if (requestCode == CALENDAR_PERMISSION_REQUEST_CODE) {
+            val granted =
+                grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }
+            val events = pendingCalendarEvents
+            val pending = pendingCalendarResult
+            pendingCalendarEvents = null
+            pendingCalendarResult = null
+            if (granted && events != null && pending != null) {
+                insertCalendarEvents(events, pending)
+            } else {
+                pending?.error("CALENDAR_PERMISSION_DENIED", "未授予日历权限，无法导入", null)
+            }
+        }
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+    }
+
+    private fun hasCalendarPermission(): Boolean {
+        return ContextCompat.checkSelfPermission(
+            this, android.Manifest.permission.READ_CALENDAR
+        ) == PackageManager.PERMISSION_GRANTED &&
+            ContextCompat.checkSelfPermission(
+                this, android.Manifest.permission.WRITE_CALENDAR
+            ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun insertCalendarEvents(
+        events: List<Map<*, *>>,
+        result: MethodChannel.Result
+    ) {
+        Thread {
+            try {
+                val calendarId = writableCalendarId()
+                if (calendarId == null) {
+                    runOnUiThread {
+                        result.error("NO_CALENDAR", "设备上没有可写入的系统日历", null)
+                    }
+                    return@Thread
+                }
+                var added = 0
+                for (raw in events) {
+                    val title = raw["title"] as? String ?: continue
+                    val start = (raw["startMillis"] as? Number)?.toLong() ?: continue
+                    val end = (raw["endMillis"] as? Number)?.toLong() ?: continue
+                    val values = ContentValues().apply {
+                        put(CalendarContract.Events.CALENDAR_ID, calendarId)
+                        put(CalendarContract.Events.TITLE, title)
+                        put(CalendarContract.Events.DTSTART, start)
+                        put(CalendarContract.Events.DTEND, end)
+                        put(
+                            CalendarContract.Events.EVENT_TIMEZONE,
+                            java.util.TimeZone.getDefault().id,
+                        )
+                        put(
+                            CalendarContract.Events.EVENT_END_TIMEZONE,
+                            java.util.TimeZone.getDefault().id,
+                        )
+                        put(CalendarContract.Events.ALL_DAY, 0)
+                        raw["location"]?.toString()?.takeIf { it.isNotEmpty() }?.let {
+                            put(CalendarContract.Events.EVENT_LOCATION, it)
+                        }
+                        raw["description"]?.toString()?.takeIf { it.isNotEmpty() }?.let {
+                            put(CalendarContract.Events.DESCRIPTION, it)
+                        }
+                    }
+                    val uri = contentResolver.insert(CalendarContract.Events.CONTENT_URI, values)
+                    if (uri != null) added++
+                }
+                val finalAdded = added
+                runOnUiThread {
+                    if (finalAdded > 0) {
+                        result.success(finalAdded)
+                    } else {
+                        result.error("CALENDAR_INSERT_FAILED", "未能写入系统日历", null)
+                    }
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    result.error("CALENDAR_ERROR", e.message ?: "导入日历失败", null)
+                }
+            }
+        }.start()
+    }
+
+    private fun writableCalendarId(): Long? {
+        val projection = arrayOf(
+            CalendarContract.Calendars._ID,
+            CalendarContract.Calendars.CALENDAR_ACCESS_LEVEL,
+        )
+        var selected: Long? = null
+        var writable: Long? = null
+        contentResolver.query(
+            CalendarContract.Calendars.CONTENT_URI,
+            projection,
+            null,
+            null,
+            null,
+        )?.use { cursor ->
+            val idIndex = cursor.getColumnIndexOrThrow(CalendarContract.Calendars._ID)
+            val levelIndex = cursor.getColumnIndexOrThrow(
+                CalendarContract.Calendars.CALENDAR_ACCESS_LEVEL
+            )
+            while (cursor.moveToNext()) {
+                val id = cursor.getLong(idIndex)
+                if (selected == null) selected = id
+                if (cursor.getInt(levelIndex) >= CalendarContract.Calendars.CAL_ACCESS_CONTRIBUTOR
+                    && writable == null
+                ) {
+                    writable = id
+                }
+            }
+        }
+        return writable ?: selected
     }
 
     private fun getLastKnownLocation(): android.location.Location? {
@@ -474,6 +617,7 @@ class MainActivity : FlutterActivity() {
     companion object {
         private const val LOCATION_PERMISSION_REQUEST_CODE = 1001
         private const val NOTIFICATION_PERMISSION_REQUEST_CODE = 1002
+        private const val CALENDAR_PERMISSION_REQUEST_CODE = 1003
     }
 
     private fun openAutoStartSettings(): Boolean {
@@ -610,63 +754,6 @@ class MainActivity : FlutterActivity() {
         }
     }
     
-    private fun setupBuglyChannel(flutterEngine: FlutterEngine) {
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, BUGLY_CHANNEL).setMethodCallHandler { call, result ->
-            when (call.method) {
-                "init" -> {
-                    result.success(GzusApplication.buglyInitialized)
-                }
-                "setUserId" -> {
-                    val userId = call.argument<String>("userId")
-                    if (userId != null) {
-                        CrashReport.setUserId(userId)
-                        result.success(true)
-                    } else {
-                        result.error("INVALID_ARGUMENT", "userId is required", null)
-                    }
-                }
-                "setTag" -> {
-                    val tagId = call.argument<Int>("tagId")
-                    if (tagId != null) {
-                        CrashReport.setUserSceneTag(context, tagId)
-                        result.success(true)
-                    } else {
-                        result.error("INVALID_ARGUMENT", "tagId is required", null)
-                    }
-                }
-                "setUserData" -> {
-                    val key = call.argument<String>("key")
-                    val value = call.argument<String>("value")
-                    if (key != null && value != null) {
-                        CrashReport.putUserData(context, key, value)
-                        result.success(true)
-                    } else {
-                        result.error("INVALID_ARGUMENT", "key and value are required", null)
-                    }
-                }
-                "reportException" -> {
-                    val exception = call.argument<String>("exception")
-                    val stackTrace = call.argument<String>("stackTrace")
-                    val reason = call.argument<String>("reason")
-                    if (exception != null && stackTrace != null) {
-                        val throwable = Exception(exception)
-                        CrashReport.postCatchedException(throwable)
-                        result.success(true)
-                    } else {
-                        result.error("INVALID_ARGUMENT", "exception and stackTrace are required", null)
-                    }
-                }
-                "testCrash" -> {
-                    CrashReport.testJavaCrash()
-                    result.success(true)
-                }
-                else -> {
-                    result.notImplemented()
-                }
-            }
-        }
-    }
-
     private fun setupUpgradeChannel(flutterEngine: FlutterEngine) {
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, UPGRADE_CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {

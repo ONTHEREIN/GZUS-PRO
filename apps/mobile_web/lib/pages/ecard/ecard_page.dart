@@ -5,7 +5,36 @@ import 'package:flutter/material.dart';
 import '../../api_client.dart';
 import '../../gzus_design.dart';
 import '../../widgets/empty_state.dart';
+import '../../widgets/async_panel.dart';
 import '../../widgets/page_panel.dart';
+
+enum EcardConsumptionSort { dateNewest, dateOldest, usageHighest, usageLowest }
+
+List<EcardConsumptionItem> sortEcardConsumptionItems(
+  List<EcardConsumptionItem> items,
+  EcardConsumptionSort sort,
+) {
+  final sorted = [...items];
+  sorted.sort((a, b) {
+    final dateA = DateTime.tryParse(a.date.isNotEmpty ? a.date : a.time) ??
+        DateTime.fromMillisecondsSinceEpoch(0);
+    final dateB = DateTime.tryParse(b.date.isNotEmpty ? b.date : b.time) ??
+        DateTime.fromMillisecondsSinceEpoch(0);
+    final usageA = a.usage ?? -1;
+    final usageB = b.usage ?? -1;
+    switch (sort) {
+      case EcardConsumptionSort.dateNewest:
+        return dateB.compareTo(dateA);
+      case EcardConsumptionSort.dateOldest:
+        return dateA.compareTo(dateB);
+      case EcardConsumptionSort.usageHighest:
+        return usageB.compareTo(usageA);
+      case EcardConsumptionSort.usageLowest:
+        return usageA.compareTo(usageB);
+    }
+  });
+  return sorted;
+}
 
 class EcardPage extends StatefulWidget {
   const EcardPage({super.key, required this.api, this.onSessionExpired});
@@ -25,6 +54,7 @@ class _EcardPageState extends State<EcardPage> {
   bool _bindingRoom = false;
   String? _bindingRoomId;
   int _refreshVersion = 0;
+  int _consumptionHistoryVersion = 0;
   String? _error;
   Timer? _periodicRefreshTimer;
   Timer? _searchDebounce;
@@ -62,7 +92,9 @@ class _EcardPageState extends State<EcardPage> {
       final summary =
           await widget.api.ecardSummary(forceRefresh: true).then((r) => r.data);
       if (!mounted) return;
-      setState(() => _summaryFuture = Future.value(summary));
+      setState(() {
+        _summaryFuture = Future.value(summary);
+      });
     } catch (_) {
       // Silent refresh — ignore errors
     }
@@ -76,13 +108,15 @@ class _EcardPageState extends State<EcardPage> {
     try {
       final summary = await widget.api.refreshEcard();
       if (!mounted) return;
-      setState(() => _summaryFuture = Future.value(summary));
+      setState(() {
+        _summaryFuture = Future.value(summary);
+      });
       if (summary.stale) {
         // 后端刷新失败、返回的是旧缓存:明确提示,避免用户以为数据已更新
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(
-                '刷新失败：${summary.staleReason ?? '一卡通服务暂时不可用'}，当前显示的是缓存数据'),
+            content:
+                Text('刷新失败：${summary.staleReason ?? '一卡通服务暂时不可用'}，当前显示的是缓存数据'),
           ),
         );
       }
@@ -108,8 +142,8 @@ class _EcardPageState extends State<EcardPage> {
     });
     try {
       await _summaryFuture;
-    } catch (_) {
-      // FutureBuilder 会展示错误;这里避免未捕获的异步异常
+    } catch (error) {
+      if (mounted) showRefreshFailure(context, error);
     }
   }
 
@@ -174,7 +208,9 @@ class _EcardPageState extends State<EcardPage> {
         reminderItems: reminderItems,
       );
       if (!mounted) return;
-      setState(() => _summaryFuture = Future.value(summary));
+      setState(() {
+        _summaryFuture = Future.value(summary);
+      });
     } catch (exc) {
       _handleError(exc);
     }
@@ -270,9 +306,19 @@ class _EcardPageState extends State<EcardPage> {
                   onChanged: _updateReminder,
                 ),
                 const SizedBox(height: 12),
+                _EcardConsumptionOverviewPanel(
+                  api: widget.api,
+                  refreshVersion: _consumptionHistoryVersion,
+                ),
+                const SizedBox(height: 12),
                 _EcardConsumptionPanel(
                   api: widget.api,
                   refreshVersion: _refreshVersion,
+                  onMonthRecorded: () {
+                    if (mounted) {
+                      setState(() => _consumptionHistoryVersion++);
+                    }
+                  },
                 ),
               ],
             ],
@@ -944,8 +990,8 @@ class _ThresholdSlider extends StatelessWidget {
   }
 }
 
-class _EcardConsumptionPanel extends StatefulWidget {
-  const _EcardConsumptionPanel({
+class _EcardConsumptionOverviewPanel extends StatefulWidget {
+  const _EcardConsumptionOverviewPanel({
     required this.api,
     required this.refreshVersion,
   });
@@ -954,16 +1000,106 @@ class _EcardConsumptionPanel extends StatefulWidget {
   final int refreshVersion;
 
   @override
+  State<_EcardConsumptionOverviewPanel> createState() =>
+      _EcardConsumptionOverviewPanelState();
+}
+
+class _EcardConsumptionOverviewPanelState
+    extends State<_EcardConsumptionOverviewPanel> {
+  late Future<EcardConsumptionOverviewResponse> _overviewFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _overviewFuture = widget.api.ecardConsumptionOverview();
+  }
+
+  @override
+  void didUpdateWidget(covariant _EcardConsumptionOverviewPanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.api != widget.api ||
+        oldWidget.refreshVersion != widget.refreshVersion) {
+      _overviewFuture = widget.api.ecardConsumptionOverview();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return PagePanel(
+      title: '电费历史总览',
+      icon: Icons.insights_outlined,
+      child: FutureBuilder<EcardConsumptionOverviewResponse>(
+        future: _overviewFuture,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState != ConnectionState.done) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          if (snapshot.hasError) return const EmptyState(message: '历史总览加载失败');
+          final data = snapshot.data;
+          if (data == null || data.months.isEmpty) {
+            return EmptyState(message: data?.message ?? '查询月份后会在这里生成历史总览');
+          }
+          return Column(
+            children: [
+              for (final month in data.months)
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.calendar_month_outlined),
+                  title: Text(month.month),
+                  subtitle: Text(
+                    '共 ${month.recordedDays} 天 · 日均 ${month.averageDailyUsage.toStringAsFixed(2)} ${month.unit}',
+                  ),
+                  trailing: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Text(
+                          '最高 ${month.peakUsage.toStringAsFixed(2)} ${month.unit}'),
+                      Text(
+                        month.peakDate,
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      Text(
+                        '总计 ${month.totalUsage.toStringAsFixed(2)} ${month.unit}',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _EcardConsumptionPanel extends StatefulWidget {
+  const _EcardConsumptionPanel({
+    required this.api,
+    required this.refreshVersion,
+    required this.onMonthRecorded,
+  });
+
+  final ApiClient api;
+  final int refreshVersion;
+  final VoidCallback onMonthRecorded;
+
+  @override
   State<_EcardConsumptionPanel> createState() => _EcardConsumptionPanelState();
 }
 
 class _EcardConsumptionPanelState extends State<_EcardConsumptionPanel> {
   late Future<EcardConsumptionResponse> _consumptionFuture;
+  late String _selectedMonth;
+  EcardConsumptionSort _sort = EcardConsumptionSort.dateNewest;
+  String? _lastRecordedMonth;
 
   @override
   void initState() {
     super.initState();
-    _consumptionFuture = widget.api.ecardConsumption();
+    _selectedMonth = _monthKey(DateTime.now());
+    _consumptionFuture = widget.api.ecardConsumption(month: _selectedMonth);
   }
 
   @override
@@ -971,9 +1107,41 @@ class _EcardConsumptionPanelState extends State<_EcardConsumptionPanel> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.api != widget.api ||
         oldWidget.refreshVersion != widget.refreshVersion) {
-      _consumptionFuture = widget.api.ecardConsumption(
-        forceRefresh: oldWidget.refreshVersion != widget.refreshVersion,
-      );
+      _consumptionFuture = widget.api.ecardConsumption(month: _selectedMonth);
+    }
+  }
+
+  Future<void> _selectMonth() async {
+    final parts = _selectedMonth.split('-');
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: DateTime(int.parse(parts[0]), int.parse(parts[1])),
+      firstDate: DateTime(2020),
+      lastDate: DateTime(DateTime.now().year + 1, 12),
+      helpText: '选择查询月份',
+    );
+    if (picked == null) return;
+    final month = _monthKey(picked);
+    if (!mounted || month == _selectedMonth) return;
+    setState(() {
+      _selectedMonth = month;
+      _consumptionFuture = widget.api.ecardConsumption(month: month);
+    });
+  }
+
+  String _monthKey(DateTime value) =>
+      '${value.year.toString().padLeft(4, '0')}-${value.month.toString().padLeft(2, '0')}';
+
+  String get _sortLabel {
+    switch (_sort) {
+      case EcardConsumptionSort.dateNewest:
+        return '日期最新';
+      case EcardConsumptionSort.dateOldest:
+        return '日期最早';
+      case EcardConsumptionSort.usageHighest:
+        return '用电量从高到低';
+      case EcardConsumptionSort.usageLowest:
+        return '用电量从低到高';
     }
   }
 
@@ -982,6 +1150,30 @@ class _EcardConsumptionPanelState extends State<_EcardConsumptionPanel> {
     return PagePanel(
       title: '电费消费记录',
       icon: Icons.electric_bolt,
+      trailing: PopupMenuButton<EcardConsumptionSort>(
+        key: const Key('ecard-consumption-sort'),
+        tooltip: '排序',
+        icon: const Icon(Icons.sort),
+        onSelected: (sort) => setState(() => _sort = sort),
+        itemBuilder: (context) => const [
+          PopupMenuItem(
+            value: EcardConsumptionSort.dateNewest,
+            child: Text('日期最新'),
+          ),
+          PopupMenuItem(
+            value: EcardConsumptionSort.dateOldest,
+            child: Text('日期最早'),
+          ),
+          PopupMenuItem(
+            value: EcardConsumptionSort.usageHighest,
+            child: Text('用电量从高到低'),
+          ),
+          PopupMenuItem(
+            value: EcardConsumptionSort.usageLowest,
+            child: Text('用电量从低到高'),
+          ),
+        ],
+      ),
       child: FutureBuilder<EcardConsumptionResponse>(
         future: _consumptionFuture,
         builder: (context, snapshot) {
@@ -990,18 +1182,37 @@ class _EcardConsumptionPanelState extends State<_EcardConsumptionPanel> {
           }
           if (snapshot.hasError) return const EmptyState(message: '消费记录加载失败');
           final data = snapshot.data;
-          if (data == null || data.items.isEmpty) {
-            return EmptyState(message: data?.message ?? '暂无消费记录');
+          if (data?.status == 'ok' && _lastRecordedMonth != _selectedMonth) {
+            _lastRecordedMonth = _selectedMonth;
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted) widget.onMonthRecorded();
+            });
           }
+          final items =
+              sortEcardConsumptionItems(data?.items ?? const [], _sort);
           return Column(
             children: [
-              for (final item in data.items)
-                ListTile(
-                  leading: const Icon(Icons.payments),
-                  title: Text(item.title, overflow: TextOverflow.ellipsis),
-                  subtitle: Text(item.time),
-                  trailing: Text(item.amount),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: OutlinedButton.icon(
+                  key: const Key('ecard-consumption-month'),
+                  onPressed: _selectMonth,
+                  icon: const Icon(Icons.calendar_month_outlined),
+                  label: Text('查询月份：$_selectedMonth · $_sortLabel'),
                 ),
+              ),
+              const SizedBox(height: 6),
+              if (items.isEmpty)
+                EmptyState(message: data?.message ?? '暂无消费记录')
+              else
+                for (final item in items)
+                  ListTile(
+                    leading: const Icon(Icons.payments),
+                    title: Text(item.title, overflow: TextOverflow.ellipsis),
+                    subtitle:
+                        Text(item.date.isNotEmpty ? item.date : item.time),
+                    trailing: Text(item.amount.isEmpty ? '-' : item.amount),
+                  ),
             ],
           );
         },

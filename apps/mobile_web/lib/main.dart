@@ -1,7 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
-import 'dart:ui';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -17,6 +14,7 @@ import 'services_deferred.dart';
 
 import 'background_guide_page.dart';
 import 'browser_redirect.dart';
+import 'first_run_onboarding_page.dart';
 import 'live_activity_service.dart';
 
 import 'persistent_cache.dart' deferred as persistent_cache;
@@ -45,6 +43,7 @@ import 'pages/more/more_page.dart';
 import 'pages/notices/notices_page.dart';
 import 'pages/schedule/schedule_page.dart';
 import 'test_flags.dart';
+import 'widgets/liquid_glass.dart';
 import 'widgets/open_browser.dart';
 import 'widgets/page_panel.dart';
 import 'widgets/page_silent_refresh.dart';
@@ -65,19 +64,14 @@ void main() async {
     systemNavigationBarColor: Colors.transparent,
     systemNavigationBarDividerColor: Colors.transparent,
     systemNavigationBarIconBrightness: Brightness.dark,
+    systemNavigationBarContrastEnforced: false,
   ));
 
   SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
 
   runApp(const ProviderScope(child: OneGzusRoot()));
 
-  unawaited(_initDeferredServices());
-}
-
-Future<void> _initDeferredServices() async {
-  try {
-    await DeferredServices().initialize();
-  } catch (_) {}
+  unawaited(LiquidGlassPlatform.initialize());
 }
 
 ThemeData _appTheme(Brightness brightness,
@@ -134,9 +128,6 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
 
   /// 云端课表偏好（登录后拉取；登出时清空，避免多账号串数据）。
   ScheduleSettings? _cloudScheduleSettings;
-
-  /// 登录方式: "password" = 教务系统账密登录, "sso" = 办事大厅一键登录, null = 未登录
-  String? loginMethod;
 
   /// 防止 _logout() 被并发调用
   bool _logoutInProgress = false;
@@ -311,6 +302,7 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
       systemNavigationBarDividerColor: Colors.transparent,
       systemNavigationBarIconBrightness:
           isDark ? Brightness.light : Brightness.dark,
+      systemNavigationBarContrastEnforced: false,
     ));
   }
 
@@ -341,42 +333,18 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
                   },
                 )
               : !_scheduleOnboardingCompleted
-                  ? ScheduleOnboardingPage(
+                  ? FirstRunOnboardingPage(
                       api: api,
                       studentName: studentName,
-                      onComplete: () async {
-                        final prefs =
-                            await SharedPreferences.getInstance();
-                        await prefs.setBool(
-                            'schedule_onboarding_completed', true);
+                      onComplete: () {
                         if (!mounted) return;
                         setState(() {
                           _scheduleOnboardingCompleted = true;
-                        });
-                      },
-                      onSkip: () async {
-                        final prefs =
-                            await SharedPreferences.getInstance();
-                        await prefs.setBool(
-                            'schedule_onboarding_completed', true);
-                        // 云端记录完成标记，换设备后不再要求选择
-                        unawaited(_markScheduleOnboardingCompleted());
-                        if (!mounted) return;
-                        setState(() {
-                          _scheduleOnboardingCompleted = true;
+                          _backgroundGuideCompleted = true;
                         });
                       },
                     )
-                  : !_backgroundGuideCompleted
-                      ? BackgroundGuidePage(
-                          api: api,
-                          onComplete: () {
-                            WidgetsBinding.instance.addPostFrameCallback((_) {
-                              _navigatorKey.currentState?.pushNamedAndRemoveUntil(
-                                  '/dashboard', (route) => false);
-                            });
-                          })
-                      : _buildDashboardShell(),
+                  : _buildDashboardShell(),
       routes: {
         '/dashboard': (context) {
           if (!loggedIn) {
@@ -443,7 +411,6 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
         studentName = result.studentName;
         loginError = null;
         _backgroundGuideCompleted = false;
-        loginMethod = result.loginMethod ?? 'sso';
       });
       widget.onAuthenticationChanged?.call(true);
       _initPushServices();
@@ -472,7 +439,10 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
     api.useSession(savedSession);
     final savedStudentId = prefs.getString('auth.studentId');
     if (savedStudentId != null && savedStudentId.isNotEmpty) {
-      api.setStudentId(savedStudentId);
+      await api.adoptStudentIdentity(
+        studentId: savedStudentId,
+        sessionNamespace: savedSession,
+      );
     }
     final guideCompleted = prefs.getBool('background_guide_completed') ?? false;
     final localOnboardingCompleted =
@@ -489,7 +459,6 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
       _scheduleOnboardingCompleted =
           cloud?.onboardingCompleted ?? localOnboardingCompleted;
       _globalDataSource = const DataSourceInfo(fromLocalCache: true);
-      loginMethod = prefs.getString('auth.loginMethod');
     });
     widget.onAuthenticationChanged?.call(true);
 
@@ -516,7 +485,13 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
         studentName = freshName;
       });
       if (freshId.isNotEmpty) {
-        api.setStudentId(freshId);
+        final currentSessionId = api.sessionId;
+        if (currentSessionId != null) {
+          await api.adoptStudentIdentity(
+            studentId: freshId,
+            sessionNamespace: currentSessionId,
+          );
+        }
       }
       // 用 API 返回的最新身份回写本地缓存，保证下次冷启动显示一致
       await prefs.setString('auth.studentName', freshName);
@@ -541,6 +516,7 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
 
   Future<void> _initPushServices() async {
     await LoginRequiredServices.initialize(
+      api: api,
       apiBaseUrl: api.baseUrl,
       sessionId: api.sessionId ?? '',
       onNotificationTap: _handleNotificationTap,
@@ -566,7 +542,7 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
     try {
       await mobile_sso.loadLibrary();
       if (!mounted) return;
-      await mobile_sso.openAuthenticatedEhallUrl(context, url);
+      await mobile_sso.openAuthenticatedEhallUrl(context, url, api: api);
     } catch (_) {}
   }
 
@@ -625,7 +601,6 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
       _cloudScheduleSettings = cloud;
       _scheduleOnboardingCompleted =
           cloud?.onboardingCompleted ?? localCompleted;
-      loginMethod = result.loginMethod;
     });
     widget.onAuthenticationChanged?.call(true);
 
@@ -648,21 +623,18 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
     }
   }
 
-  /// 云端标记开学引导已完成（best-effort，失败仅打印日志）。
-  Future<void> _markScheduleOnboardingCompleted() async {
-    try {
-      await api.saveScheduleSettings(onboardingCompleted: true);
-    } catch (error) {
-      debugPrint('同步开学引导完成标记到云端失败: error=${error.runtimeType}');
-    }
-  }
-
   Future<void> _fetchStudentInfoAfterLogin() async {
     final info = await api.fetchStudentInfo();
     if (info == null || !mounted) return;
     final studentId = info.studentId;
     if (studentId.isNotEmpty) {
-      api.setStudentId(studentId);
+      final currentSessionId = api.sessionId;
+      if (currentSessionId != null) {
+        await api.adoptStudentIdentity(
+          studentId: studentId,
+          sessionNamespace: currentSessionId,
+        );
+      }
     }
     // 姓名也以 API 返回的最新值为准并回写本地，避免首页/桌面组件一直
     // 显示登录响应里的旧姓名。
@@ -678,8 +650,6 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
   Future<void> _persistLogin(LoginResult result) async {
     _lastLoginAt = DateTime.now();
     _isAdmin = result.isAdmin ?? false;
-    // 登录响应只带 isAdmin 布尔；角色（owner/admin）以 /admin/me 为准
-    unawaited(_checkAdminStatus());
     final prefs = await SharedPreferences.getInstance();
     if (result.sessionId != null) {
       api.useSession(result.sessionId);
@@ -691,9 +661,10 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
     if (result.studentId != null) {
       await prefs.setString('auth.studentId', result.studentId!);
     }
-    if (result.loginMethod != null) {
-      await prefs.setString('auth.loginMethod', result.loginMethod!);
-    }
+    await prefs.remove('auth.loginMethod');
+    // 登录响应只带 isAdmin 布尔；角色（owner/admin）以 /admin/me 为准。
+    // 必须在写入本次登录的新会话后请求，避免沿用已失效的旧会话。
+    unawaited(_checkAdminStatus());
   }
 
   /// 确认当前会话的管理员身份与角色（best-effort）。
@@ -702,8 +673,7 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
   Future<void> _checkAdminStatus() async {
     if (api.sessionId == null || api.sessionId!.isEmpty) return;
     try {
-      final data =
-          await api.adminMe().timeout(const Duration(seconds: 4));
+      final data = await api.adminMe().timeout(const Duration(seconds: 4));
       if (!mounted) return;
       setState(() {
         _isAdmin = data['isAdmin'] == true || data['role'] != null;
@@ -744,7 +714,6 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
       _scheduleOnboardingCompleted = false;
       _cloudScheduleSettings = null; // 清空云端偏好，防止多账号串数据
       _globalDataSource = const DataSourceInfo();
-      loginMethod = null;
       loginError = null;
       _isAdmin = false;
       _isOwner = false;
@@ -771,6 +740,16 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
             debugPrint('注销 Web Push 订阅失败: error=${error.runtimeType}');
           }
         }
+        if (!kIsWeb) {
+          try {
+            await LoginRequiredServices.unregisterIosPushToken(
+              api,
+              activeSessionId,
+            );
+          } catch (error) {
+            debugPrint('注销 iOS 推送令牌失败: error=${error.runtimeType}');
+          }
+        }
         try {
           await api.revokeSession(activeSessionId);
         } catch (error) {
@@ -783,10 +762,28 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
       } catch (error) {
         debugPrint('清除本地登录状态失败: error=${error.runtimeType}');
       }
-      if (activeStudentId != null && activeStudentId.isNotEmpty) {
+      if (!kIsWeb) {
+        try {
+          await mobile_sso.loadLibrary();
+          await mobile_sso.clearMobileSsoCookies();
+        } catch (error) {
+          debugPrint('清除 WebView 登录 Cookie 失败: error=${error.runtimeType}');
+        }
+      }
+      if ((activeStudentId != null && activeStudentId.isNotEmpty) ||
+          (activeSessionId != null && activeSessionId.isNotEmpty)) {
         try {
           await persistent_cache.loadLibrary();
-          await persistent_cache.PersistentCache.clearForStudent(activeStudentId);
+          if (activeStudentId != null && activeStudentId.isNotEmpty) {
+            await persistent_cache.PersistentCache.clearForStudent(
+              activeStudentId,
+            );
+          }
+          if (activeSessionId != null && activeSessionId.isNotEmpty) {
+            await persistent_cache.PersistentCache.clearForStudent(
+              activeSessionId,
+            );
+          }
         } catch (error) {
           debugPrint('清除账号缓存失败: error=${error.runtimeType}');
         }
@@ -832,7 +829,6 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
       },
       onSettingsPressed: _showBackgroundGuide,
       dataSource: _globalDataSource,
-      loginMethod: loginMethod,
       cloudFirstWeeks: _cloudScheduleSettings?.firstWeeks ?? const {},
       cloudAutoWeek: _cloudScheduleSettings?.autoWeek,
       isAdmin: _isAdmin,

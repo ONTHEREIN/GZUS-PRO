@@ -11,6 +11,8 @@ import 'package:encrypt/encrypt.dart' as encrypt;
 import 'package:pointycastle/asymmetric/api.dart';
 
 import 'auth_storage.dart';
+import 'calendar_import.dart';
+import 'leave_attachment.dart';
 import 'models/schedule_settings.dart';
 import 'persistent_cache.dart';
 import 'schedule_utils.dart';
@@ -40,7 +42,6 @@ String _defaultApiBaseUrl() {
 
   return onrein;
 }
-
 
 http.Client _createDefaultClient() {
   if (kIsWeb) {
@@ -82,6 +83,13 @@ EcardDirectClient Function()? debugEcardDirectClientFactoryForTests;
 EcardDirectClient _createEcardDirectClient() =>
     debugEcardDirectClientFactoryForTests?.call() ?? EcardDirectClient();
 
+class _Fetched<T> {
+  const _Fetched({required this.data, required this.source});
+
+  final T data;
+  final DataSourceInfo source;
+}
+
 class ApiClient {
   ApiClient({http.Client? httpClient, String? baseUrl, RequestCache? cache})
       : _http = httpClient ?? _createDefaultClient(),
@@ -114,7 +122,6 @@ class ApiClient {
   String? _rsaPublicKeyPem;
   String? _rsaKeyId;
   Future<void>? _publicKeyFuture;
-
 
   /// 当自动重新登录失败时调用的回调，UI 层可用来导航到登录页
   void Function()? onReloginFailed;
@@ -161,6 +168,20 @@ class ApiClient {
       _persistentCache = null;
       _persistentCacheFuture = null;
     }
+  }
+
+  Future<void> adoptStudentIdentity({
+    required String studentId,
+    required String sessionNamespace,
+  }) async {
+    if (studentId.isEmpty) {
+      throw ArgumentError.value(studentId, 'studentId', '学号不能为空');
+    }
+    await PersistentCache.migrateNamespace(
+      fromNamespace: sessionNamespace,
+      toNamespace: studentId,
+    );
+    setStudentId(studentId);
   }
 
   Future<PersistentCache> _getPersistentCache() async {
@@ -240,7 +261,7 @@ class ApiClient {
 
   Future<DataResult<T>> _cacheFirstObject<T>({
     required String cacheKey,
-    required Future<Map<String, dynamic>> Function() fetch,
+    required Future<_Fetched<Map<String, dynamic>>> Function() fetch,
     required T Function(Map<String, dynamic>) fromJson,
     bool forceRefresh = false,
     Duration? memoryTtl,
@@ -255,10 +276,11 @@ class ApiClient {
     final pcache = await _getPersistentCache();
 
     Future<DataResult<T>> fetchAndCache() async {
-      final data = await fetch();
+      final fetched = await fetch();
+      final data = fetched.data;
       _cache.set(cacheKey, data, memoryTtl);
       await pcache.set(cacheKey, data);
-      return DataResult<T>(data: fromJson(data));
+      return DataResult<T>(data: fromJson(data), source: fetched.source);
     }
 
     if (!forceRefresh) {
@@ -317,7 +339,7 @@ class ApiClient {
 
   Future<DataResult<List<T>>> _cacheFirstList<T>({
     required String cacheKey,
-    required Future<List<Map<String, dynamic>>> Function() fetch,
+    required Future<_Fetched<List<Map<String, dynamic>>>> Function() fetch,
     required T Function(Map<String, dynamic>) fromJson,
     bool forceRefresh = false,
     Duration? memoryTtl,
@@ -337,11 +359,13 @@ class ApiClient {
     final pcache = await _getPersistentCache();
 
     Future<DataResult<List<T>>> fetchAndCache() async {
-      final data = await fetch();
+      final fetched = await fetch();
+      final data = fetched.data;
       _cache.set(cacheKey, data, memoryTtl);
       await pcache.set(cacheKey, data);
       return DataResult<List<T>>(
         data: data.map((item) => fromJson(item)).toList(),
+        source: fetched.source,
       );
     }
 
@@ -411,41 +435,38 @@ class ApiClient {
     return uri.replace(queryParameters: {'return_url': returnUrl}).toString();
   }
 
-  Future<LoginResult> login(String account, String password) async {
-    _account = account;
-    final response = await _postLoginWithFreshKeyRetry(
-      '/auth/login',
-      account,
-      password,
-    );
-    final result = LoginResult.fromJson(response);
-    sessionId = result.sessionId;
-    _captureTransientEhallAuth(result);
-    _cache.clear();
-    await _saveEhallAuth(result);
-    return result;
-  }
-
-  Future<LoginResult> submitCaptcha(String token, String code) async {
-    final response = await _post('/auth/captcha', {
-      'captchaToken': token,
-      'code': code,
-    });
-    final result = LoginResult.fromJson(response);
-    sessionId = result.sessionId;
-    _captureTransientEhallAuth(result);
-    _cache.clear();
-    await _saveEhallAuth(result);
-    return result;
-  }
-
   Future<LoginResult> completeLySso(String ssoCode) async {
-    final response = await _post('/auth/ly/complete', {'ssoCode': ssoCode});
+    final response =
+        await _postWithoutRelogin('/auth/ly/complete', {'ssoCode': ssoCode});
+    return _applySsoLoginResponse(response);
+  }
+
+  Future<String> startNativeLySso(String verifier) async {
+    final response = await _postWithoutRelogin(
+        '/auth/ly/native-start', {'verifier': verifier});
+    final authorizationUrl = response['authorizationUrl'];
+    if (authorizationUrl is! String || authorizationUrl.isEmpty) {
+      throw ApiException('服务器未返回统一身份认证地址');
+    }
+    return authorizationUrl;
+  }
+
+  Future<LoginResult> completeNativeLySso(String code, String verifier) async {
+    final response = await _postWithoutRelogin(
+      '/auth/ly/native-complete',
+      {'code': code, 'verifier': verifier},
+    );
+    return _applySsoLoginResponse(response);
+  }
+
+  Future<LoginResult> _applySsoLoginResponse(
+      Map<String, dynamic> response) async {
     final result = LoginResult.fromJson(response);
     sessionId = result.sessionId;
+    await _adoptLoginIdentity(result);
     _captureTransientEhallAuth(result);
     _cache.clear();
-    await _saveEhallAuth(result);
+    await _saveSchoolAuth(result);
     return result;
   }
 
@@ -458,12 +479,13 @@ class ApiClient {
     );
     final result = LoginResult.fromJson(response);
     sessionId = result.sessionId;
+    await _adoptLoginIdentity(result);
     _captureTransientEhallAuth(result);
     _cache.clear();
     if (result.credentialToken != null) {
       _credentialToken = result.credentialToken;
     }
-    await _saveEhallAuth(result);
+    await _saveSchoolAuth(result);
     return result;
   }
 
@@ -474,11 +496,11 @@ class ApiClient {
   ) async {
     await fetchPublicKey();
     try {
-      return await _post(path, _loginPayload(account, password));
+      return await _postWithoutRelogin(path, _loginPayload(account, password));
     } on ApiException catch (e) {
       if (!_isPasswordDecryptFailure(e.message)) rethrow;
       await _refreshPublicKey();
-      return _post(path, _loginPayload(account, password));
+      return _postWithoutRelogin(path, _loginPayload(account, password));
     }
   }
 
@@ -557,7 +579,7 @@ class ApiClient {
         rethrow;
       }
     }
-    throw ApiException('教务系统会话已失效，请重新登录', statusCode: 401);
+    throw ApiException('登录状态已失效，请重新登录', statusCode: 401);
   }
 
   Future<LoginResult> _reloginWithCredentialToken(
@@ -572,12 +594,25 @@ class ApiClient {
     final decoded = _decode(response);
     final result = LoginResult.fromJson(decoded as Map<String, dynamic>);
     sessionId = result.sessionId;
+    await _adoptLoginIdentity(result);
     _captureTransientEhallAuth(result);
     _cache.clear();
 
     await saveCredentialToken(result.credentialToken ?? credentialToken);
-    await _saveEhallAuth(result);
+    await _saveSchoolAuth(result);
     return result;
+  }
+
+  Future<void> _adoptLoginIdentity(LoginResult result) async {
+    final studentId = result.studentId;
+    final currentSessionId = sessionId;
+    if (studentId == null || studentId.isEmpty || currentSessionId == null) {
+      return;
+    }
+    await adoptStudentIdentity(
+      studentId: studentId,
+      sessionNamespace: currentSessionId,
+    );
   }
 
   Future<void> saveCredentialToken(String? credentialToken) async {
@@ -607,12 +642,13 @@ class ApiClient {
     await prefs.remove('auth.password');
   }
 
-  Future<void> _saveEhallAuth(LoginResult result) async {
+  Future<void> _saveSchoolAuth(LoginResult result) async {
     final prefs = await SharedPreferences.getInstance();
     if (result.sessionId != null && result.sessionId!.isNotEmpty) {
       await prefs.setString('auth.sessionId', result.sessionId!);
     }
-    await _authStorage.saveEhallAuth(
+    await _authStorage.saveSchoolAuth(
+      result.jwxtCookies,
       result.ehallCookies,
       result.ehallAuthToken,
     );
@@ -623,6 +659,9 @@ class ApiClient {
     final sensitiveAuth = await _authStorage.load();
     _account = prefs.getString('auth.account');
     _credentialToken = sensitiveAuth.credentialToken;
+    if (_isSchoolDirectEnabled) {
+      _jwxtCookies = sensitiveAuth.jwxtCookies;
+    }
     _ehallCookies = sensitiveAuth.ehallCookies;
     _ehallAuthToken = sensitiveAuth.ehallAuthToken;
     await prefs.remove('auth.password');
@@ -702,10 +741,15 @@ class ApiClient {
   Future<DataResult<StudentInfo>> me({bool forceRefresh = false}) =>
       _cacheFirstObject<StudentInfo>(
         cacheKey: 'me',
-        fetch: () => _get('/me'),
+        fetch: () => _plainObject(_get('/me')),
         fromJson: (json) => StudentInfo.fromJson(json),
         forceRefresh: forceRefresh,
       );
+
+  StudentInfo? cachedStudentInfo() {
+    final cached = _cache.get<Map<String, dynamic>>('me');
+    return cached == null ? null : StudentInfo.fromJson(cached);
+  }
 
   /// Fetch student info asynchronously after login.
   /// This calls the /auth/student-info endpoint which was separated from
@@ -729,7 +773,15 @@ class ApiClient {
       final info = StudentInfo.fromJson(data['info'] as Map<String, dynamic>);
       final studentId = data['studentId'] as String?;
       if (studentId != null && studentId.isNotEmpty) {
-        setStudentId(studentId);
+        final currentSessionId = sessionId;
+        if (currentSessionId != null) {
+          await adoptStudentIdentity(
+            studentId: studentId,
+            sessionNamespace: currentSessionId,
+          );
+        } else {
+          setStudentId(studentId);
+        }
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('auth.studentId', studentId);
       }
@@ -802,30 +854,80 @@ class ApiClient {
     return _getList(path);
   }
 
-  Future<Map<String, dynamic>> _schoolDirectObjectOrApi({
+  Future<_Fetched<List<Map<String, dynamic>>>> _academicListOrDirect({
+    required String path,
+    required Future<List<Map<String, dynamic>>> Function(SchoolDirectClient)
+        direct,
+  }) async {
+    try {
+      return await _getListWithSource(path);
+    } catch (error, stackTrace) {
+      if (!_isApiUnavailable(error)) {
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      final client = _schoolDirectClient();
+      if (client == null) Error.throwWithStackTrace(error, stackTrace);
+      try {
+        return _Fetched(
+          data: await direct(client),
+          source: const DataSourceInfo(),
+        );
+      } catch (_) {
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+    }
+  }
+
+  Future<_Fetched<Map<String, dynamic>>> _academicObjectOrDirect({
     required String path,
     required Future<Map<String, dynamic>> Function(SchoolDirectClient) direct,
   }) async {
-    final client = _schoolDirectClient();
-    if (client != null) {
+    try {
+      return await _getObjectWithSource(path);
+    } catch (error, stackTrace) {
+      if (!_isApiUnavailable(error)) {
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      final client = _schoolDirectClient();
+      if (client == null) Error.throwWithStackTrace(error, stackTrace);
       try {
-        return await direct(client);
+        return _Fetched(
+          data: await direct(client),
+          source: const DataSourceInfo(),
+        );
       } catch (_) {
-        // Direct school access is best-effort; keep existing API fallback.
+        Error.throwWithStackTrace(error, stackTrace);
       }
     }
-    return _get(path);
   }
+
+  bool _isApiUnavailable(Object error) =>
+      error is TimeoutException ||
+      error is SocketException ||
+      error is http.ClientException ||
+      (error is ApiException &&
+          error.statusCode != null &&
+          error.statusCode! >= 500);
+
+  Future<_Fetched<Map<String, dynamic>>> _plainObject(
+    Future<Map<String, dynamic>> request,
+  ) async =>
+      _Fetched(data: await request, source: const DataSourceInfo());
+
+  Future<_Fetched<List<Map<String, dynamic>>>> _plainList(
+    Future<List<Map<String, dynamic>>> request,
+  ) async =>
+      _Fetched(data: await request, source: const DataSourceInfo());
 
   Future<DataResult<ScheduleResult>> schedule(
       {required int year, required int term, bool forceRefresh = false}) async {
     final cacheKey = 'schedule_${year}_$term';
     return _cacheFirstList<ScheduleCourse>(
       cacheKey: cacheKey,
-      fetch: () => _schoolDirectListOrApi(
+      fetch: () => _plainList(_schoolDirectListOrApi(
         path: '/schedule?year=$year&term=$term',
         direct: (client) => client.schedule(year: year, term: term),
-      ),
+      )),
       fromJson: (json) => ScheduleCourse.fromJson(json),
       forceRefresh: forceRefresh,
     ).then(
@@ -843,7 +945,7 @@ class ApiClient {
           {required int year, required int term, bool forceRefresh = false}) =>
       _cacheFirstList<ExamItem>(
         cacheKey: 'exams_${year}_$term',
-        fetch: () => _schoolDirectListOrApi(
+        fetch: () => _academicListOrDirect(
           path: '/exams?year=$year&term=$term',
           direct: (client) => client.exams(year: year, term: term),
         ),
@@ -855,10 +957,10 @@ class ApiClient {
           {required int year, required int term, bool forceRefresh = false}) =>
       _cacheFirstList<GradeItem>(
         cacheKey: 'grades_${year}_$term',
-        fetch: () => _schoolDirectListOrApi(
+        fetch: () => _plainList(_schoolDirectListOrApi(
           path: '/grades?year=$year&term=$term',
           direct: (client) => client.grades(year: year, term: term),
-        ),
+        )),
         fromJson: (json) => GradeItem.fromJson(json),
         forceRefresh: forceRefresh,
       );
@@ -867,7 +969,7 @@ class ApiClient {
           {required int year, required int term, bool forceRefresh = false}) =>
       _cacheFirstObject<AttendanceResponse>(
         cacheKey: 'attendance_${year}_$term',
-        fetch: () => _schoolDirectObjectOrApi(
+        fetch: () => _academicObjectOrDirect(
           path: '/attendance?year=$year&term=$term',
           direct: (client) => client.attendance(year: year, term: term),
         ),
@@ -875,13 +977,40 @@ class ApiClient {
         forceRefresh: forceRefresh,
       );
 
+  /// 返回 dashboard 已写入内存的考勤快照，供详情页首屏直接复用。
+  AttendanceResponse? cachedAttendance({required int year, required int term}) {
+    final cached = _cache.get<Map<String, dynamic>>('attendance_${year}_$term');
+    return cached == null ? null : AttendanceResponse.fromJson(cached);
+  }
+
+  ScheduleResult? cachedSchedule({required int year, required int term}) {
+    final cached = _cache.get<List<dynamic>>('schedule_${year}_$term');
+    if (cached == null) return null;
+    final items = cached
+        .whereType<Map<String, dynamic>>()
+        .map(ScheduleCourse.fromJson)
+        .toList();
+    return ScheduleResult(
+      items: items,
+      raw: items.map((item) => item.raw).toList(),
+    );
+  }
+
+  List<CreditItem>? cachedCredits() {
+    final cached = _cache.get<List<dynamic>>('credits');
+    return cached
+        ?.whereType<Map<String, dynamic>>()
+        .map(CreditItem.fromJson)
+        .toList();
+  }
+
   Future<DataResult<List<CreditItem>>> credits({bool forceRefresh = false}) =>
       _cacheFirstList<CreditItem>(
         cacheKey: 'credits',
-        fetch: () => _schoolDirectListOrApi(
+        fetch: () => _plainList(_schoolDirectListOrApi(
           path: '/credits',
           direct: (client) => client.credits(),
-        ),
+        )),
         fromJson: (json) => CreditItem.fromJson(json),
         forceRefresh: forceRefresh,
       );
@@ -893,11 +1022,123 @@ class ApiClient {
   }) =>
       _cacheFirstObject<WeatherData>(
         cacheKey: _weatherCacheKey(lat, lon),
-        fetch: () => _get(_weatherPath(lat, lon)),
+        fetch: () => _plainObject(_getDirectWeather(lat, lon)),
         fromJson: (json) => WeatherData.fromJson(json),
         forceRefresh: forceRefresh,
         memoryTtl: const Duration(minutes: 30),
       );
+
+  Future<Map<String, dynamic>> _getDirectWeather(
+      double? lat, double? lon) async {
+    final location = lat != null && lon != null
+        ? '${lat.toStringAsFixed(2)},${lon.toStringAsFixed(2)}'
+        : 'Guangzhou';
+    final response = await _http
+        .get(
+          Uri.https('wttr.in', '/$location', {'format': 'j1'}),
+          headers: {'Accept': 'application/json', 'User-Agent': 'OneGZUS/1.0'},
+        )
+        .timeout(_connectTimeout)
+        .timeout(_requestTimeout);
+    return _normalizeWttrWeather(_decodeObject(response));
+  }
+
+  Map<String, dynamic> _normalizeWttrWeather(Map<String, dynamic> raw) {
+    final current = _firstWeatherMap(raw['current_condition']);
+    final nearest = _firstWeatherMap(raw['nearest_area']);
+    final days = raw['weather'] is List<dynamic>
+        ? (raw['weather'] as List<dynamic>).whereType<Map<String, dynamic>>()
+        : const <Map<String, dynamic>>[];
+    final code = '${current['weatherCode'] ?? '116'}';
+    final forecasts = <Map<String, dynamic>>[];
+    for (final day in days) {
+      final hourly = day['hourly'] is List<dynamic>
+          ? (day['hourly'] as List<dynamic>)
+              .whereType<Map<String, dynamic>>()
+              .toList()
+          : const <Map<String, dynamic>>[];
+      if (hourly.isEmpty) continue;
+      final mid = hourly[hourly.length ~/ 2];
+      final date = '${day['date'] ?? ''}';
+      forecasts.add({
+        'date': date,
+        'week': _weatherWeekday(date),
+        'temp_max': _weatherDouble(day['maxtempC']),
+        'temp_min': _weatherDouble(day['mintempC']),
+        'weather_day': _weatherDescription('${mid['weatherCode'] ?? '116'}'),
+      });
+    }
+    final area = _firstWeatherValue(nearest['areaName']);
+    final region = _firstWeatherValue(nearest['region']);
+    return {
+      'province': region.isEmpty ? '广东' : region,
+      'city': area.isEmpty ? '广州' : area,
+      'district': area.isEmpty ? '广州' : area,
+      'weather': _weatherDescription(code),
+      'weather_icon': code,
+      'temperature': _weatherDouble(current['temp_C']),
+      'wind_direction': '${current['winddir16Point'] ?? ''}',
+      'wind_power': _weatherWindPower(_weatherDouble(current['windspeedKmph'])),
+      'humidity': _weatherInt(current['humidity']),
+      'temp_max': days.isEmpty ? null : _weatherDouble(days.first['maxtempC']),
+      'temp_min': days.isEmpty ? null : _weatherDouble(days.first['mintempC']),
+      'forecast': forecasts,
+    };
+  }
+
+  Map<String, dynamic> _firstWeatherMap(dynamic value) {
+    if (value is List<dynamic> && value.isNotEmpty) {
+      final first = value.first;
+      if (first is Map<String, dynamic>) return first;
+    }
+    return const <String, dynamic>{};
+  }
+
+  String _firstWeatherValue(dynamic value) {
+    final first = _firstWeatherMap(value);
+    return '${first['value'] ?? ''}';
+  }
+
+  double _weatherDouble(dynamic value) =>
+      value is num ? value.toDouble() : double.tryParse('$value') ?? 0;
+
+  int _weatherInt(dynamic value) =>
+      value is num ? value.toInt() : int.tryParse('$value') ?? 0;
+
+  String _weatherDescription(String code) =>
+      const {
+        '113': '晴',
+        '116': '多云',
+        '119': '阴',
+        '122': '阴',
+        '143': '雾',
+        '176': '小雨',
+        '200': '雷阵雨',
+        '299': '中雨',
+        '305': '大雨',
+        '308': '暴雨',
+        '323': '中雪',
+        '329': '大雪',
+        '386': '雷阵雨',
+      }[code] ??
+      '多云';
+
+  String _weatherWindPower(double speed) {
+    if (speed < 6) return '1级';
+    if (speed < 12) return '2级';
+    if (speed < 20) return '3级';
+    if (speed < 29) return '4级';
+    if (speed < 39) return '5级';
+    if (speed < 50) return '6级';
+    if (speed < 62) return '7级';
+    return '8级+';
+  }
+
+  String _weatherWeekday(String date) {
+    final parsed = DateTime.tryParse(date);
+    if (parsed == null) return '';
+    return const ['周一', '周二', '周三', '周四', '周五', '周六', '周日'][parsed.weekday - 1];
+  }
 
   Future<DataResult<DashboardSnapshot>> dashboard({
     required int year,
@@ -907,9 +1148,9 @@ class ApiClient {
   }) async {
     final result = await _cacheFirstObject<DashboardSnapshot>(
       cacheKey: 'dashboard_${year}_${term}_$week',
-      fetch: () => _getDashboardObject(
+      fetch: () => _plainObject(_getDashboardObject(
         '/dashboard?year=$year&term=$term&week=$week',
-      ),
+      )),
       fromJson: (json) => DashboardSnapshot.fromJson(json),
       forceRefresh: forceRefresh,
       memoryTtl: const Duration(minutes: 2),
@@ -929,7 +1170,6 @@ class ApiClient {
       final mod = snapshot.module(module);
       if (!mod.hasUsableData) return;
       final items = mod.listData();
-      if (items.isEmpty) return;
       _cache.set(cacheKey, items);
     }
 
@@ -944,15 +1184,10 @@ class ApiClient {
     seedList('schedule', 'schedule_${year}_$term');
     seedList('grades', 'grades_${year}_$term');
     seedList('exams', 'exams_${year}_$term');
+    seedObject('me', 'me');
+    seedList('notices', 'notices');
     seedObject('attendance', 'attendance_${year}_$term');
     seedList('credits', 'credits');
-  }
-
-  String _weatherPath(double? lat, double? lon) {
-    if (lat != null && lon != null) {
-      return '/weather?lat=${lat.toStringAsFixed(2)}&lon=${lon.toStringAsFixed(2)}';
-    }
-    return '/weather';
   }
 
   String _weatherCacheKey(double? lat, double? lon) {
@@ -966,7 +1201,7 @@ class ApiClient {
       {bool forceRefresh = false}) async {
     final result = await _cacheFirstList<NoticeItem>(
       cacheKey: 'notices',
-      fetch: () => _getList('/notices'),
+      fetch: () => _plainList(_getList('/notices')),
       fromJson: (json) => NoticeItem.fromJson(json),
       forceRefresh: forceRefresh,
       memoryTtl: const Duration(minutes: 2),
@@ -977,13 +1212,24 @@ class ApiClient {
     );
   }
 
+  List<NoticeItem>? cachedNotices() {
+    final cached = _cache.get<List<dynamic>>('notices');
+    return cached
+        ?.whereType<Map<String, dynamic>>()
+        .map(NoticeItem.fromJson)
+        .where(_isReadableNoticeItem)
+        .toList();
+  }
+
   Future<DataResult<NoticeDetail>> fetchNoticeDetail(
     String url, {
     bool forceRefresh = false,
   }) =>
       _cacheFirstObject<NoticeDetail>(
         cacheKey: 'notice_detail_${Uri.encodeComponent(url)}',
-        fetch: () => _get('/notices/detail?url=${Uri.encodeComponent(url)}'),
+        fetch: () => _plainObject(
+          _get('/notices/detail?url=${Uri.encodeComponent(url)}'),
+        ),
         fromJson: (json) => NoticeDetail.fromJson(json),
         forceRefresh: forceRefresh,
       );
@@ -1014,8 +1260,7 @@ class ApiClient {
     required DateTime endDate,
     required DateTime firstWeekStart,
     required String reason,
-    required String attachmentName,
-    required Uint8List attachmentBytes,
+    required List<PickedAttachment> attachments,
     List<MatchedTeacherItem> teacherHandlers = const [],
     List<Map<String, dynamic>> courses = const [],
   }) async {
@@ -1026,8 +1271,13 @@ class ApiClient {
       'endDate': dateText(endDate),
       'firstWeekStart': dateText(firstWeekStart),
       'reason': reason,
-      'attachmentName': attachmentName,
-      'attachmentContentBase64': base64Encode(attachmentBytes),
+      'attachments': [
+        for (final attachment in attachments)
+          {
+            'attachmentName': attachment.name,
+            'attachmentContentBase64': base64Encode(attachment.bytes),
+          },
+      ],
       if (teacherHandlers.isNotEmpty)
         'teacherHandlers':
             teacherHandlers.map((item) => item.toJson()).toList(),
@@ -1059,7 +1309,7 @@ class ApiClient {
           {bool forceRefresh = false}) async =>
       (await _cacheFirstList<EhallAffairItem>(
         cacheKey: 'ehall_affairs',
-        fetch: () => _getList('/ehall/affairs'),
+        fetch: () => _plainList(_getList('/ehall/affairs')),
         fromJson: (json) => EhallAffairItem.fromJson(json),
         forceRefresh: forceRefresh,
         memoryTtl: const Duration(minutes: 10),
@@ -1070,7 +1320,7 @@ class ApiClient {
           {bool forceRefresh = false}) async =>
       (await _cacheFirstList<EhallApplicationItem>(
         cacheKey: 'ehall_applications',
-        fetch: () => _getList('/ehall/applications'),
+        fetch: () => _plainList(_getList('/ehall/applications')),
         fromJson: (json) => EhallApplicationItem.fromJson(json),
         forceRefresh: forceRefresh,
         memoryTtl: const Duration(minutes: 10),
@@ -1081,7 +1331,7 @@ class ApiClient {
           {bool forceRefresh = false}) async =>
       (await _cacheFirstObject<EhallProgressOverview>(
         cacheKey: 'ehall_progress_overview',
-        fetch: () => _get('/ehall/progress'),
+        fetch: () => _plainObject(_get('/ehall/progress')),
         fromJson: (json) => EhallProgressOverview.fromJson(json),
         forceRefresh: forceRefresh,
         memoryTtl: const Duration(minutes: 5),
@@ -1116,7 +1366,7 @@ class ApiClient {
         cacheKey: query != null && query.trim().isNotEmpty
             ? 'ecard_rooms_q_${query.trim().toLowerCase()}'
             : 'ecard_rooms',
-        fetch: () => _getList(path),
+        fetch: () => _plainList(_getList(path)),
         fromJson: (json) => EcardRoomItem.fromJson(json),
         forceRefresh: forceRefresh,
         memoryTtl: const Duration(minutes: 30),
@@ -1133,7 +1383,7 @@ class ApiClient {
       {bool forceRefresh = false}) async {
     final result = await _cacheFirstObject<EcardSummary>(
       cacheKey: 'ecard_summary',
-      fetch: () => _get('/ecard/summary'),
+      fetch: () => _plainObject(_get('/ecard/summary')),
       fromJson: (json) => EcardSummary.fromJson(json),
       forceRefresh: forceRefresh,
     );
@@ -1321,20 +1571,14 @@ class ApiClient {
     return EcardSummary.fromJson(data);
   }
 
-  Future<EcardConsumptionResponse> ecardConsumption(
-      {String? month, bool forceRefresh = false}) async {
+  Future<EcardConsumptionResponse> ecardConsumption({String? month}) async {
     try {
-      return (await _cacheFirstObject<EcardConsumptionResponse>(
-        cacheKey:
-            month == null ? 'ecard_consumption' : 'ecard_consumption_$month',
-        fetch: () => _get(month == null
-                ? '/ecard/consumption'
-                : '/ecard/consumption?month=$month')
-            .timeout(const Duration(seconds: 12)),
-        fromJson: (json) => EcardConsumptionResponse.fromJson(json),
-        forceRefresh: forceRefresh,
-      ))
-          .data;
+      final path = month == null
+          ? '/ecard/consumption'
+          : '/ecard/consumption?month=$month';
+      return EcardConsumptionResponse.fromJson(
+        await _get(path).timeout(const Duration(seconds: 12)),
+      );
     } on TimeoutException {
       return EcardConsumptionResponse.fromJson({
         'status': 'limited',
@@ -1342,6 +1586,12 @@ class ApiClient {
         'items': const [],
       });
     }
+  }
+
+  Future<EcardConsumptionOverviewResponse> ecardConsumptionOverview() async {
+    return EcardConsumptionOverviewResponse.fromJson(
+      await _get('/ecard/consumption/overview'),
+    );
   }
 
   Future<List<Map<String, dynamic>>> pollPushMessages() async {
@@ -1357,6 +1607,31 @@ class ApiClient {
   Future<Map<String, dynamic>> getWebPushConfig() async {
     final data = await _get('/push/web/config');
     return data;
+  }
+
+  Future<void> registerIosPushToken({
+    required String deviceToken,
+    required String environment,
+  }) async {
+    await _post('/push/ios/register', {
+      'deviceToken': deviceToken,
+      'environment': environment,
+    });
+  }
+
+  Future<void> unregisterIosPushToken({
+    required String activeSessionId,
+    required String deviceToken,
+    required String environment,
+  }) async {
+    await _postSessionCleanupWithBody(
+      '/push/ios/unregister',
+      activeSessionId,
+      {
+        'deviceToken': deviceToken,
+        'environment': environment,
+      },
+    );
   }
 
   // ─── 管理后台 ──────────────────────────────────────────────
@@ -1464,6 +1739,54 @@ class ApiClient {
   Future<Map<String, dynamic>> adminDeleteNotice(int noticeId) async =>
       _delete('/admin/notices/$noticeId');
 
+  /// 未登录状态可读取的登录页轮播内容。
+  Future<List<LoginCarouselSlide>> loginCarouselSlides() async {
+    final items = await _getList('/content/login-slides');
+    return items.map(LoginCarouselSlide.fromJson).toList();
+  }
+
+  // ─── 管理后台 · 登录页轮播 ─────────────────────────────
+
+  Future<Map<String, dynamic>> adminLoginSlides() async =>
+      _get('/admin/login-slides');
+
+  Future<Map<String, dynamic>> adminCreateLoginSlide({
+    required String title,
+    required String imageData,
+    required String imageMime,
+    required bool published,
+    String? description,
+  }) =>
+      _post('/admin/login-slides', {
+        'title': title,
+        'description': description,
+        'imageData': imageData,
+        'imageMime': imageMime,
+        'published': published,
+      });
+
+  Future<Map<String, dynamic>> adminUpdateLoginSlide(
+    int slideId, {
+    String? title,
+    String? description,
+    String? imageData,
+    String? imageMime,
+    bool? published,
+  }) =>
+      _put('/admin/login-slides/$slideId', {
+        'title': title,
+        'description': description,
+        'imageData': imageData,
+        'imageMime': imageMime,
+        'published': published,
+      });
+
+  Future<Map<String, dynamic>> adminReorderLoginSlides(List<int> ids) =>
+      _put('/admin/login-slides/actions/order', {'ids': ids});
+
+  Future<Map<String, dynamic>> adminDeleteLoginSlide(int slideId) async =>
+      _delete('/admin/login-slides/$slideId');
+
   // ─── 管理后台 · 公众号文章 ─────────────────────────────
 
   /// 公众号同步通道状态（是否配置合集、上次同步时间）。
@@ -1481,7 +1804,7 @@ class ApiClient {
 
   /// 隐藏/取消隐藏公众号文章。
   Future<Map<String, dynamic>> adminWechatSetHidden(
-          int articleId, bool hidden) async {
+      int articleId, bool hidden) async {
     final action = hidden ? 'hide' : 'unhide';
     return _post('/admin/wechat/articles/$articleId/$action', const {});
   }
@@ -1518,6 +1841,35 @@ class ApiClient {
     );
   }
 
+  DataSourceInfo _sourceFromResponse(http.Response response) {
+    if (response.headers['x-data-source'] != 'cache') {
+      return const DataSourceInfo();
+    }
+    return DataSourceInfo(
+      fromCache: true,
+      cachedAt: DateTime.tryParse(response.headers['x-data-cached-at'] ?? ''),
+      isOffline: true,
+    );
+  }
+
+  Future<_Fetched<Map<String, dynamic>>> _getObjectWithSource(
+    String path,
+  ) async {
+    return _withReloginRetry(
+      () async {
+        final url = _requireBaseUrl();
+        final response = await _http
+            .get(Uri.parse('$url$path'), headers: _headers())
+            .timeout(_connectTimeout)
+            .timeout(_requestTimeout);
+        return _Fetched(
+          data: _decodeObject(response),
+          source: _sourceFromResponse(response),
+        );
+      },
+    );
+  }
+
   Future<List<Map<String, dynamic>>> _getList(String path) async {
     return _withReloginRetry(
       () async {
@@ -1535,22 +1887,45 @@ class ApiClient {
     );
   }
 
-  Future<Map<String, dynamic>> _post(
-      String path, Map<String, dynamic> body) async {
+  Future<_Fetched<List<Map<String, dynamic>>>> _getListWithSource(
+    String path,
+  ) async {
     return _withReloginRetry(
       () async {
         final url = _requireBaseUrl();
         final response = await _http
-            .post(
-              Uri.parse('$url$path'),
-              headers: _headers(),
-              body: jsonEncode(body),
-            )
+            .get(Uri.parse('$url$path'), headers: _headers())
             .timeout(_connectTimeout)
             .timeout(_requestTimeout);
-        return _decodeObject(response);
+        final decoded = _decode(response);
+        if (decoded is! List<dynamic>) {
+          throw ApiException('服务器返回了意外的数据格式');
+        }
+        return _Fetched(
+          data: decoded.whereType<Map<String, dynamic>>().toList(),
+          source: _sourceFromResponse(response),
+        );
       },
     );
+  }
+
+  Future<Map<String, dynamic>> _post(
+      String path, Map<String, dynamic> body) async {
+    return _withReloginRetry(() => _postWithoutRelogin(path, body));
+  }
+
+  Future<Map<String, dynamic>> _postWithoutRelogin(
+      String path, Map<String, dynamic> body) async {
+    final url = _requireBaseUrl();
+    final response = await _http
+        .post(
+          Uri.parse('$url$path'),
+          headers: _headers(),
+          body: jsonEncode(body),
+        )
+        .timeout(_connectTimeout)
+        .timeout(_requestTimeout);
+    return _decodeObject(response);
   }
 
   Future<Map<String, dynamic>> _patch(
@@ -1691,7 +2066,7 @@ class ApiClient {
             now.difference(_lastReloginAttempt!) <
                 Duration(seconds: backoffSeconds)) {
           // Too soon to retry — rethrow so the caller sees the 401
-          throw ApiException('教务系统会话已失效，请重新登录', statusCode: 401);
+          throw ApiException('登录状态已失效，请重新登录', statusCode: 401);
         }
         _lastReloginAttempt = now;
         bool reloginSucceeded = false;
@@ -1783,6 +2158,44 @@ class ApiClient {
               Uri.parse('$url$path'),
               headers: _headersForSession(activeSessionId),
               body: jsonEncode({}),
+            )
+            .timeout(const Duration(seconds: 10));
+        _decodeObject(response);
+        return;
+      } catch (error, stackTrace) {
+        lastError = error;
+        lastStackTrace = stackTrace;
+        final sessionPrefix = activeSessionId.length <= 8
+            ? activeSessionId
+            : activeSessionId.substring(0, 8);
+        debugPrint(
+          '会话清理请求失败: path=$path, attempt=$attempt, '
+          'session=$sessionPrefix, '
+          'error=${error.runtimeType}',
+        );
+        if (attempt < 2) {
+          await Future<void>.delayed(const Duration(milliseconds: 300));
+        }
+      }
+    }
+    Error.throwWithStackTrace(lastError!, lastStackTrace!);
+  }
+
+  Future<void> _postSessionCleanupWithBody(
+    String path,
+    String activeSessionId,
+    Map<String, dynamic> body,
+  ) async {
+    final url = _requireBaseUrl();
+    Object? lastError;
+    StackTrace? lastStackTrace;
+    for (var attempt = 1; attempt <= 2; attempt++) {
+      try {
+        final response = await _http
+            .post(
+              Uri.parse('$url$path'),
+              headers: _headersForSession(activeSessionId),
+              body: jsonEncode(body),
             )
             .timeout(const Duration(seconds: 10));
         _decodeObject(response);
@@ -1948,10 +2361,10 @@ String generateExamIcs({
     lines.add(
         'UID:gzus-exam-${exam.courseName.hashCode.abs()}-${pe.period.year}-${pe.period.term}@onegzus');
     lines.add('SUMMARY:${exam.courseName} 考试');
-    final parsed = _parseExamDateTime(exam.time);
+    final parsed = parseExamDateRange(exam.time);
     if (parsed != null) {
-      lines.add('DTSTART:${parsed.$1}');
-      lines.add('DTEND:${parsed.$2}');
+      lines.add('DTSTART:${_dateTimeToIcs(parsed.$1)}');
+      lines.add('DTEND:${_dateTimeToIcs(parsed.$2)}');
     }
     if (exam.location != null && exam.location!.isNotEmpty) {
       lines.add('LOCATION:${exam.location}');
@@ -1969,29 +2382,103 @@ String generateExamIcs({
   return lines.join('\r\n');
 }
 
-(String, String)? _parseExamDateTime(String? time) {
-  if (time == null) return null;
-  final dateMatch =
-      RegExp(r'(\d{4})[年/\-.](\d{1,2})[月/\-.](\d{1,2})').firstMatch(time);
-  if (dateMatch == null) return null;
-  final year = int.tryParse(dateMatch.group(1)!);
-  final month = int.tryParse(dateMatch.group(2)!);
-  final day = int.tryParse(dateMatch.group(3)!);
-  if (year == null || month == null || day == null) return null;
-  final dateStr =
-      '$year${month.toString().padLeft(2, '0')}${day.toString().padLeft(2, '0')}';
-  final timeMatch = RegExp(r'(\d{1,2}):(\d{2})').allMatches(time).toList();
-  if (timeMatch.length >= 2) {
-    final sh = int.tryParse(timeMatch[0].group(1)!) ?? 0;
-    final sm = int.tryParse(timeMatch[0].group(2)!) ?? 0;
-    final eh = int.tryParse(timeMatch[1].group(1)!) ?? 0;
-    final em = int.tryParse(timeMatch[1].group(2)!) ?? 0;
-    return (
-      '${dateStr}T${sh.toString().padLeft(2, '0')}${sm.toString().padLeft(2, '0')}00',
-      '${dateStr}T${eh.toString().padLeft(2, '0')}${em.toString().padLeft(2, '0')}00',
+String _dateTimeToIcs(DateTime value) {
+  final date = '${value.year}${value.month.toString().padLeft(2, '0')}'
+      '${value.day.toString().padLeft(2, '0')}';
+  final time = '${value.hour.toString().padLeft(2, '0')}'
+      '${value.minute.toString().padLeft(2, '0')}';
+  return '${date}T${time}00';
+}
+
+DateTime _dateTimeAtScheduleTime(DateTime date, String time) {
+  final parts = time.split(':');
+  return DateTime(
+    date.year,
+    date.month,
+    date.day,
+    int.parse(parts[0]),
+    int.parse(parts[1]),
+  );
+}
+
+/// 把课表展开成可直接写入系统日历的日程列表。
+List<CalendarImportEvent> scheduleCalendarEvents({
+  required List<ScheduleCourse> courses,
+  required DateTime firstWeekStart,
+  required int year,
+  required int term,
+}) {
+  final events = <CalendarImportEvent>[];
+  final mondayOfFirstWeek = mondayOf(firstWeekStart);
+  for (final course in courses) {
+    if (course.weekday == null ||
+        course.startSection == null ||
+        course.endSection == null) {
+      continue;
+    }
+    final weeks = parseWeeks(course.weeks);
+    for (final week in weeks) {
+      final date = mondayOfFirstWeek
+          .add(Duration(days: (week - 1) * 7 + course.weekday! - 1));
+      final start = _dateTimeAtScheduleTime(
+        date,
+        scheduleTimes[course.startSection! - 1].$1,
+      );
+      final end = _dateTimeAtScheduleTime(
+        date,
+        scheduleTimes[course.endSection! - 1].$2,
+      );
+      final descParts = <String>[];
+      if (course.teacher != null && course.teacher!.isNotEmpty) {
+        descParts.add('教师: ${course.teacher}');
+      }
+      if (course.weeks != null && course.weeks!.isNotEmpty) {
+        descParts.add('周次: ${course.weeks}');
+      }
+      events.add(
+        CalendarImportEvent(
+          title: course.name,
+          description: descParts.isEmpty ? null : descParts.join('\n'),
+          location: course.classroom != null && course.classroom!.isNotEmpty
+              ? course.classroom
+              : null,
+          start: start,
+          end: end,
+        ),
+      );
+    }
+  }
+  return events;
+}
+
+/// 把考试列表转换成可直接写入系统日历的日程列表。
+List<CalendarImportEvent> examCalendarEvents({
+  required List<PeriodExam> exams,
+  required int year,
+  required int term,
+}) {
+  final events = <CalendarImportEvent>[];
+  for (final pe in exams) {
+    final exam = pe.exam;
+    final range = parseExamDateRange(exam.time);
+    if (range == null) continue;
+    final descParts = <String>[];
+    if (exam.time != null) descParts.add('时间: ${exam.time}');
+    if (exam.type != null) descParts.add('类型: ${exam.type}');
+    if (exam.seat != null) descParts.add('座位: ${exam.seat}');
+    events.add(
+      CalendarImportEvent(
+        title: '${exam.courseName} 考试',
+        description: descParts.isEmpty ? null : descParts.join('\n'),
+        location: exam.location != null && exam.location!.isNotEmpty
+            ? exam.location
+            : null,
+        start: range.$1,
+        end: range.$2,
+      ),
     );
   }
-  return ('${dateStr}T090000', '${dateStr}T110000');
+  return events;
 }
 
 // Direct JWXT API client for native mobile foreground reads.
@@ -2147,7 +2634,7 @@ class SchoolDirectClient {
     }
     final text = _decodeAcademicBody(response.bodyBytes);
     if (_looksLikeLoginPage(text)) {
-      throw ApiException('教务系统会话已失效', statusCode: 401);
+      throw ApiException('登录状态已失效', statusCode: 401);
     }
     final decoded = jsonDecode(text);
     if (decoded is! Map<String, dynamic>) {
@@ -2363,7 +2850,6 @@ class EcardDirectClient {
     _cachedToken = v;
     _cachedAt = DateTime.now();
   }
-
 
   void _invalidateToken() {
     _cachedToken = null;

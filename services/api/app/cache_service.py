@@ -18,6 +18,7 @@ _session_factory = None
 # 兜底缓存的最大存活时间：超过则视为过期，避免故障时返回数月前的旧数据。
 # 仅用于「失败兜底」场景（成功路径不主动读缓存），因此取较宽松的默认值。
 DEFAULT_CACHE_MAX_AGE_SECONDS = 7 * 24 * 3600
+ACADEMIC_CACHE_MAX_AGE_SECONDS = 180 * 24 * 3600
 
 
 def _is_stale(cached_at: datetime | None, max_age_seconds: int | None) -> bool:

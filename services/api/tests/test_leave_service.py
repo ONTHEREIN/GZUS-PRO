@@ -1,4 +1,6 @@
 from datetime import timedelta
+
+import pytest
 from fastapi.testclient import TestClient
 
 from app.leave_service import (
@@ -9,6 +11,8 @@ from app.leave_service import (
     week_spec_contains,
 )
 from app.main import create_app
+from app.routes.ehall import _decode_leave_attachments
+from app.schemas import LEAVE_ATTACHMENT_MAX_COUNT, LeaveAttachmentItem, LeaveFillRequest
 from app.staff_service import import_staff_records
 
 
@@ -132,6 +136,72 @@ def test_build_leave_preview_flags_missing_required_course_fields():
 
     assert preview["hasMissingFields"] is True
     assert "班级编号" in preview["items"][0]["missingFields"]
+
+
+def test_leave_preview_normalizes_raw_payload_courses():
+    app = create_app()
+    session = app.state.sessions.create(FailingScheduleClient(), "测试学生")
+    client = TestClient(app)
+    first_week = default_first_week_start(2026, 2)
+    monday = first_week + timedelta(days=7)
+
+    response = client.post(
+        "/ehall/leave/preview",
+        headers={"X-Session-Id": session.id},
+        json={
+            "year": 2026,
+            "term": 2,
+            "startDate": monday.isoformat(),
+            "endDate": monday.isoformat(),
+            "firstWeekStart": first_week.isoformat(),
+            "courses": [
+                {
+                    "kcmc": "移动应用开发",
+                    "xqj": 1,
+                    "jcs": "1-2",
+                    "zcd": "1-16周",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["items"][0]["courseName"] == "移动应用开发"
+
+
+def test_decode_leave_attachments_enforces_total_size(monkeypatch):
+    monkeypatch.setattr("app.routes.ehall.LEAVE_ATTACHMENT_MAX_BYTES", 2)
+    attachments = [
+        LeaveAttachmentItem(attachmentName="one.jpg", attachmentContentBase64="YQ=="),
+        LeaveAttachmentItem(attachmentName="two.jpg", attachmentContentBase64="Yg=="),
+    ]
+
+    assert _decode_leave_attachments(attachments) == [("one.jpg", b"a"), ("two.jpg", b"b")]
+
+    with pytest.raises(ValueError, match="图片总大小"):
+        _decode_leave_attachments(
+            attachments
+            + [LeaveAttachmentItem(attachmentName="three.jpg", attachmentContentBase64="Yw==")]
+        )
+
+    with pytest.raises(ValueError):
+        _decode_leave_attachments(
+            [LeaveAttachmentItem(attachmentName="invalid.jpg", attachmentContentBase64="not-base64")]
+        )
+
+
+def test_leave_fill_request_limits_attachment_count():
+    attachment = {"attachmentName": "note.jpg", "attachmentContentBase64": "YQ=="}
+
+    with pytest.raises(ValueError, match="at most 5 items"):
+        LeaveFillRequest(
+            year=2026,
+            term=2,
+            startDate="2027-03-08",
+            endDate="2027-03-08",
+            reason="事假",
+            attachments=[attachment] * (LEAVE_ATTACHMENT_MAX_COUNT + 1),
+        )
 
 
 def test_build_leave_fill_script_targets_real_ehall_fields():
@@ -327,7 +397,7 @@ def test_leave_fill_calls_ehall_client_when_ready():
     assert "WF_T10004" in response.json()["handlerScript"]
     assert response.json()["matchedTeachers"][0]["userid"] == "u100"
     assert ehall.calls[0]["courses"][0]["courseName"] == "移动应用开发"
-    assert ehall.calls[0]["attachment_content"] == b"ok"
+    assert ehall.calls[0]["attachments"] == [("note.txt", b"ok")]
 
 
 def test_leave_fill_uses_manual_teacher_handler_selection():

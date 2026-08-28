@@ -2,9 +2,9 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request, Header, status
 
 from app.config import get_settings
-from app.database import WebPushSubscription, get_sync_session_factory
+from app.database import IosPushToken, WebPushSubscription, get_sync_session_factory
 from app.routes.deps import require_session
-from app.schemas import WebPushConfigResponse, WebPushSubscriptionRequest
+from app.schemas import IosPushTokenRequest, WebPushConfigResponse, WebPushSubscriptionRequest
 from app.sessions import AppSession, student_id_of
 
 router = APIRouter(prefix="/push", tags=["push"])
@@ -101,6 +101,55 @@ def unregister_web_push(
     return {"status": "ok"}
 
 
+@router.post("/ios/register")
+def register_ios_push(
+    payload: IosPushTokenRequest,
+    session: AppSession = Depends(require_session),
+) -> dict[str, str]:
+    student_id = student_id_of(session)
+    if not student_id:
+        return {"status": "error", "message": "Student ID not found"}
+
+    device_token = payload.device_token.lower()
+    factory = get_sync_session_factory()
+    with factory() as db:
+        existing = db.query(IosPushToken).filter(
+            IosPushToken.device_token == device_token,
+            IosPushToken.environment == payload.environment,
+        ).first()
+        if existing:
+            existing.student_id = student_id
+            existing.updated_at = datetime.now(timezone.utc)
+        else:
+            db.add(IosPushToken(
+                student_id=student_id,
+                device_token=device_token,
+                environment=payload.environment,
+            ))
+        db.commit()
+    return {"status": "ok"}
+
+
+@router.post("/ios/unregister")
+def unregister_ios_push(
+    payload: IosPushTokenRequest,
+    session: AppSession = Depends(require_session),
+) -> dict[str, str]:
+    student_id = student_id_of(session)
+    if not student_id:
+        return {"status": "error", "message": "Student ID not found"}
+
+    factory = get_sync_session_factory()
+    with factory() as db:
+        db.query(IosPushToken).filter(
+            IosPushToken.student_id == student_id,
+            IosPushToken.device_token == payload.device_token.lower(),
+            IosPushToken.environment == payload.environment,
+        ).delete()
+        db.commit()
+    return {"status": "ok"}
+
+
 @router.post("/test")
 async def test_push(
     request: Request,
@@ -123,6 +172,11 @@ async def test_push(
     }
     _copy_live_update_fields(body, message)
     await manager.send_to_session(session.id, message)
+    from app.push import send_push_to_student
+
+    student_id = student_id_of(session)
+    if student_id:
+        send_push_to_student(student_id, title, alert, message)
     return {"status": "ok", "sent_to": session.id[:8]}
 
 
