@@ -37,6 +37,7 @@ def test_normalize_task_record_maps_to_notice_item():
         "date": "2026-06-01 09:10:11",
         "url": "https://ehall.gzus.edu.cn/#/affairprocess?taskId=task-1",
         "summary": "辅导员审批 / 张三",
+        "source": "ehall",
     }
 
 
