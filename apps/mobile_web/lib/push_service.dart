@@ -6,6 +6,11 @@ import 'permission_service.dart';
 
 typedef OnPushTap = void Function(Map<String, dynamic> extras);
 
+const _iosPushEnvironment = String.fromEnvironment(
+  'IOS_PUSH_ENVIRONMENT',
+  defaultValue: kDebugMode ? 'sandbox' : 'production',
+);
+
 class PushService {
   static const _channel = MethodChannel('cn.gzus.pro/push');
   static OnPushTap? _onTap;
@@ -45,9 +50,13 @@ class PushService {
     if (deviceToken == null || deviceToken.isEmpty) {
       throw StateError('iOS 未返回 APNs 设备令牌');
     }
+    if (_iosPushEnvironment != 'sandbox' &&
+        _iosPushEnvironment != 'production') {
+      throw StateError('IOS_PUSH_ENVIRONMENT 必须为 sandbox 或 production');
+    }
     await api.registerIosPushToken(
       deviceToken: deviceToken,
-      environment: kDebugMode ? 'sandbox' : 'production',
+      environment: _iosPushEnvironment,
     );
   }
 
@@ -62,7 +71,7 @@ class PushService {
     await api.unregisterIosPushToken(
       activeSessionId: activeSessionId,
       deviceToken: deviceToken,
-      environment: kDebugMode ? 'sandbox' : 'production',
+      environment: _iosPushEnvironment,
     );
   }
 

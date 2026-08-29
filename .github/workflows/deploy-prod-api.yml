@@ -35,8 +35,16 @@ jobs:
           DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          APNS_KEY_ID: ${{ secrets.APNS_KEY_ID }}
+          APNS_TEAM_ID: ${{ secrets.APNS_TEAM_ID }}
+          APNS_KEY_P8_BASE64: ${{ secrets.APNS_KEY_P8_BASE64 }}
+          APNS_BUNDLE_ID: ${{ secrets.APNS_BUNDLE_ID }}
         run: |
           set -euo pipefail
+          test -n "$APNS_KEY_ID"
+          test -n "$APNS_TEAM_ID"
+          test -n "$APNS_KEY_P8_BASE64"
+          test -n "$APNS_BUNDLE_ID"
           mkdir -p ~/.ssh
           echo "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
@@ -66,6 +74,19 @@ jobs:
             -o StrictHostKeyChecking=yes \
             "$DEPLOY_USER@$DEPLOY_HOST" \
             "bash /opt/onegzus/deploy/scripts/install_runtime.sh"
+          apns_env_file="$(mktemp)"
+          chmod 600 "$apns_env_file"
+          printf '%s\n' \
+            "APNS_KEY_ID=$APNS_KEY_ID" \
+            "APNS_TEAM_ID=$APNS_TEAM_ID" \
+            "APNS_KEY_P8_BASE64=$APNS_KEY_P8_BASE64" \
+            "APNS_BUNDLE_ID=$APNS_BUNDLE_ID" > "$apns_env_file"
+          ssh -i "$HOME/.ssh/deploy_key" \
+            -o "UserKnownHostsFile=$HOME/.ssh/known_hosts" \
+            -o StrictHostKeyChecking=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "install -d -m 700 -o onegzus -g onegzus /opt/onegzus/shared; cat > /opt/onegzus/shared/.apns.env; chown onegzus:onegzus /opt/onegzus/shared/.apns.env; chmod 600 /opt/onegzus/shared/.apns.env" < "$apns_env_file"
+          rm -f "$apns_env_file"
           ssh -i "$HOME/.ssh/deploy_key" \
             -o "UserKnownHostsFile=$HOME/.ssh/known_hosts" \
             -o StrictHostKeyChecking=yes \
@@ -73,6 +94,14 @@ jobs:
           release_id="$1"
           release_dir="/opt/onegzus/releases/api/$release_id"
           env_file="/opt/onegzus/shared/api.env"
+          apns_env_file="/opt/onegzus/shared/.apns.env"
+          test -f "$env_file"
+          test -s "$apns_env_file"
+          merged_env_file="$(mktemp "${env_file}.XXXXXX")"
+          grep -vE '^APNS_(KEY_ID|TEAM_ID|KEY_P8_BASE64|BUNDLE_ID)=' "$env_file" > "$merged_env_file" || true
+          cat "$apns_env_file" >> "$merged_env_file"
+          install -m 600 -o onegzus -g onegzus "$merged_env_file" "$env_file"
+          rm -f "$merged_env_file" "$apns_env_file"
           if ! grep -q '^RSA_PRIVATE_KEY_PEM=.' "$env_file"; then
             rsa_key="$(openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 | base64 -w0)"
             printf '\nRSA_PRIVATE_KEY_PEM=%s\n' "$rsa_key" >> "$env_file"
