@@ -63,6 +63,24 @@ class FakeEhallClient:
             "formUrl": "https://ehall.gzus.edu.cn/bpm/r?wf_num=R_S003_B036",
         }
 
+    def search_staff(self, keyword):
+        if keyword != "张老师":
+            return []
+        return [
+            {
+                "JobTitle": "教职工",
+                "Userid": "teacher-1",
+                "CnName": "张老师",
+                "FolderName": "软件与人工智能学院",
+            },
+            {
+                "JobTitle": "学生",
+                "Userid": "student-1",
+                "CnName": "张同学",
+                "FolderName": "测试班级",
+            },
+        ]
+
 
 class UnknownTeacherClient:
     def get_schedule(self, year, term):
@@ -354,6 +372,30 @@ def test_leave_fill_requires_ehall_session():
 
     assert response.status_code == 200
     assert response.json()["status"] == "no_ehall_session"
+
+
+def test_leave_teacher_search_reads_live_ehall_directory():
+    app = create_app()
+    session = app.state.sessions.create(
+        FakeClient(), "测试学生", ehall_client=FakeEhallClient()
+    )
+    client = TestClient(app)
+
+    response = client.get(
+        "/ehall/leave/teachers/search?keyword=%E5%BC%A0%E8%80%81%E5%B8%88",
+        headers={"X-Session-Id": session.id},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "items": [
+            {
+                "userid": "teacher-1",
+                "cnName": "张老师",
+                "folderName": "软件与人工智能学院",
+            }
+        ]
+    }
 
 
 def test_leave_fill_calls_ehall_client_when_ready():

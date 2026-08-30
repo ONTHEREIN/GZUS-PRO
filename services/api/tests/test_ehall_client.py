@@ -18,6 +18,68 @@ def test_extract_records_reads_common_ehall_shapes():
     assert extract_total({"data": {"total": "12"}}) == 12
 
 
+def test_search_staff_posts_captured_organization_directory_request(monkeypatch):
+    calls = []
+
+    class FakeResponse:
+        url = "https://ehall.gzus.edu.cn/bpm/r?wf_num=D_S007_J001"
+        headers = {"content-type": "application/json"}
+        text = ""
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {
+                "total": 1,
+                "rows": [
+                    {
+                        "JobTitle": "教职工",
+                        "Userid": "teacher-1",
+                        "CnName": "张老师",
+                    }
+                ],
+            }
+
+    class FakeHttpClient:
+        def post(self, endpoint, *, params, data, headers):
+            calls.append(
+                {
+                    "endpoint": endpoint,
+                    "params": params,
+                    "data": data,
+                    "headers": headers,
+                }
+            )
+            return FakeResponse()
+
+    client = EhallClient("https://ehall.gzus.edu.cn", "JSESSIONID=abc")
+    monkeypatch.setattr(client, "_get_http_client", lambda: FakeHttpClient())
+
+    records = client.search_staff("张老师")
+
+    assert records == [
+        {"JobTitle": "教职工", "Userid": "teacher-1", "CnName": "张老师"}
+    ]
+    assert calls == [
+        {
+            "endpoint": "bpm/r",
+            "params": {"wf_num": "D_S007_J001", "wf_gridnum": "V_S007_G001"},
+            "data": {
+                "searchStr": "张老师",
+                "page": "1",
+                "rows": "25",
+                "sort": "SortNumber",
+                "order": "asc",
+            },
+            "headers": {
+                "Accept": "application/json, text/javascript, */*; q=0.01",
+                "X-Requested-With": "XMLHttpRequest",
+            },
+        }
+    ]
+
+
 def test_normalize_task_record_maps_to_notice_item():
     item = normalize_task_record(
         {

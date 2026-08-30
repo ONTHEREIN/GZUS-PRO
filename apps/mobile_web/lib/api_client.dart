@@ -1298,6 +1298,19 @@ class ApiClient {
     return LeaveFillResponse.fromJson(data);
   }
 
+  Future<List<StaffCandidateItem>> searchLeaveTeachers({
+    required String keyword,
+  }) async {
+    final data = await _get(
+      '/ehall/leave/teachers/search?keyword=${Uri.encodeQueryComponent(keyword)}',
+    );
+    final items = data['items'] as List<dynamic>? ?? const [];
+    return items
+        .whereType<Map<String, dynamic>>()
+        .map(StaffCandidateItem.fromJson)
+        .toList();
+  }
+
   Future<bool> uploadLeaveAttachment({
     required String docUnid,
     required String processId,

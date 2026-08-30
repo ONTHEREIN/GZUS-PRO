@@ -102,6 +102,28 @@ def import_staff_records_to_session(session: Session, records: list[dict]) -> in
     return count
 
 
+def staff_candidates_from_records(records: list[dict]) -> list[StaffCandidate]:
+    """将办事大厅组织架构结果转换为可选的教职工经办人。"""
+    candidates: list[StaffCandidate] = []
+    seen_userids: set[str] = set()
+    for record in records:
+        if record.get("JobTitle") != "教职工":
+            continue
+        userid = _text(record.get("Userid"))
+        cn_name = _text(record.get("CnName"))
+        if not userid or not cn_name or userid in seen_userids:
+            continue
+        seen_userids.add(userid)
+        candidates.append(
+            StaffCandidate(
+                userid=userid,
+                cn_name=cn_name,
+                folder_name=_text(record.get("FolderName")),
+            )
+        )
+    return candidates
+
+
 def resolve_teacher(name: str, department: str | None = None) -> TeacherResolution:
     init_db()
     factory = get_sync_session_factory()

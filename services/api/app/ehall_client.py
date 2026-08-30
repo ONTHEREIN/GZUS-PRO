@@ -33,6 +33,8 @@ AFFAIRS_ENDPOINT = "api/affair/uis/affairs"
 LEAVE_WORKFLOW_NUMBER = "R_S003_B036"
 LEAVE_WORKFLOW_PROCESS_ID = "c6a5de7f061020438c0a03707374e7b85d85"
 ATTACHMENT_WORKFLOW_NUMBER = "R_S004_B002"
+STAFF_SEARCH_WORKFLOW_NUMBER = "D_S007_J001"
+STAFF_SEARCH_GRID_NUMBER = "V_S007_G001"
 
 # Retry configuration for ehall upstream requests
 _EHALL_MAX_RETRIES = 2
@@ -207,6 +209,27 @@ class EhallClient:
             ],
             "items": items,
         }
+
+    def search_staff(self, search_text: str) -> list[dict]:
+        """通过办事大厅组织架构实时检索教职工候选人。"""
+        normalized = search_text.strip()
+        if not normalized:
+            raise ValueError("搜索关键词不能为空")
+        payload = self._post_form_json(
+            "bpm/r",
+            params={
+                "wf_num": STAFF_SEARCH_WORKFLOW_NUMBER,
+                "wf_gridnum": STAFF_SEARCH_GRID_NUMBER,
+            },
+            data={
+                "searchStr": normalized,
+                "page": "1",
+                "rows": "25",
+                "sort": "SortNumber",
+                "order": "asc",
+            },
+        )
+        return extract_records(payload)
 
     def get_affairs(
         self,
@@ -502,6 +525,44 @@ class EhallClient:
                     _time.sleep(wait)
                     continue
                 raise
+
+    def _post_form_json(
+        self,
+        endpoint: str,
+        *,
+        params: dict[str, str],
+        data: dict[str, str],
+    ) -> Any:
+        client = self._get_http_client()
+        for attempt in range(_EHALL_MAX_RETRIES + 1):
+            try:
+                response = client.post(
+                    endpoint,
+                    params=params,
+                    data=data,
+                    headers={
+                        "Accept": "application/json, text/javascript, */*; q=0.01",
+                        "X-Requested-With": "XMLHttpRequest",
+                    },
+                )
+                if _looks_like_login(response):
+                    raise EhallAuthenticationError("办事大厅会话已失效，请重新登录")
+                response.raise_for_status()
+                return response.json()
+            except EhallAuthenticationError:
+                raise
+            except (httpx.TimeoutException, httpx.ConnectError) as exc:
+                if attempt < _EHALL_MAX_RETRIES:
+                    time.sleep(_EHALL_RETRY_BACKOFF_BASE * (2**attempt))
+                    continue
+                raise RuntimeError(f"办事大厅人员搜索失败: {exc}") from exc
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code >= 500 and attempt < _EHALL_MAX_RETRIES:
+                    time.sleep(_EHALL_RETRY_BACKOFF_BASE * (2**attempt))
+                    continue
+                raise RuntimeError(
+                    f"办事大厅人员搜索失败: HTTP {exc.response.status_code}: {exc.response.text[:500]}"
+                ) from exc
 
 
 def extract_records(payload: Any) -> list[dict]:

@@ -39,9 +39,11 @@ class _AutoLeavePageState extends State<AutoLeavePage> {
   LeaveFillResponse? _fillResult;
   List<Map<String, dynamic>>? _scheduleCourses;
   final Map<String, StaffCandidateItem> _teacherSelections = {};
+  final Map<String, List<StaffCandidateItem>> _teacherSearchResults = {};
   String? _error;
   bool _loadingPreview = false;
   bool _filling = false;
+  String? _searchingTeacher;
 
   @override
   void initState() {
@@ -182,10 +184,13 @@ class _AutoLeavePageState extends State<AutoLeavePage> {
                 _TeacherCandidateSelector(
                   result: _fillResult!,
                   selections: _teacherSelections,
+                  searchResults: _teacherSearchResults,
+                  searchingTeacher: _searchingTeacher,
                   confirming: _filling,
                   onSelected: (teacher, candidate) {
                     setState(() => _teacherSelections[teacher] = candidate);
                   },
+                  onSearch: _searchTeacher,
                   onConfirm: () => _fillLeave(useTeacherSelections: true),
                 ),
               ],
@@ -239,6 +244,7 @@ class _AutoLeavePageState extends State<AutoLeavePage> {
       _fillResult = null;
       _scheduleCourses = null;
       _teacherSelections.clear();
+      _teacherSearchResults.clear();
     });
     try {
       List<Map<String, dynamic>> courses = const [];
@@ -298,7 +304,10 @@ class _AutoLeavePageState extends State<AutoLeavePage> {
       _filling = true;
       _error = null;
       _fillResult = null;
-      if (!useTeacherSelections) _teacherSelections.clear();
+      if (!useTeacherSelections) {
+        _teacherSelections.clear();
+        _teacherSearchResults.clear();
+      }
     });
     try {
       final result = await widget.api.fillLeave(
@@ -322,6 +331,28 @@ class _AutoLeavePageState extends State<AutoLeavePage> {
 
   void _refreshLeaveFormState() {
     if (mounted) setState(() {});
+  }
+
+  Future<void> _searchTeacher(String teacher, String keyword) async {
+    final normalized = keyword.trim();
+    if (normalized.isEmpty) {
+      setState(() => _error = '请输入经办人姓名或工号');
+      return;
+    }
+    setState(() {
+      _searchingTeacher = teacher;
+      _error = null;
+    });
+    try {
+      final results = await widget.api.searchLeaveTeachers(keyword: normalized);
+      if (mounted) {
+        setState(() => _teacherSearchResults[teacher] = results);
+      }
+    } catch (exc) {
+      _handleError(exc);
+    } finally {
+      if (mounted) setState(() => _searchingTeacher = null);
+    }
   }
 
   (DateTime, DateTime)? _parseRange() {
@@ -460,21 +491,29 @@ class _TeacherCandidateSelector extends StatelessWidget {
   const _TeacherCandidateSelector({
     required this.result,
     required this.selections,
+    required this.searchResults,
+    required this.searchingTeacher,
     required this.confirming,
     required this.onSelected,
+    required this.onSearch,
     required this.onConfirm,
   });
 
   final LeaveFillResponse result;
   final Map<String, StaffCandidateItem> selections;
+  final Map<String, List<StaffCandidateItem>> searchResults;
+  final String? searchingTeacher;
   final bool confirming;
   final void Function(String teacher, StaffCandidateItem candidate) onSelected;
+  final Future<void> Function(String teacher, String keyword) onSearch;
   final VoidCallback onConfirm;
 
   @override
   Widget build(BuildContext context) {
     final groups = result.teacherCandidates;
-    final allSelectable = groups.every((group) => group.candidates.isNotEmpty);
+    final allSelectable = groups.every(
+      (group) => (searchResults[group.teacher] ?? group.candidates).isNotEmpty,
+    );
     final allSelected = allSelectable &&
         groups.every((group) => selections[group.teacher] != null);
     return AccentPanel(
@@ -487,14 +526,21 @@ class _TeacherCandidateSelector extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           for (final group in groups) ...[
-            if (group.candidates.isEmpty)
-              Text('${group.teacher}：未找到候选教师')
+            _TeacherSearchField(
+              teacher: group.teacher,
+              searching: searchingTeacher == group.teacher,
+              onSearch: onSearch,
+            ),
+            const SizedBox(height: 8),
+            if ((searchResults[group.teacher] ?? group.candidates).isEmpty)
+              Text('${group.teacher}：未找到候选教师，请搜索组织架构')
             else
               DropdownButtonFormField<String>(
                 initialValue: selections[group.teacher]?.userid,
                 decoration: InputDecoration(labelText: group.teacher),
                 items: [
-                  for (final candidate in group.candidates)
+                  for (final candidate
+                      in (searchResults[group.teacher] ?? group.candidates))
                     DropdownMenuItem(
                       value: candidate.userid,
                       child: Text(
@@ -506,7 +552,9 @@ class _TeacherCandidateSelector extends StatelessWidget {
                 ],
                 onChanged: (userid) {
                   if (userid == null) return;
-                  final candidate = group.candidates.firstWhere(
+                  final candidate =
+                      (searchResults[group.teacher] ?? group.candidates)
+                          .firstWhere(
                     (item) => item.userid == userid,
                   );
                   onSelected(group.teacher, candidate);
@@ -522,6 +570,63 @@ class _TeacherCandidateSelector extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _TeacherSearchField extends StatefulWidget {
+  const _TeacherSearchField({
+    required this.teacher,
+    required this.searching,
+    required this.onSearch,
+  });
+
+  final String teacher;
+  final bool searching;
+  final Future<void> Function(String teacher, String keyword) onSearch;
+
+  @override
+  State<_TeacherSearchField> createState() => _TeacherSearchFieldState();
+}
+
+class _TeacherSearchFieldState extends State<_TeacherSearchField> {
+  late final TextEditingController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.teacher);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _search() => widget.onSearch(widget.teacher, _controller.text);
+
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      controller: _controller,
+      onSubmitted: (_) => _search(),
+      decoration: InputDecoration(
+        labelText: '${widget.teacher} · 搜索经办人',
+        hintText: '姓名或工号',
+        prefixIcon: const Icon(Icons.manage_search, size: 18),
+        suffixIcon: IconButton(
+          tooltip: '搜索办事大厅组织架构',
+          onPressed: widget.searching ? null : _search,
+          icon: widget.searching
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.search),
+        ),
       ),
     );
   }

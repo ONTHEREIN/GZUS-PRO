@@ -2,7 +2,7 @@ import base64
 import logging
 import re
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.cache_service import load_and_get_cached_at, save_cache
 from app.ehall_client import EhallAuthenticationError
@@ -29,11 +29,38 @@ from app.schemas import (
     NoticeItem,
 )
 from app.sessions import AppSession
-from app.staff_service import ensure_staff_loaded, resolve_teacher
+from app.staff_service import ensure_staff_loaded, resolve_teacher, staff_candidates_from_records
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/ehall", tags=["ehall"])
+
+
+@router.get("/leave/teachers/search")
+def search_leave_teachers(
+    keyword: str = Query(min_length=1, max_length=50),
+    session: AppSession = Depends(require_session),
+) -> dict:
+    """实时查询办事大厅组织架构，供请假单选择任课教师经办人。"""
+    ehall_client = getattr(session, "ehall_client", None)
+    if ehall_client is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="缺少办事大厅会话，请重新登录",
+        )
+    try:
+        records = ehall_client.search_staff(keyword)
+        return {"items": [candidate.to_dict() for candidate in staff_candidates_from_records(records)]}
+    except EhallAuthenticationError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.warning("leave teacher search failed: %s: %s", type(exc).__name__, exc)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=_ehall_upstream_error_detail(exc),
+        ) from exc
 
 
 def _ehall_upstream_error_detail(exc: Exception) -> str:
