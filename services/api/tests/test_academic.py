@@ -79,6 +79,15 @@ class FakeClient:
         pass
 
 
+class CountingInfoClient(FakeClient):
+    def __init__(self):
+        self.info_calls = 0
+
+    def get_info(self):
+        self.info_calls += 1
+        return super().get_info()
+
+
 class ExpiredClient(FakeClient):
     def get_schedule(self, year, term):
         raise AuthenticationError("登录状态已失效，请重新登录")
@@ -185,6 +194,22 @@ def test_me_schedule_exams_grades():
     assert client.get("/schedule", headers=headers).json()[0]["name"] == "高等数学"
     assert client.get("/exams", headers=headers).json()[0]["courseName"] == "高等数学"
     assert client.get("/grades", headers=headers).json()[0]["score"] == "95"
+
+
+def test_me_uses_server_cache_for_repeated_requests():
+    app = create_app()
+    info_client = CountingInfoClient()
+    session = app.state.sessions.create(info_client, "测试学生")
+    headers = {"X-Session-Id": session.id}
+
+    with TestClient(app) as client:
+        first_response = client.get("/me", headers=headers)
+        cached_response = client.get("/me", headers=headers)
+
+    assert first_response.status_code == 200
+    assert cached_response.status_code == 200
+    assert cached_response.headers["X-Data-Source"] == "cache"
+    assert info_client.info_calls == 1
 
 
 def test_attendance_and_credits():

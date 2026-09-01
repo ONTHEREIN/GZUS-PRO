@@ -808,9 +808,10 @@ class ApiClient {
     return cached == null ? null : StudentInfo.fromJson(cached);
   }
 
-  /// Fetch student info asynchronously after login.
-  /// This calls the /auth/student-info endpoint which was separated from
-  /// the login flow to speed up login response time.
+  /// 登录后异步获取个人信息。
+  ///
+  /// 复用 /me，让首次请求写入服务器缓存，之后打开信息页可直接命中；
+  /// 请求仍不走自动重登，避免登录后的短暂网络抖动触发登出。
   Future<StudentInfo?> fetchStudentInfo() async {
     try {
       // Use a direct HTTP call without _withReloginRetry to avoid
@@ -819,7 +820,7 @@ class ApiClient {
       final url = _requireBaseUrl();
       if (url.isEmpty) return null;
       final response = await _http
-          .get(Uri.parse('$url/auth/student-info'), headers: _headers())
+          .get(Uri.parse('$url/me'), headers: _headers())
           .timeout(_connectTimeout)
           .timeout(_requestTimeout);
       if (response.statusCode >= 400) {
@@ -827,9 +828,9 @@ class ApiClient {
         return null;
       }
       final data = _decodeObject(response);
-      final info = StudentInfo.fromJson(data['info'] as Map<String, dynamic>);
-      final studentId = data['studentId'] as String?;
-      if (studentId != null && studentId.isNotEmpty) {
+      final info = StudentInfo.fromJson(data);
+      final studentId = info.studentId;
+      if (studentId.isNotEmpty) {
         final currentSessionId = sessionId;
         if (currentSessionId != null) {
           await adoptStudentIdentity(

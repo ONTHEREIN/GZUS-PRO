@@ -41,6 +41,19 @@ private struct NextClassEntry: TimelineEntry {
     let snapshot: NextClassSnapshot
 }
 
+private extension View {
+    @ViewBuilder
+    func nextClassWidgetBackground() -> some View {
+        if #available(iOSApplicationExtension 17.0, *) {
+            containerBackground(for: .widget) {
+                Color(red: 0.08, green: 0.12, blue: 0.22)
+            }
+        } else {
+            background(Color(red: 0.08, green: 0.12, blue: 0.22))
+        }
+    }
+}
+
 private struct NextClassProvider: TimelineProvider {
     func placeholder(in context: Context) -> NextClassEntry {
         NextClassEntry(
@@ -142,6 +155,7 @@ private struct NextClassHomeScreenWidget: Widget {
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: kind, provider: NextClassProvider()) { entry in
             NextClassHomeScreenView(entry: entry)
+                .nextClassWidgetBackground()
         }
         .configurationDisplayName("下一节课")
         .description("在主屏幕查看下一节课程。")
@@ -195,6 +209,7 @@ private struct NextClassLockScreenWidget: Widget {
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: kind, provider: NextClassProvider()) { entry in
             NextClassLockScreenView(entry: entry)
+                .nextClassWidgetBackground()
         }
         .configurationDisplayName("下一节课")
         .description("在锁屏上查看下一节课程。")
