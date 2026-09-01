@@ -20,11 +20,12 @@ class _TestPushClient:
 
 @router.get("/web/config", response_model=WebPushConfigResponse)
 def get_web_push_config() -> WebPushConfigResponse:
-    settings = get_settings()
-    enabled = bool(settings.web_push_vapid_public_key and settings.web_push_vapid_private_key)
+    from app.push import web_push_public_key
+
+    public_key = web_push_public_key()
     return WebPushConfigResponse(
-        enabled=enabled,
-        publicKey=settings.web_push_vapid_public_key if enabled else None
+        enabled=public_key is not None,
+        publicKey=public_key,
     )
 
 

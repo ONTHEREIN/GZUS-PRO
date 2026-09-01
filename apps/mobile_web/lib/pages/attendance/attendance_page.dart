@@ -44,6 +44,7 @@ class _AttendancePageState extends ConsumerState<AttendancePage>
   Set<String> _highlightedAttendanceKeys = {};
   String? _processedAttendanceSignature;
   bool _forceRefresh = false;
+  int _detailRefreshVersion = 0;
 
   AttendanceRequest get _request => AttendanceRequest(
         client: widget.api,
@@ -53,7 +54,10 @@ class _AttendancePageState extends ConsumerState<AttendancePage>
       );
 
   Future<void> _refreshAttendance() async {
-    setState(() => _forceRefresh = true);
+    setState(() {
+      _forceRefresh = true;
+      _detailRefreshVersion += 1;
+    });
     final request = _request;
     ref.invalidate(attendanceProvider(request));
     try {
@@ -68,6 +72,7 @@ class _AttendancePageState extends ConsumerState<AttendancePage>
   @override
   void silentRefresh() {
     if (!mounted) return;
+    setState(() => _detailRefreshVersion += 1);
     ref.invalidate(attendanceProvider(_request));
   }
 
@@ -295,9 +300,13 @@ class _AttendancePageState extends ConsumerState<AttendancePage>
                     const SizedBox(height: 10),
                   ],
                   _AttendanceCourseSection(
+                    api: widget.api,
+                    year: widget.year,
+                    term: widget.term,
                     items: filteredItems,
                     highlightedKeys: _highlightedAttendanceKeys,
                     compact: compact,
+                    detailRefreshVersion: _detailRefreshVersion,
                   ),
                   const SizedBox(height: 24),
                 ],
@@ -554,14 +563,22 @@ class _AttendanceHistoryPanel extends StatelessWidget {
 
 class _AttendanceCourseSection extends StatelessWidget {
   const _AttendanceCourseSection({
+    required this.api,
+    required this.year,
+    required this.term,
     required this.items,
     required this.highlightedKeys,
     required this.compact,
+    required this.detailRefreshVersion,
   });
 
+  final ApiClient api;
+  final int year;
+  final int term;
   final List<AttendanceItem> items;
   final Set<String> highlightedKeys;
   final bool compact;
+  final int detailRefreshVersion;
 
   @override
   Widget build(BuildContext context) {
@@ -593,9 +610,14 @@ class _AttendanceCourseSection extends StatelessWidget {
                 Padding(
                   padding: const EdgeInsets.only(bottom: 10),
                   child: _AttendanceCard(
+                    key: ValueKey('attendance-card-${item.courseId}'),
+                    api: api,
+                    year: year,
+                    term: term,
                     item: item,
                     total: _attendanceStatusTotal(item),
                     highlighted: highlightedKeys.contains(item.compareKey),
+                    detailRefreshVersion: detailRefreshVersion,
                   ),
                 ),
             ],
@@ -609,9 +631,14 @@ class _AttendanceCourseSection extends StatelessWidget {
                 SizedBox(
                   width: 280,
                   child: _AttendanceCard(
+                    key: ValueKey('attendance-card-${item.courseId}'),
+                    api: api,
+                    year: year,
+                    term: term,
                     item: item,
                     total: _attendanceStatusTotal(item),
                     highlighted: highlightedKeys.contains(item.compareKey),
+                    detailRefreshVersion: detailRefreshVersion,
                   ),
                 ),
             ],
@@ -621,17 +648,65 @@ class _AttendanceCourseSection extends StatelessWidget {
   }
 }
 
-class _AttendanceCard extends StatelessWidget {
-  const _AttendanceCard(
-      {required this.item, required this.total, this.highlighted = false});
+class _AttendanceCard extends ConsumerStatefulWidget {
+  const _AttendanceCard({
+    super.key,
+    required this.api,
+    required this.year,
+    required this.term,
+    required this.item,
+    required this.total,
+    required this.detailRefreshVersion,
+    this.highlighted = false,
+  });
+
+  final ApiClient api;
+  final int year;
+  final int term;
   final AttendanceItem item;
   final int total;
   final bool highlighted;
+  final int detailRefreshVersion;
+
+  @override
+  ConsumerState<_AttendanceCard> createState() => _AttendanceCardState();
+}
+
+class _AttendanceCardState extends ConsumerState<_AttendanceCard> {
+  bool _expanded = false;
+  bool _forceDetailsRefresh = false;
+
+  AttendanceDetailRequest get _detailRequest => AttendanceDetailRequest(
+        client: widget.api,
+        year: widget.year,
+        term: widget.term,
+        courseId: widget.item.courseId,
+        forceRefresh: _forceDetailsRefresh,
+      );
+
+  @override
+  void didUpdateWidget(covariant _AttendanceCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.detailRefreshVersion != oldWidget.detailRefreshVersion) {
+      _forceDetailsRefresh = true;
+    }
+  }
+
+  void _retryDetails() {
+    setState(() => _forceDetailsRefresh = true);
+    ref.invalidate(attendanceDetailProvider(_detailRequest));
+  }
+
+  void _toggleDetails() {
+    setState(() => _expanded = !_expanded);
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
+    final item = widget.item;
+    final total = widget.total;
     final abnormal = item.late + item.leaveEarly + item.absent;
     final rate = total <= 0 ? 0.0 : item.normal / total;
     final focusColor = abnormal > 0
@@ -639,79 +714,133 @@ class _AttendanceCard extends StatelessWidget {
         : item.leave > 0
             ? colorScheme.secondary
             : colorScheme.primary;
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: highlighted
-            ? colorScheme.errorContainer.withValues(alpha: 0.45)
-            : colorScheme.surfaceContainerLow,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(
-          color: highlighted
-              ? colorScheme.error
-              : colorScheme.outlineVariant.withValues(alpha: 0.65),
+    return GestureDetector(
+      key: ValueKey('attendance-detail-toggle-${item.courseId}'),
+      behavior: HitTestBehavior.opaque,
+      onTap: item.courseId.isEmpty ? null : _toggleDetails,
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: widget.highlighted
+              ? colorScheme.errorContainer.withValues(alpha: 0.45)
+              : colorScheme.surfaceContainerLow,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(
+            color: widget.highlighted
+                ? colorScheme.error
+                : colorScheme.outlineVariant.withValues(alpha: 0.65),
+          ),
         ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            children: [
-              Icon(
-                abnormal > 0 ? Icons.warning_amber : Icons.check_circle,
-                color: focusColor,
-                size: 20,
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  highlighted ? '★ ${item.courseName}' : item.courseName,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 15,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  abnormal > 0 ? Icons.warning_amber : Icons.check_circle,
+                  color: focusColor,
+                  size: 20,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    widget.highlighted
+                        ? '★ ${item.courseName}'
+                        : item.courseName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+                StatusPill(
+                  label: abnormal > 0 ? '异常 $abnormal' : '正常',
+                  color: focusColor,
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Text(
+                  '${(rate * 100).toStringAsFixed(1)}%',
+                  style: TextStyle(
+                    color: focusColor,
+                    fontSize: 22,
                     fontWeight: FontWeight.w900,
                   ),
                 ),
-              ),
-              StatusPill(
-                label: abnormal > 0 ? '异常 $abnormal' : '正常',
-                color: focusColor,
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Text(
-                '${(rate * 100).toStringAsFixed(1)}%',
-                style: TextStyle(
-                  color: focusColor,
-                  fontSize: 22,
-                  fontWeight: FontWeight.w900,
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(child: StaticProgressBar(value: rate)),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              _attendancePill(context, '正常', item.normal, colorScheme.primary),
-              _attendancePill(context, '迟到', item.late, colorScheme.error),
-              _attendancePill(
-                  context, '早退', item.leaveEarly, colorScheme.tertiary),
-              _attendancePill(context, '旷课', item.absent, colorScheme.error),
-              _attendancePill(context, '请假', item.leave, colorScheme.secondary),
-              _attendancePill(
-                  context, '合计', total, colorScheme.onSurfaceVariant),
-            ],
-          ),
-        ],
+                const SizedBox(width: 10),
+                Expanded(child: StaticProgressBar(value: rate)),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _attendancePill(
+                    context, '正常', item.normal, colorScheme.primary),
+                _attendancePill(context, '迟到', item.late, colorScheme.error),
+                _attendancePill(
+                    context, '早退', item.leaveEarly, colorScheme.tertiary),
+                _attendancePill(context, '旷课', item.absent, colorScheme.error),
+                _attendancePill(
+                    context, '请假', item.leave, colorScheme.secondary),
+                _attendancePill(
+                    context, '合计', total, colorScheme.onSurfaceVariant),
+              ],
+            ),
+            const SizedBox(height: 8),
+            TextButton.icon(
+              onPressed: item.courseId.isEmpty ? null : _toggleDetails,
+              icon: Icon(_expanded ? Icons.expand_less : Icons.expand_more),
+              label: Text(_expanded ? '收起点名明细' : '查看点名明细'),
+            ),
+            if (_expanded) _buildDetails(context),
+          ],
+        ),
       ),
+    );
+  }
+
+  Widget _buildDetails(BuildContext context) {
+    if (widget.item.courseId.isEmpty) {
+      return const Padding(
+        padding: EdgeInsets.only(top: 8),
+        child: Text('该课程缺少明细查询标识，暂无法加载点名记录。'),
+      );
+    }
+    final future = ref.watch(attendanceDetailProvider(_detailRequest).future);
+    return FutureBuilder<DataResult<AttendanceDetailResponse>>(
+      future: future,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done) {
+          return const Padding(
+            padding: EdgeInsets.all(16),
+            child: Center(child: CircularProgressIndicator()),
+          );
+        }
+        if (snapshot.hasError) {
+          return Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('点名明细加载失败，请重试。'),
+                TextButton.icon(
+                  onPressed: _retryDetails,
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('重试'),
+                ),
+              ],
+            ),
+          );
+        }
+        return _AttendanceDetailPanel(items: snapshot.data!.data.items);
+      },
     );
   }
 
@@ -737,6 +866,142 @@ class _AttendanceCard extends StatelessWidget {
           fontWeight: FontWeight.w700,
         ),
       ),
+    );
+  }
+}
+
+class _AttendanceDetailPanel extends StatefulWidget {
+  const _AttendanceDetailPanel({required this.items});
+
+  final List<AttendanceDetail> items;
+
+  @override
+  State<_AttendanceDetailPanel> createState() => _AttendanceDetailPanelState();
+}
+
+class _AttendanceDetailPanelState extends State<_AttendanceDetailPanel> {
+  static const _statusFilters = [
+    ('all', '全部'),
+    ('normal', '正常'),
+    ('late', '迟到'),
+    ('leaveEarly', '早退'),
+    ('absent', '旷课'),
+    ('leave', '请假'),
+  ];
+
+  String _statusFilter = 'all';
+
+  @override
+  Widget build(BuildContext context) {
+    final items = widget.items;
+    if (items.isEmpty) {
+      return const Padding(
+        padding: EdgeInsets.only(top: 8),
+        child: Text('暂无点名明细。'),
+      );
+    }
+    final visibleItems = _statusFilter == 'all'
+        ? items
+        : items.where((item) => item.status == _statusFilter).toList();
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text('显示 ${visibleItems.length} / ${items.length} 条点名记录',
+              style: Theme.of(context).textTheme.labelMedium),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final filter in _statusFilters)
+                ChoiceChip(
+                  key: ValueKey('attendance-detail-status-${filter.$1}'),
+                  label: Text(
+                    '${filter.$2} ${filter.$1 == 'all' ? items.length : items.where((item) => item.status == filter.$1).length}',
+                  ),
+                  selected: _statusFilter == filter.$1,
+                  onSelected: (_) => setState(() => _statusFilter = filter.$1),
+                ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          if (visibleItems.isEmpty)
+            const Padding(
+              padding: EdgeInsets.all(12),
+              child: Text('该状态暂无点名记录。'),
+            ),
+          for (final item in visibleItems)
+            Container(
+              margin: const EdgeInsets.only(bottom: 8),
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          '${item.classDate} ${item.classTime}'.trim(),
+                          style: const TextStyle(fontWeight: FontWeight.w800),
+                        ),
+                      ),
+                      StatusPill(
+                        label: item.statusLabel,
+                        color: _attendanceStatusColor(context, item.status),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 12,
+                    runSpacing: 6,
+                    children: [
+                      _AttendanceDetailField('学年', item.academicYear),
+                      _AttendanceDetailField('学期', item.term),
+                      _AttendanceDetailField('开课学院', item.offeringCollege),
+                      _AttendanceDetailField('课程代码', item.courseCode),
+                      _AttendanceDetailField('课程名称', item.courseName),
+                      _AttendanceDetailField('教学班', item.teachingClass),
+                      _AttendanceDetailField('任课老师', item.teacher),
+                      _AttendanceDetailField('点名时间', item.rollCallTime),
+                      _AttendanceDetailField('节次', item.sections),
+                      _AttendanceDetailField('学号', item.studentId),
+                      _AttendanceDetailField('姓名', item.studentName),
+                      _AttendanceDetailField('性别', item.gender),
+                      _AttendanceDetailField('学院', item.college),
+                      _AttendanceDetailField('年级', item.grade),
+                      _AttendanceDetailField('专业', item.major),
+                      _AttendanceDetailField('班级', item.className),
+                      _AttendanceDetailField('备注', item.remark),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AttendanceDetailField extends StatelessWidget {
+  const _AttendanceDetailField(this.label, this.value);
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    if (value.isEmpty) return const SizedBox.shrink();
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 260),
+      child: Text('$label：$value', style: const TextStyle(fontSize: 12)),
     );
   }
 }

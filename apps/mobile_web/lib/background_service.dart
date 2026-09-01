@@ -56,6 +56,11 @@ class BackgroundService {
     }
   }
 
+  static Future<void> cancelCourseReminders() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
+    await _channel.invokeMethod('cancelCourseReminders');
+  }
+
   static Future<void> setAppForeground(bool foreground) async {
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
     try {

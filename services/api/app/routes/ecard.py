@@ -253,6 +253,14 @@ def _summary_from_binding(binding: EcardBinding, student_id: str | None = None) 
     }
 
 
+def summary_for_student(student_id: str) -> dict[str, Any]:
+    """读取已绑定宿舍的缓存摘要，不请求一卡通上游。"""
+    binding = _binding_for(student_id)
+    if binding is None:
+        return {"status": "not_bound"}
+    return _summary_from_binding(binding, student_id)
+
+
 def refresh_binding(
     binding: EcardBinding, student_id: str, client: EcardClient | None = None
 ) -> tuple[dict[str, Any], bool, str | None]:
@@ -402,10 +410,7 @@ def bind_room(
 @router.get("/summary", response_model=EcardSummary)
 def summary(session: AppSession = Depends(require_session)) -> dict[str, Any]:
     student_id, _ = _student_info(session)
-    binding = _binding_for(student_id)
-    if binding is None:
-        return {"status": "not_bound"}
-    return _summary_from_binding(binding, student_id)
+    return summary_for_student(student_id)
 
 
 @router.post("/refresh", response_model=EcardSummary)

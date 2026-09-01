@@ -119,6 +119,7 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
   Color seedColor = GzusColors.blue;
   bool _systemDark = false;
   bool loggedIn = false;
+  bool _scheduleOnlyMode = false;
   bool initializing = true;
   String? studentName;
   String? loginError;
@@ -137,9 +138,6 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
   bool _isAdmin = false;
   bool _isOwner = false;
 
-  /// 最近一次登录成功的时间，用于防止登录后立即因瞬态 401 被踢出
-  DateTime? _lastLoginAt;
-
   @override
   void initState() {
     super.initState();
@@ -148,17 +146,14 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
     _systemDark =
         WidgetsBinding.instance.platformDispatcher.platformBrightness ==
             Brightness.dark;
-    // 当 relogin 失败时（credential token 已失效），触发 logout
-    // 添加 5 秒冷却期，防止登录后因短暂网络故障被误踢出。
+    // 登录态失效后仅保留无身份信息的课表离线浏览，不清除课表快照。
     api.onReloginFailed = () {
-      if (!loggedIn) return;
-      final now = DateTime.now();
-      if (_lastLoginAt != null &&
-          now.difference(_lastLoginAt!) < const Duration(seconds: 5)) {
-        debugPrint('Ignoring relogin failure within 5s of login (transient)');
-        return;
-      }
-      _logout();
+      if (!loggedIn && !_scheduleOnlyMode) return;
+      _enterScheduleOnlyMode();
+    };
+    api.onSessionReplaced = (_) async {
+      if (!mounted || !loggedIn) return;
+      await _initPushServices();
     };
     _loadThemePreference();
     _loadSeedColorPreference();
@@ -203,6 +198,9 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
   }
 
   Future<void> _handleAppResume() async {
+    final prefs = await SharedPreferences.getInstance();
+    await _tryBackgroundRefresh(prefs);
+    if (!mounted || !loggedIn) return;
     try {
       await push_service.loadLibrary();
       push_service.PushService.resume();
@@ -325,27 +323,32 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
       },
       home: initializing
           ? const LoadingPage()
-          : !loggedIn
-              ? LoginPage(
+          : _scheduleOnlyMode
+              ? OfflineSchedulePage(
                   api: api,
-                  initialError: loginError,
-                  onLoggedIn: (result) {
-                    _finishLogin(result);
-                  },
+                  onLoginRequested: _showLoginFromScheduleOnlyMode,
                 )
-              : !_scheduleOnboardingCompleted
-                  ? FirstRunOnboardingPage(
+              : !loggedIn
+                  ? LoginPage(
                       api: api,
-                      studentName: studentName,
-                      onComplete: () {
-                        if (!mounted) return;
-                        setState(() {
-                          _scheduleOnboardingCompleted = true;
-                          _backgroundGuideCompleted = true;
-                        });
+                      initialError: loginError,
+                      onLoggedIn: (result) {
+                        _finishLogin(result);
                       },
                     )
-                  : _buildDashboardShell(),
+                  : !_scheduleOnboardingCompleted
+                      ? FirstRunOnboardingPage(
+                          api: api,
+                          studentName: studentName,
+                          onComplete: () {
+                            if (!mounted) return;
+                            setState(() {
+                              _scheduleOnboardingCompleted = true;
+                              _backgroundGuideCompleted = true;
+                            });
+                          },
+                        )
+                      : _buildDashboardShell(),
       routes: {
         '/dashboard': (context) {
           if (!loggedIn) {
@@ -596,6 +599,7 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
     if (!mounted) return;
     setState(() {
       loggedIn = true;
+      _scheduleOnlyMode = false;
       studentName = result.studentName;
       loginError = null;
       _backgroundGuideCompleted = false;
@@ -649,8 +653,8 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
   }
 
   Future<void> _persistLogin(LoginResult result) async {
-    _lastLoginAt = DateTime.now();
     _isAdmin = result.isAdmin ?? false;
+    _scheduleOnlyMode = false;
     final prefs = await SharedPreferences.getInstance();
     if (result.sessionId != null) {
       api.useSession(result.sessionId);
@@ -725,12 +729,49 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
     unawaited(_performLogoutCleanup(activeSessionId, activeStudentId));
   }
 
+  void _enterScheduleOnlyMode() {
+    LoginRequiredServices.disconnect();
+    unawaited(LoginRequiredServices.disableBackgroundService());
+    LoginRequiredServices.cancelCourseReminders();
+    if (!mounted) return;
+    setState(() {
+      loggedIn = false;
+      _scheduleOnlyMode = true;
+      studentName = null;
+      _backgroundGuideCompleted = false;
+      _scheduleOnboardingCompleted = true;
+      _cloudScheduleSettings = null;
+      _globalDataSource = const DataSourceInfo(
+        fromLocalCache: true,
+        isOffline: true,
+        needsRelogin: true,
+      );
+      loginError = null;
+      _isAdmin = false;
+      _isOwner = false;
+    });
+    widget.onAuthenticationChanged?.call(false);
+    _navigatorKey.currentState?.popUntil((route) => route.isFirst);
+  }
+
+  void _showLoginFromScheduleOnlyMode() {
+    setState(() {
+      _scheduleOnlyMode = false;
+      loginError = '登录状态已失效，请重新登录';
+    });
+  }
+
   Future<void> _performLogoutCleanup(
     String? activeSessionId,
     String? activeStudentId,
   ) async {
     try {
       if (activeSessionId != null && activeSessionId.isNotEmpty) {
+        try {
+          await api.revokeBackgroundNotificationAccess(activeSessionId);
+        } catch (error) {
+          debugPrint('撤销后台通知授权失败: error=${error.runtimeType}');
+        }
         if (kIsWeb) {
           try {
             await LoginRequiredServices.unsubscribeWebPush(
@@ -849,6 +890,94 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
             });
           },
         ),
+      ),
+    );
+  }
+}
+
+class OfflineSchedulePage extends StatefulWidget {
+  const OfflineSchedulePage({
+    super.key,
+    required this.api,
+    required this.onLoginRequested,
+  });
+
+  final ApiClient api;
+  final VoidCallback onLoginRequested;
+
+  @override
+  State<OfflineSchedulePage> createState() => _OfflineSchedulePageState();
+}
+
+class _OfflineSchedulePageState extends State<OfflineSchedulePage> {
+  late int _year;
+  late int _term;
+  late int _currentWeek;
+  late DateTime _firstWeekStart;
+  bool _autoWeek = true;
+
+  @override
+  void initState() {
+    super.initState();
+    final period = academicPeriodOf(DateTime.now());
+    _year = period.$1;
+    _term = period.$2;
+    _firstWeekStart = defaultFirstWeekStart(_year, _term);
+    _currentWeek = weekFromDate(
+      _firstWeekStart,
+      DateTime.now(),
+      clampToTerm: true,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('离线课表'),
+        actions: [
+          TextButton.icon(
+            onPressed: widget.onLoginRequested,
+            icon: const Icon(Icons.login),
+            label: const Text('重新登录'),
+          ),
+        ],
+      ),
+      body: Column(
+        children: [
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(
+              horizontal: GzusSpacing.m,
+              vertical: GzusSpacing.s,
+            ),
+            color: theme.colorScheme.errorContainer,
+            child: Text(
+              '登录状态已失效，仅可查看此前缓存的课表。重新登录后恢复全部功能。',
+              style: TextStyle(color: theme.colorScheme.onErrorContainer),
+            ),
+          ),
+          Expanded(
+            child: SchedulePage(
+              api: widget.api,
+              year: _year,
+              term: _term,
+              currentWeek: _currentWeek,
+              firstWeekStart: _firstWeekStart,
+              autoWeek: _autoWeek,
+              onFirstWeekChanged: (value) {
+                setState(() => _firstWeekStart = value);
+              },
+              onCurrentWeekChanged: (value) {
+                setState(() => _currentWeek = value);
+              },
+              onAutoWeekChanged: (value) {
+                setState(() => _autoWeek = value);
+              },
+            ),
+          ),
+        ],
       ),
     );
   }

@@ -9,7 +9,8 @@ import WidgetKit
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate, CLLocationManagerDelegate {
   private let homeWidgetsChannel = "cn.gzus.pro/home_widgets"
   private let homeWidgetsAppGroup = "group.cn.gzus.pro.6772c5tf6c"
-  private let nextClassWidgetKind = "OneGzusNextClassLockScreen"
+  private let nextClassHomeScreenWidgetKind = "OneGzusNextClassHomeScreen"
+  private let nextClassLockScreenWidgetKind = "OneGzusNextClassLockScreen"
   private let liquidGlassChannelName = "cn.gzus.pro/liquid-glass"
   private let permissionsChannelName = "cn.gzus.pro/permissions"
   private let locationChannelName = "cn.gzus.pro/location"
@@ -27,6 +28,7 @@ import WidgetKit
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
+    ShiplyManager.shared().initializeSDK()
     UNUserNotificationCenter.current().delegate = self as? UNUserNotificationCenterDelegate
     if let userInfo = launchOptions?[.remoteNotification] as? [AnyHashable: Any] {
       cacheNotificationOpen(userInfo)
@@ -41,6 +43,7 @@ import WidgetKit
     // 隐式 Flutter 引擎完成初始化时，FlutterViewController 可能尚未创建。
     // 应通过引擎桥接器取得消息通道，不能依赖 window.rootViewController。
     let messenger = engineBridge.applicationRegistrar.messenger()
+    ShiplyManager.shared().register(with: messenger)
     let homeWidgets = FlutterMethodChannel(name: homeWidgetsChannel, binaryMessenger: messenger)
     homeWidgets.setMethodCallHandler { [weak self] call, result in
       self?.handleHomeWidgetMethod(call: call, result: result)
@@ -376,7 +379,7 @@ import WidgetKit
       result(FlutterError(code: "INVALID_ARGUMENT", message: "Widget data must be a map.", details: nil))
       return
     }
-    guard #available(iOS 16.0, *) else {
+    guard #available(iOS 14.0, *) else {
       result(true)
       return
     }
@@ -397,7 +400,10 @@ import WidgetKit
     for key in numberKeys {
       defaults.set((values[key] as? NSNumber)?.int64Value ?? 0, forKey: key)
     }
-    WidgetCenter.shared.reloadTimelines(ofKind: nextClassWidgetKind)
+    WidgetCenter.shared.reloadTimelines(ofKind: nextClassHomeScreenWidgetKind)
+    if #available(iOS 16.0, *) {
+      WidgetCenter.shared.reloadTimelines(ofKind: nextClassLockScreenWidgetKind)
+    }
     result(true)
   }
 

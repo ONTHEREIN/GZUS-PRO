@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import re
 import time
@@ -6,7 +7,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import TypeVar
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse
 
 from app.cache_service import (
@@ -16,7 +17,9 @@ from app.cache_service import (
 )
 from app.notice_utils import merge_notices, valid_notice_items
 from app.routes.deps import require_session
+from app.routes.ecard import summary_for_student
 from app.schemas import (
+    AttendanceDetailResponse,
     AttendanceResponse,
     CreditItem,
     ExamItem,
@@ -26,7 +29,11 @@ from app.schemas import (
     ScheduleCourse,
     StudentInfo,
 )
-from app.school_client import AuthenticationError, MissingProxySlotError
+from app.school_client import (
+    AttendanceCourseNotFoundError,
+    AuthenticationError,
+    MissingProxySlotError,
+)
 from app.sessions import AppSession
 
 logger = logging.getLogger(__name__)
@@ -44,6 +51,7 @@ _CACHE_FRESH_SECONDS = {
     "schedule": 12 * 3600,
     "notices": 10 * 60,
     "attendance": 5 * 60,
+    "attendance_details": 5 * 60,
     "credits": 12 * 3600,
     "grades": 30 * 60,
     "exams": 60 * 60,
@@ -274,6 +282,8 @@ def _get_student_id(session: AppSession) -> str:
 def _run_academic_call(call: Callable[[], T]) -> T:
     try:
         return call()
+    except HTTPException:
+        raise
     except AuthenticationError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
     except MissingProxySlotError as exc:
@@ -434,6 +444,37 @@ async def attendance(
     )
 
 
+@router.get("/attendance/details", response_model=AttendanceDetailResponse)
+async def attendance_details(
+    course_id: str = Query(alias="courseId"),
+    year: str | None = None,
+    term: str | None = None,
+    request: Request = None,
+    refresh: bool = False,
+    session: AppSession = Depends(require_session),
+) -> AttendanceDetailResponse:
+    if not course_id.strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="缺少考勤课程标识")
+    student_id = _get_student_id(session)
+    params = {"year": year, "term": term, "courseId": course_id}
+
+    def call() -> AttendanceDetailResponse:
+        try:
+            items = session.client.get_attendance_details(year, term, course_id)
+        except AttendanceCourseNotFoundError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        return AttendanceDetailResponse(items=items)
+
+    return await _run_with_cache_fallback(
+        "attendance_details",
+        student_id,
+        call,
+        params,
+        ACADEMIC_CACHE_MAX_AGE_SECONDS,
+        refresh,
+    )
+
+
 @router.get("/credits", response_model=list[CreditItem])
 async def credits(
     request: Request,
@@ -495,7 +536,7 @@ async def dashboard(
                 "notices",
                 dashboard_caches["notices"][0],
                 dashboard_caches["notices"][1],
-                lambda: _merged_public_notices(
+                lambda: _session_notices(
                     session.client.get_notices() if session.client else [],
                     ehall_client,
                 ),
@@ -572,10 +613,14 @@ async def dashboard(
     ]
     modules = dict(await asyncio.gather(*module_jobs))
     _save_dashboard_module_caches(student_id, params, modules)
+    notices_module = modules["notices"]
+    if notices_module["status"] != "error":
+        notices_module["data"] = _merge_public_notices(notices_module["data"])
+    ecard_summary = summary_for_student(student_id)
     modules["ecard"] = {
-        "status": "empty",
-        "data": {"status": "not_bound"},
-        "source": "api",
+        "status": "ok" if ecard_summary["status"] == "ok" else "empty",
+        "data": ecard_summary,
+        "source": "cache",
         "durationMs": 0,
     }
     modules["weather"] = {
@@ -592,28 +637,68 @@ async def dashboard(
     }
 
 
-def _merged_public_notices(jwxt_items: list, ehall_client) -> list[dict]:
-    """合并 JWXT + ehall + 校历 + 公众号 四路公开通知（供通知页与首页 dashboard 复用）。"""
-    items = jwxt_items
+def _session_notices(jwxt_items: list[dict], ehall_client) -> list[dict]:
+    """合并与学生会话有关的 JWXT、办事大厅通知，供缓存使用。"""
+    items = list(jwxt_items)
     if ehall_client is not None:
         try:
             ehall_items = ehall_client.get_notice_items()
             items = merge_notices(items, ehall_items)
         except Exception:
             logger.exception("ehall notices merge failed")
+    return valid_notice_items(items)
+
+
+def _merge_public_notices(session_items: list[dict]) -> list[dict]:
+    """每次读取时合并动态公共通知，避免管理员发布受学生缓存影响。"""
+    admin_items: list[dict] = []
     try:
         from app.routes.admin import list_published_admin_notices
 
-        items.extend(list_published_admin_notices())
+        admin_items = list_published_admin_notices()
     except Exception:
         logger.exception("admin notices merge failed")
+    wechat_items: list[dict] = []
     try:
         from app.wechat_service import list_visible_articles
 
-        items.extend(list_visible_articles())
+        wechat_items = list_visible_articles()
     except Exception:
         logger.exception("wechat articles merge failed")
-    return valid_notice_items(items)
+    pinned_admin_items = [item for item in admin_items if item.get("isPinned")]
+    regular_admin_items = [item for item in admin_items if not item.get("isPinned")]
+    public_pinned_items = [
+        {key: value for key, value in item.items() if key != "isPinned"}
+        for item in pinned_admin_items
+    ]
+    public_regular_items = [
+        {key: value for key, value in item.items() if key != "isPinned"}
+        for item in regular_admin_items
+    ]
+    return valid_notice_items(
+        [*public_pinned_items, *session_items, *public_regular_items, *wechat_items]
+    )
+
+
+def _response_list(response: JSONResponse) -> list[dict]:
+    try:
+        payload = json.loads(response.body)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("通知缓存数据格式无效") from exc
+    if not isinstance(payload, list) or not all(isinstance(item, dict) for item in payload):
+        raise RuntimeError("通知缓存数据格式无效")
+    return payload
+
+
+def _with_public_notices(result: JSONResponse | list[dict]) -> JSONResponse | list[dict]:
+    if not isinstance(result, JSONResponse):
+        return _merge_public_notices(result)
+    response = JSONResponse(content=_merge_public_notices(_response_list(result)))
+    for name in ("X-Data-Source", "X-Data-Cached-At"):
+        value = result.headers.get(name)
+        if value is not None:
+            response.headers[name] = value
+    return response
 
 
 @router.get("/notices", response_model=list[NoticeItem])
@@ -632,12 +717,13 @@ async def notices(
             trigger_lazy_sync()
         except Exception:
             pass
-        return _merged_public_notices(
+        return _session_notices(
             session.client.get_notices(),
             getattr(session, "ehall_client", None),
         )
 
-    return await _run_with_cache_fallback("notices", student_id, call, refresh=refresh)
+    result = await _run_with_cache_fallback("notices", student_id, call, refresh=refresh)
+    return _with_public_notices(result)
 
 
 @router.get("/notices/detail", response_model=NoticeDetail)

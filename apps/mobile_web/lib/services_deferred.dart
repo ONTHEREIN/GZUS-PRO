@@ -96,7 +96,7 @@ class LoginRequiredServices {
     }
 
     final future = Future.wait([
-      if (!_initialized) _initWebPushService(onNotificationTap),
+      if (!_initialized) _initWebPushService(api, onNotificationTap),
       if (!_initialized) _initLocalNotificationService(onNotificationTap),
       if (!_initialized) _initPushService(api, onNotificationTap),
       _syncIosPushToken(api),
@@ -119,10 +119,21 @@ class LoginRequiredServices {
   }
 
   static Future<void> _initWebPushService(
+      ApiClient api,
       void Function(Map<String, dynamic>)? onTap) async {
     try {
       await web_push_service.loadLibrary();
-      await web_push_service.WebPushService.instance.init(onTap: onTap);
+      final service = web_push_service.WebPushService.instance;
+      await service.init(onTap: onTap);
+      if (await service.getPermissionStatus() != 'granted') return;
+      final config = await api.getWebPushConfig();
+      final publicKey = config['publicKey'] as String?;
+      if (config['enabled'] != true || publicKey == null || publicKey.isEmpty) return;
+      await service.subscribe(
+        publicKey,
+        apiBaseUrl: api.baseUrl,
+        sessionId: api.sessionId ?? '',
+      );
     } catch (_) {}
   }
 

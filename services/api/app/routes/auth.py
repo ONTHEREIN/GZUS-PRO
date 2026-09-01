@@ -136,6 +136,11 @@ def _should_return_jwxt_cookies(request: Request) -> bool:
     return (request.headers.get("x-client-platform") or "").lower() in {"android", "ios"}
 
 
+def _raise_cas_login_error(error: str, error_status: int | None) -> None:
+    """将 CAS 可恢复故障与需要人工验证的失败映射为不同 HTTP 状态。"""
+    raise HTTPException(status_code=error_status or status.HTTP_503_SERVICE_UNAVAILABLE, detail=error)
+
+
 @router.get("/ly/start")
 def ly_sso_start(return_url: str = "", request: Request = None):
     return RedirectResponse(url=_create_pending_sso(request, _safe_return_url(return_url), None))
@@ -281,7 +286,11 @@ def _complete_sso_ticket(ticket: str, request: Request) -> dict:
 @limiter.limit("10/minute")
 def relogin(payload: ReloginRequest, request: Request) -> dict:
     from app.cas_auto_login import CasAutoLogin
-    from app.sessions import decrypt_credentials
+    from app.sessions import (
+        credential_fingerprint,
+        decrypt_credential_payload,
+        encrypt_device_credentials,
+    )
 
     settings = get_settings()
     sessions = request.app.state.sessions
@@ -291,17 +300,23 @@ def relogin(payload: ReloginRequest, request: Request) -> dict:
         if old_session is not None and old_session.revoked_at is not None:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="账号已在其他设备登录，请重新登录",
+                detail="当前设备已被管理员下线，请重新验证登录",
             )
 
     try:
-        account, password = decrypt_credentials(
-            payload.credential_token,
-            settings.credential_encryption_key,
-            ttl_seconds=settings.ehall_session_ttl_hours * 3600,
+        account, password, credential_id = decrypt_credential_payload(
+            payload.credential_token, settings.credential_encryption_key
         )
     except Exception as exc:
         raise HTTPException(status_code=401, detail="凭据已失效，请重新登录") from exc
+    if credential_id is None:
+        credential_id = token_urlsafe(32)
+    fingerprint = credential_fingerprint(credential_id)
+    if sessions.is_credential_revoked(fingerprint):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="当前设备已被管理员下线，请重新验证登录",
+        )
 
     cas_url = (
         f"{settings.cas_login_url}?service="
@@ -315,7 +330,7 @@ def relogin(payload: ReloginRequest, request: Request) -> dict:
     )
     result = cas_auto_login.auto_login(account, password)
     if result.error:
-        raise HTTPException(status_code=401, detail=result.error)
+        _raise_cas_login_error(result.error, result.error_status)
 
     client = SchoolSdkClient(
         base_url=settings.jw_base_url,
@@ -325,7 +340,7 @@ def relogin(payload: ReloginRequest, request: Request) -> dict:
     try:
         student_name = client.login_with_cookies(result.cookies, account=result.account)
     except Exception as exc:
-        raise HTTPException(status_code=401, detail=str(exc)) from exc
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="学校登录会话恢复失败") from exc
 
     ehall_client = None
     if result.ehall_auth_token or result.ehall_cookies:
@@ -340,6 +355,7 @@ def relogin(payload: ReloginRequest, request: Request) -> dict:
         client, student_name=student_name,
         ehall_client=ehall_client,
         student_account=account,
+        credential_fingerprint=fingerprint,
     )
 
     response = {
@@ -347,7 +363,9 @@ def relogin(payload: ReloginRequest, request: Request) -> dict:
         "sessionId": session.id,
         "studentName": student_name,
         "studentId": account,
-        "credentialToken": payload.credential_token,
+        "credentialToken": encrypt_device_credentials(
+            account, password, credential_id, settings.credential_encryption_key
+        ),
         "ehallCookies": result.ehall_cookies,
         "ehallAuthToken": result.ehall_auth_token,
     }
@@ -385,7 +403,7 @@ def auto_login(payload: AutoLoginRequest, request: Request) -> dict:
     logger.info("[TIMING] cas_auto_login.auto_login: %.2fs", time.time() - t1)
 
     if result.error:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=result.error)
+        _raise_cas_login_error(result.error, result.error_status)
 
     client = SchoolSdkClient(
         base_url=settings.jw_base_url,
@@ -396,7 +414,7 @@ def auto_login(payload: AutoLoginRequest, request: Request) -> dict:
     try:
         student_name = client.login_with_cookies(result.cookies, result.account)
     except AuthenticationError as exc:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc))
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="学校登录会话建立失败") from exc
     logger.info("[TIMING] login_with_cookies: %.2fs", time.time() - t2)
 
     ehall_client = None
@@ -414,14 +432,18 @@ def auto_login(payload: AutoLoginRequest, request: Request) -> dict:
             timeout_seconds=settings.request_timeout_seconds,
         )
 
-    from app.sessions import encrypt_credentials
+    from app.sessions import credential_fingerprint, encrypt_device_credentials
 
-    cred_token = encrypt_credentials(payload.account, password, settings.credential_encryption_key)
+    credential_id = token_urlsafe(32)
+    cred_token = encrypt_device_credentials(
+        payload.account, password, credential_id, settings.credential_encryption_key
+    )
 
     session = sessions.create(
         client, student_name,
         ehall_client=ehall_client,
         student_account=payload.account,
+        credential_fingerprint=credential_fingerprint(credential_id),
     )
 
     logger.info("[TIMING] auto_login endpoint total: %.2fs", time.time() - t_total)

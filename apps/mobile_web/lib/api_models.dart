@@ -166,6 +166,10 @@ class RequestCache {
   void remove(String key) {
     _cache.remove(key);
   }
+
+  void removeStartingWith(String prefix) {
+    _cache.removeWhere((key, _) => key.startsWith(prefix));
+  }
 }
 
 class ApiException implements Exception {
@@ -173,8 +177,6 @@ class ApiException implements Exception {
 
   final String message;
   final int? statusCode;
-
-  bool get isSingleDeviceConflict => message.contains('其他设备登录');
 
   @override
   String toString() => message;
@@ -604,7 +606,8 @@ class AttendanceResponse {
 
 class AttendanceItem {
   AttendanceItem.fromJson(Map<String, dynamic> json)
-      : courseName = json['courseName'] as String? ?? '',
+      : courseId = json['courseId'] as String? ?? '',
+        courseName = json['courseName'] as String? ?? '',
         courseCode = json['courseCode'] as String?,
         academicYear = json['academicYear'] as String?,
         term = json['term'] as String?,
@@ -619,6 +622,7 @@ class AttendanceItem {
             .map((item) => AttendanceRecord.fromJson(item))
             .toList();
 
+  final String courseId;
   final String courseName;
   final String? courseCode;
   final String? academicYear;
@@ -660,6 +664,63 @@ class AttendanceItem {
         'leave': leave,
         'total': total,
       };
+}
+
+class AttendanceDetailResponse {
+  AttendanceDetailResponse.fromJson(Map<String, dynamic> json)
+      : items = (json['items'] as List<dynamic>? ?? const [])
+            .whereType<Map<String, dynamic>>()
+            .map((item) => AttendanceDetail.fromJson(item))
+            .toList();
+
+  final List<AttendanceDetail> items;
+}
+
+class AttendanceDetail {
+  AttendanceDetail.fromJson(Map<String, dynamic> json)
+      : academicYear = json['academicYear'] as String? ?? '',
+        term = json['term'] as String? ?? '',
+        status = json['status'] as String? ?? 'normal',
+        statusLabel = json['statusLabel'] as String? ?? '正常',
+        offeringCollege = json['offeringCollege'] as String? ?? '',
+        courseCode = json['courseCode'] as String? ?? '',
+        courseName = json['courseName'] as String? ?? '',
+        teachingClass = json['teachingClass'] as String? ?? '',
+        teacher = json['teacher'] as String? ?? '',
+        rollCallTime = json['rollCallTime'] as String? ?? '',
+        classDate = json['classDate'] as String? ?? '',
+        classTime = json['classTime'] as String? ?? '',
+        sections = json['sections'] as String? ?? '',
+        studentId = json['studentId'] as String? ?? '',
+        studentName = json['studentName'] as String? ?? '',
+        gender = json['gender'] as String? ?? '',
+        college = json['college'] as String? ?? '',
+        grade = json['grade'] as String? ?? '',
+        major = json['major'] as String? ?? '',
+        className = json['className'] as String? ?? '',
+        remark = json['remark'] as String? ?? '';
+
+  final String academicYear;
+  final String term;
+  final String status;
+  final String statusLabel;
+  final String offeringCollege;
+  final String courseCode;
+  final String courseName;
+  final String teachingClass;
+  final String teacher;
+  final String rollCallTime;
+  final String classDate;
+  final String classTime;
+  final String sections;
+  final String studentId;
+  final String studentName;
+  final String gender;
+  final String college;
+  final String grade;
+  final String major;
+  final String className;
+  final String remark;
 }
 
 class AttendanceRecord {
@@ -729,7 +790,8 @@ class NoticeItem {
         date = json['date'] as String?,
         url = json['url'] as String?,
         summary = _noticeSummaryFromJson(json),
-        coverUrl = _firstText(json, const ['coverUrl', 'cover_url', 'cover']);
+        coverUrl = _firstText(json, const ['coverUrl', 'cover_url', 'cover']),
+        source = _noticeSourceFromJson(json);
 
   final String category;
   final String title;
@@ -737,6 +799,27 @@ class NoticeItem {
   final String? url;
   final String? summary;
   final String? coverUrl;
+  final NoticeSource source;
+}
+
+enum NoticeSource { jwxt, ehall, admin, wechat }
+
+NoticeSource _noticeSourceFromJson(Map<String, dynamic> json) {
+  switch (json['source']) {
+    case 'ehall':
+      return NoticeSource.ehall;
+    case 'admin':
+      return NoticeSource.admin;
+    case 'wechat':
+      return NoticeSource.wechat;
+    case 'jwxt':
+      return NoticeSource.jwxt;
+  }
+  final category = _cleanNoticeText(json['category']);
+  if (category.contains('校历')) return NoticeSource.admin;
+  if (category.contains('公众号')) return NoticeSource.wechat;
+  if (category.contains('办事大厅')) return NoticeSource.ehall;
+  return NoticeSource.jwxt;
 }
 
 String _noticeTitleFromJson(Map<String, dynamic> json) {

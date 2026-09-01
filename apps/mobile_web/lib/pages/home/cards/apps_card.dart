@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import '../../../api_client.dart';
 import '../../../widgets/badges.dart';
-import '../../../widgets/empty_state.dart';
 import '../../home/cards/home_card_shell.dart';
 
 /// 常用服务卡片：大/中/小三种信息密度。
@@ -85,7 +84,7 @@ class _AppsCard extends StatelessWidget {
       badge: '${apps.length} 个',
       onTap: onTap,
       child: visible.isEmpty
-          ? const EmptyState(message: '暂无应用')
+          ? const Center(child: Text('暂无应用'))
           : LayoutBuilder(
               builder: (context, constraints) {
                 final itemWidth = constraints.maxWidth < 240

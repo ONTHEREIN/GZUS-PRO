@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import '../../../api_client.dart';
 import '../../../widgets/badges.dart';
-import '../../../widgets/empty_state.dart';
 import '../../home/cards/home_card_shell.dart';
 
 /// 通知摘要卡片：大/中/小三种信息密度。
@@ -22,7 +21,7 @@ class NotificationsLargeCard extends StatelessWidget {
       badge: '${notices.length}',
       onTap: onTap,
       child: notices.isEmpty
-          ? const EmptyState(message: '暂无通知')
+          ? const Center(child: Text('暂无通知'))
           : Column(
               children: [
                 for (final item in notices.take(3)) _NoticeRow(item: item),
@@ -48,7 +47,7 @@ class NotificationsMediumCard extends StatelessWidget {
       badge: '${notices.length}',
       onTap: onTap,
       child: notices.isEmpty
-          ? const EmptyState(message: '暂无通知')
+          ? const Center(child: Text('暂无通知'))
           : Column(
               children: [
                 _NoticeRow(item: notices.first),

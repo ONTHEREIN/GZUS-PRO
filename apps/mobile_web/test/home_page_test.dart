@@ -104,6 +104,49 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('首页水电卡使用生活缴费摘要而非旧 dashboard 快照', (tester) async {
+    final api = ApiClient(
+      baseUrl: 'https://api.example.test',
+      httpClient: MockClient((request) async {
+        if (request.url.path == '/ecard/summary') {
+          return http.Response(
+            jsonEncode({
+              'status': 'ok',
+              'roomId': 'CGCOMMON1111|1|A2|932',
+              'roomDisplay': '校本部 A2 A2-932',
+              'powerText': '9 度',
+              'coldWaterText': '2 吨',
+              'hotWaterText': '12 元',
+            }),
+            200,
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        if (request.url.path == '/dashboard') {
+          return http.Response(
+            jsonEncode(_dashboardBody()),
+            200,
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        return http.Response('not found', 404);
+      }),
+    );
+    api.useSession('home-ecard-test-session');
+    api.setStudentId('2024000000');
+
+    await _pumpHome(tester, api, const Size(800, 1400));
+
+    final utilityCard = find.byKey(const ValueKey('home-card-水电余额'));
+    await tester.scrollUntilVisible(
+      utilityCard,
+      200,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(find.text('9 度'), findsOneWidget);
+    expect(find.text('点击绑定宿舍'), findsNothing);
+  });
+
   testWidgets('首页标题横幅和首个模块共用移动端内容边线', (tester) async {
     await _pumpDashboardShell(
       tester,

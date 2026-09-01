@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi.testclient import TestClient
 
 from app.config import get_settings
-from app.database import DataCache, get_sync_session_factory
+from app.database import AdminNotice, DataCache, EcardBinding, get_sync_session_factory
 from app.main import create_app
 from app.school_client import AuthenticationError
 
@@ -31,7 +31,36 @@ class FakeClient:
         return [{"courseName": "高等数学", "score": "95", "credit": "4", "gradePoint": "4.5"}]
 
     def get_attendance(self, year, term):
-        return [{"courseName": "高等数学", "normal": 10, "late": 0, "total": 10}]
+        return [
+            {
+                "courseId": "course-1",
+                "courseName": "高等数学",
+                "normal": 10,
+                "late": 0,
+                "total": 10,
+            }
+        ]
+
+    def get_attendance_details(self, year, term, course_id):
+        if course_id != "course-1":
+            from app.school_client import AttendanceCourseNotFoundError
+
+            raise AttendanceCourseNotFoundError("当前学期未找到该考勤课程")
+        return [
+            {
+                "academicYear": "2025-2026",
+                "term": "1",
+                "status": "normal",
+                "statusLabel": "正常",
+                "courseCode": "GE1030",
+                "courseName": "高等数学",
+                "classDate": "2025-10-22",
+                "classTime": "10:40-12:00",
+                "sections": "3-4",
+                "studentId": "20250001",
+                "studentName": "测试学生",
+            }
+        ]
 
     def get_credits(self):
         return [{"studentId": "20240001", "name": "测试学生", "totalCredit": "120"}]
@@ -165,8 +194,28 @@ def test_attendance_and_credits():
     notices = client.get("/notices", headers=headers).json()
     assert attendance["status"] == "ok"
     assert attendance["items"][0]["normal"] == 10
+    assert attendance["items"][0]["courseId"] == "course-1"
     assert credits[0]["totalCredit"] == "120"
     assert notices[0]["title"] == "测试通知"
+
+
+def test_attendance_details_are_course_scoped_and_authenticated():
+    client, headers = client_with_session()
+
+    response = client.get(
+        "/attendance/details?year=2025&term=1&courseId=course-1", headers=headers
+    )
+
+    assert response.status_code == 200
+    detail = response.json()["items"][0]
+    assert detail["courseCode"] == "GE1030"
+    assert detail["classDate"] == "2025-10-22"
+    assert client.get("/attendance/details?courseId=course-1").status_code == 401
+    assert (
+        client.get("/attendance/details?year=2025&term=1&courseId=missing", headers=headers)
+        .status_code
+        == 404
+    )
 
 
 def test_dashboard_runs_modules_in_parallel():
@@ -181,6 +230,54 @@ def test_dashboard_runs_modules_in_parallel():
     assert response.status_code == 200
     assert duration < 0.8
     assert response.json()["modules"]["schedule"]["status"] == "ok"
+
+
+def test_dashboard_returns_cached_ecard_summary_for_bound_room():
+    app = create_app()
+    session = app.state.sessions.create(FakeClient(), "测试学生")
+    factory = get_sync_session_factory()
+    with factory() as db:
+        db.add(
+            EcardBinding(
+                student_id="20240001",
+                room_id="CGCOMMON1111|1|A2|932",
+                room_display="校本部 A2 A2-932",
+                last_summary_json=(
+                    '{"powerBalance": 12.5, "powerText": "12.5 度", '
+                    '"coldWaterBalance": 3.2, "coldWaterText": "3.2 吨"}'
+                ),
+                hot_water_balance_cache=6.8,
+            )
+        )
+        db.commit()
+
+    response = TestClient(app).get(
+        "/dashboard?year=2025&term=2&week=3",
+        headers={"X-Session-Id": session.id},
+    )
+
+    assert response.status_code == 200
+    ecard = response.json()["modules"]["ecard"]
+    assert ecard["status"] == "ok"
+    assert ecard["source"] == "cache"
+    assert ecard["data"]["roomDisplay"] == "校本部 A2 A2-932"
+    assert ecard["data"]["powerText"] == "12.5 度"
+    assert ecard["data"]["coldWaterText"] == "3.2 吨"
+    assert ecard["data"]["hotWaterText"] == "6.80元"
+
+
+def test_dashboard_returns_not_bound_ecard_summary_without_binding():
+    app = create_app()
+    session = app.state.sessions.create(FakeClient(), "测试学生")
+
+    response = TestClient(app).get(
+        "/dashboard?year=2025&term=2&week=3",
+        headers={"X-Session-Id": session.id},
+    )
+
+    ecard = response.json()["modules"]["ecard"]
+    assert ecard["status"] == "empty"
+    assert ecard["data"] == {"status": "not_bound"}
 
 
 def test_dashboard_returns_module_error_before_client_timeout(monkeypatch):
@@ -530,6 +627,46 @@ def test_fresh_cache_avoids_repeat_school_requests():
     assert cached_schedule.headers["X-Data-Cached-At"]
     assert cached_grades.headers["X-Data-Source"] == "cache"
     assert cached_notices.headers["X-Data-Source"] == "cache"
+
+
+def test_public_notices_are_merged_after_student_notice_cache():
+    app = create_app()
+    session = app.state.sessions.create(FakeClient(), "测试学生")
+    headers = {"X-Session-Id": session.id}
+    client = TestClient(app)
+
+    first = client.get("/notices", headers=headers)
+    assert [item["title"] for item in first.json()] == ["测试通知"]
+
+    factory = get_sync_session_factory()
+    with factory() as db:
+        db.add(
+            AdminNotice(
+                title="2026-2027 学年校历",
+                description="管理员发布的校历",
+                published=True,
+                is_pinned=True,
+            )
+        )
+        db.commit()
+
+    cached = client.get("/notices", headers=headers)
+    items = cached.json()
+    assert cached.headers["X-Data-Source"] == "cache"
+    assert items[0]["title"] == "2026-2027 学年校历"
+    assert items[0]["source"] == "admin"
+
+    dashboard = client.get("/dashboard?year=2025&term=2&week=3", headers=headers)
+    dashboard_items = dashboard.json()["modules"]["notices"]["data"]
+    assert dashboard_items[0]["title"] == "2026-2027 学年校历"
+
+    with factory() as db:
+        row = db.query(AdminNotice).filter(AdminNotice.title == "2026-2027 学年校历").first()
+        row.published = False
+        db.commit()
+
+    after_unpublish = client.get("/notices", headers=headers).json()
+    assert [item["title"] for item in after_unpublish] == ["测试通知"]
 
 
 def test_dashboard_reuses_fresh_module_caches_and_refreshes_on_demand():

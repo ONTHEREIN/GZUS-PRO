@@ -28,7 +28,9 @@ class Settings(BaseSettings):
     request_timeout_seconds: int = 6
     request_connect_timeout_seconds: int = 5
     cas_login_timeout_seconds: int = 60
-    push_poll_interval_seconds: int = 1800
+    push_poll_interval_seconds: int = 300
+    background_notification_poll_interval_seconds: int = 300
+    course_reminder_dispatch_interval_seconds: int = 60
     ws_heartbeat_seconds: int = 30
     debug: bool = False
     database_url: str = ""

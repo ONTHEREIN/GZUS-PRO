@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import json
 import logging
 import threading
 import time
@@ -43,6 +44,11 @@ class AcademicClient(Protocol):
     def get_attendance(self, year: str | None, term: str | None) -> list[dict]:
         ...
 
+    def get_attendance_details(
+        self, year: str | None, term: str | None, course_id: str
+    ) -> list[dict]:
+        ...
+
     def get_credits(self) -> list[dict]:
         ...
 
@@ -69,6 +75,7 @@ class AppSession:
     revoked_at: datetime | None = None
     revoked_reason: str | None = None
     student_account: str | None = None
+    credential_fingerprint: str | None = None
     # 管理后台标记：登录时查 admin_users 表写入（sessions.create 参数），
     # 与 DB 列 AppSessionModel.is_admin 保持一致。
     is_admin: bool = False
@@ -99,12 +106,48 @@ def encrypt_credentials(account: str, password: str, key: str) -> str:
     return f.encrypt(f"{account}:{password}".encode("utf-8")).decode("ascii")
 
 
+def encrypt_device_credentials(account: str, password: str, credential_id: str, key: str) -> str:
+    """签发绑定单台设备的长期自动登录凭据。"""
+    f = _get_fernet(key)
+    payload = json.dumps([account, password, credential_id], ensure_ascii=False, separators=(",", ":"))
+    return f.encrypt(payload.encode("utf-8")).decode("ascii")
+
+
 def decrypt_credentials(token: str, key: str, ttl_seconds: int | None = None) -> tuple[str, str]:
     """Decrypt a token back into (account, password)."""
     f = _get_fernet(key)
     plain = f.decrypt(token.encode("ascii"), ttl=ttl_seconds).decode("utf-8")
+    if plain.startswith("["):
+        payload = json.loads(plain)
+        if isinstance(payload, list) and len(payload) == 3 and all(isinstance(item, str) for item in payload):
+            return payload[0], payload[1]
     account, password = plain.split(":", 1)
     return account, password
+
+
+def decrypt_credential_payload(token: str, key: str) -> tuple[str, str, str | None]:
+    """解密新旧自动登录凭据；旧版无设备标识，首次重登后会升级。"""
+    f = _get_fernet(key)
+    plain = f.decrypt(token.encode("ascii")).decode("utf-8")
+    if plain.startswith("["):
+        payload = json.loads(plain)
+        if (
+            isinstance(payload, list)
+            and len(payload) == 3
+            and all(isinstance(item, str) and item for item in payload)
+        ):
+            return payload[0], payload[1], payload[2]
+        raise ValueError("自动登录凭据格式无效")
+    parts = plain.split(":", 1)
+    if len(parts) == 2:
+        account, password = parts
+        return account, password, None
+    raise ValueError("自动登录凭据格式无效")
+
+
+def credential_fingerprint(credential_id: str) -> str:
+    """将设备标识转换为可持久化比对的不可逆指纹。"""
+    return hashlib.sha256(credential_id.encode("utf-8")).hexdigest()
 
 
 def _rebuild_school_client(
@@ -253,6 +296,7 @@ class SessionStore:
         ehall_client: Any | None = None,
         student_account: str | None = None,
         is_admin: bool | None = None,
+        credential_fingerprint: str | None = None,
     ) -> AppSession:
         from app.database import AppSessionModel
 
@@ -304,6 +348,7 @@ class SessionStore:
             student_name=student_name,
             ehall_client=ehall_client,
             student_account=resolved_student_account,
+            credential_fingerprint=credential_fingerprint,
             is_admin=is_admin,
         )
 
@@ -311,35 +356,6 @@ class SessionStore:
 
         try:
             self._clear_legacy_credentials(db)
-            if resolved_student_account:
-                # 内存撤销段加锁，避免并发登录同一账号时重复写入未撤销会话
-                with self._lock:
-                    for existing in self._sessions.values():
-                        if (
-                            existing.student_account == resolved_student_account
-                            and existing.revoked_at is None
-                        ):
-                            existing.revoked_at = datetime.now(timezone.utc).replace(tzinfo=None)
-                            existing.revoked_reason = "single_device_login"
-                revoked_at = datetime.now(timezone.utc)
-                revoked = (
-                    db.query(AppSessionModel)
-                    .filter(AppSessionModel.student_account == resolved_student_account)
-                    .filter(AppSessionModel.revoked_at.is_(None))
-                    .update(
-                        {
-                            "revoked_at": revoked_at,
-                            "revoked_reason": "single_device_login",
-                        },
-                        synchronize_session=False,
-                    )
-                )
-                if revoked:
-                    logger.info(
-                        "Revoked %d existing sessions for account %s",
-                        revoked,
-                        resolved_student_account,
-                    )
             row = AppSessionModel(
                 id=session.id,
                 student_name=student_name,
@@ -350,6 +366,7 @@ class SessionStore:
                 jwxt_cookies=jwxt_cookies or None,
                 ehall_cookies=ehall_cookies or None,
                 ehall_auth_token=ehall_auth_token or None,
+                credential_fingerprint=credential_fingerprint,
             )
             db.add(row)
             db.commit()
@@ -471,16 +488,19 @@ class SessionStore:
             if last_active_dt.tzinfo is None:
                 last_active_dt = last_active_dt.replace(tzinfo=timezone.utc)
             if now_utc - last_active_dt > self._ttl:
-                idle_secs = int((now_utc - last_active_dt).total_seconds())
-                logger.debug(
-                    "Session %s expired (sliding TTL=%ds, idle=%ds)",
-                    session_id[:8],
-                    int(self._ttl.total_seconds()),
-                    idle_secs,
-                )
-                db.delete(row)
-                db.commit()
-                return None
+                if getattr(row, "revoked_at", None) is not None:
+                    pass
+                else:
+                    idle_secs = int((now_utc - last_active_dt).total_seconds())
+                    logger.debug(
+                        "Session %s expired (sliding TTL=%ds, idle=%ds)",
+                        session_id[:8],
+                        int(self._ttl.total_seconds()),
+                        idle_secs,
+                    )
+                    db.delete(row)
+                    db.commit()
+                    return None
 
             revoked_at = getattr(row, "revoked_at", None)
             if revoked_at is not None:
@@ -489,7 +509,7 @@ class SessionStore:
                 cached = self._sessions.get(row.id)
                 if cached is not None:
                     cached.revoked_at = revoked_at
-                    cached.revoked_reason = row.revoked_reason or "single_device_login"
+                    cached.revoked_reason = row.revoked_reason or "revoked"
                     return cached
                 return AppSession(
                     id=row.id,
@@ -502,8 +522,9 @@ class SessionStore:
                     if row.last_active_at.tzinfo is not None
                     else row.last_active_at,
                     revoked_at=revoked_at,
-                    revoked_reason=row.revoked_reason or "single_device_login",
+                    revoked_reason=row.revoked_reason or "revoked",
                     student_account=row.student_account,
+                    credential_fingerprint=row.credential_fingerprint,
                     is_admin=bool(getattr(row, "is_admin", False)),
                 )
 
@@ -522,6 +543,7 @@ class SessionStore:
                 else:
                     cached.created_at = row.created_at
                 cached.student_account = row.student_account
+                cached.credential_fingerprint = row.credential_fingerprint
                 cached.is_admin = bool(getattr(row, "is_admin", False))
                 self._session_checked_at[session_id] = datetime.now(timezone.utc).replace(tzinfo=None)
                 if touch:
@@ -565,6 +587,7 @@ class SessionStore:
                 created_at=created_utc.replace(tzinfo=None),
                 last_active_at=last_active,
                 student_account=row.student_account,
+                credential_fingerprint=row.credential_fingerprint,
                 is_admin=bool(getattr(row, "is_admin", False)),
             )
 
@@ -609,6 +632,41 @@ class SessionStore:
         except SQLAlchemyError as exc:
             db.rollback()
             raise self._persistence_error("touch", session_id, exc) from exc
+        finally:
+            db.close()
+
+    def revoke_credential(self, credential_fingerprint: str, reason: str) -> None:
+        """撤销某台设备的长期凭据，不影响同账号的其他设备。"""
+        from app.database import CredentialRevocation
+
+        db = self._open_db("revoke_credential", credential_fingerprint)
+        try:
+            existing = db.get(CredentialRevocation, credential_fingerprint)
+            if existing is None:
+                db.add(
+                    CredentialRevocation(
+                        credential_fingerprint=credential_fingerprint,
+                        reason=reason,
+                    )
+                )
+                db.commit()
+        except SQLAlchemyError as exc:
+            db.rollback()
+            raise self._persistence_error("revoke_credential", credential_fingerprint, exc) from exc
+        finally:
+            db.close()
+
+    def is_credential_revoked(self, credential_fingerprint: str) -> bool:
+        """查询长期凭据是否已由管理员撤销。"""
+        from app.database import CredentialRevocation
+
+        db = self._open_db("is_credential_revoked", credential_fingerprint)
+        try:
+            return db.get(CredentialRevocation, credential_fingerprint) is not None
+        except SQLAlchemyError as exc:
+            raise self._persistence_error(
+                "is_credential_revoked", credential_fingerprint, exc
+            ) from exc
         finally:
             db.close()
 
@@ -684,6 +742,7 @@ class SessionStore:
             deleted = (
                 db.query(AppSessionModel)
                 .filter(AppSessionModel.last_active_at < cutoff)
+                .filter(AppSessionModel.revoked_at.is_(None))
                 .delete(synchronize_session=False)
             )
             db.commit()

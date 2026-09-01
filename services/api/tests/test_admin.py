@@ -7,6 +7,7 @@ from app.database import (
     AdminAuditLog,
     AdminUser,
     AppSessionModel,
+    CredentialRevocation,
     get_sync_session_factory,
 )
 from app.main import app
@@ -49,7 +50,12 @@ def _add_admin(student_id: str, role: str = "admin") -> None:
         db.commit()
 
 
-def _add_session_row(session_id: str, student_id: str, is_admin: bool = False) -> None:
+def _add_session_row(
+    session_id: str,
+    student_id: str,
+    is_admin: bool = False,
+    credential_fingerprint: str | None = None,
+) -> None:
     factory = get_sync_session_factory()
     with factory() as db:
         db.add(
@@ -58,6 +64,7 @@ def _add_session_row(session_id: str, student_id: str, is_admin: bool = False) -
                 student_name="目标用户",
                 student_account=student_id,
                 is_admin=is_admin,
+                credential_fingerprint=credential_fingerprint,
             )
         )
         db.commit()
@@ -103,7 +110,7 @@ def test_admin_overview_ok(monkeypatch):
 def test_admin_sessions_lists(monkeypatch):
     _authed_session(monkeypatch)
     _add_admin("20240001")
-    _add_session_row("target-session", "20240002")
+    _add_session_row("target-session", "20240002", credential_fingerprint="a" * 64)
     with TestClient(app) as client:
         response = client.get("/admin/sessions", headers={"X-Session-Id": "test-session"})
     assert response.status_code == 200
@@ -115,7 +122,7 @@ def test_admin_sessions_lists(monkeypatch):
 def test_admin_revoke_session(monkeypatch):
     _authed_session(monkeypatch)
     _add_admin("20240001", role="owner")
-    _add_session_row("target-session", "20240002")
+    _add_session_row("target-session", "20240002", credential_fingerprint="a" * 64)
     with TestClient(app) as client:
         response = client.post(
             "/admin/sessions/target-session/revoke",
@@ -127,6 +134,9 @@ def test_admin_revoke_session(monkeypatch):
         row = db.query(AppSessionModel).filter(AppSessionModel.id == "target-session").first()
         assert row.revoked_at is not None
         assert row.revoked_reason == "admin_kick"
+        revoked_credential = db.get(CredentialRevocation, "a" * 64)
+        assert revoked_credential is not None
+        assert revoked_credential.reason == "admin_kick"
         # 审计日志已落库
         log = db.query(AdminAuditLog).filter(AdminAuditLog.action == "revoke_session").first()
         assert log is not None

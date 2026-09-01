@@ -7,7 +7,12 @@ from app.cas_auto_login import CasLoginResult
 from app.config import get_settings
 from app.main import create_app
 from app.routes import auth as auth_routes
-from app.sessions import decrypt_credentials
+from app.sessions import (
+    credential_fingerprint,
+    decrypt_credential_payload,
+    decrypt_credentials,
+    encrypt_credentials,
+)
 
 
 class SuccessfulCasConnector:
@@ -232,6 +237,55 @@ def test_auto_login_creates_reusable_credential_and_session(
     session = app.state.sessions.get(data["sessionId"], touch=False)
     assert session is not None
     assert session.student_account == "20240004"
+    account, password, credential_id = decrypt_credential_payload(
+        data["credentialToken"], get_settings().credential_encryption_key
+    )
+    assert (account, password) == ("20240004", "auto-login-password")
+    assert credential_id is not None
+    assert session.credential_fingerprint == credential_fingerprint(credential_id)
+
+
+def test_relogin_upgrades_legacy_credential_and_rotates_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("app.cas_auto_login.CasAutoLogin", SuccessfulCasConnector)
+    monkeypatch.setattr(auth_routes, "SchoolSdkClient", CookieSchoolConnector)
+    app = create_app()
+    client = TestClient(app)
+    legacy_token = encrypt_credentials(
+        "20240004", "auto-login-password", get_settings().credential_encryption_key
+    )
+
+    response = client.post("/auth/relogin", json={"credentialToken": legacy_token})
+
+    assert response.status_code == 200
+    account, password, credential_id = decrypt_credential_payload(
+        response.json()["credentialToken"], get_settings().credential_encryption_key
+    )
+    assert (account, password) == ("20240004", "auto-login-password")
+    assert credential_id is not None
+
+
+def test_relogin_preserves_credential_on_transient_cas_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class UnavailableCasConnector:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        def auto_login(self, account: str, password: str) -> CasLoginResult:
+            return CasLoginResult(account=account, cookies="", error="CAS 暂不可用", error_status=503)
+
+    monkeypatch.setattr("app.cas_auto_login.CasAutoLogin", UnavailableCasConnector)
+    client = TestClient(create_app())
+    token = encrypt_credentials(
+        "20240004", "auto-login-password", get_settings().credential_encryption_key
+    )
+
+    response = client.post("/auth/relogin", json={"credentialToken": token})
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "CAS 暂不可用"
 
 
 def test_relogin_rejects_invalid_credential_before_cas_request() -> None:

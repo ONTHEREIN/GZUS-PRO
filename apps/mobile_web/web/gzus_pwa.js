@@ -63,6 +63,11 @@ window.gzusWebPushRequestPermission = async function(callback) {
 window.gzusWebPushSubscribe = async function(publicKey, apiBaseUrl, sessionId, callback) {
   try {
     const swReg = await navigator.serviceWorker.ready;
+    const storedKey = window.localStorage.getItem('gzus_web_push_vapid_key');
+    const existing = await swReg.pushManager.getSubscription();
+    if (existing && storedKey !== publicKey) {
+      await existing.unsubscribe();
+    }
     const subscription = await swReg.pushManager.subscribe({
       userVisibleOnly: true,
       applicationServerKey: urlBase64ToUint8Array(publicKey),
@@ -86,6 +91,7 @@ window.gzusWebPushSubscribe = async function(publicKey, apiBaseUrl, sessionId, c
       await subscription.unsubscribe();
       throw new Error(`Web push register failed: ${response.status}`);
     }
+    window.localStorage.setItem('gzus_web_push_vapid_key', publicKey);
     callback(true);
   } catch (e) {
     callback(false);
@@ -99,6 +105,7 @@ window.gzusWebPushUnsubscribe = async function(apiBaseUrl, sessionId, callback) 
     if (subscription) {
       await subscription.unsubscribe();
     }
+    window.localStorage.removeItem('gzus_web_push_vapid_key');
     await fetch(apiUrl(apiBaseUrl, '/push/web/unregister'), {
       method: 'POST',
       headers: requestHeaders(sessionId),

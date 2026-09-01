@@ -97,7 +97,7 @@ async def websocket_notifications(websocket: WebSocket, sessionId: str | None = 
             session.id[:8],
             session.revoked_reason,
         )
-        await websocket.close(code=4001, reason="账号已在其他设备登录，请重新登录")
+        await websocket.close(code=4001, reason="当前设备已被管理员下线，请重新验证登录")
         return
     manager: ConnectionManager = websocket.app.state.ws_manager
     await manager.connect(websocket, session.id)

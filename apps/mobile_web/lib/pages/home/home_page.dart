@@ -152,12 +152,9 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
           .map(CreditItem.fromJson)
           .toList(),
     );
-    _ecardFuture = _dashboardFuture.then((snapshot) {
-      final data = _moduleObject(snapshot, 'ecard', '水电余额');
-      return EcardSummary.fromJson(
-        data ?? <String, dynamic>{'status': 'not_bound'},
-      );
-    });
+    // 宿舍绑定会直接更新生活缴费摘要；不要复用 dashboard 的旧快照，
+    // 否则从生活缴费页返回首页后仍可能显示“未绑定宿舍”。
+    _ecardFuture = widget.api.ecardSummary().then((result) => result.data);
     _appsFuture = _dashboardFuture.then(
       (snapshot) => _moduleList(snapshot, 'apps', '常用服务')
           .map(EhallApplicationItem.fromJson)
@@ -619,7 +616,7 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
     if (breakpoint == GzusBreakpoint.compact) {
       return switch (size) {
         HomeModuleSize.large => 288,
-        HomeModuleSize.medium => 280,
+        HomeModuleSize.medium => 216,
         HomeModuleSize.small => 144,
       };
     }

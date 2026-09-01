@@ -71,14 +71,6 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      await tester.tap(
-        find.descendant(
-          of: find.byKey(const ValueKey('schedule-view-mode')),
-          matching: find.byIcon(Icons.calendar_view_month),
-        ),
-      );
-      await tester.pumpAndSettle();
-
       expect(tester.takeException(), isNull);
       final nameText = tester.widget<Text>(find.text(courseName));
       expect(nameText.style?.fontSize, greaterThanOrEqualTo(14));

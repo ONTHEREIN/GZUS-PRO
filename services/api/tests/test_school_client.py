@@ -12,6 +12,7 @@ from app.school_client import (
     extract_credit_items,
     extract_notice_detail,
     extract_notice_sections,
+    normalize_attendance_detail,
     normalize_attendance_item,
     normalize_credit_item,
     normalize_exam_item,
@@ -64,6 +65,59 @@ class ProxyOnlyUser:
                 {"items": [{"kcmc": "高等数学", "cj": "95", "xf": "4", "jd": "4.5"}]}
             )
         return FakeResponse({"items": [{"kcmc": "高等数学", "zwh": "10"}]})
+
+
+class AttendanceDetailProxyUser:
+    def __init__(self):
+        self.calls = []
+
+    def proxy_request(self, method, url_or_endpoint, **kwargs):
+        self.calls.append((method, url_or_endpoint, kwargs))
+        if "jxdmqkcx" in url_or_endpoint:
+            return FakeResponse(
+                {
+                    "items": [
+                        {
+                            "kch_id": "course-1",
+                            "xh_id": "student-1",
+                            "kcmc": "高等数学",
+                            "cs_01": 1,
+                            "cs_05": 1,
+                        }
+                    ]
+                }
+            )
+        if "jxdmqk_cxXsmd" in url_or_endpoint:
+            category = kwargs["data"]["dmlbm"]
+            return FakeResponse(
+                {
+                    "items": [
+                        {
+                            "xnmc": "2025-2026",
+                            "xqmc": "1",
+                            "dmlbmc": "正常" if category == "01" else "请假",
+                            "kkbm": "基础与通识教育学院",
+                            "kch": "GE1030",
+                            "kcmc": "高等数学I(文)",
+                            "jxbmc": "(2025-2026-1)-GE1030-06",
+                            "jsxx": "3046/李祖玉",
+                            "dmsj": "2025-10-22 14:48:01",
+                            "skrq": "2025-10-22",
+                            "jtsj": "10:40:00-12:00:00",
+                            "jcd": "3-4",
+                            "xh": "2540232101",
+                            "xm": "测试学生",
+                            "xb": "男",
+                            "jgmc": "网络空间安全学院",
+                            "njmc": "2025",
+                            "zymc": "信息管理与信息系统",
+                            "bj": "25级信息管理1班",
+                            "bz": "已登记",
+                        }
+                    ]
+                }
+            )
+        raise AssertionError(f"unexpected request: {url_or_endpoint}")
 
 
 class FakeResponse:
@@ -198,6 +252,39 @@ def test_normalize_attendance_and_credit():
     assert credit["requiredEarned"] == 40
 
 
+def test_normalize_attendance_detail_reads_all_popup_columns():
+    detail = normalize_attendance_detail(
+        {
+            "xnmc": "2025-2026",
+            "xqmc": "1",
+            "dmlbmc": "迟到",
+            "kkbm": "基础与通识教育学院",
+            "kch": "GE1030",
+            "kcmc": "高等数学I(文)",
+            "jxbmc": "教学班1",
+            "jsxx": "李老师",
+            "dmsj": "2025-10-22 14:48:01",
+            "skrq": "2025-10-22",
+            "jtsj": "10:40-12:00",
+            "jcd": "3-4",
+            "xh": "20250001",
+            "xm": "测试学生",
+            "xb": "男",
+            "jgmc": "软件学院",
+            "njmc": "2025",
+            "zymc": "软件工程",
+            "bj": "25软工1班",
+            "bz": "备注",
+        }
+    )
+
+    assert detail["status"] == "late"
+    assert detail["offeringCollege"] == "基础与通识教育学院"
+    assert detail["teachingClass"] == "教学班1"
+    assert detail["rollCallTime"] == "2025-10-22 14:48:01"
+    assert detail["className"] == "25软工1班"
+
+
 def test_extract_notice_sections_reads_notice_and_message_blocks():
     sections = extract_notice_sections(
         """
@@ -232,6 +319,27 @@ def test_notice_extraction_ignores_menu_hash_links():
     )
 
     assert [item["title"] for item in sections[0]["items"]] == ["真实通知"]
+
+
+def test_notice_extraction_ignores_static_section_labels_and_table_headers():
+    sections = extract_notice_sections(
+        """
+        <div id="messagePanel">
+          <h5><a href="/jwglxt/xtgl/index_cxNews.html">通知公告</a></h5>
+          <a href="/jwglxt/message/current.html">当前角色消息</a>
+          <a href="/jwglxt/message/other.html">其他角色消息</a>
+          <table>
+            <tr><th><a href="/jwglxt/message/unread.html">待阅事宜</a></th></tr>
+            <tr><th><a href="/jwglxt/message/read.html">已阅事宜</a></th></tr>
+            <tr><td><a href="/jwglxt/notice/1.html">真实通知</a><span>2026-05-20</span></td></tr>
+          </table>
+        </div>
+        """,
+        "https://jwxt.seig.edu.cn/jwglxt/xtgl/index_initMenu.html",
+    )
+
+    assert [item["title"] for item in sections[0]["items"]] == ["真实通知"]
+    assert sections[0]["items"][0]["source"] == "jwxt"
 
 
 def test_explicit_academic_period_is_converted_to_ints():
@@ -333,6 +441,46 @@ def test_attendance_and_credits_use_proxy_request():
     assert attendance[0]["normal"] == 8
     assert credits[0]["totalCredit"] == "120"
     assert len(user.calls) == 2
+
+
+def test_attendance_details_use_popup_endpoint_and_normalize_rows():
+    user = AttendanceDetailProxyUser()
+    client = SchoolSdkClient("https://jwxt.seig.edu.cn/jwglxt")
+    client._client = user
+    client._account = "20240001"
+
+    details = client.get_attendance_details("2025", "1", "course-1")
+
+    assert len(details) == 2
+    assert details[0]["courseName"] == "高等数学I(文)"
+    assert details[0]["studentId"] == "2540232101"
+    detail_calls = [call for call in user.calls if "jxdmqk_cxXsmd" in call[1]]
+    assert [call[2]["data"]["dmlbm"] for call in detail_calls] == ["01", "05"]
+    assert detail_calls[0][1] == "/jwglxt/jxdmgl/jxdmqk_cxXsmd.html"
+    assert detail_calls[0][2]["params"] == {"doType": "query"}
+    assert detail_calls[0][2]["data"] == {
+        "xnm": "2025",
+        "xqm": "3",
+        "xh_id": "student-1",
+        "kch_id": "course-1",
+        "kssj": "",
+        "jssj": "",
+        "dmlbm": "01",
+        "queryModel.showCount": "50",
+        "queryModel.currentPage": "1",
+        "queryModel.sortName": "",
+        "queryModel.sortOrder": "asc",
+    }
+
+
+def test_attendance_details_reject_unknown_course():
+    user = AttendanceDetailProxyUser()
+    client = SchoolSdkClient("https://jwxt.seig.edu.cn/jwglxt")
+    client._client = user
+    client._account = "20240001"
+
+    with pytest.raises(LookupError, match="未找到"):
+        client.get_attendance_details("2025", "1", "missing-course")
 
 
 def test_extract_credit_items_accepts_wrapped_and_single_object():

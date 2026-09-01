@@ -1,4 +1,5 @@
 import json
+import base64
 
 import pytest
 import httpx
@@ -9,6 +10,23 @@ from app import apns_service
 from app.database import IosPushToken, get_sync_session_factory
 from app.main import app
 from app.sessions import SessionStore
+
+
+def test_web_push_public_key_is_browser_base64url(monkeypatch):
+    from py_vapid import Vapid
+    from app.config import get_settings
+    from app.push import web_push_public_key
+
+    vapid = Vapid()
+    vapid.generate_keys()
+    raw = vapid.private_key.private_numbers().private_value.to_bytes(32, "big")
+    monkeypatch.setenv("WEB_PUSH_VAPID_PRIVATE_KEY", base64.urlsafe_b64encode(raw).rstrip(b"=").decode())
+    get_settings.cache_clear()
+    public_key = web_push_public_key()
+
+    assert public_key is not None
+    assert len(public_key) == 87
+    assert all(character.isalnum() or character in "-_" for character in public_key)
 
 
 @pytest.fixture

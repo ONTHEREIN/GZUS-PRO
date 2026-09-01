@@ -170,6 +170,7 @@ def normalize_grade_item(value: Any) -> dict:
 def normalize_attendance_item(value: Any) -> dict:
     data = as_dict(value)
     return {
+        "courseId": str(pick(data, "courseId", "kch_id") or ""),
         "courseName": str(pick(data, "courseName", "kcmc", "name") or ""),
         "courseCode": pick(data, "courseCode", "kch"),
         "academicYear": pick(data, "academicYear", "xnmc", "xn"),
@@ -181,6 +182,34 @@ def normalize_attendance_item(value: Any) -> dict:
         "leave": int(pick(data, "leave", "cs_05") or 0),
         "total": int(pick(data, "total", "totalresult") or 0),
         "records": normalize_attendance_records(data),
+    }
+
+
+def normalize_attendance_detail(value: Any) -> dict:
+    data = as_dict(value)
+    status = attendance_status_code(pick(data, "status", "dmlbmc", "dmlbm"))
+    return {
+        "academicYear": str(pick(data, "academicYear", "xnmc", "xn") or ""),
+        "term": str(pick(data, "term", "xqmc", "xq") or ""),
+        "status": status,
+        "statusLabel": str(pick(data, "statusLabel", "dmlbmc") or attendance_status_label(status)),
+        "offeringCollege": str(pick(data, "offeringCollege", "kkbm") or ""),
+        "courseCode": str(pick(data, "courseCode", "kch") or ""),
+        "courseName": str(pick(data, "courseName", "kcmc") or ""),
+        "teachingClass": str(pick(data, "teachingClass", "jxbmc") or ""),
+        "teacher": str(pick(data, "teacher", "jsxx") or ""),
+        "rollCallTime": str(pick(data, "rollCallTime", "dmsj") or ""),
+        "classDate": str(pick(data, "classDate", "skrq") or ""),
+        "classTime": str(pick(data, "classTime", "jtsj") or ""),
+        "sections": str(pick(data, "sections", "jcd") or ""),
+        "studentId": str(pick(data, "studentId", "xh") or ""),
+        "studentName": str(pick(data, "studentName", "xm") or ""),
+        "gender": str(pick(data, "gender", "xb") or ""),
+        "college": str(pick(data, "college", "jgmc") or ""),
+        "grade": str(pick(data, "grade", "njmc") or ""),
+        "major": str(pick(data, "major", "zymc") or ""),
+        "className": str(pick(data, "className", "bj") or ""),
+        "remark": str(pick(data, "remark", "bz") or ""),
     }
 
 

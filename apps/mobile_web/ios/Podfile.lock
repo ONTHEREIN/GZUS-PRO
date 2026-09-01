@@ -2,10 +2,42 @@ PODS:
   - Flutter (1.0.0)
   - flutter_web_auth_2 (3.0.0):
     - Flutter
+  - MMKV (2.4.2):
+    - MMKVCore (~> 2.4.2)
+  - MMKVCore (2.4.2)
+  - ShiplyPro (1.1.0):
+    - ShiplyPro/Core (= 1.1.0)
+    - ShiplyPro/RemoteConfig (= 1.1.0)
+    - ShiplyPro/RemoteResource (= 1.1.0)
+  - ShiplyPro/Core (1.1.0):
+    - ShiplyRDelivery (>= 1.3.6.9)
+  - ShiplyPro/RemoteConfig (1.1.0):
+    - ShiplyRDelivery (>= 1.3.6.9)
+  - ShiplyPro/RemoteResource (1.1.0):
+    - ShiplyResHub (>= 1.10.22-rc.5)
+  - ShiplyRDelivery (1.3.7-rc.2):
+    - MMKV
+    - YYModel
+  - ShiplyResHub (1.10.24-rc.6):
+    - ShiplyRDelivery (>= 1.3.7-rc.2)
+    - SSZipArchive (>= 2.2.2)
+  - SSZipArchive (2.4.3)
+  - YYModel (1.0.4)
 
 DEPENDENCIES:
   - Flutter (from `Flutter`)
   - flutter_web_auth_2 (from `.symlinks/plugins/flutter_web_auth_2/ios`)
+  - ShiplyPro (= 1.1.0)
+
+SPEC REPOS:
+  trunk:
+    - MMKV
+    - MMKVCore
+    - ShiplyPro
+    - ShiplyRDelivery
+    - ShiplyResHub
+    - SSZipArchive
+    - YYModel
 
 EXTERNAL SOURCES:
   Flutter:
@@ -16,7 +48,14 @@ EXTERNAL SOURCES:
 SPEC CHECKSUMS:
   Flutter: cabc95a1d2626b1b06e7179b784ebcf0c0cde467
   flutter_web_auth_2: 5c8d9dcd7848b5a9efb086d24e7a9adcae979c80
+  MMKV: d37bccee64404d7c3e1457fabd9368e78d69a80f
+  MMKVCore: a58d2ce5b580948122e85be3ddf378c9b1ef739e
+  ShiplyPro: e7f1322e1664a57116eb0244aa1ee486b0599572
+  ShiplyRDelivery: 08553434b86f9f2a549400f28456cad7faae9987
+  ShiplyResHub: 7ed9c376223a06100edee1ca4f07d3d783fbbf53
+  SSZipArchive: fe6a26b2a54d5a0890f2567b5cc6de5caa600aef
+  YYModel: 2a7fdd96aaa4b86a824e26d0c517de8928c04b30
 
-PODFILE CHECKSUM: c77cec6f46a21703c3893195deed2d4620fcf099
+PODFILE CHECKSUM: d62d8924366646e95abee1b206d8654d8e099741
 
 COCOAPODS: 1.17.0

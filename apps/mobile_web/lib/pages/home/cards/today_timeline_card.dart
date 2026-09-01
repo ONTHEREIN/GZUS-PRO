@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 
 import '../../../responsive/spacing.dart';
-import '../../../widgets/empty_state.dart';
 import '../../home/cards/home_card_shell.dart';
 import '../../home/cards/schedule_helpers.dart';
 
@@ -25,7 +24,7 @@ class TodayTimelineLargeCard extends StatelessWidget {
       badge: '${courses.length} 节',
       onTap: onTap,
       child: courses.isEmpty
-          ? const EmptyState(message: '今日无课')
+          ? const Center(child: Text('今日无课'))
           : Column(
               children: [
                 for (final item in courses.take(3)) _TimelineRow(course: item),
@@ -54,7 +53,7 @@ class TodayTimelineMediumCard extends StatelessWidget {
       badge: '${courses.length} 节',
       onTap: onTap,
       child: courses.isEmpty
-          ? const EmptyState(message: '今日无课')
+          ? const Center(child: Text('今日无课'))
           : Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [_TimelineRow(course: courses.first, compact: true)],

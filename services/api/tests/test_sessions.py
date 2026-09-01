@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from app.database import AppSessionModel, get_sync_session_factory
 from app.main import create_app
-from app.routes.deps import SESSION_IDLE_STALE_THRESHOLD, require_session
+from app.routes.deps import require_session
 from app.sessions import SessionStore, SessionStoreUnavailableError
 
 
@@ -47,25 +47,18 @@ def _get_row(session_id: str) -> AppSessionModel:
         return row
 
 
-def test_require_session_rejects_idle_session_before_touching_it():
+def test_require_session_accepts_idle_school_session_before_application_ttl():
     store = SessionStore(ttl_seconds=7200)
     session = store.create(_Client())
     stale_at = (
         datetime.now(timezone.utc).replace(tzinfo=None)
-        - SESSION_IDLE_STALE_THRESHOLD
-        - timedelta(seconds=1)
+        - timedelta(minutes=26)
     )
     _set_last_active(session.id, stale_at)
     session.last_active_at = stale_at
     store._session_checked_at.pop(session.id, None)
 
-    with pytest.raises(HTTPException) as exc:
-        require_session(_request_for(store), x_session_id=session.id)
-
-    assert exc.value.status_code == 401
-    assert _get_row(session.id).last_active_at.replace(microsecond=0) == stale_at.replace(
-        microsecond=0
-    )
+    assert require_session(_request_for(store), x_session_id=session.id).id == session.id
 
 
 def test_require_session_uses_memory_cache_without_immediate_db_touch():
@@ -97,15 +90,14 @@ def test_require_session_touches_db_after_throttle_window():
     assert _get_row(session.id).last_active_at > old_active_at
 
 
-def test_create_revokes_existing_session_for_same_account():
+def test_create_allows_multiple_sessions_for_same_account():
     store = SessionStore(ttl_seconds=7200)
     first = store.create(_Client("20240001"), "测试学生", student_account="20240001")
     second = store.create(_Client("20240001"), "测试学生", student_account="20240001")
 
     first_row = _get_row(first.id)
     second_row = _get_row(second.id)
-    assert first_row.revoked_at is not None
-    assert first_row.revoked_reason == "single_device_login"
+    assert first_row.revoked_at is None
     assert second_row.revoked_at is None
 
 
@@ -133,16 +125,26 @@ def test_create_clears_legacy_persisted_login_credentials():
     assert _get_row(first.id).encrypted_credentials is None
 
 
-def test_require_session_rejects_revoked_session_without_relogin_loop():
+def test_require_session_rejects_admin_revoked_session():
     store = SessionStore(ttl_seconds=7200)
     first = store.create(_Client("20240001"), "测试学生", student_account="20240001")
-    store.create(_Client("20240001"), "测试学生", student_account="20240001")
+    assert store.revoke(first.id, reason="admin_kick")
 
     with pytest.raises(HTTPException) as exc:
         require_session(_request_for(store), x_session_id=first.id)
 
     assert exc.value.status_code == 401
-    assert exc.value.detail == "账号已在其他设备登录，请重新登录"
+    assert exc.value.detail == "当前设备已被管理员下线，请重新验证登录"
+
+
+def test_admin_credential_revocation_is_persistent():
+    store = SessionStore(ttl_seconds=7200)
+    fingerprint = "a" * 64
+
+    assert store.is_credential_revoked(fingerprint) is False
+    store.revoke_credential(fingerprint, reason="admin_kick")
+
+    assert store.is_credential_revoked(fingerprint) is True
 
 
 def test_get_raises_when_session_database_is_unavailable(monkeypatch):

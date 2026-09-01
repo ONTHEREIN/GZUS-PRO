@@ -2,7 +2,8 @@ import SwiftUI
 import WidgetKit
 
 private let appGroupIdentifier = "group.cn.gzus.pro.6772c5tf6c"
-private let widgetKind = "OneGzusNextClassLockScreen"
+private let homeScreenWidgetKind = "OneGzusNextClassHomeScreen"
+private let lockScreenWidgetKind = "OneGzusNextClassLockScreen"
 
 private struct NextClassSnapshot {
     let title: String
@@ -102,6 +103,53 @@ private enum NextClassPresentation {
     }
 }
 
+private struct NextClassHomeScreenView: View {
+    @Environment(\.widgetFamily) private var family
+    let entry: NextClassEntry
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Label(
+                    NextClassPresentation.heading(snapshot: entry.snapshot, now: entry.date),
+                    systemImage: entry.snapshot.status == "ongoing" ? "play.circle.fill" : "clock"
+                )
+                .font(.caption.weight(.semibold))
+                Spacer()
+                Text(NextClassPresentation.time(snapshot: entry.snapshot, now: entry.date))
+                    .font(.caption.weight(.bold))
+            }
+
+            Text(NextClassPresentation.title(snapshot: entry.snapshot, now: entry.date))
+                .font(family == .systemSmall ? .headline : .title3.weight(.semibold))
+                .lineLimit(family == .systemSmall ? 2 : 1)
+
+            if family == .systemMedium {
+                Spacer(minLength: 0)
+                Text(entry.snapshot.location.isEmpty ? "打开软帮手查看课表" : entry.snapshot.location)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+            }
+        }
+        .padding()
+    }
+}
+
+private struct NextClassHomeScreenWidget: Widget {
+    let kind = homeScreenWidgetKind
+
+    var body: some WidgetConfiguration {
+        StaticConfiguration(kind: kind, provider: NextClassProvider()) { entry in
+            NextClassHomeScreenView(entry: entry)
+        }
+        .configurationDisplayName("下一节课")
+        .description("在主屏幕查看下一节课程。")
+        .supportedFamilies([.systemSmall, .systemMedium])
+    }
+}
+
+@available(iOS 16.0, *)
 private struct NextClassLockScreenView: View {
     @Environment(\.widgetFamily) private var family
     let entry: NextClassEntry
@@ -140,8 +188,9 @@ private struct NextClassLockScreenView: View {
     }
 }
 
+@available(iOS 16.0, *)
 private struct NextClassLockScreenWidget: Widget {
-    let kind = widgetKind
+    let kind = lockScreenWidgetKind
 
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: kind, provider: NextClassProvider()) { entry in
@@ -156,6 +205,9 @@ private struct NextClassLockScreenWidget: Widget {
 @main
 struct OneGzusWidgets: WidgetBundle {
     var body: some Widget {
-        NextClassLockScreenWidget()
+        NextClassHomeScreenWidget()
+        if #available(iOS 16.0, *) {
+            NextClassLockScreenWidget()
+        }
     }
 }

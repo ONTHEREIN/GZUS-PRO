@@ -216,6 +216,10 @@ class MainActivity : FlutterActivity() {
                     )
                     result.success(true)
                 }
+                "cancelCourseReminders" -> {
+                    CourseReminderScheduler(this).cancelAll()
+                    result.success(true)
+                }
                 else -> {
                     result.notImplemented()
                 }

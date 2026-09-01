@@ -47,10 +47,14 @@ class EcardPage extends StatefulWidget {
 }
 
 class _EcardPageState extends State<EcardPage> {
+  static const _backgroundRefreshInterval = Duration(minutes: 30);
+
   late Future<EcardSummary> _summaryFuture;
+  EcardSummary? _latestSummary;
   Future<List<EcardRoomItem>>? _roomsFuture;
   final _searchController = TextEditingController();
   bool _refreshing = false;
+  bool _backgroundRefreshing = false;
   bool _bindingRoom = false;
   String? _bindingRoomId;
   int _refreshVersion = 0;
@@ -63,10 +67,10 @@ class _EcardPageState extends State<EcardPage> {
   @override
   void initState() {
     super.initState();
-    _summaryFuture = widget.api.ecardSummary().then((r) => r.data);
-    _periodicRefreshTimer = Timer.periodic(const Duration(minutes: 30), (_) {
+    _summaryFuture = _loadSummary();
+    _periodicRefreshTimer = Timer.periodic(_backgroundRefreshInterval, (_) {
       if (!mounted) return;
-      _silentRefresh();
+      unawaited(_refreshBalanceInBackground());
     });
   }
 
@@ -74,7 +78,8 @@ class _EcardPageState extends State<EcardPage> {
   void didUpdateWidget(covariant EcardPage oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.api != widget.api) {
-      _summaryFuture = widget.api.ecardSummary().then((r) => r.data);
+      _latestSummary = null;
+      _summaryFuture = _loadSummary();
       _roomsFuture = null;
     }
   }
@@ -87,16 +92,44 @@ class _EcardPageState extends State<EcardPage> {
     super.dispose();
   }
 
-  Future<void> _silentRefresh() async {
+  Future<EcardSummary> _loadSummary() async {
+    final summary =
+        await widget.api.ecardSummary().then((result) => result.data);
+    _latestSummary = summary;
+    if (_needsBackgroundRefresh(summary)) {
+      unawaited(_refreshBalanceInBackground());
+    }
+    return summary;
+  }
+
+  bool _needsBackgroundRefresh(EcardSummary summary) {
+    if (!summary.isBound) return false;
+    final updatedAt = summary.updatedAt;
+    final updated = updatedAt == null ? null : DateTime.tryParse(updatedAt);
+    return updated == null ||
+        DateTime.now().difference(updated.toLocal()) >=
+            _backgroundRefreshInterval;
+  }
+
+  Future<void> _refreshBalanceInBackground() async {
+    final current = _latestSummary;
+    if (_backgroundRefreshing ||
+        current == null ||
+        !_needsBackgroundRefresh(current)) {
+      return;
+    }
+    _backgroundRefreshing = true;
     try {
-      final summary =
-          await widget.api.ecardSummary(forceRefresh: true).then((r) => r.data);
+      final summary = await widget.api.refreshEcard();
       if (!mounted) return;
+      _latestSummary = summary;
       setState(() {
         _summaryFuture = Future.value(summary);
       });
     } catch (_) {
-      // Silent refresh — ignore errors
+      // 后台刷新失败时继续展示缓存，避免打断用户。
+    } finally {
+      _backgroundRefreshing = false;
     }
   }
 
@@ -108,6 +141,7 @@ class _EcardPageState extends State<EcardPage> {
     try {
       final summary = await widget.api.refreshEcard();
       if (!mounted) return;
+      _latestSummary = summary;
       setState(() {
         _summaryFuture = Future.value(summary);
       });
@@ -128,11 +162,10 @@ class _EcardPageState extends State<EcardPage> {
   }
 
   Future<void> _refreshEcardPage() async {
+    await _refreshBalance();
+    if (!mounted) return;
     setState(() {
-      _error = null;
       _refreshVersion++;
-      _summaryFuture =
-          widget.api.ecardSummary(forceRefresh: true).then((r) => r.data);
       if (_roomsFuture != null) {
         _roomsFuture = widget.api.ecardRooms(
           query: _lastSearchQuery,
@@ -140,11 +173,6 @@ class _EcardPageState extends State<EcardPage> {
         );
       }
     });
-    try {
-      await _summaryFuture;
-    } catch (error) {
-      if (mounted) showRefreshFailure(context, error);
-    }
   }
 
   Future<void> _bindRoom(EcardRoomItem room) async {
@@ -245,7 +273,8 @@ class _EcardPageState extends State<EcardPage> {
     return FutureBuilder<EcardSummary>(
       future: _summaryFuture,
       builder: (context, snapshot) {
-        if (snapshot.connectionState != ConnectionState.done) {
+        if (snapshot.connectionState != ConnectionState.done &&
+            !snapshot.hasData) {
           return const Center(child: CircularProgressIndicator());
         }
         if (snapshot.hasError) {

@@ -18,7 +18,6 @@ import '../../ics_download.dart' deferred as ics_download;
 import '../../reminder_service.dart' deferred as reminder_service;
 import '../../responsive/breakpoints.dart';
 import '../../widgets/async_panel.dart';
-import '../../widgets/badges.dart';
 import '../../widgets/empty_state.dart';
 import '../../widgets/icon_label.dart';
 import '../../widgets/page_panel.dart';
@@ -555,7 +554,8 @@ class SchedulePage extends StatefulWidget {
 
 class _SchedulePageState extends State<SchedulePage> {
   late Future<ScheduleResult> _scheduleFuture;
-  ScheduleViewMode _viewMode = ScheduleViewMode.today;
+  ScheduleViewMode _viewMode = ScheduleViewMode.calendar;
+  Offset? _floatingMenuPosition;
   bool showJson = false;
   bool showAllCourses = false;
   bool courseRemindersEnabled = false;
@@ -577,6 +577,7 @@ class _SchedulePageState extends State<SchedulePage> {
     _scheduleFuture = _loadSchedule();
     _loadReminderSettings();
     _loadOverrides();
+    _loadViewPreferences();
   }
 
   @override
@@ -626,6 +627,21 @@ class _SchedulePageState extends State<SchedulePage> {
   /// 只在课表数据或提醒设置变化时实际执行，避免 build 内重复触发。
   Future<void> _applyCourseReminders(List<ScheduleCourse> courses) async {
     try {
+      final cloudStatus = await widget.api.fetchBackgroundNotificationStatus();
+      if (cloudStatus?.enabled == true) {
+        await reminder_service.loadLibrary();
+        reminder_service.ReminderService.cancelCourseReminders();
+        await background_service.loadLibrary();
+        await background_service.BackgroundService.cancelCourseReminders();
+        await widget.api.syncCloudCourseReminders(
+          enabled: courseRemindersEnabled,
+          beforeStartMinutes: courseStartReminderMinutes,
+          beforeEndMinutes: courseEndReminderMinutes,
+          firstWeekStart: widget.firstWeekStart,
+          courses: _courseReminderPayload(courses),
+        );
+        return;
+      }
       await reminder_service.loadLibrary();
       reminder_service.ReminderService.configureCourseReminders(
         courses: courses,
@@ -654,28 +670,63 @@ class _SchedulePageState extends State<SchedulePage> {
     await _scheduleFuture;
   }
 
+  Future<void> _loadViewPreferences() async {
+    final prefs = await SharedPreferences.getInstance();
+    final savedMode = prefs.getString('schedule.viewMode');
+    final savedX = prefs.getDouble('schedule.floatingMenu.x');
+    final savedY = prefs.getDouble('schedule.floatingMenu.y');
+    final mode = switch (savedMode) {
+      'today' => ScheduleViewMode.today,
+      'week' => ScheduleViewMode.week,
+      'calendar' => ScheduleViewMode.calendar,
+      'all' => ScheduleViewMode.all,
+      _ => null,
+    };
+    if (!mounted) return;
+    setState(() {
+      if (mode != null) {
+        _viewMode = mode;
+        showAllCourses = mode == ScheduleViewMode.all;
+      }
+      if (savedX != null && savedY != null) {
+        _floatingMenuPosition = Offset(
+          savedX.clamp(0.0, 1.0).toDouble(),
+          savedY.clamp(0.0, 1.0).toDouble(),
+        );
+      }
+    });
+  }
+
+  void _setViewMode(ScheduleViewMode mode) {
+    setState(() {
+      _viewMode = mode;
+      showAllCourses = mode == ScheduleViewMode.all;
+    });
+    unawaited(_saveViewMode(mode));
+  }
+
+  Future<void> _saveViewMode(ScheduleViewMode mode) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('schedule.viewMode', mode.name);
+  }
+
+  void _setFloatingMenuPosition(Offset position) {
+    setState(() => _floatingMenuPosition = position);
+  }
+
+  Future<void> _saveFloatingMenuPosition(Offset position) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble('schedule.floatingMenu.x', position.dx);
+    await prefs.setDouble('schedule.floatingMenu.y', position.dy);
+  }
+
   Future<void> _syncCourseRemindersToNative(
     List<ScheduleCourse> courses,
     int beforeStartMinutes,
     int beforeEndMinutes,
     DateTime firstWeekStart,
   ) async {
-    final coursesList = courses.map((c) {
-      final weeksList = <int>[];
-      for (var w = 1; w <= 30; w++) {
-        if (c.occursInWeek(w)) weeksList.add(w);
-      }
-      return {
-        'name': c.name,
-        'weekday': c.weekday ?? 0,
-        'startSection': c.startSection ?? 0,
-        'endSection': c.endSection ?? 0,
-        'classroom': c.classroom ?? '',
-        'teacher': c.teacher ?? '',
-        'weeks': weeksList,
-      };
-    }).toList();
-    final coursesJson = jsonEncode(coursesList);
+    final coursesJson = jsonEncode(_courseReminderPayload(courses));
     final firstWeekStr =
         '${firstWeekStart.year.toString().padLeft(4, '0')}-${firstWeekStart.month.toString().padLeft(2, '0')}-${firstWeekStart.day.toString().padLeft(2, '0')}';
     // 签名守卫：内容未变化时不重复向原生层全量推送
@@ -690,6 +741,26 @@ class _SchedulePageState extends State<SchedulePage> {
       firstWeekStart: firstWeekStr,
     );
     _lastNativeReminderSignature = signature;
+  }
+
+  List<Map<String, dynamic>> _courseReminderPayload(
+    List<ScheduleCourse> courses,
+  ) {
+    return courses.map((c) {
+      final weeksList = <int>[];
+      for (var w = 1; w <= 30; w++) {
+        if (c.occursInWeek(w)) weeksList.add(w);
+      }
+      return {
+        'name': c.name,
+        'weekday': c.weekday ?? 0,
+        'startSection': c.startSection ?? 0,
+        'endSection': c.endSection ?? 0,
+        'classroom': c.classroom ?? '',
+        'teacher': c.teacher ?? '',
+        'weeks': weeksList,
+      };
+    }).toList();
   }
 
   @override
@@ -717,56 +788,18 @@ class _SchedulePageState extends State<SchedulePage> {
                   _viewMode == ScheduleViewMode.calendar
               ? result.items
               : weekItems;
-          final shortViewport = MediaQuery.sizeOf(context).height < 500;
-          return PagePanel(
-            title: '课表',
-            icon: Icons.calendar_month,
-            expandChild: true,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                _ScheduleSummaryPanel(
-                  currentWeek: widget.currentWeek,
-                  firstWeekStart: widget.firstWeekStart,
-                  todayCount: todayItems.length,
-                  weekCount: weekItems.length,
-                  totalCount: result.items.length,
-                  nextCourse: _nextScheduleCourse(todayItems),
-                ),
-                SizedBox(height: shortViewport ? 4 : 10),
-                _ScheduleViewSwitch(
-                  selected: _viewMode,
-                  onChanged: (mode) {
-                    setState(() {
-                      _viewMode = mode;
-                      showAllCourses = mode == ScheduleViewMode.all;
-                    });
-                  },
-                ),
-                SizedBox(height: shortViewport ? 4 : 8),
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: _ScheduleToolsChip(
-                    onPressed: () =>
-                        _showScheduleTools(result.prettyJson, result.items),
-                  ),
-                ),
-                SizedBox(height: shortViewport ? 4 : 10),
-                if (result.items.isEmpty)
-                  Expanded(
-                    child: ListView(
-                      physics: const AlwaysScrollableScrollPhysics(),
-                      children: const [
-                        SizedBox(
-                          height: 260,
-                          child: EmptyState(message: '当前学期暂无课表'),
-                        ),
-                      ],
+          final content = result.items.isEmpty
+              ? ListView(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  children: const [
+                    SizedBox(
+                      height: 260,
+                      child: EmptyState(message: '当前学期暂无课表'),
                     ),
-                  )
-                else if (displayItems.isEmpty)
-                  Expanded(
-                    child: ListView(
+                  ],
+                )
+              : displayItems.isEmpty
+                  ? ListView(
                       physics: const AlwaysScrollableScrollPhysics(),
                       children: [
                         SizedBox(
@@ -775,11 +808,8 @@ class _SchedulePageState extends State<SchedulePage> {
                               message: '第${widget.currentWeek}周暂无课程'),
                         ),
                       ],
-                    ),
-                  )
-                else
-                  Expanded(
-                    child: ScheduleReadableView(
+                    )
+                  : ScheduleReadableView(
                       mode: _viewMode,
                       todayItems: todayItems,
                       weekItems: weekItems,
@@ -789,8 +819,42 @@ class _SchedulePageState extends State<SchedulePage> {
                       overrides: _overrides,
                       onAdjustCourse: _adjustCourse,
                       onMoveToDay: _moveCourseToDay,
+                    );
+          final compact = MediaQuery.sizeOf(context).width < 600;
+          if (compact) {
+            return LayoutBuilder(
+              builder: (context, constraints) => Stack(
+                children: [
+                  Positioned.fill(child: content),
+                  Positioned.fill(
+                    child: _ScheduleFloatingMenu(
+                      selected: _viewMode,
+                      currentWeek: widget.currentWeek,
+                      todayCount: todayItems.length,
+                      weekCount: weekItems.length,
+                      totalCount: result.items.length,
+                      position: _floatingMenuPosition,
+                      onViewChanged: _setViewMode,
+                      onToolsPressed: () =>
+                          _showScheduleTools(result.prettyJson, result.items),
+                      onPositionChanged: _setFloatingMenuPosition,
+                      onPositionSettled: (position) {
+                        _setFloatingMenuPosition(position);
+                        unawaited(_saveFloatingMenuPosition(position));
+                      },
                     ),
                   ),
+                ],
+              ),
+            );
+          }
+          return PagePanel(
+            title: '课表',
+            icon: Icons.calendar_month,
+            expandChild: true,
+            child: Column(
+              children: [
+                Expanded(child: content),
                 if (showJson) ...[
                   const SizedBox(height: 10),
                   Flexible(child: JsonPanel(json: result.prettyJson)),
@@ -894,12 +958,9 @@ class _SchedulePageState extends State<SchedulePage> {
                             children: [
                               TextButton(
                                 onPressed: () {
-                                  setState(() {
-                                    showAllCourses = !showAllCourses;
-                                    _viewMode = showAllCourses
-                                        ? ScheduleViewMode.all
-                                        : ScheduleViewMode.week;
-                                  });
+                                  _setViewMode(showAllCourses
+                                      ? ScheduleViewMode.week
+                                      : ScheduleViewMode.all);
                                   localSetState(() {});
                                 },
                                 child: IconLabel(
@@ -1214,52 +1275,13 @@ class _SchedulePageState extends State<SchedulePage> {
       reminder_service.loadLibrary().then((_) {
         reminder_service.ReminderService.cancelCourseReminders();
       });
+      unawaited(background_service.loadLibrary().then((_) =>
+          background_service.BackgroundService.cancelCourseReminders()));
+      unawaited(_scheduleFuture.then((r) => _applyCourseReminders(r.items)));
     } else {
       // 开启时按当前课表立即配置
       unawaited(_scheduleFuture.then((r) => _applyCourseReminders(r.items)));
     }
-  }
-}
-
-/// 课表工具按钮 — 放在 PagePanel 标题栏右侧的 chip 风格按钮
-class _ScheduleToolsChip extends StatelessWidget {
-  const _ScheduleToolsChip({required this.onPressed});
-
-  final VoidCallback onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-    final compact = MediaQuery.sizeOf(context).width < 600;
-    return Material(
-      key: const ValueKey('schedule-tools-button'),
-      color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.72),
-      borderRadius: BorderRadius.circular(20),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(20),
-        onTap: onPressed,
-        child: Padding(
-          padding: EdgeInsets.symmetric(
-            horizontal: compact ? 10 : 14,
-            vertical: compact ? 6 : 8,
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.tune, size: 16, color: colorScheme.primary),
-              SizedBox(width: compact ? 4 : 6),
-              Text(
-                '工具',
-                style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                      color: colorScheme.primary,
-                      fontWeight: FontWeight.w700,
-                    ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
   }
 }
 
@@ -1409,149 +1431,231 @@ class ScheduleInlineManage extends StatelessWidget {
 
 enum ScheduleViewMode { today, week, calendar, all }
 
-class _ScheduleSummaryPanel extends StatelessWidget {
-  const _ScheduleSummaryPanel({
+/// 手机端课表的可拖动二级菜单：将低频视图和工具收纳为一个圆点。
+class _ScheduleFloatingMenu extends StatefulWidget {
+  const _ScheduleFloatingMenu({
+    required this.selected,
     required this.currentWeek,
-    required this.firstWeekStart,
     required this.todayCount,
     required this.weekCount,
     required this.totalCount,
-    required this.nextCourse,
+    required this.position,
+    required this.onViewChanged,
+    required this.onToolsPressed,
+    required this.onPositionChanged,
+    required this.onPositionSettled,
   });
 
+  final ScheduleViewMode selected;
   final int currentWeek;
-  final DateTime firstWeekStart;
   final int todayCount;
   final int weekCount;
   final int totalCount;
-  final ScheduleCourse? nextCourse;
+  final Offset? position;
+  final ValueChanged<ScheduleViewMode> onViewChanged;
+  final VoidCallback onToolsPressed;
+  final ValueChanged<Offset> onPositionChanged;
+  final ValueChanged<Offset> onPositionSettled;
 
   @override
-  Widget build(BuildContext context) {
-    final shortViewport = MediaQuery.sizeOf(context).height < 500;
-    final nextText = nextCourse == null
-        ? '今日无后续课程'
-        : '${_scheduleTimeText(nextCourse!)} · ${nextCourse!.name}';
-    return Container(
-      padding: EdgeInsets.all(shortViewport ? 10 : 14),
-      decoration: BoxDecoration(
-        color: Theme.of(context)
-            .colorScheme
-            .primaryContainer
-            .withValues(alpha: 0.28),
-        borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 42,
-                height: 42,
-                decoration: BoxDecoration(
-                  color: Theme.of(context)
-                      .colorScheme
-                      .primary
-                      .withValues(alpha: 0.14),
-                  borderRadius: BorderRadius.circular(15),
-                ),
-                child: Icon(Icons.calendar_month,
-                    color: Theme.of(context).colorScheme.primary),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      '第$currentWeek周课表',
-                      style: Theme.of(context)
-                          .textTheme
-                          .titleLarge
-                          ?.copyWith(fontWeight: FontWeight.w900),
-                    ),
-                    Text(
-                      nextText,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          SizedBox(height: shortViewport ? 8 : 12),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              MetricPill(
-                  icon: Icons.today,
-                  label: '今日',
-                  value: '$todayCount节',
-                  dense: true),
-              MetricPill(
-                  icon: Icons.view_week,
-                  label: '本周',
-                  value: '$weekCount节',
-                  dense: true),
-              MetricPill(
-                  icon: Icons.list,
-                  label: '全部',
-                  value: '$totalCount门',
-                  dense: true),
-              MetricPill(
-                icon: Icons.access_time,
-                label: '首周',
-                value: dateText(firstWeekStart),
-                dense: true,
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
+  State<_ScheduleFloatingMenu> createState() => _ScheduleFloatingMenuState();
 }
 
-class _ScheduleViewSwitch extends StatelessWidget {
-  const _ScheduleViewSwitch({required this.selected, required this.onChanged});
+class _ScheduleFloatingMenuState extends State<_ScheduleFloatingMenu> {
+  static const _buttonSize = 52.0;
+  static const _panelWidth = 244.0;
+  static const _panelHeight = 224.0;
+  bool _isOpen = false;
 
-  final ScheduleViewMode selected;
-  final ValueChanged<ScheduleViewMode> onChanged;
+  Offset _positionFor(Size size, EdgeInsets viewPadding) {
+    final maxX = (size.width - _buttonSize).clamp(0.0, double.infinity);
+    final navigationClearance = 86.0 + viewPadding.bottom;
+    final maxY =
+        (size.height - navigationClearance - _buttonSize).clamp(0.0, double.infinity);
+    final saved = widget.position;
+    if (saved == null) return Offset(0, maxY);
+    return Offset(maxX * saved.dx, maxY * saved.dy);
+  }
+
+  Offset _fractionFor(Offset position, Size size, EdgeInsets viewPadding) {
+    final maxX = (size.width - _buttonSize).clamp(0.0, double.infinity);
+    final navigationClearance = 86.0 + viewPadding.bottom;
+    final maxY =
+        (size.height - navigationClearance - _buttonSize).clamp(0.0, double.infinity);
+    return Offset(
+      maxX == 0 ? 0 : (position.dx / maxX).clamp(0.0, 1.0),
+      maxY == 0 ? 0 : (position.dy / maxY).clamp(0.0, 1.0),
+    );
+  }
+
+  Offset _clampPosition(Offset position, Size size, EdgeInsets viewPadding) {
+    final maxX = (size.width - _buttonSize).clamp(0.0, double.infinity);
+    final navigationClearance = 86.0 + viewPadding.bottom;
+    final maxY =
+        (size.height - navigationClearance - _buttonSize).clamp(0.0, double.infinity);
+    return Offset(
+      position.dx.clamp(0.0, maxX).toDouble(),
+      position.dy.clamp(0.0, maxY).toDouble(),
+    );
+  }
+
+  Offset _snapToNearestEdge(Offset position, Size size, EdgeInsets viewPadding) {
+    final clamped = _clampPosition(position, size, viewPadding);
+    final maxX = (size.width - _buttonSize).clamp(0.0, double.infinity);
+    final navigationClearance = 86.0 + viewPadding.bottom;
+    final maxY =
+        (size.height - navigationClearance - _buttonSize).clamp(0.0, double.infinity);
+    final distances = [
+      (clamped.dx, 'left'),
+      (maxX - clamped.dx, 'right'),
+      (clamped.dy, 'top'),
+      (maxY - clamped.dy, 'bottom'),
+    ]..sort((a, b) => a.$1.compareTo(b.$1));
+    return switch (distances.first.$2) {
+      'left' => Offset(0, clamped.dy),
+      'right' => Offset(maxX, clamped.dy),
+      'top' => Offset(clamped.dx, 0),
+      'bottom' => Offset(clamped.dx, maxY),
+      _ => clamped,
+    };
+  }
 
   @override
   Widget build(BuildContext context) {
-    // 窄屏四段放不下「图标+文字」，退化为纯图标（保留语义提示）
-    final compactLabels = MediaQuery.sizeOf(context).width < 380;
-    return SegmentedButton<ScheduleViewMode>(
-      key: const ValueKey('schedule-view-mode'),
-      showSelectedIcon: false,
-      segments: [
-        ButtonSegment(
-            value: ScheduleViewMode.today,
-            icon: const Icon(Icons.today),
-            label: compactLabels ? null : const Text('今日')),
-        ButtonSegment(
-            value: ScheduleViewMode.week,
-            icon: const Icon(Icons.view_week),
-            label: compactLabels ? null : const Text('本周')),
-        ButtonSegment(
-            value: ScheduleViewMode.calendar,
-            icon: const Icon(Icons.calendar_view_month),
-            label: compactLabels ? null : const Text('日历')),
-        ButtonSegment(
-            value: ScheduleViewMode.all,
-            icon: const Icon(Icons.format_list_bulleted),
-            label: compactLabels ? null : const Text('全部')),
-      ],
-      selected: {selected},
-      onSelectionChanged: (values) => onChanged(values.single),
+    final colorScheme = Theme.of(context).colorScheme;
+    final viewPadding = MediaQuery.paddingOf(context);
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final size = constraints.biggest;
+        final position = _positionFor(size, viewPadding);
+        final panelLeft = position.dx <= size.width / 2
+            ? position.dx
+            : (position.dx - _panelWidth + _buttonSize).clamp(0.0, size.width - _panelWidth);
+        final panelTop = position.dy > size.height / 2
+            ? (position.dy - _panelHeight - 8).clamp(8.0, size.height - _panelHeight)
+            : (position.dy + _buttonSize + 8).clamp(8.0, size.height - _panelHeight);
+        return Stack(
+          clipBehavior: Clip.none,
+          children: [
+            if (_isOpen)
+              Positioned.fill(
+                child: GestureDetector(
+                  behavior: HitTestBehavior.translucent,
+                  onTap: () => setState(() => _isOpen = false),
+                ),
+              ),
+            if (_isOpen)
+              Positioned(
+                left: panelLeft.toDouble(),
+                top: panelTop.toDouble(),
+                width: _panelWidth,
+                child: Material(
+                  key: const ValueKey('schedule-floating-menu-panel'),
+                  color: colorScheme.surfaceContainerHigh,
+                  borderRadius: BorderRadius.circular(20),
+                  elevation: 8,
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text(
+                          '第${widget.currentWeek}周',
+                          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                fontWeight: FontWeight.w900,
+                              ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          '今日 ${widget.todayCount} 节 · 本周 ${widget.weekCount} 节 · 共 ${widget.totalCount} 门',
+                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                color: colorScheme.onSurfaceVariant,
+                              ),
+                        ),
+                        const SizedBox(height: 10),
+                        Wrap(
+                          spacing: 6,
+                          runSpacing: 6,
+                          children: [
+                            for (final entry in _viewItems)
+                              ChoiceChip(
+                                key: ValueKey('schedule-menu-${entry.$1.name}'),
+                                avatar: Icon(entry.$2, size: 16),
+                                label: Text(entry.$3),
+                                selected: widget.selected == entry.$1,
+                                onSelected: (_) {
+                                  widget.onViewChanged(entry.$1);
+                                  setState(() => _isOpen = false);
+                                },
+                              ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        OutlinedButton.icon(
+                          key: const ValueKey('schedule-menu-tools'),
+                          onPressed: () {
+                            setState(() => _isOpen = false);
+                            widget.onToolsPressed();
+                          },
+                          icon: const Icon(Icons.tune, size: 18),
+                          label: const Text('课表工具'),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            Positioned(
+              left: position.dx,
+              top: position.dy,
+              child: Semantics(
+                button: true,
+                label: '课表视图与工具菜单',
+                child: GestureDetector(
+                  onPanStart: (_) => setState(() => _isOpen = false),
+                  onPanUpdate: (details) {
+                    final next = _clampPosition(
+                      position + details.delta,
+                      size,
+                      viewPadding,
+                    );
+                    widget.onPositionChanged(_fractionFor(next, size, viewPadding));
+                  },
+                  onPanEnd: (_) {
+                    final snapped = _snapToNearestEdge(position, size, viewPadding);
+                    widget.onPositionSettled(_fractionFor(snapped, size, viewPadding));
+                  },
+                  onTap: () => setState(() => _isOpen = !_isOpen),
+                  child: Material(
+                    key: const ValueKey('schedule-floating-menu'),
+                    color: colorScheme.primaryContainer,
+                    shape: const CircleBorder(),
+                    elevation: 5,
+                    child: SizedBox(
+                      width: _buttonSize,
+                      height: _buttonSize,
+                      child: Icon(
+                        _isOpen ? Icons.close : Icons.more_horiz,
+                        color: colorScheme.onPrimaryContainer,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
+
+  static const _viewItems = [
+    (ScheduleViewMode.today, Icons.today, '今日'),
+    (ScheduleViewMode.week, Icons.view_week, '本周'),
+    (ScheduleViewMode.calendar, Icons.calendar_view_month, '日历'),
+    (ScheduleViewMode.all, Icons.format_list_bulleted, '全部'),
+  ];
 }
 
 class ScheduleReadableView extends StatelessWidget {
@@ -1956,16 +2060,9 @@ class _CalendarScheduleViewState extends State<_CalendarScheduleView> {
         for (var i = 0; i < 7; i++) _mondayOfWeek(week).add(Duration(days: i)),
       ];
 
-  /// 某周的日期范围文案，如「9月14日-20日 · 第2周」。
-  /// 跨月时格式化为「8月31日-9月6日」，学期外（第 0/31 周边界页）显示「该周不在本学期」。
-  String _weekRangeText(int week) {
+  String _weekTitle(int week) {
     if (week < 1 || week > 30) return '该周不在本学期';
-    final start = _mondayOfWeek(week);
-    final end = start.add(const Duration(days: 6));
-    final rangeText = start.month == end.month
-        ? '${start.month}月${start.day}日-${end.day}日'
-        : '${start.month}月${start.day}日-${end.month}月${end.day}日';
-    return '$rangeText · 第$week周';
+    return '第$week周';
   }
 
   /// 某周的短日期范围（周次选择器格子里用），如「8/31-9/6」。
@@ -1973,6 +2070,28 @@ class _CalendarScheduleViewState extends State<_CalendarScheduleView> {
     final start = _mondayOfWeek(week);
     final end = start.add(const Duration(days: 6));
     return '${start.month}/${start.day}-${end.month}/${end.day}';
+  }
+
+  double _rowHeightFor(
+    List<ScheduleCourse> courses,
+    double dayWidth,
+    bool compact,
+  ) {
+    final baseHeight = compact ? 76.0 : 70.0;
+    final charactersPerLine = ((dayWidth - 10) / 14).floor().clamp(1, 20);
+    var requiredHeight = baseHeight;
+    for (final course in courses) {
+      final start = course.startSection;
+      if (start == null) continue;
+      final end = course.endSection ?? start;
+      final span = end >= start ? end - start + 1 : 1;
+      final titleLines = (course.name.runes.length / charactersPerLine).ceil();
+      final hasClassroom = _cleanScheduleText(course.classroom) != null;
+      final contentHeight = 26 + titleLines * 18 + (hasClassroom ? 15 : 0);
+      final requiredForSpan = contentHeight / span;
+      if (requiredForSpan > requiredHeight) requiredHeight = requiredForSpan;
+    }
+    return requiredHeight;
   }
 
   /// 点击顶部周次标题弹出的底部周次选择器：
@@ -2086,7 +2205,7 @@ class _CalendarScheduleViewState extends State<_CalendarScheduleView> {
                               children: [
                                 Flexible(
                                   child: Text(
-                                    _weekRangeText(_weekIndex),
+                                    _weekTitle(_weekIndex),
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
                                     style: theme.textTheme.titleLarge
@@ -2133,7 +2252,12 @@ class _CalendarScheduleViewState extends State<_CalendarScheduleView> {
                         inTerm ? _weekCourses(week) : const <ScheduleCourse>[];
                     final compact = MediaQuery.sizeOf(context).width < 600;
                     final timeColWidth = compact ? 46.0 : 54.0;
-                    final rowHeight = compact ? 58.0 : 66.0;
+                    final minDayWidth = compact ? 96.0 : 112.0;
+                    final viewportWidth = constraints.maxWidth;
+                    final gridWidth =
+                        (timeColWidth + minDayWidth * 7).clamp(viewportWidth, double.infinity).toDouble();
+                    final dayWidth = (gridWidth - timeColWidth) / 7;
+                    final rowHeight = _rowHeightFor(weekItems, dayWidth, compact);
                     final maxSection = _maxSectionFor(weekItems);
                     if (!inTerm) {
                       return Padding(
@@ -2141,70 +2265,84 @@ class _CalendarScheduleViewState extends State<_CalendarScheduleView> {
                         child: _OutOfTermCell(week: week),
                       );
                     }
-                    return SingleChildScrollView(
-                      physics: const AlwaysScrollableScrollPhysics(),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          // 星期 + 日期表头（左侧时间列宽占位，与网格列对齐）
-                          Row(
-                            children: [
-                              SizedBox(width: timeColWidth),
-                              for (final day in days)
-                                Expanded(
-                                  child: Column(
-                                    children: [
-                                      Text(
-                                        _scheduleWeekdayText(day.weekday),
-                                        style: theme.textTheme.bodyMedium
-                                            ?.copyWith(
-                                                fontWeight: FontWeight.w800),
-                                      ),
-                                      const SizedBox(height: 2),
-                                      Container(
-                                        width: 36,
-                                        height: 36,
-                                        alignment: Alignment.center,
-                                        decoration: day == today
-                                            ? BoxDecoration(
-                                                color: colorScheme.primary,
-                                                shape: BoxShape.circle)
-                                            : null,
-                                        child: Text(
-                                          '${day.day}',
-                                          style: TextStyle(
-                                            fontSize: 15,
-                                            fontWeight: day == today
-                                                ? FontWeight.w800
-                                                : FontWeight.w600,
-                                            color: day == today
-                                                ? colorScheme.onPrimary
-                                                : colorScheme.onSurface,
-                                          ),
+                    return Scrollbar(
+                      child: SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        physics: const ClampingScrollPhysics(),
+                        child: SizedBox(
+                          width: gridWidth,
+                          child: SingleChildScrollView(
+                            physics: const AlwaysScrollableScrollPhysics(),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                // 星期 + 日期表头（左侧时间列宽占位，与网格列对齐）。
+                                Row(
+                                  children: [
+                                    SizedBox(width: timeColWidth),
+                                    for (final day in days)
+                                      SizedBox(
+                                        width: dayWidth,
+                                        child: Column(
+                                          children: [
+                                            Text(
+                                              _scheduleWeekdayText(day.weekday),
+                                              style: theme.textTheme.bodyMedium
+                                                  ?.copyWith(
+                                                      fontWeight:
+                                                          FontWeight.w800),
+                                            ),
+                                            const SizedBox(height: 2),
+                                            Container(
+                                              width: 36,
+                                              height: 36,
+                                              alignment: Alignment.center,
+                                              decoration: day == today
+                                                  ? BoxDecoration(
+                                                      color:
+                                                          colorScheme.primary,
+                                                      shape: BoxShape.circle)
+                                                  : null,
+                                              child: Text(
+                                                '${day.day}',
+                                                style: TextStyle(
+                                                  fontSize: 15,
+                                                  fontWeight: day == today
+                                                      ? FontWeight.w800
+                                                      : FontWeight.w600,
+                                                  color: day == today
+                                                      ? colorScheme.onPrimary
+                                                      : colorScheme.onSurface,
+                                                ),
+                                              ),
+                                            ),
+                                          ],
                                         ),
                                       ),
-                                    ],
+                                  ],
+                                ),
+                                const SizedBox(height: 6),
+                                SizedBox(
+                                  height: maxSection * rowHeight,
+                                  child: _WeekTimeGrid(
+                                    days: days,
+                                    items: weekItems,
+                                    maxSection: maxSection,
+                                    timeColWidth: timeColWidth,
+                                    dayWidth: dayWidth,
+                                    gridWidth: gridWidth,
+                                    rowHeight: rowHeight,
+                                    today: today,
+                                    onEmptyDayTap: (day) =>
+                                        _showDayCourses(context, day),
+                                    onAdjustCourse: widget.onAdjustCourse,
+                                    onMoveToDay: widget.onMoveToDay,
                                   ),
                                 ),
-                            ],
-                          ),
-                          const SizedBox(height: 6),
-                          SizedBox(
-                            height: maxSection * rowHeight,
-                            child: _WeekTimeGrid(
-                              days: days,
-                              items: weekItems,
-                              maxSection: maxSection,
-                              timeColWidth: timeColWidth,
-                              rowHeight: rowHeight,
-                              today: today,
-                              onEmptyDayTap: (day) =>
-                                  _showDayCourses(context, day),
-                              onAdjustCourse: widget.onAdjustCourse,
-                              onMoveToDay: widget.onMoveToDay,
+                              ],
                             ),
                           ),
-                        ],
+                        ),
                       ),
                     );
                   },
@@ -2345,6 +2483,8 @@ class _WeekTimeGrid extends StatelessWidget {
     required this.items,
     required this.maxSection,
     required this.timeColWidth,
+    required this.dayWidth,
+    required this.gridWidth,
     required this.rowHeight,
     required this.today,
     required this.onEmptyDayTap,
@@ -2356,6 +2496,8 @@ class _WeekTimeGrid extends StatelessWidget {
   final List<ScheduleCourse> items;
   final int maxSection;
   final double timeColWidth;
+  final double dayWidth;
+  final double gridWidth;
   final double rowHeight;
   final DateTime today;
   final void Function(DateTime day) onEmptyDayTap;
@@ -2367,8 +2509,6 @@ class _WeekTimeGrid extends StatelessWidget {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
     final lineColor = colorScheme.outlineVariant.withValues(alpha: 0.45);
-    final gridWidth = MediaQuery.sizeOf(context).width;
-    final colWidth = (gridWidth - timeColWidth) / 7;
     final totalHeight = maxSection * rowHeight;
 
     return Stack(
@@ -2376,9 +2516,9 @@ class _WeekTimeGrid extends StatelessWidget {
         // 7 天列背景（今天高亮），点击空白处弹当日课程面板
         for (var day = 0; day < 7; day++)
           Positioned(
-            left: timeColWidth + colWidth * day,
+            left: timeColWidth + dayWidth * day,
             top: 0,
-            width: colWidth,
+            width: dayWidth,
             height: totalHeight,
             child: GestureDetector(
               behavior: HitTestBehavior.opaque,
@@ -2426,7 +2566,7 @@ class _WeekTimeGrid extends StatelessWidget {
         // 课程块（按节次定位，块高 = 节数跨度）
         for (final course in items)
           if (course.weekday != null && course.startSection != null)
-            _buildCourseBlock(context, course, colWidth),
+            _buildCourseBlock(context, course, dayWidth),
       ],
     );
   }
@@ -2498,8 +2638,6 @@ class _CalendarCourseChip extends StatelessWidget {
             Expanded(
               child: Text(
                 course.name,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
                   color: Colors.white,
                   fontSize: 14,
@@ -3366,34 +3504,6 @@ int _compareScheduleCourses(ScheduleCourse a, ScheduleCourse b) {
   final section = (a.startSection ?? 99).compareTo(b.startSection ?? 99);
   if (section != 0) return section;
   return a.name.compareTo(b.name);
-}
-
-ScheduleCourse? _nextScheduleCourse(List<ScheduleCourse> items) {
-  final now = DateTime.now();
-  for (final item in [...items]..sort(_compareScheduleCourses)) {
-    final end = _scheduleCourseEnd(item, now);
-    if (end != null && end.isAfter(now)) return item;
-  }
-  return null;
-}
-
-DateTime? _scheduleCourseEnd(ScheduleCourse course, DateTime date) {
-  final section = course.endSection ?? course.startSection;
-  if (section == null || section < 1 || section > scheduleTimes.length) {
-    return null;
-  }
-  return _dateWithScheduleTime(date, scheduleTimes[section - 1].$2);
-}
-
-DateTime _dateWithScheduleTime(DateTime date, String time) {
-  final parts = time.split(':');
-  return DateTime(
-    date.year,
-    date.month,
-    date.day,
-    int.tryParse(parts.first) ?? 0,
-    parts.length > 1 ? int.tryParse(parts[1]) ?? 0 : 0,
-  );
 }
 
 String _scheduleTimeText(ScheduleCourse course) {

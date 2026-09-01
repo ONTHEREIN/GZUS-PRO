@@ -35,11 +35,11 @@ def _run_maintenance_job(job_name: str, runner: Callable[[], dict[str, object]])
         result = runner()
     except Exception as exc:
         duration_ms = round((time.perf_counter() - started) * 1000)
-        record_maintenance_job_result(job_name, started_at, duration_ms, str(exc)[:500])
+        record_maintenance_job_result(job_name, started_at, duration_ms, str(exc)[:500], 0, 0)
         logger.exception("maintenance_job_failed", extra={"job_name": job_name, "duration_ms": duration_ms})
         raise
     duration_ms = round((time.perf_counter() - started) * 1000)
-    record_maintenance_job_result(job_name, started_at, duration_ms, None)
+    record_maintenance_job_result(job_name, started_at, duration_ms, None, 0, 0)
     return result
 
 

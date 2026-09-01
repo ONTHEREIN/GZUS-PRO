@@ -48,13 +48,29 @@ class _ApnsCredentials:
 
 
 def is_apns_enabled() -> bool:
+    """仅在 APNs 配置完整且私钥可读取时报告为可用。"""
+    settings = get_settings()
+    configured = any(
+        (settings.apns_key_id.strip(), settings.apns_team_id.strip(), settings.apns_key_p8_base64.strip())
+    )
+    return configured and apns_configuration_error() is None
+
+
+def apns_configuration_error() -> str | None:
+    """返回可安全展示给管理员的 APNs 配置错误。"""
     settings = get_settings()
     values = (
         settings.apns_key_id.strip(),
         settings.apns_team_id.strip(),
         settings.apns_key_p8_base64.strip(),
     )
-    return any(values)
+    if not any(values):
+        return None
+    try:
+        _credentials(settings)
+    except ApnsConfigurationError as exc:
+        return str(exc)
+    return None
 
 
 def _base64url(value: bytes) -> str:
@@ -212,9 +228,13 @@ def _send_with_retry(
 
 
 def send_apns_to_student(student_id: str, title: str, body: str, extras: dict | None) -> None:
+    settings = get_settings()
     if not is_apns_enabled():
+        configuration_error = apns_configuration_error()
+        if configuration_error is not None:
+            logger.error("apns_configuration_invalid", extra={"error": configuration_error})
         return
-    credentials = _credentials(get_settings())
+    credentials = _credentials(settings)
     payload = build_apns_payload(title, body, extras)
     factory = get_sync_session_factory()
     with factory() as db:

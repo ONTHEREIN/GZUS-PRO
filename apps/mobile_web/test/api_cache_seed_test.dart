@@ -54,6 +54,7 @@ void main() {
                   'status': 'ok',
                   'items': [
                     {
+                      'courseId': 'course-a',
                       'courseName': '课程A',
                       'normal': 2,
                     }
@@ -100,6 +101,63 @@ void main() {
     expect(attendance.data.items.single.courseName, '课程A');
     expect(credits.data.single.totalCredit, '120');
     expect(notices.data.single.title, '测试通知');
+  });
+
+  test('缺少课程标识的 dashboard 考勤不会阻塞明细查询', () async {
+    SharedPreferences.setMockInitialValues({});
+    final requests = <String>[];
+    final api = ApiClient(
+      baseUrl: 'https://api.example.test',
+      httpClient: MockClient((request) async {
+        requests.add('${request.url.path}?${request.url.query}');
+        if (request.url.path == '/dashboard') {
+          return http.Response(
+            jsonEncode({
+              'status': 'ok',
+              'modules': {
+                'attendance': {
+                  'status': 'ok',
+                  'data': {
+                    'status': 'ok',
+                    'items': [
+                      {'courseName': '旧缓存课程', 'normal': 1},
+                    ],
+                  },
+                },
+              },
+            }),
+            200,
+            headers: const {'content-type': 'application/json'},
+          );
+        }
+        return http.Response(
+          jsonEncode({
+            'status': 'ok',
+            'items': [
+              {
+                'courseId': 'course-1',
+                'courseName': '新课程',
+                'normal': 1,
+              },
+            ],
+          }),
+          200,
+          headers: const {'content-type': 'application/json'},
+        );
+      }),
+    );
+
+    await api.dashboard(year: 2025, term: 2, week: 3);
+    final attendance = await api.attendance(year: 2025, term: 2);
+
+    expect(
+      requests,
+      [
+        '/dashboard?year=2025&term=2&week=3',
+        '/attendance?year=2025&term=2',
+      ],
+    );
+    expect(attendance.data.items.single.courseId, 'course-1');
   });
 
   test('会话命名空间缓存迁移后可按学号读取考试缓存', () async {
@@ -178,5 +236,37 @@ void main() {
 
     expect(result.source.fromCache, isTrue);
     expect(result.source.displayText, contains('服务端缓存'));
+  });
+
+  test('通知强制刷新绕过本地缓存并保留来源信息', () async {
+    SharedPreferences.setMockInitialValues({
+      'pcache_default_notices': jsonEncode([
+        {'title': '旧通知', 'category': '通知'}
+      ]),
+      'pcache_default_notices_at': DateTime(2026, 6, 1).toIso8601String(),
+    });
+    final requests = <String>[];
+    final api = ApiClient(
+      baseUrl: 'https://api.example.test',
+      httpClient: MockClient((request) async {
+        requests.add('${request.url.path}?${request.url.query}');
+        return http.Response.bytes(
+          utf8.encode(jsonEncode([
+            {
+              'title': '2026-2027 学年校历',
+              'category': '校历',
+              'source': 'admin',
+            }
+          ])),
+          200,
+        );
+      }),
+    );
+
+    final notices = await api.notices(forceRefresh: true);
+
+    expect(requests, ['/notices?refresh=true']);
+    expect(notices.data.single.title, '2026-2027 学年校历');
+    expect(notices.data.single.source, NoticeSource.admin);
   });
 }

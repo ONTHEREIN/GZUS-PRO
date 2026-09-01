@@ -37,7 +37,7 @@ def test_notifications_websocket_rejects_revoked_session_after_cold_start(client
         row = db.query(AppSessionModel).filter(AppSessionModel.id == session_id).first()
         assert row is not None
         row.revoked_at = datetime.now(timezone.utc)
-        row.revoked_reason = "single_device_login"
+        row.revoked_reason = "admin_kick"
         db.commit()
 
     _reset_session_store(client)

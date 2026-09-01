@@ -143,10 +143,22 @@ class AppSessionModel(Base):
     jwxt_cookies = Column(Text, nullable=True)
     ehall_cookies = Column(Text, nullable=True)
     ehall_auth_token = Column(Text, nullable=True)
+    # 长期自动登录凭据中的设备标识哈希；不保存可解密凭据或明文密码。
+    credential_fingerprint = Column(String(64), nullable=True, index=True)
     # 仅保留旧数据库结构兼容；SessionStore 会清空该列且不再写入登录凭据。
     encrypted_credentials = Column(Text, nullable=True)
     revoked_at = Column(DateTime, nullable=True, index=True)
     revoked_reason = Column(String(100), nullable=True)
+
+
+class CredentialRevocation(Base):
+    """管理员撤销某设备长期自动登录凭据的持久化记录。"""
+
+    __tablename__ = "credential_revocations"
+
+    credential_fingerprint = Column(String(64), primary_key=True)
+    revoked_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    reason = Column(String(100), nullable=False)
 
 
 class UserSettings(Base):
@@ -166,6 +178,42 @@ class UserSettings(Base):
     onboarding_completed = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
+class BackgroundNotificationProfile(Base):
+    """用户显式授权的后台通知配置与加密教务凭据。"""
+
+    __tablename__ = "background_notification_profiles"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    student_id = Column(String(100), nullable=False, unique=True, index=True)
+    credential_fingerprint = Column(String(64), nullable=False, index=True)
+    encrypted_credentials = Column(Text, nullable=False)
+    course_reminders_enabled = Column(Boolean, default=False, nullable=False)
+    before_start_minutes = Column(Integer, default=10, nullable=False)
+    before_end_minutes = Column(Integer, default=5, nullable=False)
+    first_week_start = Column(String(10), nullable=True)
+    courses_json = Column(Text, nullable=True)
+    notice_keys_json = Column(Text, nullable=True)
+    grade_snapshot_json = Column(Text, nullable=True)
+    exam_keys_json = Column(Text, nullable=True)
+    last_checked_at = Column(DateTime, nullable=True)
+    last_error = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+
+
+class NotificationDelivery(Base):
+    """持久化投递去重键，避免任务重启或多次轮询重复提醒。"""
+
+    __tablename__ = "notification_deliveries"
+    __table_args__ = (UniqueConstraint("student_id", "event_key", name="uq_notification_delivery"),)
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    student_id = Column(String(100), nullable=False, index=True)
+    event_key = Column(String(300), nullable=False)
+    notification_type = Column(String(50), nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
 
 
 class AdminUser(Base):
@@ -240,6 +288,8 @@ class MaintenanceJobStatus(Base):
     last_succeeded_at = Column(DateTime, nullable=True)
     last_duration_ms = Column(Integer, nullable=True)
     last_error = Column(Text, nullable=True)
+    last_processed = Column(Integer, nullable=True)
+    last_delivered = Column(Integer, nullable=True)
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
@@ -291,6 +341,7 @@ _APP_SESSION_COMPAT_COLUMNS: dict[str, str] = {
     "jwxt_cookies": "TEXT",
     "ehall_cookies": "TEXT",
     "ehall_auth_token": "TEXT",
+    "credential_fingerprint": "VARCHAR(64)",
     "encrypted_credentials": "TEXT",
     "revoked_at": "TIMESTAMP",
     "revoked_reason": "VARCHAR(100)",
@@ -376,6 +427,8 @@ def record_maintenance_job_result(
     started_at: datetime,
     duration_ms: int,
     error: str | None,
+    processed: int,
+    delivered: int,
 ) -> None:
     """记录 cron 的成功时间、耗时或可诊断的失败原因。"""
     factory = get_sync_session_factory()
@@ -388,6 +441,8 @@ def record_maintenance_job_result(
         row.last_started_at = started_at
         row.last_duration_ms = duration_ms
         row.last_error = error
+        row.last_processed = processed
+        row.last_delivered = delivered
         if error is None:
             row.last_succeeded_at = now
         row.updated_at = now
@@ -429,6 +484,10 @@ def init_db():
     _ensure_columns(engine, "ecard_bindings", {
         "hot_water_balance_cache": "FLOAT",
         "hot_water_cache_at": "TIMESTAMP",
+    })
+    _ensure_columns(engine, "maintenance_job_status", {
+        "last_processed": "INTEGER",
+        "last_delivered": "INTEGER",
     })
 
     if _is_sqlite(engine):

@@ -14,6 +14,7 @@ import 'auth_storage.dart';
 import 'calendar_import.dart';
 import 'leave_attachment.dart';
 import 'models/schedule_settings.dart';
+import 'models/background_notification_status.dart';
 import 'persistent_cache.dart';
 import 'schedule_utils.dart';
 
@@ -112,6 +113,7 @@ class ApiClient {
   final Map<String, DateTime> _backgroundRefreshAt = {};
   String? sessionId;
   String? _studentId;
+  String? _offlineScheduleStudentId;
   String? _account;
   PersistentCache? _persistentCache;
   Future<PersistentCache>? _persistentCacheFuture;
@@ -126,12 +128,16 @@ class ApiClient {
   /// 当自动重新登录失败时调用的回调，UI 层可用来导航到登录页
   void Function()? onReloginFailed;
 
+  /// 静默重登生成新会话后调用，供推送和 WebSocket 重新绑定会话。
+  Future<void> Function(String sessionId)? onSessionReplaced;
+
   /// --- Relogin backoff state ---
   /// Tracks the last time a relogin attempt was made and how many
   /// consecutive failures occurred.  Prevents hammering the CAS server
   /// when relogin keeps failing.
   DateTime? _lastReloginAttempt;
   int _consecutiveReloginFailures = 0;
+  Future<LoginResult>? _reloginFuture;
 
   /// Minimum interval between relogin attempts (increases with failures).
   static const Duration _reloginMinInterval = Duration(seconds: 5);
@@ -139,8 +145,10 @@ class ApiClient {
 
   static const Duration _backgroundRefreshCooldown = Duration(minutes: 5);
 
-  String get namespace => _studentId ?? sessionId ?? 'default';
+  String get namespace =>
+      _studentId ?? _offlineScheduleStudentId ?? sessionId ?? 'default';
   String? get studentId => _studentId;
+  bool get isScheduleOnlyMode => _offlineScheduleStudentId != null;
   String? get jwxtCookies => _jwxtCookies;
   String? get ehallCookies => _ehallCookies;
   String? get ehallAuthToken => _ehallAuthToken;
@@ -168,6 +176,7 @@ class ApiClient {
       _persistentCache = null;
       _persistentCacheFuture = null;
     }
+    if (value != null) _offlineScheduleStudentId = null;
   }
 
   Future<void> adoptStudentIdentity({
@@ -547,6 +556,7 @@ class ApiClient {
     sessionId = null;
     _account = null;
     setStudentId(null);
+    _offlineScheduleStudentId = null;
     _credentialToken = null;
     _jwxtCookies = null;
     _ehallCookies = null;
@@ -557,6 +567,22 @@ class ApiClient {
   Future<void> clearSavedAuthState() async {
     clearCredentials();
     await _authStorage.clear();
+    await _clearSavedAuthPreferences();
+  }
+
+  /// 登录态失效后清除个人数据，只允许读取此前缓存的课表。
+  Future<void> enterScheduleOnlyMode() async {
+    if (_offlineScheduleStudentId != null) return;
+    final expiredStudentId = _studentId;
+    _clearAuthenticationForReverification();
+    await _authStorage.clear();
+    await _clearSavedSessionPreferencesForReverification();
+    if (expiredStudentId == null || expiredStudentId.isEmpty) return;
+    _offlineScheduleStudentId = expiredStudentId;
+    await PersistentCache.clearForStudentExceptSchedule(expiredStudentId);
+  }
+
+  Future<void> _clearSavedAuthPreferences() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('auth.sessionId');
     await prefs.remove('auth.studentName');
@@ -567,17 +593,42 @@ class ApiClient {
     await prefs.remove('auth.rememberPassword');
   }
 
+  void _clearAuthenticationForReverification() {
+    sessionId = null;
+    setStudentId(null);
+    _offlineScheduleStudentId = null;
+    _credentialToken = null;
+    _jwxtCookies = null;
+    _ehallCookies = null;
+    _ehallAuthToken = null;
+    _cache.clear();
+  }
+
+  Future<void> _clearSavedSessionPreferencesForReverification() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('auth.sessionId');
+    await prefs.remove('auth.studentName');
+    await prefs.remove('auth.studentId');
+    await prefs.remove('auth.loginMethod');
+    await prefs.remove('auth.password');
+  }
+
   Future<LoginResult> relogin() async {
+    final inFlight = _reloginFuture;
+    if (inFlight != null) return inFlight;
+    final future = _reloginOnce();
+    _reloginFuture = future;
+    try {
+      return await future;
+    } finally {
+      if (_reloginFuture == future) _reloginFuture = null;
+    }
+  }
+
+  Future<LoginResult> _reloginOnce() async {
     await loadSavedCredentials();
     if (_credentialToken != null) {
-      try {
-        return await _reloginWithCredentialToken(_credentialToken!);
-      } on ApiException catch (exc) {
-        if (exc.statusCode == 401) {
-          await clearSavedCredentialToken();
-        }
-        rethrow;
-      }
+      return _reloginWithCredentialToken(_credentialToken!);
     }
     throw ApiException('登录状态已失效，请重新登录', statusCode: 401);
   }
@@ -593,6 +644,7 @@ class ApiClient {
         .timeout(_requestTimeout);
     final decoded = _decode(response);
     final result = LoginResult.fromJson(decoded as Map<String, dynamic>);
+    final previousSessionId = sessionId;
     sessionId = result.sessionId;
     await _adoptLoginIdentity(result);
     _captureTransientEhallAuth(result);
@@ -600,6 +652,10 @@ class ApiClient {
 
     await saveCredentialToken(result.credentialToken ?? credentialToken);
     await _saveSchoolAuth(result);
+    final activeSessionId = result.sessionId;
+    if (activeSessionId != null && activeSessionId != previousSessionId) {
+      await onSessionReplaced?.call(activeSessionId);
+    }
     return result;
   }
 
@@ -826,6 +882,67 @@ class ApiClient {
     });
   }
 
+  Future<BackgroundNotificationStatus?>
+      fetchBackgroundNotificationStatus() async {
+    try {
+      final url = _requireBaseUrl();
+      final response = await _http
+          .get(Uri.parse('$url/notifications/background'), headers: _headers())
+          .timeout(_requestTimeout);
+      if (response.statusCode >= 400) return null;
+      return BackgroundNotificationStatus.fromJson(_decodeObject(response));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<BackgroundNotificationStatus> setBackgroundNotificationAccess(
+    bool enabled,
+  ) async {
+    await loadSavedCredentials();
+    if (enabled && (_credentialToken == null || _credentialToken!.isEmpty)) {
+      throw StateError('请使用账号密码登录并勾选记住账号后，再开启后台持续通知');
+    }
+    final data = await _put('/notifications/background', {
+      'enabled': enabled,
+      if (enabled) 'credentialToken': _credentialToken,
+    });
+    return BackgroundNotificationStatus.fromJson(data);
+  }
+
+  Future<void> syncCloudCourseReminders({
+    required bool enabled,
+    required int beforeStartMinutes,
+    required int beforeEndMinutes,
+    required DateTime firstWeekStart,
+    required List<Map<String, dynamic>> courses,
+  }) async {
+    await _put('/notifications/course-reminders', {
+      'enabled': enabled,
+      'beforeStartMinutes': beforeStartMinutes,
+      'beforeEndMinutes': beforeEndMinutes,
+      'firstWeekStart':
+          '${firstWeekStart.year.toString().padLeft(4, '0')}-${firstWeekStart.month.toString().padLeft(2, '0')}-${firstWeekStart.day.toString().padLeft(2, '0')}',
+      'courses': courses,
+    });
+  }
+
+  Future<void> revokeBackgroundNotificationAccess(
+      String activeSessionId) async {
+    final url = _requireBaseUrl();
+    final response = await _http
+        .put(
+          Uri.parse('$url/notifications/background'),
+          headers: {..._headers(), 'X-Session-Id': activeSessionId},
+          body: jsonEncode({'enabled': false}),
+        )
+        .timeout(_requestTimeout);
+    if (response.statusCode >= 400) {
+      final detail = _decode(response);
+      throw ApiException('撤销后台通知授权失败：$detail', statusCode: response.statusCode);
+    }
+  }
+
   SchoolDirectClient? _schoolDirectClient() {
     final cookies = _jwxtCookies;
     if (!_isSchoolDirectEnabled || cookies == null || cookies.isEmpty) {
@@ -977,7 +1094,8 @@ class ApiClient {
   Future<DataResult<AttendanceResponse>> attendance(
           {required int year, required int term, bool forceRefresh = false}) =>
       _cacheFirstObject<AttendanceResponse>(
-        cacheKey: 'attendance_${year}_$term',
+        // 明细查询依赖 courseId；旧版缓存未包含该字段，必须跳过。
+        cacheKey: _attendanceCacheKey(year: year, term: term),
         fetch: () => _academicObjectOrDirect(
           path:
               '/attendance?year=$year&term=$term${forceRefresh ? '&refresh=true' : ''}',
@@ -987,9 +1105,31 @@ class ApiClient {
         forceRefresh: forceRefresh,
       );
 
+  Future<DataResult<AttendanceDetailResponse>> attendanceDetails({
+    required int year,
+    required int term,
+    required String courseId,
+    bool forceRefresh = false,
+  }) =>
+      _cacheFirstObject<AttendanceDetailResponse>(
+        cacheKey: 'attendance_detail_$year' '_$term' '_$courseId',
+        fetch: () => _plainObject(
+          _get(
+            '/attendance/details?year=$year&term=$term&courseId=${Uri.encodeComponent(courseId)}${forceRefresh ? '&refresh=true' : ''}',
+          ),
+        ),
+        fromJson: (json) => AttendanceDetailResponse.fromJson(json),
+        forceRefresh: forceRefresh,
+      );
+
+  String _attendanceCacheKey({required int year, required int term}) =>
+      'attendance_v2_${year}_$term';
+
   /// 返回 dashboard 已写入内存的考勤快照，供详情页首屏直接复用。
   AttendanceResponse? cachedAttendance({required int year, required int term}) {
-    final cached = _cache.get<Map<String, dynamic>>('attendance_${year}_$term');
+    final cached = _cache.get<Map<String, dynamic>>(
+      _attendanceCacheKey(year: year, term: term),
+    );
     return cached == null ? null : AttendanceResponse.fromJson(cached);
   }
 
@@ -1191,12 +1331,22 @@ class ApiClient {
       _cache.set(cacheKey, obj);
     }
 
+    void seedAttendance() {
+      final mod = snapshot.module('attendance');
+      if (!mod.hasUsableData) return;
+      final obj = mod.objectData();
+      if (obj == null) return;
+      final attendance = AttendanceResponse.fromJson(obj);
+      if (attendance.items.any((item) => item.courseId.isEmpty)) return;
+      _cache.set(_attendanceCacheKey(year: year, term: term), obj);
+    }
+
     seedList('schedule', 'schedule_${year}_$term');
     seedList('grades', 'grades_${year}_$term');
     seedList('exams', 'exams_${year}_$term');
     seedObject('me', 'me');
     seedList('notices', 'notices');
-    seedObject('attendance', 'attendance_${year}_$term');
+    seedAttendance();
     seedList('credits', 'credits');
   }
 
@@ -1406,16 +1556,11 @@ class ApiClient {
 
   Future<DataResult<EcardSummary>> ecardSummary(
       {bool forceRefresh = false}) async {
-    final result = await _cacheFirstObject<EcardSummary>(
+    return _cacheFirstObject<EcardSummary>(
       cacheKey: 'ecard_summary',
       fetch: () => _plainObject(_get('/ecard/summary')),
       fromJson: (json) => EcardSummary.fromJson(json),
       forceRefresh: forceRefresh,
-    );
-    if (!_isNativeMobile) return result;
-    return DataResult<EcardSummary>(
-      data: await _enrichEcardSummaryDirect(result.data),
-      source: result.source,
     );
   }
 
@@ -1428,7 +1573,18 @@ class ApiClient {
     _cache.set('ecard_summary', data);
     final pcache = await _getPersistentCache();
     await pcache.set('ecard_summary', data);
-    return _enrichEcardSummaryDirect(EcardSummary.fromJson(data));
+    await _invalidateDashboardCaches(pcache);
+    return EcardSummary.fromJson(data);
+  }
+
+  Future<void> _invalidateDashboardCaches(PersistentCache pcache) async {
+    const dashboardPrefix = 'dashboard_';
+    _cache.removeStartingWith(dashboardPrefix);
+    _backgroundRefreshes
+        .removeWhere((key, _) => key.startsWith(dashboardPrefix));
+    _backgroundRefreshAt
+        .removeWhere((key, _) => key.startsWith(dashboardPrefix));
+    await pcache.removeStartingWith(dashboardPrefix);
   }
 
   Future<EcardSummary> refreshEcard() async {
@@ -2066,20 +2222,23 @@ class ApiClient {
     Future<T> Function() request, {
     int retryCount = 0,
   }) async {
+    if (_offlineScheduleStudentId != null) {
+      throw ApiException('登录状态已失效，请重新登录', statusCode: 401);
+    }
     try {
       return await request();
     } on ApiException catch (e) {
       if (e.statusCode == 401) {
-        if (e.isSingleDeviceConflict) {
-          await clearSavedAuthState();
-          onReloginFailed?.call();
-          throw ApiException(e.message, statusCode: 401);
-        }
         await loadSavedCredentials();
         if (_credentialToken == null) {
-          // 无凭证 token 时无法自动 relogin，但不要清空本地登录态。
-          // 数据接口可能只是短暂拿不到会话，直接退出会造成误踢。
+          await enterScheduleOnlyMode();
+          onReloginFailed?.call();
           throw ApiException('登录已过期，请重新登录', statusCode: 401);
+        }
+        final inFlightRelogin = _reloginFuture;
+        if (inFlightRelogin != null) {
+          await inFlightRelogin;
+          return request();
         }
         // --- Relogin with backoff ---
         // Avoid hammering CAS if relogin keeps failing.
@@ -2101,17 +2260,15 @@ class ApiClient {
           _consecutiveReloginFailures = 0; // reset on success
         } on ApiException catch (e) {
           _consecutiveReloginFailures++;
-          // relogin 本身失败时只清除失效的凭证 token，不清空 session。
-          // 避免学校系统短暂失败被误判为用户需要退出登录。
+          // 只有服务端明确要求重新验证（401）才清除本设备凭据。
+          // CAS/网络上游故障（5xx）保留凭据，稍后可继续自动恢复。
           if (e.statusCode == 401) {
-            await clearSavedCredentialToken();
-          } else {
-            _credentialToken = null;
+            await enterScheduleOnlyMode();
+            onReloginFailed?.call();
           }
           rethrow;
         } catch (_) {
           _consecutiveReloginFailures++;
-          _credentialToken = null;
           rethrow;
         }
         // relogin 成功，重试原始请求
@@ -2790,6 +2947,7 @@ class SchoolDirectClient {
   }
 
   Map<String, dynamic> _normalizeAttendanceItem(Map<String, dynamic> item) => {
+        'courseId': _stringOrNull(item['kch_id'] ?? item['courseId']) ?? '',
         'courseName': item['kcmc'] ?? item['courseName'] ?? item['name'] ?? '',
         'courseCode': item['kch'] ?? item['courseCode'],
         'academicYear': item['xnmc'] ?? item['xn'] ?? item['academicYear'],

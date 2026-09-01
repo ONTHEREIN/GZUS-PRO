@@ -1,20 +1,16 @@
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
-import pytest
-from fastapi import HTTPException
-
-from app.routes.deps import SESSION_IDLE_STALE_THRESHOLD, require_session
+from app.routes.deps import require_session
 from app.sessions import AppSession
 
 
-def test_require_session_rejects_idle_session() -> None:
+def test_require_session_accepts_school_cookie_age_until_application_ttl() -> None:
     session = AppSession(
         id="session-id",
         client=object(),
         last_active_at=datetime.now(timezone.utc).replace(tzinfo=None)
-        - SESSION_IDLE_STALE_THRESHOLD
-        - timedelta(seconds=1),
+        - timedelta(minutes=26),
     )
     store = SimpleNamespace(
         get=lambda *_args, **_kwargs: session,
@@ -26,10 +22,7 @@ def test_require_session_rejects_idle_session() -> None:
         url=SimpleNamespace(path="/grades"),
     )
 
-    with pytest.raises(HTTPException) as exc_info:
-        require_session(request, x_session_id=session.id)
-
-    assert exc_info.value.status_code == 401
+    assert require_session(request, x_session_id=session.id) is session
 
 
 def test_require_session_touches_active_session() -> None:

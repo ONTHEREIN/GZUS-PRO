@@ -100,6 +100,7 @@ class CasLoginResult:
     ehall_cookies: str | None = None
     ehall_auth_token: str | None = None
     error: str | None = None
+    error_status: int | None = None
     httpx_client: Any | None = None
 
 
@@ -246,7 +247,7 @@ class CasAutoLogin:
                 logger.info("[TIMING] download_kaptcha: %.2fs", time.time() - t1)
                 if not captcha_bytes:
                     return CasLoginResult(
-                        account=account, cookies="", error="无法获取验证码图片"
+                        account=account, cookies="", error="无法获取验证码图片", error_status=503
                     )
 
                 # Step 3: OCR the captcha and solve arithmetic
@@ -257,7 +258,7 @@ class CasAutoLogin:
                 except RuntimeError as exc:
                     logger.error("CAPTCHA OCR unavailable: %s", exc)
                     return CasLoginResult(
-                        account=account, cookies="", error=str(exc)
+                        account=account, cookies="", error=str(exc), error_status=503
                     )
                 captcha_code = _solve_arithmetic_captcha(ocr_text)
                 logger.info(
@@ -288,11 +289,11 @@ class CasAutoLogin:
                 logger.info("Captcha was wrong on attempt %d, retrying", attempt)
 
             return CasLoginResult(
-                account=account, cookies="", error="验证码识别失败，请重试"
+                account=account, cookies="", error="验证码识别失败，请重试", error_status=503
             )
         except Exception as exc:
             logger.exception("CAS auto-login error")
-            return CasLoginResult(account=account, cookies="", error=str(exc))
+            return CasLoginResult(account=account, cookies="", error=str(exc), error_status=502)
 
     # ------------------------------------------------------------------
     # Step 1: GET CAS login page (establishes session cookies)
@@ -441,6 +442,7 @@ class CasAutoLogin:
             account=account,
             cookies="",
             error=f"登录请求失败 (HTTP {response.status_code})",
+            error_status=502 if response.status_code >= 500 else 503,
         )
 
     def _handle_error_code(
@@ -451,29 +453,29 @@ class CasAutoLogin:
         uid = data_obj.get("uid", kaptcha_uid)
 
         if code == _CODE_FALSE:
-            return CasLoginResult(account=account, cookies="", error="用户名或密码错误")
+            return CasLoginResult(account=account, cookies="", error="用户名或密码错误", error_status=401)
         if code == _CODE_CAPTCHA_FALSE:
             logger.info("Captcha code incorrect, will retry (uid=%s)", uid)
             return None  # retry
         if code == _CODE_PASS_ERROR:
             extra = data_obj.get("data", "")
-            return CasLoginResult(account=account, cookies="", error=f"密码错误: {extra}")
+            return CasLoginResult(account=account, cookies="", error=f"密码错误: {extra}", error_status=401)
         if code == _CODE_NO_USER:
-            return CasLoginResult(account=account, cookies="", error="账号不存在")
+            return CasLoginResult(account=account, cookies="", error="账号不存在", error_status=401)
         if code == _CODE_USER_DISABLED:
-            return CasLoginResult(account=account, cookies="", error="账号被停用")
+            return CasLoginResult(account=account, cookies="", error="账号被停用", error_status=401)
         if code == _CODE_USER_LOCK:
             lock_info = data_obj.get("data", "")
-            return CasLoginResult(account=account, cookies="", error=f"账号锁定: {lock_info}")
+            return CasLoginResult(account=account, cookies="", error=f"账号锁定: {lock_info}", error_status=401)
         if code == _CODE_NEED_2FA:
-            return CasLoginResult(account=account, cookies="", error="需要二次验证，暂不支持")
+            return CasLoginResult(account=account, cookies="", error="需要二次验证，暂不支持", error_status=401)
         if code == _CODE_NEED_CHANGE_PASS:
-            return CasLoginResult(account=account, cookies="", error="需要修改密码，暂不支持")
+            return CasLoginResult(account=account, cookies="", error="需要修改密码，暂不支持", error_status=401)
         if code == _CODE_MULTI_ACCOUNT:
-            return CasLoginResult(account=account, cookies="", error="多账号，暂不支持")
+            return CasLoginResult(account=account, cookies="", error="多账号，暂不支持", error_status=401)
 
         logger.warning("Unknown CAS error code: %s (data=%s)", code, data_obj)
-        return CasLoginResult(account=account, cookies="", error=f"登录失败 (code={code})")
+        return CasLoginResult(account=account, cookies="", error=f"登录失败 (code={code})", error_status=503)
 
     # ------------------------------------------------------------------
     # Step 4: Finalize login – follow service URL with ticket

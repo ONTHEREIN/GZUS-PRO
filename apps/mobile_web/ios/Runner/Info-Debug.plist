@@ -48,6 +48,12 @@
 	<string>用于将课表和考试日程导入系统日历，方便及时提醒。</string>
 	<key>NSCalendarsFullAccessUsageDescription</key>
 	<string>用于将课表和考试日程写入系统日历，方便及时提醒。</string>
+	<key>NSCameraUsageDescription</key>
+	<string>用于拍摄并上传作业照片、头像等图片内容。</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>用于录制视频时采集声音（如作业视频上传）。</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>用于从相册选择图片上传作业、头像等。</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

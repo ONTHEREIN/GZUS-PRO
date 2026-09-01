@@ -15,6 +15,7 @@ from app.jwxt.normalizers import (
     ensure_grade_list,  # noqa: F401
     ensure_list,
     extract_credit_items,
+    normalize_attendance_detail,
     normalize_attendance_item,
     normalize_credit_item,
     normalize_exam_item,
@@ -69,6 +70,7 @@ GRADE_GNMKDM = "N305005"
 ATTENDANCE_URL = "/jwglxt/jxdmgl/jxdmqkcx_cxJxdmqkcxIndex.html"
 ATTENDANCE_GNMKDM = "N254315"
 ATTENDANCE_PAGE_SIZE = 50
+ATTENDANCE_DETAIL_URL = "/jwglxt/jxdmgl/jxdmqk_cxXsmd.html"
 
 CREDIT_URL = "/jwglxt/design/funcData_cxFuncDataList.html"
 CREDIT_FUNC_WIDGET_GUID = "555A63AA3F6BB8E4E065CAE6002842BA"
@@ -87,6 +89,10 @@ class AuthenticationError(RuntimeError):
 
 
 class MissingProxySlotError(NotImplementedError):
+    pass
+
+
+class AttendanceCourseNotFoundError(LookupError):
     pass
 
 
@@ -570,6 +576,51 @@ class SchoolSdkClient:
         result = self._query_attendance(year, term)
         return [normalize_attendance_item(item) for item in ensure_list(result)]
 
+    def get_attendance_details(
+        self, year: str | None, term: str | None, course_id: str
+    ) -> list[dict]:
+        year, term = default_academic_period(year, term)
+        course = next(
+            (
+                item
+                for item in self._query_attendance(year, term)
+                if str(pick(item, "courseId", "kch_id") or "") == course_id
+            ),
+            None,
+        )
+        if course is None:
+            raise AttendanceCourseNotFoundError("当前学期未找到该考勤课程")
+
+        student_id = str(pick(course, "xh_id") or "")
+        if not student_id:
+            raise ValueError("教务系统未返回考勤明细所需的学生标识")
+
+        details: list[dict] = []
+        for category_code in ("01", "02", "03", "04", "05"):
+            if int(pick(course, f"cs_{category_code}") or 0) <= 0:
+                continue
+            details.extend(
+                self._query_attendance_details(
+                    year,
+                    term,
+                    course_id,
+                    student_id,
+                    category_code,
+                    str(pick(course, "kssj") or ""),
+                    str(pick(course, "jssj") or ""),
+                )
+            )
+        normalized = [normalize_attendance_detail(item) for item in details]
+        return sorted(
+            normalized,
+            key=lambda item: (
+                item["classDate"],
+                item["classTime"],
+                item["rollCallTime"],
+            ),
+            reverse=True,
+        )
+
     def get_credits(self) -> list[dict]:
         result = self._query_credits()
         return [normalize_credit_item(item) for item in ensure_list(result)]
@@ -773,6 +824,51 @@ class SchoolSdkClient:
                     "kch": "",
                     "kch_id": "",
                     "gnmkdm": ATTENDANCE_GNMKDM,
+                    "queryModel.showCount": str(ATTENDANCE_PAGE_SIZE),
+                    "queryModel.currentPage": str(current_page),
+                    "queryModel.sortName": "",
+                    "queryModel.sortOrder": "asc",
+                },
+            )
+            if current_page == 1:
+                total_pages = int(
+                    data.get("totalPage") or data.get("totalPages") or data.get("pageCount") or 1
+                )
+            page_items = data.get("items", [])
+            if not page_items:
+                break
+            all_items.extend(page_items)
+            if len(page_items) < ATTENDANCE_PAGE_SIZE:
+                break
+            current_page += 1
+        return all_items
+
+    def _query_attendance_details(
+        self,
+        year: int,
+        term: int,
+        course_id: str,
+        student_id: str,
+        category_code: str,
+        start_time: str,
+        end_time: str,
+    ) -> list[dict]:
+        all_items: list[dict] = []
+        current_page = 1
+        total_pages = 1
+        while current_page <= total_pages:
+            data = self._proxy_json(
+                "POST",
+                ATTENDANCE_DETAIL_URL,
+                params={"doType": "query"},
+                data={
+                    "xnm": str(year),
+                    "xqm": TERM_TO_XQM.get(term, ""),
+                    "xh_id": student_id,
+                    "kch_id": course_id,
+                    "kssj": start_time,
+                    "jssj": end_time,
+                    "dmlbm": category_code,
                     "queryModel.showCount": str(ATTENDANCE_PAGE_SIZE),
                     "queryModel.currentPage": str(current_page),
                     "queryModel.sortName": "",

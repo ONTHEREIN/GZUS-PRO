@@ -39,19 +39,25 @@ final creditsProvider =
 
 /// 通知详情查询的不可变参数，确保不同 API 会话不会共享详情状态。
 class NoticeDetailRequest {
-  const NoticeDetailRequest({required this.client, required this.url});
+  const NoticeDetailRequest({
+    required this.client,
+    required this.url,
+    required this.forceRefresh,
+  });
 
   final ApiClient client;
   final String url;
+  final bool forceRefresh;
 
   @override
   bool operator ==(Object other) =>
       other is NoticeDetailRequest &&
       identical(client, other.client) &&
-      url == other.url;
+      url == other.url &&
+      forceRefresh == other.forceRefresh;
 
   @override
-  int get hashCode => Object.hash(identityHashCode(client), url);
+  int get hashCode => Object.hash(identityHashCode(client), url, forceRefresh);
 }
 
 final noticesProvider =
@@ -60,10 +66,19 @@ final noticesProvider =
   return response.data;
 });
 
+final freshNoticesProvider =
+    FutureProvider.family<List<NoticeItem>, ApiClient>((ref, client) async {
+  final response = await client.notices(forceRefresh: true);
+  return response.data;
+});
+
 final noticeDetailProvider =
     FutureProvider.family<NoticeDetail, NoticeDetailRequest>(
   (ref, request) async {
-    final response = await request.client.fetchNoticeDetail(request.url);
+    final response = await request.client.fetchNoticeDetail(
+      request.url,
+      forceRefresh: request.forceRefresh,
+    );
     return response.data;
   },
 );
@@ -111,6 +126,50 @@ final attendanceProvider =
       forceRefresh: request.forceRefresh,
     );
   },
+);
+
+class AttendanceDetailRequest {
+  const AttendanceDetailRequest({
+    required this.client,
+    required this.year,
+    required this.term,
+    required this.courseId,
+    required this.forceRefresh,
+  });
+
+  final ApiClient client;
+  final int year;
+  final int term;
+  final String courseId;
+  final bool forceRefresh;
+
+  @override
+  bool operator ==(Object other) =>
+      other is AttendanceDetailRequest &&
+      identical(client, other.client) &&
+      year == other.year &&
+      term == other.term &&
+      courseId == other.courseId &&
+      forceRefresh == other.forceRefresh;
+
+  @override
+  int get hashCode => Object.hash(
+        identityHashCode(client),
+        year,
+        term,
+        courseId,
+        forceRefresh,
+      );
+}
+
+final attendanceDetailProvider = FutureProvider.family<
+    DataResult<AttendanceDetailResponse>, AttendanceDetailRequest>(
+  (ref, request) => request.client.attendanceDetails(
+    year: request.year,
+    term: request.term,
+    courseId: request.courseId,
+    forceRefresh: request.forceRefresh,
+  ),
 );
 
 final ehallAffairsProvider =

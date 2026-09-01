@@ -11,6 +11,7 @@ from app.ecard_client import EcardApiError, EcardClient, EcardConfigurationError
 from app.notice_utils import merge_notices, notice_key, valid_notice_items
 from app.push import send_push_to_student
 from app.sessions import student_id_of
+from app.cloud_notifications import has_background_notification_profile
 
 __all__ = [
     "ExamReminderCache",
@@ -101,6 +102,8 @@ async def run_notice_poller_once(app) -> None:
         student_id = await asyncio.get_event_loop().run_in_executor(
             None, _session_student_id, session,
         )
+        if student_id and has_background_notification_profile(student_id):
+            return
         new_items = [
             item
             for item in items
@@ -447,6 +450,8 @@ async def run_exam_reminder_once(app) -> None:
         student_id = await asyncio.get_event_loop().run_in_executor(
             None, _session_student_id, session,
         )
+        if student_id and has_background_notification_profile(student_id):
+            return
         for exam in today_exams:
             key = _exam_key(exam)
             if cache.is_reminded(session_id, key):
@@ -527,6 +532,8 @@ async def run_grade_update_once(app) -> None:
             None, _session_student_id, session,
         )
         if not student_id:
+            return
+        if has_background_notification_profile(student_id):
             return
         try:
             grades = await asyncio.get_event_loop().run_in_executor(

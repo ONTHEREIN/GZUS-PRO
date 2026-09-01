@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import '../../../api_client.dart';
 import '../../../responsive/spacing.dart';
-import '../../../widgets/empty_state.dart';
 import '../../../widgets/progress.dart';
 import '../../home/cards/home_card_shell.dart';
 
@@ -28,21 +27,16 @@ class BusinessProgressLargeCard extends StatelessWidget {
       density: HomeCardDensity.large,
       badge: '$total 项',
       onTap: onTap,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          ProgressCategoryStrip(categories: overview.categories),
-          const SizedBox(height: GzusSpacing.m),
-          if (items.isEmpty)
-            const EmptyState(message: '暂无业务进度')
-          else
-            Column(
+      child: items.isEmpty
+          ? const Center(child: Text('暂无业务进度'))
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                ProgressCategoryStrip(categories: overview.categories),
+                const SizedBox(height: GzusSpacing.m),
                 for (final item in items.take(3)) ProgressMiniRow(item: item),
               ],
             ),
-        ],
-      ),
     );
   }
 }
@@ -67,18 +61,16 @@ class BusinessProgressMediumCard extends StatelessWidget {
       density: HomeCardDensity.medium,
       badge: '$total 项',
       onTap: onTap,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          ProgressCategoryStrip(
-            categories: overview.categories,
-          ),
-          if (overview.items.isNotEmpty) ...[
-            const SizedBox(height: GzusSpacing.m),
-            ProgressMiniRow(item: overview.items.first),
-          ],
-        ],
-      ),
+      child: overview.items.isEmpty
+          ? const Center(child: Text('暂无业务进度'))
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                ProgressCategoryStrip(categories: overview.categories),
+                const SizedBox(height: GzusSpacing.m),
+                ProgressMiniRow(item: overview.items.first),
+              ],
+            ),
     );
   }
 }

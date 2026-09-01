@@ -22,6 +22,9 @@ class WsService {
     required String apiBaseUrl,
     required String sessionId,
   }) {
+    if (_sessionId != null && _sessionId != sessionId) {
+      disconnect();
+    }
     _baseUrl = apiBaseUrl;
     _sessionId = sessionId;
   }

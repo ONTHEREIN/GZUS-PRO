@@ -17,6 +17,7 @@ from app.database import (
     AdminNotice,
     AdminUser,
     AppSessionModel,
+    BackgroundNotificationProfile,
     Base,
     DataCache,
     EcardBinding,
@@ -31,9 +32,6 @@ from app.sessions import AppSession, student_id_of
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
-
-# 活跃会话口径与 deps.SESSION_IDLE_STALE_THRESHOLD 保持一致（JWXT 约 30 分钟过期）
-ACTIVE_SESSION_WINDOW = timedelta(minutes=25)
 
 _tables_ready = False
 
@@ -158,7 +156,7 @@ def admin_overview(
     factory = get_sync_session_factory()
     now_utc = datetime.now(UTC)
     today_start = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
-    active_since = now_utc - ACTIVE_SESSION_WINDOW
+    active_since = now_utc - timedelta(seconds=get_settings().session_ttl_seconds)
     with factory() as db:
         total_sessions = db.query(AppSessionModel).count()
         active_sessions = (
@@ -230,10 +228,17 @@ def revoke_session(
             target_role = admin_role_of(row.student_account) if row.student_account else None
             if target_role == "owner":
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="不能下线 owner 管理员")
+        credential_fingerprint = row.credential_fingerprint
 
     request.app.state.sessions.revoke(session_id, reason="admin_kick")
+    if credential_fingerprint:
+        request.app.state.sessions.revoke_credential(credential_fingerprint, reason="admin_kick")
 
     with factory() as db:
+        if credential_fingerprint:
+            db.query(BackgroundNotificationProfile).filter(
+                BackgroundNotificationProfile.credential_fingerprint == credential_fingerprint
+            ).delete()
         _log_audit(
             db,
             operator_id=operator_id,
@@ -474,9 +479,14 @@ def admin_status(
                 "lastSucceededAt": row.last_succeeded_at,
                 "lastDurationMs": row.last_duration_ms,
                 "lastError": row.last_error,
+                "lastProcessed": row.last_processed,
+                "lastDelivered": row.last_delivered,
             }
             for row in jobs
         ]
+        background_notification_profiles = db.query(BackgroundNotificationProfile).count()
+    from app.apns_service import apns_configuration_error, is_apns_enabled
+    from app.push import is_web_push_enabled
     return {
         "status": "ok",
         "debug": settings.debug,
@@ -486,6 +496,10 @@ def admin_status(
         "appVersion": settings.app_latest_version,
         "appBuild": settings.app_latest_build,
         "maintenanceJobs": job_statuses,
+        "backgroundNotificationProfiles": background_notification_profiles,
+        "webPushEnabled": is_web_push_enabled(),
+        "apnsEnabled": is_apns_enabled(),
+        "apnsError": apns_configuration_error(),
     }
 
 

@@ -8,7 +8,6 @@ const _compactNavBreakpoint = 1024.0;
 const _mobileNavBarHeight = 68.0;
 const _nativeIosLiquidTabBarHeight = 80.0;
 const _mobileMainNavLimit = 4;
-const _mobileContentBottomGap = 10.0;
 const _iosBackGestureEdgeWidth = 24.0;
 const _iosBackGestureMinDistance = 72.0;
 const _homeGreetingCollapseDistance = 72.0;
@@ -129,9 +128,6 @@ class _DashboardShellState extends State<DashboardShell> {
   String? _highlightCourse;
   String? _overrideTabId;
   final List<String> _tabHistory = [];
-  String? _exitingTabId;
-  Offset _tabExitOffset = Offset.zero;
-  Timer? _tabTransitionTimer;
   int? _iosBackGesturePointer;
   Offset? _iosBackGestureStart;
   DateTime? _lastBackTime;
@@ -141,8 +137,8 @@ class _DashboardShellState extends State<DashboardShell> {
   bool _sidebarCollapsed = false;
   double _lastScrollOffset = 0;
 
-  /// 已访问页面的保活缓存：首次访问时构建，之后常驻 IndexedStack 不销毁，
-  /// 切换 Tab 只换 index，页面 State/滚动位置/选中项全部保留。
+  /// 已访问页面的保活缓存：首次访问时构建，之后常驻页面栈不销毁，
+  /// 切换 Tab 时保留页面 State、滚动位置和选中项。
   final Map<String, Widget> _pageCache = {};
   final Map<String, GlobalKey> _pageKeys = {};
   final Set<String> _visitedTabs = {};
@@ -180,7 +176,6 @@ class _DashboardShellState extends State<DashboardShell> {
     LiveActivityController.instance.onOpen = null;
     _navBarVisible.dispose();
     _homeHeaderScrollProgress.dispose();
-    _tabTransitionTimer?.cancel();
     super.dispose();
   }
 
@@ -204,15 +199,6 @@ class _DashboardShellState extends State<DashboardShell> {
       }
     }
     return false;
-  }
-
-  double _mobileContentBottomInset(BuildContext context) {
-    // 底栏隐藏时仍保留内容安全区。若随隐藏动画缩放内容区，页面会在动画期间
-    // 露出 Scaffold 底色，并可能短暂遮挡滚动内容。
-    return MediaQuery.paddingOf(context).bottom +
-        _mobileNavBarHeight +
-        GzusSpacing.s +
-        _mobileContentBottomGap;
   }
 
   void _updateHomeHeaderScrollProgress(ScrollNotification notification) {
@@ -364,7 +350,7 @@ class _DashboardShellState extends State<DashboardShell> {
                                 GzusInsets.contentGutter(context),
                                 8,
                                 GzusInsets.contentGutter(context),
-                                _mobileContentBottomInset(context),
+                                0,
                               ),
                               child: Theme(
                                 data: Theme.of(context).copyWith(
@@ -507,17 +493,14 @@ class _DashboardShellState extends State<DashboardShell> {
   }
 
   /// 惰性保活页面栈：页面首次激活时才构建，之后常驻 Stack 不销毁。
-  /// 返回历史页面时，当前页会横向退出，露出下方已保活的前页。
+  /// 非活动页面会立即离屏，避免透明页面在切换期间露出旧页面内容。
   Widget _buildPageStack(String? activeTabId) {
     if (activeTabId == null) return const SizedBox.shrink();
     _retainTab(activeTabId);
     final pageOrder = <String>[
-      for (final tabId in _residentTabs.where(
-        (tabId) => tabId != activeTabId && tabId != _exitingTabId,
-      ))
+      for (final tabId in _residentTabs.where((tabId) => tabId != activeTabId))
         tabId,
       activeTabId,
-      if (_exitingTabId != null && _exitingTabId != activeTabId) _exitingTabId!,
     ];
     return Stack(
       fit: StackFit.expand,
@@ -526,7 +509,6 @@ class _DashboardShellState extends State<DashboardShell> {
           _pageSlot(
             tabId,
             active: tabId == activeTabId,
-            exiting: tabId == _exitingTabId,
           ),
       ],
     );
@@ -538,7 +520,7 @@ class _DashboardShellState extends State<DashboardShell> {
     _residentTabs.add(tabId);
     while (_residentTabs.length > _maxResidentTabPages) {
       final evictedIndex = _residentTabs.indexWhere(
-        (residentTabId) => residentTabId != _exitingTabId,
+        (residentTabId) => residentTabId != tabId,
       );
       final evictedTabId = _residentTabs.removeAt(evictedIndex);
       _pageCache.remove(evictedTabId);
@@ -554,7 +536,6 @@ class _DashboardShellState extends State<DashboardShell> {
   Widget _pageSlot(
     String tabId, {
     required bool active,
-    required bool exiting,
   }) {
     final key = _pageKeys.putIfAbsent(
         tabId, () => GlobalKey(debugLabel: 'page-$tabId'));
@@ -565,25 +546,15 @@ class _DashboardShellState extends State<DashboardShell> {
     } else {
       child = const SizedBox.shrink();
     }
-    final visible = active || exiting;
     return Positioned.fill(
-      child: IgnorePointer(
-        ignoring: !active,
-        child: KeyedSubtree(
-          key: key,
-          child: TickerMode(
-            enabled: visible,
-            child: AnimatedSlide(
-              offset: exiting ? _tabExitOffset : Offset.zero,
-              duration: GzusDurations.normal,
-              curve: GzusCurves.standard,
-              child: AnimatedOpacity(
-                opacity: visible ? 1 : 0,
-                duration: GzusDurations.normal,
-                curve: GzusCurves.exit,
-                child: child,
-              ),
-            ),
+      child: Offstage(
+        key: ValueKey('page-slot-$tabId'),
+        offstage: !active,
+        child: TickerMode(
+          enabled: active,
+          child: KeyedSubtree(
+            key: key,
+            child: child,
           ),
         ),
       ),
@@ -746,7 +717,6 @@ class _DashboardShellState extends State<DashboardShell> {
     final activeTabId = _activeTabId;
     if (activeTabId == tabId) return;
     _recordTabHistory(activeTabId);
-    _startTabExit(activeTabId, isBackNavigation: false);
     _activateTab(tabId);
     final idx = _navBarTabs.indexWhere((t) => t.tabId == tabId);
     if (idx >= 0) {
@@ -825,9 +795,7 @@ class _DashboardShellState extends State<DashboardShell> {
 
   bool _goBackInTabHistory() {
     if (_tabHistory.isEmpty) return false;
-    final activeTabId = _activeTabId;
     final tabId = _tabHistory.removeLast();
-    _startTabExit(activeTabId, isBackNavigation: true);
     _activateTab(tabId);
     final idx = _navBarTabs.indexWhere((tab) => tab.tabId == tabId);
     _navBarVisible.value = true;
@@ -836,22 +804,6 @@ class _DashboardShellState extends State<DashboardShell> {
       _overrideTabId = idx >= 0 ? null : tabId;
     });
     return true;
-  }
-
-  void _startTabExit(
-    String? tabId, {
-    required bool isBackNavigation,
-  }) {
-    _tabTransitionTimer?.cancel();
-    _exitingTabId = tabId;
-    _tabExitOffset = Offset(isBackNavigation ? 0.16 : -0.16, 0);
-    _tabTransitionTimer = Timer(GzusDurations.normal, () {
-      if (!mounted) return;
-      setState(() {
-        _exitingTabId = null;
-        _tabExitOffset = Offset.zero;
-      });
-    });
   }
 
   Future<void> _consumeWidgetLaunch() async {

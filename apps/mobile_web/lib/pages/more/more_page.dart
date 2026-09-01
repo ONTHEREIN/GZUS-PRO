@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
@@ -990,6 +991,7 @@ class HomeWidgetGuidePage extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
+    final isIos = !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
     final items = [
       const _WidgetGuideItem(
         icon: Icons.schedule,
@@ -997,25 +999,27 @@ class HomeWidgetGuidePage extends StatelessWidget {
         example: '移动应用开发 · 09:00-10:20 · A2-301',
         detail: '适合放在首页第一屏，快速看下一节课、教室和老师。',
       ),
-      const _WidgetGuideItem(
-        icon: Icons.today,
-        title: '今日课表',
-        example: '今日 4 节课，按时间列出前几节',
-        detail: '适合需要完整确认当天课程顺序时使用。',
-      ),
-      if (!hideEcardOnCurrentPlatform)
+      if (!isIos)
+        const _WidgetGuideItem(
+          icon: Icons.today,
+          title: '今日课表',
+          example: '今日 4 节课，按时间列出前几节',
+          detail: '适合需要完整确认当天课程顺序时使用。',
+        ),
+      if (!isIos && !hideEcardOnCurrentPlatform)
         const _WidgetGuideItem(
           icon: Icons.water_drop,
           title: '生活缴费',
           example: '电 9 度 · 冷水 12.3 吨 · 热水 4.6 吨',
           detail: '绑定宿舍后显示水电余额，点击进入生活缴费页。',
         ),
-      const _WidgetGuideItem(
-        icon: Icons.assignment_turned_in,
-        title: '业务进度',
-        example: '请假审批 · 辅导员审核 · 70%',
-        detail: '适合追踪请假、办事大厅等流程状态。',
-      ),
+      if (!isIos)
+        const _WidgetGuideItem(
+          icon: Icons.assignment_turned_in,
+          title: '业务进度',
+          example: '请假审批 · 辅导员审核 · 70%',
+          detail: '适合追踪请假、办事大厅等流程状态。',
+        ),
     ];
 
     return FloatingPageScaffold(
@@ -1031,17 +1035,23 @@ class HomeWidgetGuidePage extends StatelessWidget {
               style: theme.textTheme.titleMedium
                   ?.copyWith(fontWeight: FontWeight.w700)),
           const SizedBox(height: 8),
-          const _GuideStep(
+          _GuideStep(
             index: 1,
-            text: '在 Android 桌面长按空白处，进入“小组件/Widget”。',
+            text: isIos
+                ? '在 iPhone 主屏幕长按空白处，点击左上角“+”。'
+                : '在 Android 桌面长按空白处，进入“小组件/Widget”。',
           ),
-          const _GuideStep(
+          _GuideStep(
             index: 2,
-            text: '找到软帮手，选择需要的组件拖到桌面。',
+            text: isIos
+                ? '搜索“软帮手”，可添加主屏组件；在锁屏编辑界面也可添加锁屏组件。'
+                : '找到软帮手，选择需要的组件拖到桌面。',
           ),
-          const _GuideStep(
+          _GuideStep(
             index: 3,
-            text: '打开 App 登录并刷新首页，组件会同步最新课表、水电和业务进度。',
+            text: isIos
+                ? '打开 App 登录并刷新首页，组件会同步最新课表。'
+                : '打开 App 登录并刷新首页，组件会同步最新课表、水电和业务进度。',
           ),
           const SizedBox(height: 20),
           Text('组件示例',

@@ -2,6 +2,9 @@
 # Uncomment this line to define a global platform for your project
 platform :ios, '13.0'
 
+# ShiplyPro 官方 CocoaPods 镜像源。
+source 'https://github.com/CocoaPods/Specs'
+
 # CocoaPods analytics sends network stats synchronously affecting flutter build latency.
 ENV['COCOAPODS_DISABLE_STATS'] = 'true'
 
@@ -33,6 +36,7 @@ target 'Runner' do
   use_modular_headers!
 
   flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
+  pod 'ShiplyPro', '1.1.0'
 end
 
 post_install do |installer|

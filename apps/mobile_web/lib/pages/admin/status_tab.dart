@@ -105,12 +105,25 @@ class _StatusTabState extends State<StatusTab> {
                           label: 'App 版本',
                           value:
                               '${data['appVersion'] ?? '-'} (${data['appBuild'] ?? '-'})'),
+                      _KeyValueRow(
+                        label: '后台持续通知授权',
+                        value: '${data['backgroundNotificationProfiles'] ?? 0} 人',
+                      ),
+                      _KeyValueRow(
+                        label: 'Web Push',
+                        value: data['webPushEnabled'] == true ? '已启用' : '未配置或配置错误',
+                      ),
+                      _KeyValueRow(
+                        label: 'APNs',
+                        value: data['apnsError'] ??
+                            (data['apnsEnabled'] == true ? '已启用' : '未配置'),
+                      ),
                       for (final job in (data['maintenanceJobs'] as List<dynamic>? ?? const [])
                           .whereType<Map<String, dynamic>>())
                         _KeyValueRow(
                           label: '${job['name'] ?? '维护任务'}',
                           value: job['lastError'] == null
-                              ? '成功 · ${_fmt(job['lastSucceededAt'])} · ${job['lastDurationMs'] ?? '-'}ms'
+                              ? '成功 · ${_fmt(job['lastSucceededAt'])} · ${job['lastDurationMs'] ?? '-'}ms · 处理 ${job['lastProcessed'] ?? 0} · 投递 ${job['lastDelivered'] ?? 0}'
                               : '失败 · ${job['lastError']}',
                         ),
                     ],

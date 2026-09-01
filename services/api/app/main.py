@@ -15,7 +15,7 @@ from app.cache_service import ExamReminderCache, GradeUpdateCache, NoticeCache
 from app.config import get_settings
 from app.database import check_database_ready, get_sync_session_factory, init_db
 from app.rate_limit import limiter
-from app.routes import academic, admin, auth, content, ecard, ehall, push, settings, weather
+from app.routes import academic, admin, auth, content, ecard, ehall, notifications, push, settings, weather
 from app.rsa_keys import rsa_key_manager
 from app.sessions import SessionStore, SessionStoreUnavailableError
 from app.ws import ConnectionManager, ws_router
@@ -43,18 +43,26 @@ async def lifespan(app: FastAPI):
         run_grade_update_poller,
         run_notice_poller,
     )
+    from app.cloud_notifications import (
+        run_background_notification_poller,
+        run_course_reminder_dispatcher,
+    )
 
     init_db()
     poller_task = asyncio.create_task(run_notice_poller(app))
     ecard_task = asyncio.create_task(run_ecard_reminder_poller(app))
     exam_task = asyncio.create_task(run_exam_reminder_poller(app))
     grade_task = asyncio.create_task(run_grade_update_poller(app))
+    background_notification_task = asyncio.create_task(run_background_notification_poller())
+    course_reminder_task = asyncio.create_task(run_course_reminder_dispatcher())
     await app.state.sessions.start_cleanup_task()
     yield
     poller_task.cancel()
     ecard_task.cancel()
     exam_task.cancel()
     grade_task.cancel()
+    background_notification_task.cancel()
+    course_reminder_task.cancel()
     app.state.sessions.stop_cleanup_task()
 
 
@@ -180,6 +188,7 @@ def create_app() -> FastAPI:
     app.include_router(ehall.router)
     app.include_router(ecard.router)
     app.include_router(push.router)
+    app.include_router(notifications.router)
     app.include_router(weather.router)
     app.include_router(settings.router)
     app.include_router(ws_router)

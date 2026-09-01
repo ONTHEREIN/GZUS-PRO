@@ -100,6 +100,17 @@ class PersistentCache {
     await _prefs!.remove(_timeKey(key));
   }
 
+  Future<void> removeStartingWith(String prefix) async {
+    if (_prefs == null) return;
+    final keyPrefix = 'pcache_${namespace}_$prefix';
+    final keys = _prefs!.getKeys();
+    for (final key in keys) {
+      if (key.startsWith(keyPrefix)) {
+        await _prefs!.remove(key);
+      }
+    }
+  }
+
   Future<void> clearAll() async {
     if (_prefs == null) return;
     final keys = _prefs!.getKeys();
@@ -153,6 +164,21 @@ class PersistentCache {
     final keys = prefs.getKeys();
     for (final key in keys) {
       if (key.startsWith(prefix)) {
+        await prefs.remove(key);
+      }
+    }
+  }
+
+  /// 登录态失效后仅保留无个人身份信息的课表快照。
+  static Future<void> clearForStudentExceptSchedule(String studentId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final prefix = 'pcache_${studentId}_';
+    final keys = prefs.getKeys();
+    final scheduleKey = RegExp(r'^schedule_\d+_\d+(?:_at)?$');
+    for (final key in keys) {
+      if (!key.startsWith(prefix)) continue;
+      final suffix = key.substring(prefix.length);
+      if (!scheduleKey.hasMatch(suffix)) {
         await prefs.remove(key);
       }
     }

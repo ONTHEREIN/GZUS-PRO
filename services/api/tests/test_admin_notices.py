@@ -145,6 +145,7 @@ def test_list_published_admin_notices_only_published():
     items = admin_route.list_published_admin_notices()
     assert [i["title"] for i in items] == ["已发布"]
     assert items[0]["category"] == "校历"
+    assert items[0]["source"] == "admin"
 
 
 # ─── 公众号文章管理 ─────────────────────────────────────

@@ -37,6 +37,8 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
   bool _hideFromRecents = false;
   bool _checking = true;
   bool _webPushSubscribed = false;
+  bool _cloudNotificationEnabled = false;
+  String? _cloudNotificationError;
 
   /// Web Push 是否可用（后端启用 VAPID 且浏览器支持）。
   /// 不可用时只要求通知权限即可完成配置。
@@ -108,6 +110,7 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
     String permStatus = 'default';
     bool webSub = false;
     bool webEnabled = true;
+    bool cloudEnabled = false;
     try {
       if (kIsWeb) {
         final webPush = WebPushService.instance;
@@ -146,6 +149,8 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
           const Duration(seconds: 5),
         );
       }
+      final cloudStatus = await widget.api.fetchBackgroundNotificationStatus();
+      cloudEnabled = cloudStatus?.enabled ?? false;
     } catch (_) {
       // 超时或异常：保持现有状态，不清零
     }
@@ -161,6 +166,7 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
           _notificationGranted = notif;
           _exactAlarmGranted = alarm;
         }
+        _cloudNotificationEnabled = cloudEnabled;
       });
     }
   }
@@ -265,6 +271,24 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
       }
     } catch (_) {
       // 订阅失败，保持现状
+    } finally {
+      _busy = false;
+    }
+  }
+
+  Future<void> _setCloudNotificationEnabled(bool value) async {
+    if (_busy) return;
+    _busy = true;
+    try {
+      final status = await widget.api.setBackgroundNotificationAccess(value);
+      if (!mounted) return;
+      setState(() {
+        _cloudNotificationEnabled = status.enabled;
+        _cloudNotificationError = status.lastError;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _cloudNotificationError = error.toString());
     } finally {
       _busy = false;
     }
@@ -536,6 +560,17 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
                   ),
                 ),
               ],
+              const SizedBox(height: GzusSpacing.xl),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('后台持续通知'),
+                subtitle: Text(
+                  _cloudNotificationError ??
+                      '授权后，服务端会加密保存登录凭据，用于在您关闭 App 后检测课程、通知、成绩和考试。',
+                ),
+                value: _cloudNotificationEnabled,
+                onChanged: _busy ? null : _setCloudNotificationEnabled,
+              ),
               if (_isAndroid) ...[
                 const SizedBox(height: GzusSpacing.xl),
                 SwitchListTile(

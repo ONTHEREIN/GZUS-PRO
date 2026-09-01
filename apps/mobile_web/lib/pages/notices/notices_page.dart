@@ -38,7 +38,8 @@ class _NoticesPageState extends ConsumerState<NoticesPage>
 
   Future<void> _refreshNotices() async {
     ref.invalidate(noticesProvider(widget.api));
-    final items = await ref.read(noticesProvider(widget.api).future);
+    final items = await ref.read(freshNoticesProvider(widget.api).future);
+    ref.invalidate(noticesProvider(widget.api));
     if (mounted && _selectedIndex != null && _selectedIndex! >= items.length) {
       setState(() => _selectedIndex = null);
     }
@@ -87,22 +88,20 @@ class _NoticesPageState extends ConsumerState<NoticesPage>
                         physics: const AlwaysScrollableScrollPhysics(),
                         itemCount: items.length,
                         separatorBuilder: (_, __) => const SizedBox(height: 10),
-                        itemBuilder: (context, index) => GestureDetector(
-                          onTap: () => setState(() => _selectedIndex = index),
-                          child: Container(
-                            decoration: _selectedIndex == index
-                                ? BoxDecoration(
-                                    color: Theme.of(context)
-                                        .colorScheme
-                                        .primaryContainer,
-                                    borderRadius: BorderRadius.circular(8),
-                                  )
-                                : null,
-                            child: NoticeCard(
-                              item: items[index],
-                              api: widget.api,
-                              resolveUrl: widget.api.resolveMediaUrl,
-                            ),
+                        itemBuilder: (context, index) => Container(
+                          decoration: _selectedIndex == index
+                              ? BoxDecoration(
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .primaryContainer,
+                                  borderRadius: BorderRadius.circular(8),
+                                )
+                              : null,
+                          child: NoticeCard(
+                            item: items[index],
+                            api: widget.api,
+                            resolveUrl: widget.api.resolveMediaUrl,
+                            onTap: () => setState(() => _selectedIndex = index),
                           ),
                         ),
                       ),
@@ -140,6 +139,15 @@ class _NoticesPageState extends ConsumerState<NoticesPage>
                   item: items[index],
                   api: widget.api,
                   resolveUrl: widget.api.resolveMediaUrl,
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => _NoticeDetailPage(
+                        api: widget.api,
+                        item: items[index],
+                        onSessionExpired: widget.onSessionExpired,
+                      ),
+                    ),
+                  ),
                 ),
               ),
             );
@@ -163,45 +171,30 @@ class _NoticeDetailContent extends ConsumerStatefulWidget {
 }
 
 class _NoticeDetailContentState extends ConsumerState<_NoticeDetailContent> {
+  var _forceRefresh = false;
+
   @override
   Widget build(BuildContext context) {
     final coverUrl = _resolveCover();
-    if (widget.item.url == null || widget.item.url!.isEmpty) {
-      return SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              _noticeItemTitle(widget.item),
-              style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                    fontWeight: FontWeight.w800,
-                    height: 1.25,
-                  ),
-            ),
-            const SizedBox(height: 10),
-            if (widget.item.date != null)
-              Text(widget.item.date!,
-                  style: TextStyle(
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
-                      fontSize: 13)),
-            if (coverUrl != null) ...[
-              const SizedBox(height: 12),
-              _NoticeCoverImage(url: coverUrl),
-            ],
-            const SizedBox(height: 12),
-            if (widget.item.summary != null && widget.item.summary!.isNotEmpty)
-              Text(widget.item.summary!,
-                  style: const TextStyle(fontSize: 15, height: 1.6))
-            else
-              const Text('暂无详情内容'),
-          ],
-        ),
+    if (widget.item.source != NoticeSource.jwxt ||
+        widget.item.url == null ||
+        widget.item.url!.isEmpty) {
+      return _NoticeDetailBody(
+        api: widget.api,
+        item: widget.item,
+        title: _noticeItemTitle(widget.item),
+        date: widget.item.date,
+        coverUrl: coverUrl,
+        content: widget.item.summary,
       );
     }
     final detailFuture = ref.watch(
       noticeDetailProvider(
-        NoticeDetailRequest(client: widget.api, url: widget.item.url!),
+        NoticeDetailRequest(
+          client: widget.api,
+          url: widget.item.url!,
+          forceRefresh: _forceRefresh,
+        ),
       ).future,
     );
     return FutureBuilder<NoticeDetail>(
@@ -211,37 +204,25 @@ class _NoticeDetailContentState extends ConsumerState<_NoticeDetailContent> {
           return const Center(child: CircularProgressIndicator());
         }
         if (snapshot.hasError) {
-          return Center(child: Text('加载失败: ${snapshot.error}'));
+          return _NoticeDetailBody(
+            api: widget.api,
+            item: widget.item,
+            title: _noticeItemTitle(widget.item),
+            date: widget.item.date,
+            coverUrl: coverUrl,
+            content: widget.item.summary,
+            error: '详情加载失败，请重试或打开原网页查看。',
+            onRetry: _retryDetail,
+          );
         }
         final detail = snapshot.data!;
-        final title = _noticeDetailTitle(widget.item, detail);
-        return SingleChildScrollView(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                title,
-                style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                      fontWeight: FontWeight.w800,
-                      height: 1.25,
-                    ),
-              ),
-              const SizedBox(height: 10),
-              if (detail.date != null)
-                Text(detail.date!,
-                    style: TextStyle(
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
-                        fontSize: 13)),
-              if (coverUrl != null) ...[
-                const SizedBox(height: 12),
-                _NoticeCoverImage(url: coverUrl),
-              ],
-              const SizedBox(height: 8),
-              Text(detail.contentHtml.replaceAll(RegExp(r'<[^>]*>'), ''),
-                  style: const TextStyle(fontSize: 15, height: 1.6)),
-            ],
-          ),
+        return _NoticeDetailBody(
+          api: widget.api,
+          item: widget.item,
+          title: _noticeDetailTitle(widget.item, detail),
+          date: detail.date ?? widget.item.date,
+          coverUrl: coverUrl,
+          content: _noticePlainText(detail.contentHtml),
         );
       },
     );
@@ -255,6 +236,139 @@ class _NoticeDetailContentState extends ConsumerState<_NoticeDetailContent> {
     }
     return widget.api.resolveMediaUrl(cover);
   }
+
+  void _retryDetail() {
+    final url = widget.item.url;
+    if (url == null || url.isEmpty) return;
+    ref.invalidate(
+      noticeDetailProvider(
+        NoticeDetailRequest(
+          client: widget.api,
+          url: url,
+          forceRefresh: true,
+        ),
+      ),
+    );
+    setState(() => _forceRefresh = true);
+  }
+}
+
+class _NoticeDetailPage extends StatelessWidget {
+  const _NoticeDetailPage({
+    required this.api,
+    required this.item,
+    this.onSessionExpired,
+  });
+
+  final ApiClient api;
+  final NoticeItem item;
+  final VoidCallback? onSessionExpired;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text(_noticeItemTitle(item))),
+      body: SafeArea(
+        child: _NoticeDetailContent(
+          api: api,
+          item: item,
+          onSessionExpired: onSessionExpired,
+        ),
+      ),
+    );
+  }
+}
+
+class _NoticeDetailBody extends StatelessWidget {
+  const _NoticeDetailBody({
+    required this.api,
+    required this.item,
+    required this.title,
+    required this.date,
+    required this.coverUrl,
+    required this.content,
+    this.error,
+    this.onRetry,
+  });
+
+  final ApiClient api;
+  final NoticeItem item;
+  final String title;
+  final String? date;
+  final String? coverUrl;
+  final String? content;
+  final String? error;
+  final VoidCallback? onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final hasUrl = item.url != null && item.url!.isNotEmpty;
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                  fontWeight: FontWeight.w800,
+                  height: 1.25,
+                ),
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 4,
+            children: [
+              MetaText(item.category),
+              if (date != null) MetaText(date!),
+            ],
+          ),
+          if (coverUrl != null) ...[
+            const SizedBox(height: 12),
+            _NoticeCoverImage(url: coverUrl!),
+          ],
+          const SizedBox(height: 16),
+          if (error != null) ...[
+            Text(
+              error!,
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
+            if (onRetry != null) ...[
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                onPressed: onRetry,
+                icon: const Icon(Icons.refresh),
+                label: const Text('重试加载'),
+              ),
+            ],
+          ],
+          if (content != null && content!.trim().isNotEmpty)
+            Text(content!, style: const TextStyle(fontSize: 15, height: 1.7))
+          else if (error == null)
+            const Text('暂无可展示的详情内容'),
+          if (hasUrl) ...[
+            const SizedBox(height: 20),
+            FilledButton.tonalIcon(
+              key: const ValueKey('notice-open-original'),
+              onPressed: () => openInAppBrowser(context, item.url, api: api),
+              icon: const Icon(Icons.open_in_new, size: 18),
+              label: const Text('打开原网页'),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+String _noticePlainText(String value) {
+  return value
+      .replaceAll(
+          RegExp(r'<(?:br|/p|/div|/li)[^>]*>', caseSensitive: false), '\n')
+      .replaceAll(RegExp(r'<[^>]*>'), '')
+      .replaceAll(RegExp(r'\n{3,}'), '\n\n')
+      .trim();
 }
 
 class _NoticeCoverImage extends StatelessWidget {
@@ -267,16 +381,21 @@ class _NoticeCoverImage extends StatelessWidget {
     final colorScheme = Theme.of(context).colorScheme;
     return ClipRRect(
       borderRadius: BorderRadius.circular(10),
-      child: AspectRatio(
-        aspectRatio: 16 / 9,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.sizeOf(context).height * 0.7,
+        ),
         child: Image.network(
           url,
-          fit: BoxFit.cover,
+          width: double.infinity,
+          fit: BoxFit.contain,
           errorBuilder: (_, __, ___) => Container(
             color: colorScheme.surfaceContainerHighest,
             alignment: Alignment.center,
-            child: Icon(Icons.image_not_supported_outlined,
-                color: colorScheme.onSurfaceVariant),
+            child: Icon(
+              Icons.image_not_supported_outlined,
+              color: colorScheme.onSurfaceVariant,
+            ),
           ),
           loadingBuilder: (_, child, progress) {
             if (progress == null) return child;
@@ -302,6 +421,7 @@ class NoticeCard extends StatelessWidget {
     required this.item,
     required this.api,
     this.resolveUrl,
+    this.onTap,
   });
 
   final NoticeItem item;
@@ -309,6 +429,7 @@ class NoticeCard extends StatelessWidget {
 
   /// 把相对路径封面（如校历 /admin/notices/1/image）解析为完整 URL。
   final String? Function(String path)? resolveUrl;
+  final VoidCallback? onTap;
 
   String get _title {
     return _noticeItemTitle(item);
@@ -340,106 +461,94 @@ class NoticeCard extends StatelessWidget {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
     final summary = _summary;
-    final hasUrl = item.url != null && item.url!.isNotEmpty;
     final coverUrl = _coverUrl;
 
     return Card(
+      key: ValueKey<String>('notice-card-${item.url ?? item.title}'),
       clipBehavior: Clip.antiAlias,
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                IconBadge(icon: _icon, size: 32),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        _title,
-                        maxLines: 3,
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.titleMedium?.copyWith(
-                              color: colorScheme.onSurface,
-                              fontWeight: FontWeight.w800,
-                              height: 1.25,
-                            ) ??
-                            TextStyle(
-                              color: colorScheme.onSurface,
-                              fontSize: 16,
-                              fontWeight: FontWeight.w800,
-                              height: 1.25,
-                            ),
-                      ),
-                      const SizedBox(height: 6),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 4,
-                        children: [
-                          MetaText(item.category),
-                          if (item.date != null) MetaText(item.date!),
-                        ],
-                      ),
-                    ],
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  IconBadge(icon: _icon, size: 32),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _title,
+                          maxLines: 3,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.titleMedium?.copyWith(
+                                color: colorScheme.onSurface,
+                                fontWeight: FontWeight.w800,
+                                height: 1.25,
+                              ) ??
+                              TextStyle(
+                                color: colorScheme.onSurface,
+                                fontSize: 16,
+                                fontWeight: FontWeight.w800,
+                                height: 1.25,
+                              ),
+                        ),
+                        const SizedBox(height: 6),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 4,
+                          children: [
+                            MetaText(item.category),
+                            if (item.date != null) MetaText(item.date!),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              if (summary != null) ...[
+                const SizedBox(height: 8),
+                Text(
+                  summary,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(color: colorScheme.onSurfaceVariant),
+                ),
+              ],
+              if (coverUrl != null) ...[
+                const SizedBox(height: 10),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: AspectRatio(
+                    aspectRatio: 16 / 9,
+                    child: Image.network(
+                      coverUrl,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => _coverPlaceholder(context),
+                      loadingBuilder: (_, child, progress) {
+                        if (progress == null) return child;
+                        return Container(
+                          color: colorScheme.surfaceContainerHighest,
+                          alignment: Alignment.center,
+                          child: const SizedBox(
+                            width: 22,
+                            height: 22,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                        );
+                      },
+                    ),
                   ),
                 ),
               ],
-            ),
-            if (summary != null) ...[
-              const SizedBox(height: 8),
-              Text(
-                summary,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(color: colorScheme.onSurfaceVariant),
-              ),
             ],
-            if (coverUrl != null) ...[
-              const SizedBox(height: 10),
-              ClipRRect(
-                borderRadius: BorderRadius.circular(8),
-                child: AspectRatio(
-                  aspectRatio: 16 / 9,
-                  child: Image.network(
-                    coverUrl,
-                    fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) => _coverPlaceholder(context),
-                    loadingBuilder: (_, child, progress) {
-                      if (progress == null) return child;
-                      return Container(
-                        color: colorScheme.surfaceContainerHighest,
-                        alignment: Alignment.center,
-                        child: const SizedBox(
-                          width: 22,
-                          height: 22,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        ),
-                      );
-                    },
-                  ),
-                ),
-              ),
-            ],
-            if (hasUrl) ...[
-              const SizedBox(height: 12),
-              Align(
-                alignment: Alignment.centerRight,
-                child: FilledButton.tonalIcon(
-                  onPressed: () => openInAppBrowser(
-                    context,
-                    item.url,
-                    api: api,
-                  ),
-                  icon: const Icon(Icons.open_in_new, size: 18),
-                  label: const Text('打开通知'),
-                ),
-              ),
-            ],
-          ],
+          ),
         ),
       ),
     );

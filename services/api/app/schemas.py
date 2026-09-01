@@ -1,5 +1,5 @@
 from typing import Any, Literal
-from datetime import date
+from datetime import date, datetime
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
@@ -229,6 +229,7 @@ class AttendanceRecord(BaseModel):
 
 
 class AttendanceItem(BaseModel):
+    course_id: str = Field(default="", alias="courseId")
     course_name: str = Field(alias="courseName")
     course_code: str | None = Field(default=None, alias="courseCode")
     academic_year: str | None = Field(default=None, alias="academicYear")
@@ -245,6 +246,34 @@ class AttendanceItem(BaseModel):
 class AttendanceResponse(BaseModel):
     status: Literal["not_implemented", "ok"] = "ok"
     items: list[AttendanceItem] = []
+
+
+class AttendanceDetail(BaseModel):
+    academic_year: str = Field(default="", alias="academicYear")
+    term: str = ""
+    status: str = "normal"
+    status_label: str = Field(default="正常", alias="statusLabel")
+    offering_college: str = Field(default="", alias="offeringCollege")
+    course_code: str = Field(default="", alias="courseCode")
+    course_name: str = Field(default="", alias="courseName")
+    teaching_class: str = Field(default="", alias="teachingClass")
+    teacher: str = ""
+    roll_call_time: str = Field(default="", alias="rollCallTime")
+    class_date: str = Field(default="", alias="classDate")
+    class_time: str = Field(default="", alias="classTime")
+    sections: str = ""
+    student_id: str = Field(default="", alias="studentId")
+    student_name: str = Field(default="", alias="studentName")
+    gender: str = ""
+    college: str = ""
+    grade: str = ""
+    major: str = ""
+    class_name: str = Field(default="", alias="className")
+    remark: str = ""
+
+
+class AttendanceDetailResponse(BaseModel):
+    items: list[AttendanceDetail] = []
 
 
 class CreditItem(BaseModel):
@@ -466,6 +495,44 @@ class IosPushTokenRequest(BaseModel):
 
     device_token: str = Field(alias="deviceToken", min_length=32, max_length=512, pattern=r"^[A-Fa-f0-9]+$")
     environment: Literal["sandbox", "production"]
+
+
+class BackgroundNotificationAccessRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+    credential_token: str | None = Field(default=None, alias="credentialToken", min_length=1)
+
+
+class CourseReminderSyncCourse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=200)
+    weekday: int = Field(ge=1, le=7)
+    start_section: int = Field(alias="startSection", ge=1, le=16)
+    end_section: int = Field(alias="endSection", ge=1, le=16)
+    classroom: str = Field(default="", max_length=200)
+    teacher: str = Field(default="", max_length=100)
+    weeks: list[int] = Field(default_factory=list, max_length=30)
+
+
+class CourseReminderSyncRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+    before_start_minutes: int = Field(alias="beforeStartMinutes", ge=1, le=120)
+    before_end_minutes: int = Field(alias="beforeEndMinutes", ge=1, le=120)
+    first_week_start: str = Field(alias="firstWeekStart", pattern=r"^\d{4}-\d{2}-\d{2}$")
+    courses: list[CourseReminderSyncCourse] = Field(default_factory=list, max_length=200)
+
+
+class BackgroundNotificationStatus(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+    course_reminders_enabled: bool = Field(alias="courseRemindersEnabled")
+    last_checked_at: datetime | None = Field(default=None, alias="lastCheckedAt")
+    last_error: str | None = Field(default=None, alias="lastError")
 
 
 class ScheduleSettingsUpdate(BaseModel):

@@ -177,22 +177,24 @@ void main() {
     );
   });
 
-  test('native ecard summary enriches backend cache with direct balance',
+  test(
+      'native ecard summary uses cached backend balance without direct refresh',
       () async {
     SharedPreferences.setMockInitialValues({});
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
     debugDisableEcardDirectForTests = false;
-    debugEcardDirectClientFactoryForTests = () => _FakeEcardDirectClient(
-          balance: {
-            'powerBalance': 12.5,
-            'du': '度',
-            'formatPowerBalanceStr': '12.5 度',
-            'coldWaterBalance': 3.2,
-            'dun': '吨',
-            'coldWaterText': '3.2 吨',
-            'hotWaterBalance': 6.8,
-          },
-        );
+    final directClient = _FakeEcardDirectClient(
+      balance: {
+        'powerBalance': 12.5,
+        'du': '度',
+        'formatPowerBalanceStr': '12.5 度',
+        'coldWaterBalance': 3.2,
+        'dun': '吨',
+        'coldWaterText': '3.2 吨',
+        'hotWaterBalance': 6.8,
+      },
+    );
+    debugEcardDirectClientFactoryForTests = () => directClient;
     addTearDown(() {
       debugDefaultTargetPlatformOverride = null;
       debugDisableEcardDirectForTests = false;
@@ -208,15 +210,13 @@ void main() {
               'status': 'ok',
               'roomId': 'CGCOMMON1111|1|A2|932',
               'roomDisplay': '校本部 A2 A2-932',
+              'powerBalance': 9.0,
+              'powerText': '9.0 度',
+              'coldWaterBalance': 2.0,
+              'coldWaterText': '2.0 吨',
+              'hotWaterBalance': 5.0,
+              'hotWaterText': '5.0 元',
             }),
-            200,
-            headers: {'content-type': 'application/json'},
-          );
-        }
-        if (request.method == 'PATCH' &&
-            request.url.path == '/ecard/summary-cache') {
-          return http.Response(
-            jsonEncode({'status': 'ok'}),
             200,
             headers: {'content-type': 'application/json'},
           );
@@ -227,12 +227,13 @@ void main() {
 
     final result = await api.ecardSummary(forceRefresh: true);
 
-    expect(result.data.powerBalance, 12.5);
-    expect(result.data.powerText, '12.5 度');
-    expect(result.data.coldWaterBalance, 3.2);
-    expect(result.data.coldWaterText, '3.2 吨');
-    expect(result.data.hotWaterBalance, 6.8);
-    expect(result.data.hotWaterText, '6.8 元');
+    expect(result.data.powerBalance, 9.0);
+    expect(result.data.powerText, '9.0 度');
+    expect(result.data.coldWaterBalance, 2.0);
+    expect(result.data.coldWaterText, '2.0 吨');
+    expect(result.data.hotWaterBalance, 5.0);
+    expect(result.data.hotWaterText, '5.0 元');
+    expect(directClient.balanceCalls, 0);
   });
 
   test('native ecard refresh skips stale local summary cache', () async {
@@ -250,16 +251,17 @@ void main() {
     });
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
     debugDisableEcardDirectForTests = false;
-    debugEcardDirectClientFactoryForTests = () => _FakeEcardDirectClient(
-          balance: {
-            'powerBalance': 22.0,
-            'du': '度',
-            'formatPowerBalanceStr': '22.0 度',
-            'coldWaterBalance': 4.5,
-            'dun': '吨',
-            'hotWaterBalance': 8.0,
-          },
-        );
+    final directClient = _FakeEcardDirectClient(
+      balance: {
+        'powerBalance': 22.0,
+        'du': '度',
+        'formatPowerBalanceStr': '22.0 度',
+        'coldWaterBalance': 4.5,
+        'dun': '吨',
+        'hotWaterBalance': 8.0,
+      },
+    );
+    debugEcardDirectClientFactoryForTests = () => directClient;
     addTearDown(() {
       debugDefaultTargetPlatformOverride = null;
       debugDisableEcardDirectForTests = false;
@@ -306,6 +308,152 @@ void main() {
     expect(summary.powerText, '22.0 度');
     expect(summary.coldWaterBalance, 4.5);
     expect(summary.hotWaterBalance, 8.0);
+    expect(directClient.balanceCalls, 1);
+  });
+
+  test('binding a room invalidates the stale home dashboard snapshot',
+      () async {
+    SharedPreferences.setMockInitialValues({});
+    var dashboardRequests = 0;
+    var isBound = false;
+    final api = ApiClient(
+      baseUrl: 'https://api.example.test',
+      httpClient: MockClient((request) async {
+        if (request.method == 'GET' && request.url.path == '/dashboard') {
+          dashboardRequests++;
+          return http.Response(
+            jsonEncode({
+              'status': 'ok',
+              'generatedAt': '2026-08-30T12:00:00Z',
+              'modules': {
+                'ecard': {
+                  'status': isBound ? 'ok' : 'empty',
+                  'data': isBound
+                      ? {
+                          'status': 'ok',
+                          'roomId': 'CGCOMMON1111|1|A2|932',
+                          'roomDisplay': '校本部 A2 A2-932',
+                          'powerText': '9 度',
+                        }
+                      : {'status': 'not_bound'},
+                },
+              },
+            }),
+            200,
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        if (request.method == 'POST' && request.url.path == '/ecard/binding') {
+          isBound = true;
+          return http.Response(
+            jsonEncode({
+              'status': 'ok',
+              'roomId': 'CGCOMMON1111|1|A2|932',
+              'roomDisplay': '校本部 A2 A2-932',
+              'powerText': '9 度',
+            }),
+            200,
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        return http.Response('not found', 404);
+      }),
+    );
+    api.useSession('test-session');
+    api.setStudentId('2024000000');
+
+    final beforeBinding = await api.dashboard(year: 2026, term: 1, week: 1);
+    expect(beforeBinding.data.module('ecard').objectData()?['status'],
+        'not_bound');
+
+    await api.bindEcardRoom(EcardRoomItem.fromJson({
+      'id': 'CGCOMMON1111|1|A2|932',
+      'displayName': '校本部 A2 A2-932',
+    }));
+    final afterBinding = await api.dashboard(year: 2026, term: 1, week: 1);
+
+    expect(dashboardRequests, 2);
+    expect(afterBinding.data.module('ecard').objectData()?['status'], 'ok');
+    expect(afterBinding.data.module('ecard').objectData()?['powerText'], '9 度');
+  });
+
+  testWidgets(
+      'ecard page keeps cached balance visible during background refresh',
+      (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    debugDisableEcardDirectForTests = false;
+    final directClient = _DeferredEcardDirectClient();
+    debugEcardDirectClientFactoryForTests = () => directClient;
+    addTearDown(() {
+      debugDefaultTargetPlatformOverride = null;
+      debugDisableEcardDirectForTests = false;
+      debugEcardDirectClientFactoryForTests = null;
+    });
+
+    final api = ApiClient(
+      baseUrl: 'https://api.example.test',
+      httpClient: MockClient((request) async {
+        if (request.method == 'GET' && request.url.path == '/ecard/summary') {
+          return http.Response(
+            jsonEncode({
+              'status': 'ok',
+              'studentId': '2024000000',
+              'roomId': 'CGCOMMON1111|1|A2|932',
+              'roomDisplay': '校本部 A2 A2-932',
+              'powerBalance': 1.0,
+              'powerText': '1.0 度',
+              'coldWaterBalance': 2.0,
+              'coldWaterText': '2.0 吨',
+              'hotWaterBalance': 3.0,
+              'hotWaterText': '3.0 元',
+              'updatedAt': DateTime.now()
+                  .subtract(const Duration(minutes: 31))
+                  .toIso8601String(),
+            }),
+            200,
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        if (request.method == 'PATCH' &&
+            request.url.path == '/ecard/summary-cache') {
+          return http.Response(
+            jsonEncode({'status': 'ok'}),
+            200,
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        return http.Response('not found', 404);
+      }),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(home: Scaffold(body: EcardPage(api: api))),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.text('1.0 度'), findsOneWidget);
+    expect(directClient.balanceCalls, 1);
+
+    directClient.complete({
+      'powerBalance': 22.0,
+      'du': '度',
+      'formatPowerBalanceStr': '22.0 度',
+      'coldWaterBalance': 4.5,
+      'dun': '吨',
+      'formatWaterBalanceStr': '4.5 吨',
+      'hotWaterBalance': 8.0,
+      'formatHotWaterBalanceStr': '8.0 元',
+    });
+    for (var index = 0; index < 5; index++) {
+      await tester.pump();
+    }
+
+    expect(find.text('22.0 度'), findsOneWidget);
+    debugDefaultTargetPlatformOverride = null;
+    debugDisableEcardDirectForTests = false;
+    debugEcardDirectClientFactoryForTests = null;
   });
 
   test('live activity maps notification messages to targets', () {
@@ -426,6 +574,7 @@ void main() {
 
   test('attendance records parse day details', () {
     final item = AttendanceItem.fromJson({
+      'courseId': 'course-1',
       'courseName': '移动应用开发',
       'normal': 1,
       'late': 1,
@@ -442,6 +591,34 @@ void main() {
 
     expect(item.records.single.normalizedDate, '2026-06-03');
     expect(item.records.single.statusLabel, '迟到');
+    expect(item.courseId, 'course-1');
+
+    final detail = AttendanceDetail.fromJson({
+      'academicYear': '2025-2026',
+      'term': '1',
+      'status': 'normal',
+      'statusLabel': '正常',
+      'offeringCollege': '基础与通识教育学院',
+      'courseCode': 'GE1030',
+      'courseName': '高等数学I(文)',
+      'teachingClass': '教学班1',
+      'teacher': '李老师',
+      'rollCallTime': '2025-10-22 14:48:01',
+      'classDate': '2025-10-22',
+      'classTime': '10:40-12:00',
+      'sections': '3-4',
+      'studentId': '20250001',
+      'studentName': '测试学生',
+      'gender': '男',
+      'college': '软件学院',
+      'grade': '2025',
+      'major': '软件工程',
+      'className': '25软工1班',
+      'remark': '已登记',
+    });
+    expect(detail.teacher, '李老师');
+    expect(detail.classDate, '2025-10-22');
+    expect(detail.remark, '已登记');
   });
 
   test('leave combined script stops before final submit', () {
@@ -655,7 +832,8 @@ void main() {
     expect(prefs.getBool('auth.rememberPassword'), isNull);
   });
 
-  test('api clears saved auth and notifies on single-device conflict',
+  test(
+      'api requests reauthentication after device revocation while retaining account',
       () async {
     SharedPreferences.setMockInitialValues({
       'auth.sessionId': 'old-session',
@@ -679,8 +857,7 @@ void main() {
 
     await expectLater(
       api.me(forceRefresh: true),
-      throwsA(isA<ApiException>()
-          .having((error) => error.isSingleDeviceConflict, 'conflict', true)),
+      throwsA(isA<ApiException>()),
     );
     final prefs = await SharedPreferences.getInstance();
 
@@ -688,7 +865,70 @@ void main() {
     expect(api.sessionId, isNull);
     expect(prefs.getString('auth.sessionId'), isNull);
     expect(prefs.getString('auth.credentialToken'), isNull);
-    expect(prefs.getString('auth.account'), isNull);
+    expect(prefs.getString('auth.account'), '2024000000');
+    expect(prefs.getBool('auth.rememberPassword'), isTrue);
+  });
+
+  test('api coalesces concurrent relogin requests and refreshes the session',
+      () async {
+    SharedPreferences.setMockInitialValues({
+      'auth.credentialToken': 'credential',
+      'auth.account': '2024000000',
+      'auth.rememberPassword': true,
+    });
+    final reloginStarted = Completer<void>();
+    final releaseRelogin = Completer<void>();
+    var reloginCalls = 0;
+    var replacementCalls = 0;
+    final api = ApiClient(
+      httpClient: MockClient((request) async {
+        if (request.url.path.endsWith('/auth/relogin')) {
+          reloginCalls++;
+          if (!reloginStarted.isCompleted) reloginStarted.complete();
+          await releaseRelogin.future;
+          return http.Response(
+            jsonEncode({
+              'status': 'ok',
+              'sessionId': 'new-session',
+              'studentId': '2024000000',
+              'credentialToken': 'new-credential',
+            }),
+            200,
+          );
+        }
+        if (request.url.path.endsWith('/me')) {
+          if (request.headers['X-Session-Id'] != 'new-session') {
+            return http.Response.bytes(
+              utf8.encode(jsonEncode({'detail': '会话已过期'})),
+              401,
+            );
+          }
+          return http.Response.bytes(
+            utf8.encode(
+                jsonEncode({'studentId': '2024000000', 'name': '测试学生'})),
+            200,
+          );
+        }
+        return http.Response('not found', 404);
+      }),
+    )
+      ..useSession('old-session')
+      ..onSessionReplaced = (_) async {
+        replacementCalls++;
+      };
+
+    final first = api.me(forceRefresh: true);
+    await reloginStarted.future;
+    final second = api.me(forceRefresh: true);
+    await Future<void>.delayed(Duration.zero);
+    releaseRelogin.complete();
+
+    final results = await Future.wait([first, second]);
+
+    expect(reloginCalls, 1);
+    expect(replacementCalls, 1);
+    expect(api.sessionId, 'new-session');
+    expect(results.map((result) => result.data.name), everyElement('测试学生'));
   });
 
   test('api stores remembered account without password', () async {
@@ -1016,7 +1256,7 @@ void main() {
   });
 
   testWidgets(
-      'mobile dashboard content clears the top system inset on every tab',
+      'mobile dashboard content spans behind the bottom navigation on every tab',
       (tester) async {
     tester.view.padding = const FakeViewPadding(top: 24, bottom: 34);
     await _pumpDashboard(tester, const Size(390, 844));
@@ -1030,6 +1270,10 @@ void main() {
           .dy;
       expect(contentTop, greaterThanOrEqualTo(32),
           reason: '$label 内容应位于状态栏安全区下方');
+      final contentBottom = tester
+          .getBottomLeft(find.byKey(const ValueKey('mobile-dashboard-content')))
+          .dy;
+      expect(contentBottom, 844, reason: '$label 内容不应为底栏预留遮挡区域');
       expect(tester.takeException(), isNull);
     }
   });
@@ -1196,7 +1440,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('iOS 主界面从左边缘右滑按 Tab 访问历史返回', (tester) async {
+  testWidgets('iOS 主界面从左边缘右滑按 Tab 访问历史返回且不保留离开页面', (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
     try {
       await _pumpDashboard(tester, const Size(390, 844));
@@ -1206,9 +1450,14 @@ void main() {
       await tester.pumpAndSettle();
 
       await _swipeFromLeftEdge(tester);
+      await tester.pump();
+      final morePageSlot = tester.widget<Offstage>(
+        find.byKey(const ValueKey('page-slot-more')),
+      );
+      expect(morePageSlot.offstage, isTrue);
       await tester.pumpAndSettle();
       expect(
-        find.byKey(const ValueKey('schedule-tools-button')),
+        find.byKey(const ValueKey('schedule-floating-menu')),
         findsOneWidget,
       );
 
@@ -1284,15 +1533,21 @@ void main() {
     await tester.tap(find.text('课表').last);
     await tester.pumpAndSettle();
 
-    expect(find.text('首周'), findsOneWidget);
-    expect(find.text(startText), findsOneWidget);
-    expect(find.byKey(const ValueKey('schedule-tools-button')), findsOneWidget);
+    expect(
+        find.byKey(const ValueKey('schedule-floating-menu')), findsOneWidget);
+    expect(find.byKey(const ValueKey('schedule-view-mode')), findsNothing);
 
-    await tester.tap(find.byKey(const ValueKey('schedule-tools-button')));
+    await tester.tap(find.byKey(const ValueKey('schedule-floating-menu')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('第1周'), findsNWidgets(2));
+    expect(find.text('首周'), findsNothing);
+
+    await tester.tap(find.byKey(const ValueKey('schedule-menu-tools')));
     await tester.pumpAndSettle();
 
     expect(find.text('课表工具'), findsWidgets);
-    expect(find.text(startText), findsNWidgets(2));
+    expect(find.text(startText), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -1322,24 +1577,34 @@ void main() {
     await tester.tap(find.text('课表').last);
     await tester.pumpAndSettle();
 
-    expect(find.byKey(const ValueKey('schedule-view-mode')), findsOneWidget);
+    expect(
+        find.byKey(const ValueKey('schedule-floating-menu')), findsOneWidget);
 
-    await tester.tap(find.descendant(
-      of: find.byKey(const ValueKey('schedule-view-mode')),
-      matching: find.text('本周'),
-    ));
+    await tester.tap(find.byKey(const ValueKey('schedule-floating-menu')));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('schedule-menu-week')));
     await tester.pumpAndSettle();
     expect(find.text('09:00-10:20'), findsOneWidget);
     expect(find.text('周一'), findsWidgets);
     expect(find.text('1节'), findsWidgets);
 
-    await tester.tap(find.descendant(
-      of: find.byKey(const ValueKey('schedule-view-mode')),
-      matching: find.text('全部'),
-    ));
+    await tester.tap(find.byKey(const ValueKey('schedule-floating-menu')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('schedule-menu-all')));
     await tester.pumpAndSettle();
     expect(find.text('移动应用开发'), findsWidgets);
     expect(find.text('1条'), findsOneWidget);
+
+    await tester.drag(
+      find.byKey(const ValueKey('schedule-floating-menu')),
+      const Offset(180, -120),
+    );
+    await tester.pumpAndSettle();
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getString('schedule.viewMode'), 'all');
+    expect(prefs.getDouble('schedule.floatingMenu.x'), isNotNull);
+    expect(prefs.getDouble('schedule.floatingMenu.y'), isNotNull);
     expect(tester.takeException(), isNull);
   });
 
@@ -1886,9 +2151,27 @@ class _FakeEcardDirectClient extends EcardDirectClient {
   _FakeEcardDirectClient({this.balance});
 
   final Map<String, dynamic>? balance;
+  int balanceCalls = 0;
 
   @override
   Future<Map<String, dynamic>?> getBalance(String roomId,
-          {String? studentId}) async =>
-      balance;
+      {String? studentId}) async {
+    balanceCalls++;
+    return balance;
+  }
+}
+
+class _DeferredEcardDirectClient extends EcardDirectClient {
+  final _balance = Completer<Map<String, dynamic>?>();
+  int balanceCalls = 0;
+
+  @override
+  Future<Map<String, dynamic>?> getBalance(String roomId, {String? studentId}) {
+    balanceCalls++;
+    return _balance.future;
+  }
+
+  void complete(Map<String, dynamic> value) {
+    _balance.complete(value);
+  }
 }
