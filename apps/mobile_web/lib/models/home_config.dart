@@ -40,7 +40,7 @@ class HomePreferences {
   static const defaultModules = [
     // 首屏：按 iOS 桌面组件的视觉优先级排列。
     HomeModuleConfig('nextClass', '下一节课', Icons.watch_later,
-        size: HomeModuleSize.large),
+        size: HomeModuleSize.medium),
     HomeModuleConfig('todayTimeline', '今日时间线', Icons.view_timeline,
         size: HomeModuleSize.medium),
     HomeModuleConfig('examCountdown', '考试倒计时', Icons.timer,
@@ -61,8 +61,8 @@ class HomePreferences {
         size: HomeModuleSize.medium),
     HomeModuleConfig('notifications', '通知摘要', Icons.notifications_active,
         size: HomeModuleSize.medium),
-    HomeModuleConfig('dailyCourses', '今日课程', Icons.format_list_bulleted,
-        size: HomeModuleSize.medium),
+    HomeModuleConfig('adminNotices', '管理员信息', Icons.campaign,
+        size: HomeModuleSize.large),
 
     // small：轻量入口/信息摘要
     HomeModuleConfig('weather', '今日天气', Icons.wb_sunny,
@@ -100,7 +100,7 @@ class HomePreferences {
       if (parts.length != 2) continue;
       final size =
           HomeModuleSize.values.where((v) => v.name == parts[1]).firstOrNull;
-      if (size != null) result[parts[0]] = size;
+      if (size != null) result[parts[0]] = effectiveSize(parts[0], size);
     }
     return result;
   }
@@ -154,12 +154,24 @@ class HomePreferences {
     HomeModuleSize? overrideSize,
   }) {
     final base = availableModules.firstWhere((item) => item.id == id);
-    if (overrideSize == null || overrideSize == base.size) return base;
+    final effectiveOverride =
+        overrideSize == null ? null : effectiveSize(id, overrideSize);
+    if (effectiveOverride == null || effectiveOverride == base.size) {
+      return base;
+    }
     return HomeModuleConfig(
       base.id,
       base.label,
       base.icon,
-      size: overrideSize,
+      size: effectiveOverride,
     );
+  }
+
+  static HomeModuleSize effectiveSize(String id, HomeModuleSize size) {
+    if (id == 'nextClass' && size == HomeModuleSize.large) {
+      return HomeModuleSize.medium;
+    }
+    if (id == 'adminNotices') return HomeModuleSize.large;
+    return size;
   }
 }

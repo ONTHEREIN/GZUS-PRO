@@ -66,7 +66,24 @@ def _to_serializable(data):
     return data
 
 
+def is_cacheable_payload(resource: str, data: object) -> bool:
+    """判断响应是否值得持久化，避免把空响应或不完整身份信息当成成功数据。"""
+    data = _to_serializable(data)
+    if isinstance(data, list):
+        return bool(data)
+    if not isinstance(data, dict) or not data:
+        return False
+    if resource == "me":
+        student_id = str(data.get("studentId") or "").strip()
+        name = str(data.get("name") or "").strip()
+        return bool(student_id and name)
+    return True
+
+
 def save_cache(student_id: str, resource: str, data, params: dict | None = None) -> None:
+    if not is_cacheable_payload(resource, data):
+        logger.info("Skipping empty or incomplete cache payload for resource=%s", resource)
+        return
     params_hash = _compute_params_hash(params)
     cache_key = _make_cache_key(student_id, resource, params_hash)
     serializable = _to_serializable(data)
@@ -115,6 +132,9 @@ def load_cache(
         if not isinstance(data, (dict, list)):
             logger.warning("Corrupt cache entry for key=%s (type=%s), discarding", cache_key, type(data).__name__)
             return None
+        if not is_cacheable_payload(resource, data):
+            logger.info("Ignoring empty or incomplete cache entry for resource=%s", resource)
+            return None
         return data
 
 
@@ -143,6 +163,9 @@ def load_and_get_cached_at(
             return None, None
         if not isinstance(data, (dict, list)):
             logger.warning("Corrupt cache entry for key=%s (type=%s), discarding", cache_key, type(data).__name__)
+            return None, None
+        if not is_cacheable_payload(resource, data):
+            logger.info("Ignoring empty or incomplete cache entry for resource=%s", resource)
             return None, None
         return data, entry.cached_at
 

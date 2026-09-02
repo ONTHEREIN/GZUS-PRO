@@ -179,6 +179,18 @@ class _DashboardShellState extends State<DashboardShell> {
     super.dispose();
   }
 
+  @override
+  void didUpdateWidget(covariant DashboardShell oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // 更多页位于保活页面栈中，外层主题/主题色变化时需要让缓存页重新接收最新参数。
+    if (oldWidget.themeMode != widget.themeMode ||
+        oldWidget.seedColor != widget.seedColor ||
+        oldWidget.isAdmin != widget.isAdmin ||
+        oldWidget.isOwner != widget.isOwner) {
+      _pageGeneration++;
+    }
+  }
+
   bool _onScrollNotification(ScrollNotification notification) {
     _updateHomeHeaderScrollProgress(notification);
     if (!_autoHideNavBar) return false;
@@ -702,7 +714,10 @@ class _DashboardShellState extends State<DashboardShell> {
               await NavPreferences.saveAutoHideNavBar(v);
               if (!mounted) return;
               _navBarVisible.value = true;
-              setState(() => _autoHideNavBar = v);
+              setState(() {
+                _autoHideNavBar = v;
+                _pageGeneration++;
+              });
             },
             onShowBackgroundGuide: widget.onSettingsPressed,
             isAdmin: widget.isAdmin,

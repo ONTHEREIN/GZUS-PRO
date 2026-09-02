@@ -17,7 +17,8 @@ class AttendanceLargeCard extends StatelessWidget {
     return _AttendanceCard(
       data: data,
       onTap: onTap,
-      showAll: false,
+      showAll: true,
+      showLatest: true,
     );
   }
 }
@@ -35,6 +36,7 @@ class AttendanceMediumCard extends StatelessWidget {
       data: data,
       onTap: onTap,
       showAll: true,
+      showLatest: false,
     );
   }
 }
@@ -74,11 +76,13 @@ class _AttendanceCard extends StatelessWidget {
     required this.data,
     required this.onTap,
     required this.showAll,
+    required this.showLatest,
   });
 
   final AttendanceResponse data;
   final VoidCallback onTap;
   final bool showAll;
+  final bool showLatest;
 
   @override
   Widget build(BuildContext context) {
@@ -86,40 +90,122 @@ class _AttendanceCard extends StatelessWidget {
     final late = data.items.fold(0, (sum, item) => sum + item.late);
     final early = data.items.fold(0, (sum, item) => sum + item.leaveEarly);
     final absent = data.items.fold(0, (sum, item) => sum + item.absent);
+    final stats = showAll
+        ? [
+            _AttendanceStatMini('正常', normal, _normalColor(context)),
+            _AttendanceStatMini('迟到', late, _lateColor(context)),
+            _AttendanceStatMini('早退', early, _earlyColor(context)),
+            _AttendanceStatMini('旷课', absent, _absentColor(context)),
+          ]
+        : [
+            _AttendanceStatMini('正常', normal, _normalColor(context)),
+            _AttendanceStatMini(
+                '异常', late + early + absent, _absentColor(context)),
+          ];
     return HomeCardShell(
       title: '本月考勤统计',
       icon: Icons.fact_check,
-      density: showAll ? HomeCardDensity.large : HomeCardDensity.medium,
+      density: showLatest ? HomeCardDensity.large : HomeCardDensity.medium,
       badge: '${data.items.length} 门',
       onTap: onTap,
-      child: Row(
-        children: showAll
-            ? [
+      child: showLatest
+          ? Column(
+              children: [
+                Row(children: [
+                  for (final stat in stats) Expanded(child: stat)
+                ]),
+                const SizedBox(height: GzusSpacing.m),
                 Expanded(
-                    child: _AttendanceStatMini(
-                        '正常', normal, _normalColor(context))),
-                Expanded(
-                    child:
-                        _AttendanceStatMini('迟到', late, _lateColor(context))),
-                Expanded(
-                    child:
-                        _AttendanceStatMini('早退', early, _earlyColor(context))),
-                Expanded(
-                    child: _AttendanceStatMini(
-                        '旷课', absent, _absentColor(context))),
-              ]
-            : [
-                Expanded(
-                    child: _AttendanceStatMini(
-                        '正常', normal, _normalColor(context))),
-                Expanded(
-                    child: _AttendanceStatMini(
-                        '异常', late + early + absent, _absentColor(context))),
+                  child: Align(
+                    alignment: Alignment.topCenter,
+                    child: _LatestAttendance(data: data),
+                  ),
+                ),
               ],
+            )
+          : Row(children: [for (final stat in stats) Expanded(child: stat)]),
+    );
+  }
+}
+
+class _LatestAttendance extends StatelessWidget {
+  const _LatestAttendance({required this.data});
+
+  final AttendanceResponse data;
+
+  @override
+  Widget build(BuildContext context) {
+    final latest = <({String courseName, AttendanceRecord record})>[];
+    for (final item in data.items) {
+      for (final record in item.records) {
+        latest.add((courseName: item.courseName, record: record));
+      }
+    }
+    latest.sort((a, b) => _attendanceRecordKey(a.record)
+        .compareTo(_attendanceRecordKey(b.record)));
+    final item = latest.lastOrNull;
+    if (item == null) {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: const Text('暂无最新考勤记录'),
+      );
+    }
+
+    final isNormal = item.record.status == 'normal';
+    final color = isNormal ? _normalColor(context) : _absentColor(context);
+    final detail = [
+      item.record.normalizedDate,
+      item.record.time,
+      item.record.statusLabel ?? '考勤记录',
+      item.record.remark,
+    ].whereType<String>().where((text) => text.trim().isNotEmpty).join(' · ');
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: color.withValues(
+          alpha: Theme.of(context).brightness == Brightness.dark ? 0.18 : 0.10,
+        ),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withValues(alpha: 0.45)),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            isNormal ? Icons.check_circle : Icons.warning_rounded,
+            color: color,
+            size: 22,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('最新考勤 · ${item.courseName}',
+                    maxLines: 1, overflow: TextOverflow.ellipsis),
+                const SizedBox(height: 3),
+                Text(
+                  detail,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(color: color, fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
 }
+
+String _attendanceRecordKey(AttendanceRecord record) =>
+    '${record.normalizedDate} ${record.time ?? ''}';
 
 class _AttendanceStatMini extends StatelessWidget {
   const _AttendanceStatMini(this.label, this.value, this.color);

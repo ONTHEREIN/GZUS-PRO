@@ -101,6 +101,18 @@ void main() {
     expect(attendance.data.items.single.courseName, '课程A');
     expect(credits.data.single.totalCredit, '120');
     expect(notices.data.single.title, '测试通知');
+
+    final prefs = await SharedPreferences.getInstance();
+    expect(
+      jsonDecode(prefs.getString('pcache_default_notices')!),
+      contains(
+        isA<Map<String, dynamic>>().having(
+          (item) => item['title'],
+          'title',
+          '测试通知',
+        ),
+      ),
+    );
   });
 
   test('缺少课程标识的 dashboard 考勤不会阻塞明细查询', () async {
@@ -238,6 +250,30 @@ void main() {
     expect(result.source.displayText, contains('服务端缓存'));
   });
 
+  test('空列表和不完整个人信息不会写入本地缓存', () async {
+    SharedPreferences.setMockInitialValues({});
+    final api = ApiClient(
+      baseUrl: 'https://api.example.test',
+      httpClient: MockClient((request) async {
+        if (request.url.path == '/notices') {
+          return http.Response('[]', 200);
+        }
+        return http.Response(
+          jsonEncode({'studentId': '20240001', 'name': ''}),
+          200,
+        );
+      }),
+    );
+
+    final notices = await api.notices();
+    expect(notices.data, isEmpty);
+    await expectLater(api.me(), throwsA(isA<ApiException>()));
+
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.containsKey('pcache_default_notices'), isFalse);
+    expect(prefs.containsKey('pcache_default_me'), isFalse);
+  });
+
   test('通知强制刷新绕过本地缓存并保留来源信息', () async {
     SharedPreferences.setMockInitialValues({
       'pcache_default_notices': jsonEncode([
@@ -268,5 +304,42 @@ void main() {
     expect(requests, ['/notices?refresh=true']);
     expect(notices.data.single.title, '2026-2027 学年校历');
     expect(notices.data.single.source, NoticeSource.admin);
+  });
+
+  test('登录轮播图使用独立公共本地缓存', () async {
+    SharedPreferences.setMockInitialValues({});
+    final firstApi = ApiClient(
+      baseUrl: 'https://api.example.test',
+      httpClient: MockClient((request) async {
+        expect(request.url.path, '/content/login-slides');
+        return http.Response.bytes(
+          utf8.encode(jsonEncode([
+            {
+              'id': 1,
+              'title': '欢迎使用',
+              'imageUrl': '/admin/login-slides/1/image',
+              'published': true,
+              'sortOrder': 1,
+            }
+          ])),
+          200,
+        );
+      }),
+    );
+
+    final fetched = await firstApi.loginCarouselSlides();
+    expect(fetched.single.title, '欢迎使用');
+
+    final secondApi = ApiClient(
+      baseUrl: 'https://api.example.test',
+      httpClient: MockClient((request) async {
+        return http.Response.bytes(utf8.encode('服务不可用'), 503);
+      }),
+    );
+    final cached = await secondApi.loginCarouselSlides();
+    final prefs = await SharedPreferences.getInstance();
+
+    expect(cached.single.imageUrl, '/admin/login-slides/1/image');
+    expect(prefs.containsKey('pcache_public_login_slides'), isTrue);
   });
 }

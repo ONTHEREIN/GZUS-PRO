@@ -25,11 +25,7 @@ class TodayTimelineLargeCard extends StatelessWidget {
       onTap: onTap,
       child: courses.isEmpty
           ? const Center(child: Text('今日无课'))
-          : Column(
-              children: [
-                for (final item in courses.take(3)) _TimelineRow(course: item),
-              ],
-            ),
+          : _TimelineList(courses: courses),
     );
   }
 }
@@ -54,10 +50,7 @@ class TodayTimelineMediumCard extends StatelessWidget {
       onTap: onTap,
       child: courses.isEmpty
           ? const Center(child: Text('今日无课'))
-          : Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [_TimelineRow(course: courses.first, compact: true)],
-            ),
+          : _TimelineList(courses: courses, compact: true),
     );
   }
 }
@@ -76,7 +69,7 @@ class TodayTimelineSmallCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     return HomeCardShell(
-      title: '今日课程',
+      title: '今日时间线',
       icon: Icons.view_timeline,
       density: HomeCardDensity.small,
       badge: courses.isEmpty ? '0' : '${courses.length} 节',
@@ -196,6 +189,28 @@ class _TimelineRow extends StatelessWidget {
             ],
           );
         },
+      ),
+    );
+  }
+}
+
+class _TimelineList extends StatelessWidget {
+  const _TimelineList({required this.courses, this.compact = false});
+
+  final List<TimedCourse> courses;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView.separated(
+      key: const ValueKey('home-today-timeline-scroll'),
+      padding: EdgeInsets.only(right: compact ? 2 : 4),
+      physics: const ClampingScrollPhysics(),
+      itemCount: courses.length,
+      separatorBuilder: (_, __) => SizedBox(height: compact ? 4 : 6),
+      itemBuilder: (context, index) => _TimelineRow(
+        course: courses[index],
+        compact: compact,
       ),
     );
   }

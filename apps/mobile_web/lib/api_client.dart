@@ -117,6 +117,8 @@ class ApiClient {
   String? _account;
   PersistentCache? _persistentCache;
   Future<PersistentCache>? _persistentCacheFuture;
+  PersistentCache? _publicPersistentCache;
+  Future<PersistentCache>? _publicPersistentCacheFuture;
   String? _credentialToken;
   String? _jwxtCookies;
   String? _ehallCookies;
@@ -144,6 +146,9 @@ class ApiClient {
   static const int _reloginMaxBackoffSeconds = 120;
 
   static const Duration _backgroundRefreshCooldown = Duration(minutes: 5);
+  static const String _publicCacheNamespace = 'public';
+  static const String _publicLoginSlidesMemoryKey = 'public_login_slides';
+  static const String _publicLoginSlidesCacheKey = 'login_slides';
 
   String get namespace =>
       _studentId ?? _offlineScheduleStudentId ?? sessionId ?? 'default';
@@ -219,6 +224,29 @@ class ApiClient {
     }
   }
 
+  Future<PersistentCache> _getPublicPersistentCache() async {
+    final cache = _publicPersistentCache;
+    if (cache != null) return cache;
+
+    final initializing = _publicPersistentCacheFuture;
+    if (initializing != null) return initializing;
+
+    final future = () async {
+      final cache = PersistentCache(namespace: _publicCacheNamespace);
+      await cache.init();
+      _publicPersistentCache = cache;
+      return cache;
+    }();
+    _publicPersistentCacheFuture = future;
+    try {
+      return await future;
+    } finally {
+      if (_publicPersistentCacheFuture == future) {
+        _publicPersistentCacheFuture = null;
+      }
+    }
+  }
+
   DataSourceInfo _localSource(DateTime? cachedAt) => DataSourceInfo(
         fromLocalCache: true,
         cachedAt: cachedAt,
@@ -234,18 +262,46 @@ class ApiClient {
 
   Map<String, dynamic>? _cachedObject(PersistentCache cache, String key) {
     final cached = cache.getRaw(key);
-    return cached is Map<String, dynamic> ? cached : null;
+    if (cached is! Map<String, dynamic>) return null;
+    if (!_isCacheableObject(key, cached)) {
+      unawaited(cache.remove(key));
+      return null;
+    }
+    return cached;
   }
 
   List<Map<String, dynamic>>? _cachedList(PersistentCache cache, String key) {
     final cached = cache.getRaw(key);
     if (cached is! List<dynamic>) return null;
+    if (cached.isEmpty) {
+      unawaited(cache.remove(key));
+      return null;
+    }
     final result = <Map<String, dynamic>>[];
     for (final item in cached) {
       if (item is! Map<String, dynamic>) return null;
       result.add(item);
     }
     return result;
+  }
+
+  bool _isCacheableObject(String key, Map<String, dynamic> data) {
+    if (data.isEmpty) return false;
+    if (key == 'me') {
+      final studentId = (data['studentId'] as String?)?.trim() ?? '';
+      final name = (data['name'] as String?)?.trim() ?? '';
+      return studentId.isNotEmpty && name.isNotEmpty;
+    }
+    if (key.startsWith('dashboard_')) {
+      final modules = data['modules'];
+      if (modules is! Map) return false;
+      return modules.values.any((module) {
+        if (module is! Map) return false;
+        final status = module['status'];
+        return status == 'ok' && module['data'] != null;
+      });
+    }
+    return true;
   }
 
   void _queueBackgroundRefresh(
@@ -277,9 +333,10 @@ class ApiClient {
   }) async {
     if (!forceRefresh) {
       final memCached = _cache.get<Map<String, dynamic>>(cacheKey);
-      if (memCached != null) {
+      if (memCached != null && _isCacheableObject(cacheKey, memCached)) {
         return DataResult<T>(data: fromJson(memCached));
       }
+      if (memCached != null) _cache.remove(cacheKey);
     }
 
     final pcache = await _getPersistentCache();
@@ -287,8 +344,13 @@ class ApiClient {
     Future<DataResult<T>> fetchAndCache() async {
       final fetched = await fetch();
       final data = fetched.data;
-      _cache.set(cacheKey, data, memoryTtl);
-      await pcache.set(cacheKey, data);
+      if (cacheKey == 'me' && !_isCacheableObject(cacheKey, data)) {
+        throw ApiException('个人信息数据不完整，请稍后重试');
+      }
+      if (_isCacheableObject(cacheKey, data)) {
+        _cache.set(cacheKey, data, memoryTtl);
+        await pcache.set(cacheKey, data);
+      }
       return DataResult<T>(data: fromJson(data), source: fetched.source);
     }
 
@@ -355,7 +417,7 @@ class ApiClient {
   }) async {
     if (!forceRefresh) {
       final memCached = _cache.get<List<dynamic>>(cacheKey);
-      if (memCached != null) {
+      if (memCached != null && memCached.isNotEmpty) {
         return DataResult<List<T>>(
           data: memCached
               .whereType<Map<String, dynamic>>()
@@ -363,6 +425,7 @@ class ApiClient {
               .toList(),
         );
       }
+      if (memCached != null) _cache.remove(cacheKey);
     }
 
     final pcache = await _getPersistentCache();
@@ -370,8 +433,10 @@ class ApiClient {
     Future<DataResult<List<T>>> fetchAndCache() async {
       final fetched = await fetch();
       final data = fetched.data;
-      _cache.set(cacheKey, data, memoryTtl);
-      await pcache.set(cacheKey, data);
+      if (data.isNotEmpty) {
+        _cache.set(cacheKey, data, memoryTtl);
+        await pcache.set(cacheKey, data);
+      }
       return DataResult<List<T>>(
         data: data.map((item) => fromJson(item)).toList(),
         source: fetched.source,
@@ -828,6 +893,7 @@ class ApiClient {
         return null;
       }
       final data = _decodeObject(response);
+      if (!_isCacheableObject('me', data)) return null;
       final info = StudentInfo.fromJson(data);
       final studentId = info.studentId;
       if (studentId.isNotEmpty) {
@@ -843,6 +909,9 @@ class ApiClient {
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('auth.studentId', studentId);
       }
+      _cache.set('me', data);
+      final pcache = await _getPersistentCache();
+      await pcache.set('me', data);
       return info;
     } catch (_) {
       return null;
@@ -898,8 +967,8 @@ class ApiClient {
   }
 
   Future<BackgroundNotificationStatus> setBackgroundNotificationAccess(
-    bool enabled,
-  ) async {
+      bool enabled,
+      {Map<String, dynamic>? courseReminder}) async {
     await loadSavedCredentials();
     if (enabled && (_credentialToken == null || _credentialToken!.isEmpty)) {
       throw StateError('请使用账号密码登录并勾选记住账号后，再开启后台持续通知');
@@ -907,6 +976,7 @@ class ApiClient {
     final data = await _put('/notifications/background', {
       'enabled': enabled,
       if (enabled) 'credentialToken': _credentialToken,
+      if (enabled && courseReminder != null) 'courseReminder': courseReminder,
     });
     return BackgroundNotificationStatus.fromJson(data);
   }
@@ -1309,49 +1379,57 @@ class ApiClient {
       forceRefresh: forceRefresh,
       memoryTtl: const Duration(minutes: 2),
     );
-    _seedModuleCachesFromDashboard(result.data, year, term);
+    await _seedModuleCachesFromDashboard(result.data, year, term);
     return result;
   }
 
-  /// 将 dashboard 各模块数据写入与独立端点相同的内存缓存 key，
+  /// 将 dashboard 各模块数据写入与独立端点相同的缓存 key，
   /// 使详情页首次进入直接命中缓存，省掉一次重复的网络往返。
-  void _seedModuleCachesFromDashboard(
+  Future<void> _seedModuleCachesFromDashboard(
     DashboardSnapshot snapshot,
     int year,
     int term,
-  ) {
-    void seedList(String module, String cacheKey) {
+  ) async {
+    final persistent = await _getPersistentCache();
+
+    Future<void> seedList(String module, String cacheKey) async {
       final mod = snapshot.module(module);
       if (!mod.hasUsableData) return;
       final items = mod.listData();
+      if (items.isEmpty) return;
       _cache.set(cacheKey, items);
+      await persistent.set(cacheKey, items);
     }
 
-    void seedObject(String module, String cacheKey) {
+    Future<void> seedObject(String module, String cacheKey) async {
       final mod = snapshot.module(module);
       if (!mod.hasUsableData) return;
       final obj = mod.objectData();
       if (obj == null) return;
+      if (!_isCacheableObject(cacheKey, obj)) return;
       _cache.set(cacheKey, obj);
+      await persistent.set(cacheKey, obj);
     }
 
-    void seedAttendance() {
+    Future<void> seedAttendance() async {
       final mod = snapshot.module('attendance');
       if (!mod.hasUsableData) return;
       final obj = mod.objectData();
       if (obj == null) return;
       final attendance = AttendanceResponse.fromJson(obj);
       if (attendance.items.any((item) => item.courseId.isEmpty)) return;
-      _cache.set(_attendanceCacheKey(year: year, term: term), obj);
+      final cacheKey = _attendanceCacheKey(year: year, term: term);
+      _cache.set(cacheKey, obj);
+      await persistent.set(cacheKey, obj);
     }
 
-    seedList('schedule', 'schedule_${year}_$term');
-    seedList('grades', 'grades_${year}_$term');
-    seedList('exams', 'exams_${year}_$term');
-    seedObject('me', 'me');
-    seedList('notices', 'notices');
-    seedAttendance();
-    seedList('credits', 'credits');
+    await seedList('schedule', 'schedule_${year}_$term');
+    await seedList('grades', 'grades_${year}_$term');
+    await seedList('exams', 'exams_${year}_$term');
+    await seedObject('me', 'me');
+    await seedList('notices', 'notices');
+    await seedAttendance();
+    await seedList('credits', 'credits');
   }
 
   String _weatherCacheKey(double? lat, double? lon) {
@@ -1926,8 +2004,54 @@ class ApiClient {
 
   /// 未登录状态可读取的登录页轮播内容。
   Future<List<LoginCarouselSlide>> loginCarouselSlides() async {
+    final memoryCached = _cache.get<List<dynamic>>(_publicLoginSlidesMemoryKey);
+    final memoryItems =
+        memoryCached?.whereType<Map<String, dynamic>>().toList();
+    if (memoryCached != null &&
+        memoryItems != null &&
+        memoryItems.length == memoryCached.length &&
+        memoryItems.isNotEmpty) {
+      _queueBackgroundRefresh(
+        _publicLoginSlidesMemoryKey,
+        _refreshLoginCarouselSlides,
+      );
+      return _parseLoginCarouselSlides(memoryItems);
+    }
+    if (memoryCached != null) _cache.remove(_publicLoginSlidesMemoryKey);
+
+    final persistent = await _getPublicPersistentCache();
+    final cached = _cachedList(persistent, _publicLoginSlidesCacheKey);
+    if (cached != null) {
+      _cache.set(_publicLoginSlidesMemoryKey, cached);
+      _queueBackgroundRefresh(
+        _publicLoginSlidesMemoryKey,
+        _refreshLoginCarouselSlides,
+      );
+      return _parseLoginCarouselSlides(cached);
+    }
+
     final items = await _getList('/content/login-slides');
-    return items.map(LoginCarouselSlide.fromJson).toList();
+    final slides = _parseLoginCarouselSlides(items);
+    if (items.isNotEmpty) {
+      _cache.set(_publicLoginSlidesMemoryKey, items);
+      await persistent.set(_publicLoginSlidesCacheKey, items);
+    }
+    return slides;
+  }
+
+  List<LoginCarouselSlide> _parseLoginCarouselSlides(
+    List<Map<String, dynamic>> items,
+  ) =>
+      items.map(LoginCarouselSlide.fromJson).toList();
+
+  Future<void> _refreshLoginCarouselSlides() async {
+    final items = await _getList('/content/login-slides');
+    if (items.isEmpty) return;
+    final slides = _parseLoginCarouselSlides(items);
+    if (slides.isEmpty) return;
+    _cache.set(_publicLoginSlidesMemoryKey, items);
+    final persistent = await _getPublicPersistentCache();
+    await persistent.set(_publicLoginSlidesCacheKey, items);
   }
 
   // ─── 管理后台 · 登录页轮播 ─────────────────────────────
@@ -2587,6 +2711,10 @@ DateTime _dateTimeAtScheduleTime(DateTime date, String time) {
   );
 }
 
+String _calendarSourcePart(String value) {
+  return value.replaceAll(RegExp(r'[^A-Za-z0-9._:-]'), '_');
+}
+
 /// 把课表展开成可直接写入系统日历的日程列表。
 List<CalendarImportEvent> scheduleCalendarEvents({
   required List<ScheduleCourse> courses,
@@ -2623,6 +2751,8 @@ List<CalendarImportEvent> scheduleCalendarEvents({
       }
       events.add(
         CalendarImportEvent(
+          sourceId:
+              'course:$year-$term:${_calendarSourcePart('${course.raw['courseId'] ?? course.raw['kch_id'] ?? course.name}:${course.startSection}:${course.endSection}:${course.teacher ?? ''}:${course.classroom ?? ''}')}:$week:${course.weekday}:${date.year}-${date.month}-${date.day}',
           title: course.name,
           description: descParts.isEmpty ? null : descParts.join('\n'),
           location: course.classroom != null && course.classroom!.isNotEmpty
@@ -2654,6 +2784,8 @@ List<CalendarImportEvent> examCalendarEvents({
     if (exam.seat != null) descParts.add('座位: ${exam.seat}');
     events.add(
       CalendarImportEvent(
+        sourceId:
+            'exam:$year-$term:${_calendarSourcePart(exam.sourceId ?? exam.courseName)}:${range.$1.year}-${range.$1.month}-${range.$1.day}',
         title: '${exam.courseName} 考试',
         description: descParts.isEmpty ? null : descParts.join('\n'),
         location: exam.location != null && exam.location!.isNotEmpty
@@ -2936,6 +3068,7 @@ class SchoolDirectClient {
     }
     final name = item['kcmc'] ?? item['courseName'] ?? item['name'] ?? '';
     return {
+      'sourceId': item['id'] ?? item['examId'] ?? item['ksh'] ?? item['ks_id'],
       'courseName': name,
       'name': name,
       'date': date,

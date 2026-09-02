@@ -35,6 +35,7 @@ void main() {
     expect(events.first.end, DateTime(2026, 9, 7, 10, 20));
     expect(events.first.location, 'A101');
     expect(events.first.description, contains('周次'));
+    expect(events.first.sourceId, isNotEmpty);
   });
 
   test('examCalendarEvents 解析考试起止时间', () {
@@ -60,5 +61,6 @@ void main() {
     expect(events.single.start, DateTime(2026, 6, 20, 9, 0));
     expect(events.single.end, DateTime(2026, 6, 20, 11, 0));
     expect(events.single.description, contains('座位: 12'));
+    expect(events.single.sourceId, isNotEmpty);
   });
 }

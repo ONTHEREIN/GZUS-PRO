@@ -123,6 +123,15 @@ class ProfileSmallCard extends StatelessWidget {
                   style: const TextStyle(
                       fontSize: 15, fontWeight: FontWeight.w800),
                 ),
+                Text(
+                  info.major ?? '专业待定',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    fontSize: 12,
+                  ),
+                ),
                 if (info.className != null)
                   Text(
                     info.className!,

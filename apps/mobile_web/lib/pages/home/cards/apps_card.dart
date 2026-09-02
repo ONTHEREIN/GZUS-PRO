@@ -87,30 +87,45 @@ class _AppsCard extends StatelessWidget {
           ? const Center(child: Text('暂无应用'))
           : LayoutBuilder(
               builder: (context, constraints) {
-                final itemWidth = constraints.maxWidth < 240
-                    ? constraints.maxWidth / 4 - 10
-                    : (constraints.maxWidth / 4).clamp(64.0, 84.0);
-                return Wrap(
-                  alignment: WrapAlignment.start,
-                  spacing: 10,
-                  runSpacing: 10,
-                  children: [
-                    for (final app in visible)
-                      SizedBox(
-                        width: itemWidth,
-                        child: Column(
-                          children: [
-                            const IconBadge(icon: Icons.dashboard_customize),
-                            const SizedBox(height: 6),
-                            Text(app.title,
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                                textAlign: TextAlign.center,
-                                style: const TextStyle(fontSize: 12)),
-                          ],
-                        ),
-                      ),
-                  ],
+                final columns = maxItems == 6 ? 3 : 2;
+                final rows = (visible.length / columns).ceil();
+                final rowHeight =
+                    ((constraints.maxHeight - (rows - 1) * 10) / rows)
+                        .clamp(48.0, 92.0);
+                return Center(
+                  child: GridView.builder(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    padding: EdgeInsets.zero,
+                    itemCount: visible.length,
+                    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: columns,
+                      crossAxisSpacing: 10,
+                      mainAxisSpacing: 10,
+                      mainAxisExtent: rowHeight,
+                    ),
+                    itemBuilder: (context, index) {
+                      final app = visible[index];
+                      final iconSize = rowHeight < 68 ? 28.0 : 36.0;
+                      return Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          IconBadge(
+                            icon: Icons.dashboard_customize,
+                            size: iconSize,
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            app.title,
+                            maxLines: rowHeight < 68 ? 1 : 2,
+                            overflow: TextOverflow.ellipsis,
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                        ],
+                      );
+                    },
+                  ),
                 );
               },
             ),

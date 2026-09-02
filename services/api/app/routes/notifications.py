@@ -44,12 +44,14 @@ def _status(row: BackgroundNotificationProfile | None) -> BackgroundNotification
             courseRemindersEnabled=False,
             lastCheckedAt=None,
             lastError=None,
+            courseSyncError=None,
         )
     return BackgroundNotificationStatus(
         enabled=True,
         courseRemindersEnabled=row.course_reminders_enabled,
         lastCheckedAt=row.last_checked_at,
         lastError=row.last_error,
+        courseSyncError=row.course_sync_error,
     )
 
 
@@ -108,6 +110,17 @@ def put_background_notification_access(
             row.credential_fingerprint = fingerprint
             row.encrypted_credentials = payload.credential_token
             row.last_error = None
+        if payload.course_reminder is not None:
+            reminder = payload.course_reminder
+            row.course_reminders_enabled = reminder.enabled
+            row.before_start_minutes = reminder.before_start_minutes
+            row.before_end_minutes = reminder.before_end_minutes
+            row.first_week_start = reminder.first_week_start
+            row.courses_json = json.dumps(
+                [course.model_dump(by_alias=True) for course in reminder.courses],
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
         row.updated_at = datetime.now(timezone.utc)
         db.commit()
         db.refresh(row)
@@ -133,6 +146,7 @@ def put_cloud_course_reminders(
             ensure_ascii=False,
             separators=(",", ":"),
         )
+        row.course_sync_error = None
         row.updated_at = datetime.now(timezone.utc)
         db.commit()
         db.refresh(row)

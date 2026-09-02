@@ -31,7 +31,7 @@ void main() {
 
     final scheduleCard = find.byKey(const ValueKey('home-card-下一节课'));
     expect(scheduleCard, findsOneWidget);
-    expect(find.descendant(of: scheduleCard, matching: find.text('焦点')),
+    expect(find.descendant(of: scheduleCard, matching: find.text('下一节')),
         findsOneWidget);
     expect(find.textContaining('考试模块加载失败'), findsOneWidget);
     expect(find.textContaining('考试服务暂时不可用'), findsOneWidget);
@@ -106,7 +106,7 @@ void main() {
 
     expect(requestCount, greaterThanOrEqualTo(2));
     expect(find.byKey(const ValueKey('home-card-下一节课')), findsOneWidget);
-    expect(find.text('焦点'), findsOneWidget);
+    expect(find.text('下一节'), findsOneWidget);
     await tester.pump(const Duration(seconds: 2));
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
@@ -277,7 +277,7 @@ void main() {
   testWidgets('桌面端首页滚动启用悬浮标题栏', (tester) async {
     await _pumpDashboardShell(
       tester,
-      const Size(1280, 800),
+      const Size(1280, 600),
       false,
       TextScaler.noScaling,
     );

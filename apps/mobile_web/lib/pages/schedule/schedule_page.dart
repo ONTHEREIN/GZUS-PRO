@@ -564,6 +564,7 @@ class _SchedulePageState extends State<SchedulePage> {
   bool _exporting = false;
   String? manageError;
   String? _lastNativeReminderSignature;
+  String? _reminderSyncError;
 
   /// 本地调课条目（本学期），叠加到学校课表上显示。
   List<ScheduleOverride> _overrides = const [];
@@ -629,10 +630,6 @@ class _SchedulePageState extends State<SchedulePage> {
     try {
       final cloudStatus = await widget.api.fetchBackgroundNotificationStatus();
       if (cloudStatus?.enabled == true) {
-        await reminder_service.loadLibrary();
-        reminder_service.ReminderService.cancelCourseReminders();
-        await background_service.loadLibrary();
-        await background_service.BackgroundService.cancelCourseReminders();
         await widget.api.syncCloudCourseReminders(
           enabled: courseRemindersEnabled,
           beforeStartMinutes: courseStartReminderMinutes,
@@ -640,6 +637,12 @@ class _SchedulePageState extends State<SchedulePage> {
           firstWeekStart: widget.firstWeekStart,
           courses: _courseReminderPayload(courses),
         );
+        // 服务器配置确认成功后再关闭本地调度，避免网络失败造成提醒空窗。
+        await reminder_service.loadLibrary();
+        reminder_service.ReminderService.cancelCourseReminders();
+        await background_service.loadLibrary();
+        await background_service.BackgroundService.cancelCourseReminders();
+        if (mounted) setState(() => _reminderSyncError = null);
         return;
       }
       await reminder_service.loadLibrary();
@@ -659,6 +662,7 @@ class _SchedulePageState extends State<SchedulePage> {
         widget.firstWeekStart,
       );
     } catch (e) {
+      if (mounted) setState(() => _reminderSyncError = e.toString());
       debugPrint('课程提醒配置失败: $e');
     }
   }
@@ -746,7 +750,17 @@ class _SchedulePageState extends State<SchedulePage> {
   List<Map<String, dynamic>> _courseReminderPayload(
     List<ScheduleCourse> courses,
   ) {
-    return courses.map((c) {
+    return courses.where((c) {
+      return c.weekday != null &&
+          c.weekday! >= 1 &&
+          c.weekday! <= 7 &&
+          c.startSection != null &&
+          c.startSection! >= 1 &&
+          c.startSection! <= 16 &&
+          c.endSection != null &&
+          c.endSection! >= 1 &&
+          c.endSection! <= 16;
+    }).map((c) {
       final weeksList = <int>[];
       for (var w = 1; w <= 30; w++) {
         if (c.occursInWeek(w)) weeksList.add(w);
@@ -971,9 +985,11 @@ class _SchedulePageState extends State<SchedulePage> {
                               Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  const IconLabel(
+                                  IconLabel(
                                     icon: Icons.notifications_active,
-                                    label: '上下课提醒',
+                                    label: _reminderSyncError == null
+                                        ? '上下课提醒'
+                                        : '提醒同步失败',
                                   ),
                                   Switch(
                                     value: courseRemindersEnabled,
@@ -981,6 +997,12 @@ class _SchedulePageState extends State<SchedulePage> {
                                       _setCourseRemindersEnabled(value);
                                       localSetState(() {});
                                     },
+                                  ),
+                                  IconButton(
+                                    tooltip: '提醒设置',
+                                    icon: const Icon(Icons.tune, size: 20),
+                                    onPressed: () =>
+                                        _showCourseReminderSettings(),
                                   ),
                                 ],
                               ),
@@ -1079,14 +1101,14 @@ class _SchedulePageState extends State<SchedulePage> {
                                               year: widget.year,
                                               term: widget.term,
                                             );
-                                            final added =
+                                            final importResult =
                                                 await CalendarImportService
                                                     .importEvents(events);
                                             if (mounted) {
                                               messenger?.showSnackBar(
                                                 SnackBar(
                                                   content: Text(
-                                                      '已向系统日历导入 $added 条课程'),
+                                                      '日历：新增 ${importResult.added} 条，更新 ${importResult.updated} 条，跳过 ${importResult.skipped} 条'),
                                                   duration: const Duration(
                                                       seconds: 2),
                                                 ),
@@ -1275,13 +1297,83 @@ class _SchedulePageState extends State<SchedulePage> {
       reminder_service.loadLibrary().then((_) {
         reminder_service.ReminderService.cancelCourseReminders();
       });
-      unawaited(background_service.loadLibrary().then((_) =>
-          background_service.BackgroundService.cancelCourseReminders()));
+      unawaited(background_service.loadLibrary().then(
+          (_) => background_service.BackgroundService.cancelCourseReminders()));
       unawaited(_scheduleFuture.then((r) => _applyCourseReminders(r.items)));
     } else {
       // 开启时按当前课表立即配置
       unawaited(_scheduleFuture.then((r) => _applyCourseReminders(r.items)));
     }
+  }
+
+  Future<void> _showCourseReminderSettings() async {
+    var enabled = courseRemindersEnabled;
+    var beforeStart = courseStartReminderMinutes;
+    var beforeEnd = courseEndReminderMinutes;
+    const options = [5, 10, 15, 30, 60];
+    final result = await showDialog<(bool, int, int)>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('上下课提醒'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('开启提醒'),
+                value: enabled,
+                onChanged: (value) => setDialogState(() => enabled = value),
+              ),
+              DropdownButtonFormField<int>(
+                initialValue: beforeStart,
+                decoration: const InputDecoration(labelText: '上课前提醒'),
+                items: options
+                    .map((value) => DropdownMenuItem(
+                        value: value, child: Text('$value 分钟')))
+                    .toList(),
+                onChanged: (value) {
+                  if (value != null) setDialogState(() => beforeStart = value);
+                },
+              ),
+              DropdownButtonFormField<int>(
+                initialValue: beforeEnd,
+                decoration: const InputDecoration(labelText: '下课前提醒'),
+                items: options
+                    .map((value) => DropdownMenuItem(
+                        value: value, child: Text('$value 分钟')))
+                    .toList(),
+                onChanged: (value) {
+                  if (value != null) setDialogState(() => beforeEnd = value);
+                },
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('取消')),
+            FilledButton(
+              onPressed: () => Navigator.pop(
+                  dialogContext, (enabled, beforeStart, beforeEnd)),
+              child: const Text('保存'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (result == null || !mounted) return;
+    final (newEnabled, newStart, newEnd) = result;
+    setState(() {
+      courseRemindersEnabled = newEnabled;
+      courseStartReminderMinutes = newStart;
+      courseEndReminderMinutes = newEnd;
+    });
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('schedule.courseRemindersEnabled', newEnabled);
+    await prefs.setInt('schedule.courseStartReminderMinutes', newStart);
+    await prefs.setInt('schedule.courseEndReminderMinutes', newEnd);
+    unawaited(_scheduleFuture.then((r) => _applyCourseReminders(r.items)));
   }
 }
 
@@ -1470,8 +1562,8 @@ class _ScheduleFloatingMenuState extends State<_ScheduleFloatingMenu> {
   Offset _positionFor(Size size, EdgeInsets viewPadding) {
     final maxX = (size.width - _buttonSize).clamp(0.0, double.infinity);
     final navigationClearance = 86.0 + viewPadding.bottom;
-    final maxY =
-        (size.height - navigationClearance - _buttonSize).clamp(0.0, double.infinity);
+    final maxY = (size.height - navigationClearance - _buttonSize)
+        .clamp(0.0, double.infinity);
     final saved = widget.position;
     if (saved == null) return Offset(0, maxY);
     return Offset(maxX * saved.dx, maxY * saved.dy);
@@ -1480,8 +1572,8 @@ class _ScheduleFloatingMenuState extends State<_ScheduleFloatingMenu> {
   Offset _fractionFor(Offset position, Size size, EdgeInsets viewPadding) {
     final maxX = (size.width - _buttonSize).clamp(0.0, double.infinity);
     final navigationClearance = 86.0 + viewPadding.bottom;
-    final maxY =
-        (size.height - navigationClearance - _buttonSize).clamp(0.0, double.infinity);
+    final maxY = (size.height - navigationClearance - _buttonSize)
+        .clamp(0.0, double.infinity);
     return Offset(
       maxX == 0 ? 0 : (position.dx / maxX).clamp(0.0, 1.0),
       maxY == 0 ? 0 : (position.dy / maxY).clamp(0.0, 1.0),
@@ -1491,20 +1583,21 @@ class _ScheduleFloatingMenuState extends State<_ScheduleFloatingMenu> {
   Offset _clampPosition(Offset position, Size size, EdgeInsets viewPadding) {
     final maxX = (size.width - _buttonSize).clamp(0.0, double.infinity);
     final navigationClearance = 86.0 + viewPadding.bottom;
-    final maxY =
-        (size.height - navigationClearance - _buttonSize).clamp(0.0, double.infinity);
+    final maxY = (size.height - navigationClearance - _buttonSize)
+        .clamp(0.0, double.infinity);
     return Offset(
       position.dx.clamp(0.0, maxX).toDouble(),
       position.dy.clamp(0.0, maxY).toDouble(),
     );
   }
 
-  Offset _snapToNearestEdge(Offset position, Size size, EdgeInsets viewPadding) {
+  Offset _snapToNearestEdge(
+      Offset position, Size size, EdgeInsets viewPadding) {
     final clamped = _clampPosition(position, size, viewPadding);
     final maxX = (size.width - _buttonSize).clamp(0.0, double.infinity);
     final navigationClearance = 86.0 + viewPadding.bottom;
-    final maxY =
-        (size.height - navigationClearance - _buttonSize).clamp(0.0, double.infinity);
+    final maxY = (size.height - navigationClearance - _buttonSize)
+        .clamp(0.0, double.infinity);
     final distances = [
       (clamped.dx, 'left'),
       (maxX - clamped.dx, 'right'),
@@ -1530,10 +1623,13 @@ class _ScheduleFloatingMenuState extends State<_ScheduleFloatingMenu> {
         final position = _positionFor(size, viewPadding);
         final panelLeft = position.dx <= size.width / 2
             ? position.dx
-            : (position.dx - _panelWidth + _buttonSize).clamp(0.0, size.width - _panelWidth);
+            : (position.dx - _panelWidth + _buttonSize)
+                .clamp(0.0, size.width - _panelWidth);
         final panelTop = position.dy > size.height / 2
-            ? (position.dy - _panelHeight - 8).clamp(8.0, size.height - _panelHeight)
-            : (position.dy + _buttonSize + 8).clamp(8.0, size.height - _panelHeight);
+            ? (position.dy - _panelHeight - 8)
+                .clamp(8.0, size.height - _panelHeight)
+            : (position.dy + _buttonSize + 8)
+                .clamp(8.0, size.height - _panelHeight);
         return Stack(
           clipBehavior: Clip.none,
           children: [
@@ -1562,16 +1658,18 @@ class _ScheduleFloatingMenuState extends State<_ScheduleFloatingMenu> {
                       children: [
                         Text(
                           '第${widget.currentWeek}周',
-                          style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                                fontWeight: FontWeight.w900,
-                              ),
+                          style:
+                              Theme.of(context).textTheme.titleMedium?.copyWith(
+                                    fontWeight: FontWeight.w900,
+                                  ),
                         ),
                         const SizedBox(height: 2),
                         Text(
                           '今日 ${widget.todayCount} 节 · 本周 ${widget.weekCount} 节 · 共 ${widget.totalCount} 门',
-                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                color: colorScheme.onSurfaceVariant,
-                              ),
+                          style:
+                              Theme.of(context).textTheme.bodySmall?.copyWith(
+                                    color: colorScheme.onSurfaceVariant,
+                                  ),
                         ),
                         const SizedBox(height: 10),
                         Wrap(
@@ -1620,11 +1718,14 @@ class _ScheduleFloatingMenuState extends State<_ScheduleFloatingMenu> {
                       size,
                       viewPadding,
                     );
-                    widget.onPositionChanged(_fractionFor(next, size, viewPadding));
+                    widget.onPositionChanged(
+                        _fractionFor(next, size, viewPadding));
                   },
                   onPanEnd: (_) {
-                    final snapped = _snapToNearestEdge(position, size, viewPadding);
-                    widget.onPositionSettled(_fractionFor(snapped, size, viewPadding));
+                    final snapped =
+                        _snapToNearestEdge(position, size, viewPadding);
+                    widget.onPositionSettled(
+                        _fractionFor(snapped, size, viewPadding));
                   },
                   onTap: () => setState(() => _isOpen = !_isOpen),
                   child: Material(
@@ -2254,10 +2355,12 @@ class _CalendarScheduleViewState extends State<_CalendarScheduleView> {
                     final timeColWidth = compact ? 46.0 : 54.0;
                     final minDayWidth = compact ? 96.0 : 112.0;
                     final viewportWidth = constraints.maxWidth;
-                    final gridWidth =
-                        (timeColWidth + minDayWidth * 7).clamp(viewportWidth, double.infinity).toDouble();
+                    final gridWidth = (timeColWidth + minDayWidth * 7)
+                        .clamp(viewportWidth, double.infinity)
+                        .toDouble();
                     final dayWidth = (gridWidth - timeColWidth) / 7;
-                    final rowHeight = _rowHeightFor(weekItems, dayWidth, compact);
+                    final rowHeight =
+                        _rowHeightFor(weekItems, dayWidth, compact);
                     final maxSection = _maxSectionFor(weekItems);
                     if (!inTerm) {
                       return Padding(

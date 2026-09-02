@@ -197,6 +197,9 @@ class BackgroundNotificationProfile(Base):
     notice_keys_json = Column(Text, nullable=True)
     grade_snapshot_json = Column(Text, nullable=True)
     exam_keys_json = Column(Text, nullable=True)
+    attendance_snapshot_json = Column(Text, nullable=True)
+    exam_reminder_keys_json = Column(Text, nullable=True)
+    course_sync_error = Column(Text, nullable=True)
     last_checked_at = Column(DateTime, nullable=True)
     last_error = Column(Text, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
@@ -204,7 +207,7 @@ class BackgroundNotificationProfile(Base):
 
 
 class NotificationDelivery(Base):
-    """持久化投递去重键，避免任务重启或多次轮询重复提醒。"""
+    """持久化投递去重键与结果，失败记录可在后续轮询重试。"""
 
     __tablename__ = "notification_deliveries"
     __table_args__ = (UniqueConstraint("student_id", "event_key", name="uq_notification_delivery"),)
@@ -213,6 +216,11 @@ class NotificationDelivery(Base):
     student_id = Column(String(100), nullable=False, index=True)
     event_key = Column(String(300), nullable=False)
     notification_type = Column(String(50), nullable=False)
+    delivery_status = Column(String(20), default="pending", nullable=False)
+    retry_count = Column(Integer, default=0, nullable=False)
+    last_failure_reason = Column(Text, nullable=True)
+    last_attempt_at = Column(DateTime, nullable=True)
+    succeeded_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
 
 
@@ -488,6 +496,18 @@ def init_db():
     _ensure_columns(engine, "maintenance_job_status", {
         "last_processed": "INTEGER",
         "last_delivered": "INTEGER",
+    })
+    _ensure_columns(engine, "background_notification_profiles", {
+        "attendance_snapshot_json": "TEXT",
+        "exam_reminder_keys_json": "TEXT",
+        "course_sync_error": "TEXT",
+    })
+    _ensure_columns(engine, "notification_deliveries", {
+        "delivery_status": "TEXT DEFAULT 'delivered'",
+        "retry_count": "INTEGER DEFAULT 0",
+        "last_failure_reason": "TEXT",
+        "last_attempt_at": "TIMESTAMP",
+        "succeeded_at": "TIMESTAMP",
     })
 
     if _is_sqlite(engine):

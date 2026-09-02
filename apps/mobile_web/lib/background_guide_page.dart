@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -9,6 +11,7 @@ import 'responsive/spacing.dart';
 import 'background_service.dart';
 import 'services_deferred.dart';
 import 'web_push_service.dart';
+import 'schedule_utils.dart';
 
 class BackgroundGuidePage extends StatefulWidget {
   const BackgroundGuidePage({
@@ -91,6 +94,10 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
       }
       _busy = false;
     }
+    // 兼容旧用户：系统通知已授权但云端档案仍关闭时，进入设置页自动补同步。
+    if (mounted && _notificationGranted && !_cloudNotificationEnabled) {
+      unawaited(_setCloudNotificationEnabled(true));
+    }
   }
 
   /// 静默刷新权限状态（不显示加载指示器，用于 resume/操作后）
@@ -151,6 +158,9 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
       }
       final cloudStatus = await widget.api.fetchBackgroundNotificationStatus();
       cloudEnabled = cloudStatus?.enabled ?? false;
+      if (cloudStatus?.courseSyncError != null && mounted) {
+        _cloudNotificationError = cloudStatus!.courseSyncError;
+      }
     } catch (_) {
       // 超时或异常：保持现有状态，不清零
     }
@@ -226,6 +236,7 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
             _webPushEnabled = pushEnabled;
           });
         }
+        await _setCloudNotificationEnabled(true);
         return;
       }
     } else {
@@ -237,6 +248,7 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
           debugPrint('iOS 推送令牌同步失败: error=${error.runtimeType}');
         }
       }
+      if (granted) await _setCloudNotificationEnabled(true);
     }
     // 权限未授予（或非 Web 平台），静默刷新状态
     _refreshPermissions();
@@ -280,7 +292,10 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
     if (_busy) return;
     _busy = true;
     try {
-      final status = await widget.api.setBackgroundNotificationAccess(value);
+      final status = await widget.api.setBackgroundNotificationAccess(
+        value,
+        courseReminder: value ? await _courseReminderSnapshot() : null,
+      );
       if (!mounted) return;
       setState(() {
         _cloudNotificationEnabled = status.enabled;
@@ -288,10 +303,69 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
       });
     } catch (error) {
       if (!mounted) return;
-      setState(() => _cloudNotificationError = error.toString());
+      final message =
+          error is StateError ? '请重新登录并勾选“记住账号”，再开启后台持续通知。' : error.toString();
+      setState(() => _cloudNotificationError = message);
+      if (error is StateError) {
+        final messenger = ScaffoldMessenger.maybeOf(context);
+        final prefs = await SharedPreferences.getInstance();
+        final shown = prefs.getBool('background.credentialGuideShown') ?? false;
+        if (!shown && mounted && messenger != null) {
+          await prefs.setBool('background.credentialGuideShown', true);
+          messenger.showSnackBar(
+            const SnackBar(content: Text('后台通知需要保存凭据，请重新登录并勾选“记住账号”。')),
+          );
+        }
+      }
     } finally {
       _busy = false;
     }
+  }
+
+  Future<Map<String, dynamic>?> _courseReminderSnapshot() async {
+    final prefs = await SharedPreferences.getInstance();
+    final (year, term) = onboardingAcademicPeriodOf(DateTime.now());
+    final scheduleSettings = await widget.api.fetchScheduleSettings();
+    final firstWeekStart = DateTime.tryParse(
+          scheduleSettings?.firstWeeks['$year-$term'] ?? '',
+        ) ??
+        defaultFirstWeekStart(year, term);
+    final result = await widget.api.schedule(year: year, term: term);
+    final courses = result.data.items.where((course) {
+      return course.weekday != null &&
+          course.weekday! >= 1 &&
+          course.weekday! <= 7 &&
+          course.startSection != null &&
+          course.startSection! >= 1 &&
+          course.startSection! <= 16 &&
+          course.endSection != null &&
+          course.endSection! >= 1 &&
+          course.endSection! <= 16;
+    }).map((course) {
+      final weeks = <int>[];
+      for (var week = 1; week <= 30; week++) {
+        if (course.occursInWeek(week)) weeks.add(week);
+      }
+      return {
+        'name': course.name,
+        'weekday': course.weekday ?? 0,
+        'startSection': course.startSection ?? 0,
+        'endSection': course.endSection ?? 0,
+        'classroom': course.classroom ?? '',
+        'teacher': course.teacher ?? '',
+        'weeks': weeks,
+      };
+    }).toList();
+    return {
+      'enabled': prefs.getBool('schedule.courseRemindersEnabled') ?? false,
+      'beforeStartMinutes':
+          prefs.getInt('schedule.courseStartReminderMinutes') ?? 10,
+      'beforeEndMinutes':
+          prefs.getInt('schedule.courseEndReminderMinutes') ?? 5,
+      'firstWeekStart':
+          '${firstWeekStart.year.toString().padLeft(4, '0')}-${firstWeekStart.month.toString().padLeft(2, '0')}-${firstWeekStart.day.toString().padLeft(2, '0')}',
+      'courses': courses,
+    };
   }
 
   Future<Map<String, dynamic>?> _fetchWebPushConfig() async {

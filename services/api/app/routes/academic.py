@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse, Response
 
 from app.cache_service import (
     ACADEMIC_CACHE_MAX_AGE_SECONDS,
+    is_cacheable_payload,
     load_and_get_cached_at,
     save_cache,
 )
@@ -125,6 +126,15 @@ def _cached_response(data: dict | list, cached_at: datetime | None) -> JSONRespo
     return response
 
 
+def _validate_academic_result(resource: str, data: object) -> None:
+    """拒绝把关键资源的不完整成功响应当成正常数据缓存。"""
+    if resource == "me" and not is_cacheable_payload(resource, data):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="学校教务系统返回的个人信息不完整，请稍后重试",
+        )
+
+
 def _load_cached_data(
     student_id: str,
     resource: str,
@@ -158,6 +168,8 @@ def _dashboard_module(
         }
     try:
         data = _run_academic_call(call)
+        if name == "me":
+            _validate_academic_result(name, data)
         status_value = "empty" if data == empty else "ok"
         return {
             "status": status_value,
@@ -368,6 +380,7 @@ async def _run_with_cache_fallback(
             return _cached_response(cached, cached_at)
     try:
         result = await loop.run_in_executor(None, _run_academic_call, call)
+        _validate_academic_result(resource, result)
         try:
             await loop.run_in_executor(None, save_cache, student_id, resource, result, params)
         except Exception:

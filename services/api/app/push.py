@@ -103,6 +103,6 @@ def send_web_push_to_student(student_id: str, title: str, body: str, extras: dic
 
 def send_push_to_student(student_id: str, title: str, body: str, extras: dict | None = None) -> int:
     """向同一学生的 Web Push 与 iOS APNs 设备投递通知。"""
-    delivered = send_web_push_to_student(student_id, title, body, extras)
-    send_apns_to_student(student_id, title, body, extras)
-    return delivered
+    return send_web_push_to_student(student_id, title, body, extras) + send_apns_to_student(
+        student_id, title, body, extras
+    )

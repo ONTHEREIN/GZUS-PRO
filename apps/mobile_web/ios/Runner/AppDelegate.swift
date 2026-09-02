@@ -316,28 +316,57 @@ import WidgetKit
       return
     }
     var added = 0
+    var updated = 0
+    var skipped = 0
     var lastError: String?
     for raw in events {
       guard let start = (raw["startMillis"] as? NSNumber)?.doubleValue,
             let end = (raw["endMillis"] as? NSNumber)?.doubleValue else {
+        skipped += 1
         continue
+      }
+      guard let sourceId = raw["sourceId"] as? String, !sourceId.isEmpty else {
+        skipped += 1
+        continue
+      }
+      let marker = "OneGZUS-ID:\(sourceId)"
+      let startDate = Date(timeIntervalSince1970: start / 1000)
+      let endDate = Date(timeIntervalSince1970: end / 1000)
+      let predicate = store.predicateForEvents(
+        withStart: startDate.addingTimeInterval(-86400),
+        end: endDate.addingTimeInterval(86400),
+        calendars: [targetCalendar]
+      )
+      let existing = store.events(matching: predicate).first {
+        $0.notes?.contains(marker) == true
       }
       let event = EKEvent(eventStore: store)
       event.title = raw["title"] as? String ?? "软帮手日程"
-      event.startDate = Date(timeIntervalSince1970: start / 1000)
-      event.endDate = Date(timeIntervalSince1970: end / 1000)
+      event.startDate = startDate
+      event.endDate = endDate
       event.location = raw["location"] as? String
-      event.notes = raw["description"] as? String
+      let description = raw["description"] as? String
+      event.notes = [description, marker].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n\n")
       event.calendar = targetCalendar
       do {
-        try store.save(event, span: .thisEvent, commit: true)
-        added += 1
+        if let existing {
+          existing.title = event.title
+          existing.startDate = event.startDate
+          existing.endDate = event.endDate
+          existing.location = event.location
+          existing.notes = event.notes
+          try store.save(existing, span: .thisEvent, commit: true)
+          updated += 1
+        } else {
+          try store.save(event, span: .thisEvent, commit: true)
+          added += 1
+        }
       } catch {
         lastError = error.localizedDescription
       }
     }
-    if added > 0 {
-      result(added)
+    if added + updated + skipped > 0 {
+      result(["added": added, "updated": updated, "skipped": skipped])
     } else {
       result(FlutterError(
         code: "CALENDAR_SAVE_FAILED",

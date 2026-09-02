@@ -471,7 +471,10 @@ class ScheduleResult {
 
 class ExamItem {
   ExamItem.fromJson(Map<String, dynamic> json)
-      : courseName =
+      : sourceId =
+            (json['sourceId'] ?? json['id'] ?? json['examId'] ?? json['ksh'])
+                ?.toString(),
+        courseName =
             json['courseName'] as String? ?? json['name'] as String? ?? '',
         name = json['name'] as String? ?? json['courseName'] as String? ?? '',
         date = json['date'] as String? ?? '',
@@ -482,6 +485,7 @@ class ExamItem {
         type = json['type'] as String?;
 
   final String courseName;
+  final String? sourceId;
   final String name;
   final String date;
   final String? time;

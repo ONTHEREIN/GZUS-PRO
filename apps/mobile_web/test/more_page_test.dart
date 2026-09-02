@@ -82,6 +82,67 @@ void main() {
     expect(configChanged, 1);
     expect(preferences.getStringList('nav_bar_config'), isNull);
   });
+
+  testWidgets('学年和学期变化后设置控件显示最新值', (tester) async {
+    await tester.pumpWidget(_morePage(
+      onConfigChanged: () {},
+      onNavigate: (_) {},
+      year: 2026,
+      term: 1,
+    ));
+
+    expect(
+      tester
+          .widget<EditableText>(find.descendant(
+            of: find.byKey(const ValueKey('more-year-2026')),
+            matching: find.byType(EditableText),
+          ))
+          .controller
+          .text,
+      '2026',
+    );
+    expect(
+      tester
+          .widget<EditableText>(find.descendant(
+            of: find.byKey(const ValueKey('more-term-1')),
+            matching: find.byType(EditableText),
+          ))
+          .controller
+          .text,
+      '第1学期',
+    );
+
+    await tester.pumpWidget(_morePage(
+      onConfigChanged: () {},
+      onNavigate: (_) {},
+      year: 2025,
+      term: 2,
+    ));
+    await tester.pumpAndSettle();
+
+    expect(
+      tester
+          .widget<EditableText>(find.descendant(
+            of: find.byKey(const ValueKey('more-year-2025')),
+            matching: find.byType(EditableText),
+          ))
+          .controller
+          .text,
+      '2025',
+    );
+    expect(find.byKey(const ValueKey('more-year-2026')), findsNothing);
+    expect(
+      tester
+          .widget<EditableText>(find.descendant(
+            of: find.byKey(const ValueKey('more-term-2')),
+            matching: find.byType(EditableText),
+          ))
+          .controller
+          .text,
+      '第2学期',
+    );
+    expect(find.byKey(const ValueKey('more-term-1')), findsNothing);
+  });
 }
 
 Future<void> _setViewport({
@@ -96,6 +157,8 @@ Future<void> _setViewport({
 Widget _morePage({
   required VoidCallback onConfigChanged,
   required ValueChanged<String> onNavigate,
+  int year = 2026,
+  int term = 1,
 }) {
   return MaterialApp(
     theme: gzusTheme(Brightness.light),
@@ -112,8 +175,8 @@ Widget _morePage({
         navBarLimit: 5,
         onNavigate: onNavigate,
         onConfigChanged: onConfigChanged,
-        year: 2026,
-        term: 1,
+        year: year,
+        term: term,
         onLogout: () {},
         onYearChanged: (_) {},
         onTermChanged: (_) {},

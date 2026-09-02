@@ -162,20 +162,39 @@ private struct NextClassHomeView: View {
     let entry: Entry
     var body: some View {
         let dashboard = entry.dashboard
-        VStack(alignment: .leading, spacing: 8) {
-            Header(title: nextHeading(dashboard, entry.date), icon: dashboard.nextStatus == "ongoing" ? "play.circle.fill" : "clock", badge: dashboard.nextTime.isEmpty ? "待定" : dashboard.nextTime)
-            Text(nextText(dashboard, entry.date)).font(family == .systemSmall ? .headline : .title3.weight(.semibold)).lineLimit(family == .systemLarge ? 2 : 1)
-            Text(nextLocation(dashboard)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-            if family != .systemSmall { Text(dashboard.nextTeacher.isEmpty ? "教师待定" : dashboard.nextTeacher).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
-            if family == .systemLarge { Spacer(minLength: 0); Text("\(dashboard.nextTime.isEmpty ? "时间待定" : dashboard.nextTime) · \(nextLocation(dashboard))").font(.caption.weight(.medium)).lineLimit(1) }
-        }.padding().widgetURL(targetURL("schedule"))
+        if family == .systemSmall {
+            VStack(alignment: .leading, spacing: 6) {
+                Header(title: nextHeading(dashboard, entry.date), icon: dashboard.nextStatus == "ongoing" ? "play.circle.fill" : "clock", badge: "")
+                Text(nextText(dashboard, entry.date)).font(.headline.weight(.semibold)).lineLimit(2).minimumScaleFactor(0.78)
+                Divider()
+                HStack(spacing: 5) {
+                    Image(systemName: "clock").foregroundStyle(.secondary)
+                    Text(dashboard.nextTime.isEmpty ? "时间待定" : dashboard.nextTime).lineLimit(1).minimumScaleFactor(0.7)
+                }.font(.caption)
+                HStack(alignment: .top, spacing: 5) {
+                    Image(systemName: "mappin.and.ellipse").foregroundStyle(.secondary)
+                    Text(nextLocation(dashboard)).lineLimit(2).minimumScaleFactor(0.7)
+                }.font(.caption).foregroundStyle(.secondary)
+                HStack(spacing: 5) {
+                    Image(systemName: "person").foregroundStyle(.secondary)
+                    Text(dashboard.nextTeacher.isEmpty ? "教师待定" : dashboard.nextTeacher).lineLimit(1).minimumScaleFactor(0.7)
+                }.font(.caption).foregroundStyle(.secondary)
+            }.padding().widgetURL(targetURL("schedule"))
+        } else {
+            VStack(alignment: .leading, spacing: 8) {
+                Header(title: nextHeading(dashboard, entry.date), icon: dashboard.nextStatus == "ongoing" ? "play.circle.fill" : "clock", badge: dashboard.nextTime.isEmpty ? "待定" : dashboard.nextTime)
+                Text(nextText(dashboard, entry.date)).font(.title3.weight(.semibold)).lineLimit(1)
+                Text(nextLocation(dashboard)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Text(dashboard.nextTeacher.isEmpty ? "教师待定" : dashboard.nextTeacher).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }.padding().widgetURL(targetURL("schedule"))
+        }
     }
 }
 private struct NextClassHomeWidget: Widget {
     let kind = nextClassHomeScreenWidgetKind
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: kind, provider: Provider()) { NextClassHomeView(entry: $0) }
-            .configurationDisplayName("下一节课").description("查看下一节课程、地点与教师。").supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
+            .configurationDisplayName("下一节课").description("查看下一节课程、时间、地点与教师。").supportedFamilies([.systemSmall, .systemMedium])
     }
 }
 
@@ -184,9 +203,9 @@ private struct TodayCoursesView: View {
     let entry: Entry
     var body: some View {
         let courses = entry.dashboard.todayCourses
-        let limit = family == .systemLarge ? 3 : 1
+        let limit = family == .systemMedium ? 2 : 3
         VStack(alignment: .leading, spacing: 8) {
-            Header(title: family == .systemSmall ? "今日课程" : "今日时间线", icon: "list.bullet", badge: "\(courses.count) 节")
+            Header(title: "今日时间线", icon: "list.bullet", badge: "\(courses.count) 节")
             if courses.isEmpty { Spacer(); Text("今日无课").font(.headline); Spacer() }
             else {
                 ForEach(Array(courses.prefix(limit).enumerated()), id: \.offset) { _, course in CourseLine(course: course, compact: family != .systemLarge) }
@@ -199,7 +218,7 @@ private struct TodayCoursesWidget: Widget {
     let kind = todayCoursesWidgetKind
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: kind, provider: Provider()) { TodayCoursesView(entry: $0) }
-            .configurationDisplayName("今日课程").description("按首页时间线查看今天的课程。").supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
+            .configurationDisplayName("今日时间线").description("按时间顺序查看今天的课程。").supportedFamilies([.systemMedium, .systemLarge])
     }
 }
 
@@ -223,7 +242,7 @@ private struct ExamCountdownView: View {
     let entry: Entry
     var body: some View {
         let exams = entry.dashboard.exams
-        let limit = family == .systemLarge ? 3 : 1
+        let limit = family == .systemSmall ? 1 : family == .systemMedium ? 2 : 3
         VStack(alignment: .leading, spacing: 8) {
             Header(title: family == .systemSmall ? "考试" : "考试倒计时", icon: "timer", badge: "\(exams.count)")
             if let first = exams.first {
@@ -270,8 +289,14 @@ private struct GradesWidget: Widget {
 }
 
 private struct UtilityTile: View {
-    let title: String; let value: String; let icon: String; let accent: Color
-    var body: some View { VStack(spacing: 3) { Image(systemName: icon).font(.caption).foregroundStyle(accent); Text(title).font(.caption2).foregroundStyle(.secondary); Text(value).font(.caption.weight(.bold)).lineLimit(1) }.frame(maxWidth: .infinity) }
+    let title: String; let value: String; let icon: String; let accent: Color; let compact: Bool
+    var body: some View {
+        VStack(spacing: compact ? 2 : 3) {
+            Image(systemName: icon).font(compact ? .caption2 : .caption).foregroundStyle(accent)
+            Text(title).font(.caption2).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.7)
+            Text(value).font(compact ? .caption2.weight(.bold) : .caption.weight(.bold)).lineLimit(1).minimumScaleFactor(0.55)
+        }.frame(maxWidth: .infinity)
+    }
 }
 private struct UtilitiesView: View {
     @Environment(\.widgetFamily) private var family
@@ -281,10 +306,14 @@ private struct UtilitiesView: View {
         VStack(alignment: .leading, spacing: 8) {
             Header(title: family == .systemSmall ? "水电" : "水电余额", icon: "drop", badge: dashboard.utilityIsBound ? "实时" : "未绑定")
             if !dashboard.utilityIsBound { Spacer(); Text("点击绑定宿舍").font(.headline); if family != .systemSmall { Text("绑定后可查看水电余额").font(.caption).foregroundStyle(.secondary) }; Spacer() }
-            else if family == .systemSmall { Spacer(); UtilityTile(title: "电费余额", value: dashboard.utilityElectricity, icon: "bolt.fill", accent: dashboard.utilityLowPower ? .red : .orange); Spacer() }
             else {
-                HStack(spacing: 4) { UtilityTile(title: "冷水", value: dashboard.utilityColdWater, icon: "drop.fill", accent: .blue); UtilityTile(title: "电费", value: dashboard.utilityElectricity, icon: "bolt.fill", accent: dashboard.utilityLowPower ? .red : .orange); if family == .systemLarge { UtilityTile(title: "热水", value: dashboard.utilityHotWater, icon: "flame.fill", accent: .red) } }
-                if family == .systemLarge { Spacer(minLength: 0); Text(dashboard.utilityRoomInfo.isEmpty ? dashboard.utilityTitle : dashboard.utilityRoomInfo).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
+                Spacer(minLength: 0)
+                HStack(spacing: family == .systemSmall ? 4 : 8) {
+                    UtilityTile(title: "冷水", value: dashboard.utilityColdWater, icon: "drop.fill", accent: .blue, compact: family == .systemSmall)
+                    UtilityTile(title: "热水", value: dashboard.utilityHotWater, icon: "flame.fill", accent: .red, compact: family == .systemSmall)
+                    UtilityTile(title: "电费", value: dashboard.utilityElectricity, icon: "bolt.fill", accent: dashboard.utilityLowPower ? .red : .orange, compact: family == .systemSmall)
+                }
+                Spacer(minLength: 0)
             }
         }.padding().widgetURL(targetURL("ecard"))
     }
@@ -293,7 +322,7 @@ private struct UtilitiesWidget: Widget {
     let kind = utilitiesWidgetKind
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: kind, provider: Provider()) { UtilitiesView(entry: $0) }
-            .configurationDisplayName("水电余额").description("复用首页水电余额与低余额状态。").supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
+            .configurationDisplayName("水电余额").description("显示冷水、热水和电费余额。").supportedFamilies([.systemSmall, .systemMedium])
     }
 }
 
@@ -306,7 +335,7 @@ private struct ProgressView: View {
     let entry: Entry
     var body: some View {
         let dashboard = entry.dashboard
-        let limit = family == .systemLarge ? 3 : 1
+        let limit = family == .systemSmall ? 1 : family == .systemMedium ? 2 : 3
         VStack(alignment: .leading, spacing: 8) {
             Header(title: family == .systemSmall ? "业务" : "业务进度", icon: "point.topleft.down.curvedto.point.bottomright.up", badge: dashboard.progressMeta)
             if dashboard.progressItems.isEmpty { Spacer(); Text("暂无业务进度").font(.headline); Spacer() }
@@ -334,7 +363,7 @@ private struct NextClassLockScreenView: View {
         case .accessoryCircular:
             VStack(spacing: 1) { Text(String(nextLocation(dashboard).prefix(6))).font(.system(size: 10, weight: .semibold)).lineLimit(1); Text(dashboard.nextTime.prefix(5)).font(.system(size: 11, weight: .bold, design: .rounded)) }
         case .accessoryRectangular:
-            HStack(spacing: 8) { Image(systemName: dashboard.nextStatus == "ongoing" ? "play.circle.fill" : "clock").font(.title3); VStack(alignment: .leading, spacing: 2) { Text(nextHeading(dashboard, entry.date)).font(.caption2); Text(nextText(dashboard, entry.date)).font(.headline).lineLimit(1); Text("\(dashboard.nextTime) · \(nextLocation(dashboard))").font(.caption).lineLimit(1) } }
+            VStack(alignment: .leading, spacing: 2) { Text(nextHeading(dashboard, entry.date)).font(.caption2); Text(nextText(dashboard, entry.date)).font(.headline).lineLimit(1); Text("\(dashboard.nextTime.isEmpty ? "时间待定" : dashboard.nextTime) · \(nextLocation(dashboard))").font(.caption).lineLimit(1) }
         default:
             Text("\(nextText(dashboard, entry.date)) · \(nextLocation(dashboard))")
         }

@@ -88,6 +88,11 @@ class CountingInfoClient(FakeClient):
         return super().get_info()
 
 
+class IncompleteInfoClient(FakeClient):
+    def get_info(self):
+        return {"studentId": "20240001", "name": ""}
+
+
 class ExpiredClient(FakeClient):
     def get_schedule(self, year, term):
         raise AuthenticationError("登录状态已失效，请重新登录")
@@ -467,6 +472,20 @@ def test_academic_authentication_error_returns_json_401():
 
     assert response.status_code == 401
     assert response.json()["detail"] == "登录状态已失效，请重新登录"
+
+
+def test_incomplete_student_info_is_not_cached_as_success():
+    app = create_app()
+    session = app.state.sessions.create(IncompleteInfoClient(), "测试学生")
+    headers = {"X-Session-Id": session.id}
+
+    with TestClient(app) as client:
+        response = client.get("/me", headers=headers)
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == "学校教务系统返回的个人信息不完整，请稍后重试"
+    with get_sync_session_factory()() as db:
+        assert db.query(DataCache).filter(DataCache.resource == "me").count() == 0
 
 
 def test_notice_detail_route():

@@ -22,7 +22,7 @@ import 'cards/schedule_helpers.dart';
 import 'cards/next_class_card.dart';
 import 'cards/today_timeline_card.dart';
 import 'cards/week_grid_card.dart';
-import 'cards/daily_courses_card.dart';
+import 'cards/admin_notices_card.dart';
 import 'cards/utilities_card.dart';
 import 'cards/business_progress_card.dart';
 import 'cards/notifications_card.dart';
@@ -700,7 +700,10 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
   }
 
   HomeModuleSize _sizeFor(String id) {
-    return _moduleSizes[id] ?? HomePreferences.configFor(id).size;
+    return HomePreferences.effectiveSize(
+      id,
+      _moduleSizes[id] ?? HomePreferences.configFor(id).size,
+    );
   }
 
   HomeCardDensity _cardDensity(HomeModuleSize size) {
@@ -730,10 +733,10 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
             final course = nextTimedCourse(timedCourses);
             void onTap() => widget.onNavigate('schedule');
             return switch (size) {
-              HomeModuleSize.large => NextClassLargeCard(
+              HomeModuleSize.large => NextClassMediumCard(
                   course: course,
                   onTap: onTap,
-                  key: const ValueKey('nextClass-large'),
+                  key: const ValueKey('nextClass-medium'),
                 ),
               HomeModuleSize.medium => NextClassMediumCard(
                   course: course,
@@ -815,40 +818,23 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
             };
           },
         );
-      case 'dailyCourses':
-        return _AsyncModuleCard<ScheduleResult>(
-          future: _scheduleFuture,
+      case 'adminNotices':
+        return _AsyncModuleCard<List<NoticeItem>>(
+          future: _noticesFuture,
           onRetry: _retryDashboard,
-          title: '今日课程',
-          icon: Icons.format_list_bulleted,
-          density: _cardDensity(size),
-          minHeight: _moduleHeight(size, context.gzusBreakpoint),
-          builder: (data) {
-            final timedCourses = homeTimedCourses(
-              data.items,
-              currentWeek: widget.currentWeek,
-              firstWeekStart: widget.firstWeekStart,
-            );
-            final courses = todayTimedCourses(timedCourses);
-            void onTap() => widget.onNavigate('schedule');
-            return switch (size) {
-              HomeModuleSize.large => DailyCoursesLargeCard(
-                  courses: courses,
-                  onTap: onTap,
-                  key: const ValueKey('dailyCourses-large'),
-                ),
-              HomeModuleSize.medium => DailyCoursesMediumCard(
-                  courses: courses,
-                  onTap: onTap,
-                  key: const ValueKey('dailyCourses-medium'),
-                ),
-              HomeModuleSize.small => DailyCoursesSmallCard(
-                  courses: courses,
-                  onTap: onTap,
-                  key: const ValueKey('dailyCourses-small'),
-                ),
-            };
-          },
+          title: '管理员信息',
+          icon: Icons.campaign,
+          density: HomeCardDensity.large,
+          minHeight:
+              _moduleHeight(HomeModuleSize.large, context.gzusBreakpoint),
+          builder: (data) => AdminNoticesLargeCard(
+            api: widget.api,
+            notices: data
+                .where((item) => item.source == NoticeSource.admin)
+                .toList(),
+            onTap: () => widget.onNavigate('notices'),
+            key: const ValueKey('adminNotices-large'),
+          ),
         );
       case 'utilities':
         if (hideEcardOnCurrentPlatform) return const SizedBox.shrink();
@@ -1207,8 +1193,10 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
                       },
                       itemBuilder: (context, index) {
                         final id = order[index];
-                        final size =
-                            sizes[id] ?? HomePreferences.configFor(id).size;
+                        final size = HomePreferences.effectiveSize(
+                          id,
+                          sizes[id] ?? HomePreferences.configFor(id).size,
+                        );
                         final config =
                             HomePreferences.configFor(id, overrideSize: size);
                         final visible = !hidden.contains(id);
@@ -1220,35 +1208,43 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
                           trailing: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              _SizeChip(
-                                label: '大',
-                                selected: size == HomeModuleSize.large,
-                                onSelected: () async {
-                                  sizes[id] = HomeModuleSize.large;
-                                  await persist();
-                                  localSetState(() {});
-                                },
-                              ),
-                              const SizedBox(width: 4),
-                              _SizeChip(
-                                label: '中',
-                                selected: size == HomeModuleSize.medium,
-                                onSelected: () async {
-                                  sizes[id] = HomeModuleSize.medium;
-                                  await persist();
-                                  localSetState(() {});
-                                },
-                              ),
-                              const SizedBox(width: 4),
-                              _SizeChip(
-                                label: '小',
-                                selected: size == HomeModuleSize.small,
-                                onSelected: () async {
-                                  sizes[id] = HomeModuleSize.small;
-                                  await persist();
-                                  localSetState(() {});
-                                },
-                              ),
+                              if (id != 'nextClass' && id != 'adminNotices')
+                                _SizeChip(
+                                  label: '大',
+                                  selected: size == HomeModuleSize.large,
+                                  onSelected: () async {
+                                    sizes[id] = HomeModuleSize.large;
+                                    await persist();
+                                    localSetState(() {});
+                                  },
+                                ),
+                              if (id != 'adminNotices') ...[
+                                const SizedBox(width: 4),
+                                _SizeChip(
+                                  label: '中',
+                                  selected: size == HomeModuleSize.medium,
+                                  onSelected: () async {
+                                    sizes[id] = HomeModuleSize.medium;
+                                    await persist();
+                                    localSetState(() {});
+                                  },
+                                ),
+                                const SizedBox(width: 4),
+                                _SizeChip(
+                                  label: '小',
+                                  selected: size == HomeModuleSize.small,
+                                  onSelected: () async {
+                                    sizes[id] = HomeModuleSize.small;
+                                    await persist();
+                                    localSetState(() {});
+                                  },
+                                ),
+                              ],
+                              if (id == 'adminNotices')
+                                const Padding(
+                                  padding: EdgeInsets.symmetric(horizontal: 8),
+                                  child: Text('固定大卡片'),
+                                ),
                               const SizedBox(width: 8),
                               Switch(
                                 value: visible,

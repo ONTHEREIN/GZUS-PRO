@@ -4,6 +4,7 @@ class BackgroundNotificationStatus {
     required this.courseRemindersEnabled,
     required this.lastCheckedAt,
     required this.lastError,
+    required this.courseSyncError,
   });
 
   factory BackgroundNotificationStatus.fromJson(Map<String, dynamic> json) {
@@ -11,8 +12,10 @@ class BackgroundNotificationStatus {
     return BackgroundNotificationStatus(
       enabled: json['enabled'] == true,
       courseRemindersEnabled: json['courseRemindersEnabled'] == true,
-      lastCheckedAt: rawCheckedAt == null ? null : DateTime.tryParse(rawCheckedAt),
+      lastCheckedAt:
+          rawCheckedAt == null ? null : DateTime.tryParse(rawCheckedAt),
       lastError: json['lastError'] as String?,
+      courseSyncError: json['courseSyncError'] as String?,
     );
   }
 
@@ -20,4 +23,5 @@ class BackgroundNotificationStatus {
   final bool courseRemindersEnabled;
   final DateTime? lastCheckedAt;
   final String? lastError;
+  final String? courseSyncError;
 }

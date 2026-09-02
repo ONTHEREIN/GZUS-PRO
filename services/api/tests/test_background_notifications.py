@@ -32,7 +32,21 @@ def test_background_notification_access_can_be_enabled_synced_and_revoked():
     )
     headers = {"X-Session-Id": session_id}
 
-    enabled = client.put("/notifications/background", json={"enabled": True, "credentialToken": token}, headers=headers)
+    enabled = client.put(
+        "/notifications/background",
+        json={
+            "enabled": True,
+            "credentialToken": token,
+            "courseReminder": {
+                "enabled": True,
+                "beforeStartMinutes": 10,
+                "beforeEndMinutes": 5,
+                "firstWeekStart": "2026-09-01",
+                "courses": [],
+            },
+        },
+        headers=headers,
+    )
     assert enabled.status_code == 200
     assert enabled.json()["enabled"] is True
 

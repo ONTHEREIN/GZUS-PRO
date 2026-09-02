@@ -45,6 +45,62 @@ def _grade_snapshot(items: list[dict]) -> dict[str, str]:
     return snapshot
 
 
+def _attendance_snapshot(items: list[dict]) -> dict[str, str]:
+    snapshot: dict[str, str] = {}
+    for item in items:
+        course = str(item.get("courseId") or item.get("courseName") or "").strip()
+        if not course:
+            continue
+        snapshot[course] = json.dumps(
+            {
+                "courseName": item.get("courseName") or "",
+                "late": int(item.get("late") or 0),
+                "leaveEarly": int(item.get("leaveEarly") or 0),
+                "absent": int(item.get("absent") or 0),
+                "leave": int(item.get("leave") or 0),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    return snapshot
+
+
+def _attendance_abnormal_changes(
+    items: list[dict], previous: dict[str, str]
+) -> list[tuple[str, str]]:
+    changes: list[tuple[str, str]] = []
+    for item in items:
+        course_id = str(item.get("courseId") or item.get("courseName") or "").strip()
+        if not course_id:
+            continue
+        old = {}
+        if course_id in previous:
+            try:
+                old = json.loads(previous[course_id])
+            except json.JSONDecodeError:
+                old = {}
+        labels = (("late", "迟到"), ("leaveEarly", "早退"), ("absent", "缺勤"), ("leave", "请假"))
+        increased = [
+            f"{label}{int(item.get(field) or 0) - int(old.get(field) or 0)}次"
+            for field, label in labels
+            if int(item.get(field) or 0) > int(old.get(field) or 0)
+        ]
+        if increased:
+            changes.append((course_id, f"{item.get('courseName') or '课程'}：{'、'.join(increased)}"))
+    return changes
+
+
+def _exam_start(value: str) -> datetime | None:
+    try:
+        date_part, time_range = value.strip().split(" ", 1)
+        return datetime.strptime(
+            f"{date_part} {time_range.split('-', 1)[0]}", "%Y-%m-%d %H:%M"
+        ).replace(tzinfo=_SHANGHAI)
+    except (ValueError, IndexError):
+        return None
+
+
 def _json_object(value: str | None) -> dict[str, str]:
     if not value:
         return {}
@@ -63,19 +119,45 @@ def _json_set(value: str | None) -> set[str]:
     return {str(item) for item in parsed}
 
 
-def _record_delivery(student_id: str, event_key: str, notification_type: str) -> bool:
+def _reserve_delivery(student_id: str, event_key: str, notification_type: str) -> int | None:
     with get_sync_session_factory()() as db:
-        db.add(NotificationDelivery(
-            student_id=student_id,
-            event_key=event_key,
-            notification_type=notification_type,
-        ))
+        row = db.query(NotificationDelivery).filter_by(
+            student_id=student_id, event_key=event_key
+        ).one_or_none()
+        if row is not None and row.delivery_status == "delivered":
+            return None
+        if row is None:
+            row = NotificationDelivery(
+                student_id=student_id,
+                event_key=event_key,
+                notification_type=notification_type,
+            )
+            db.add(row)
+        row.delivery_status = "pending"
+        row.retry_count = (row.retry_count or 0) + 1
+        row.last_attempt_at = datetime.now(timezone.utc)
         try:
             db.commit()
         except IntegrityError:
             db.rollback()
+            return None
+        return row.id
+
+
+def _finish_delivery(delivery_id: int, delivered: int, failure_reason: str | None) -> bool:
+    with get_sync_session_factory()() as db:
+        row = db.get(NotificationDelivery, delivery_id)
+        if row is None:
             return False
-    return True
+        if delivered > 0:
+            row.delivery_status = "delivered"
+            row.last_failure_reason = None
+            row.succeeded_at = datetime.now(timezone.utc)
+        else:
+            row.delivery_status = "failed"
+            row.last_failure_reason = failure_reason or "没有设备接受推送"
+        db.commit()
+    return delivered > 0
 
 
 def has_background_notification_profile(student_id: str) -> bool:
@@ -124,10 +206,21 @@ def _authenticated_client(credentials: str):
 
 
 def _deliver(student_id: str, event_key: str, notification_type: str, title: str, body: str, extras: dict) -> bool:
-    if not _record_delivery(student_id, event_key, notification_type):
+    delivery_id = _reserve_delivery(student_id, event_key, notification_type)
+    if delivery_id is None:
         return False
-    send_push_to_student(student_id, title, body, extras)
-    return True
+    try:
+        delivered = send_push_to_student(student_id, title, body, extras)
+        failure_reason = None if delivered > 0 else "没有设备接受推送"
+    except Exception as exc:
+        delivered = 0
+        failure_reason = f"{type(exc).__name__}: {str(exc)[:300]}"
+        logger.warning(
+            "notification_delivery_failed",
+            extra={"student_id": student_id, "event_key": event_key},
+            exc_info=True,
+        )
+    return _finish_delivery(delivery_id, delivered, failure_reason)
 
 
 def _poll_profile(profile: BackgroundNotificationProfile) -> int:
@@ -140,12 +233,25 @@ def _poll_profile(profile: BackgroundNotificationProfile) -> int:
             logger.warning("background_ehall_notices_failed", extra={"student_id": profile.student_id}, exc_info=True)
     grades = list(client.get_grades(None, None))
     exams = list(client.get_exams(None, None))
+    attendance: list[dict] | None
+    try:
+        attendance = list(client.get_attendance(None, None))
+    except Exception:
+        logger.warning(
+            "background_attendance_poll_failed",
+            extra={"student_id": profile.student_id},
+            exc_info=True,
+        )
+        attendance = None
     notice_keys = {notice_key(item) for item in notices}
     grade_values = _grade_snapshot(grades)
     exam_keys = {f"{item.get('courseName', '')}|{item.get('time', '')}|{item.get('location', '')}" for item in exams}
     previous_notices = _json_set(profile.notice_keys_json)
     previous_grades = _json_object(profile.grade_snapshot_json)
     previous_exams = _json_set(profile.exam_keys_json)
+    previous_attendance = _json_object(profile.attendance_snapshot_json)
+    delivered_exam_reminders = _json_set(profile.exam_reminder_keys_json)
+    current_time = datetime.now(_SHANGHAI)
     delivered = 0
     if previous_notices:
         for item in notices:
@@ -167,9 +273,31 @@ def _poll_profile(profile: BackgroundNotificationProfile) -> int:
                 body = f"{item.get('courseName') or '考试'} {item.get('time') or ''}".strip()
                 if _deliver(profile.student_id, f"exam:{key}", "exam_reminder", "考试提醒", body, {"type": "exam_reminder"}):
                     delivered += 1
+    attendance_snapshot = _attendance_snapshot(attendance or [])
+    if previous_attendance and attendance is not None:
+        for key, body in _attendance_abnormal_changes(attendance, previous_attendance):
+            event_key = f"attendance:{key}:{attendance_snapshot.get(key, '')}"
+            if _deliver(profile.student_id, event_key, "attendance_update", "考勤异常", body, {"type": "attendance_update"}):
+                delivered += 1
+    for item in exams:
+        key = f"{item.get('courseName', '')}|{item.get('time', '')}|{item.get('location', '')}"
+        start = _exam_start(str(item.get("time") or ""))
+        if start is None or start <= current_time:
+            continue
+        body = f"{item.get('courseName') or '考试'} {item.get('time') or ''}".strip()
+        for milestone, delta in (("24h", timedelta(hours=24)), ("2h", timedelta(hours=2))):
+            reminder_key = f"{milestone}:{key}"
+            target = start - delta
+            if target <= current_time < target + timedelta(minutes=10) and reminder_key not in delivered_exam_reminders:
+                if _deliver(profile.student_id, f"exam-time:{reminder_key}", "exam_reminder", "考试提醒", body, {"type": "exam_reminder", "milestone": milestone}):
+                    delivered += 1
+                    delivered_exam_reminders.add(reminder_key)
     profile.notice_keys_json = json.dumps(sorted(notice_keys), ensure_ascii=False)
     profile.grade_snapshot_json = json.dumps(grade_values, ensure_ascii=False, sort_keys=True)
     profile.exam_keys_json = json.dumps(sorted(exam_keys), ensure_ascii=False)
+    if attendance is not None:
+        profile.attendance_snapshot_json = json.dumps(attendance_snapshot, ensure_ascii=False, sort_keys=True)
+    profile.exam_reminder_keys_json = json.dumps(sorted(delivered_exam_reminders), ensure_ascii=False)
     return delivered
 
 

@@ -102,6 +102,15 @@ class UtilitiesMediumCard extends StatelessWidget {
           const SizedBox(width: GzusSpacing.s),
           Expanded(
             child: _UtilityMini(
+              icon: Icons.local_fire_department,
+              label: '热水',
+              value: summary.hotWaterText ?? '-',
+              color: _hotWaterColor(context),
+            ),
+          ),
+          const SizedBox(width: GzusSpacing.s),
+          Expanded(
+            child: _UtilityMini(
               icon: Icons.electric_bolt,
               label: '电费',
               value: summary.powerText ?? '-',

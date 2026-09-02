@@ -497,13 +497,6 @@ class IosPushTokenRequest(BaseModel):
     environment: Literal["sandbox", "production"]
 
 
-class BackgroundNotificationAccessRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    enabled: bool
-    credential_token: str | None = Field(default=None, alias="credentialToken", min_length=1)
-
-
 class CourseReminderSyncCourse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -526,6 +519,14 @@ class CourseReminderSyncRequest(BaseModel):
     courses: list[CourseReminderSyncCourse] = Field(default_factory=list, max_length=200)
 
 
+class BackgroundNotificationAccessRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+    credential_token: str | None = Field(default=None, alias="credentialToken", min_length=1)
+    course_reminder: CourseReminderSyncRequest | None = Field(default=None, alias="courseReminder")
+
+
 class BackgroundNotificationStatus(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -533,6 +534,7 @@ class BackgroundNotificationStatus(BaseModel):
     course_reminders_enabled: bool = Field(alias="courseRemindersEnabled")
     last_checked_at: datetime | None = Field(default=None, alias="lastCheckedAt")
     last_error: str | None = Field(default=None, alias="lastError")
+    course_sync_error: str | None = Field(default=None, alias="courseSyncError")
 
 
 class ScheduleSettingsUpdate(BaseModel):

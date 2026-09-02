@@ -216,14 +216,14 @@ class _ExamsPageState extends State<ExamsPage>
                                                 exams: items,
                                                 year: year,
                                                 term: term);
-                                            final added =
+                                            final importResult =
                                                 await CalendarImportService
                                                     .importEvents(events);
                                             if (mounted) {
                                               messenger?.showSnackBar(
                                                 SnackBar(
                                                   content: Text(
-                                                      '已向系统日历导入 $added 场考试'),
+                                                      '日历：新增 ${importResult.added} 场，更新 ${importResult.updated} 场，跳过 ${importResult.skipped} 场'),
                                                   duration: const Duration(
                                                       seconds: 2),
                                                 ),
@@ -347,14 +347,14 @@ class _ExamsPageState extends State<ExamsPage>
                                             exams: items,
                                             year: year,
                                             term: term);
-                                        final added =
+                                        final importResult =
                                             await CalendarImportService
                                                 .importEvents(events);
                                         if (mounted) {
                                           messenger?.showSnackBar(
                                             SnackBar(
-                                              content:
-                                                  Text('已向系统日历导入 $added 场考试'),
+                                              content: Text(
+                                                  '日历：新增 ${importResult.added} 场，更新 ${importResult.updated} 场，跳过 ${importResult.skipped} 场'),
                                               duration:
                                                   const Duration(seconds: 2),
                                             ),

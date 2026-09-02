@@ -564,10 +564,21 @@ class MainActivity : FlutterActivity() {
                     return@Thread
                 }
                 var added = 0
+                var updated = 0
+                var skipped = 0
                 for (raw in events) {
-                    val title = raw["title"] as? String ?: continue
-                    val start = (raw["startMillis"] as? Number)?.toLong() ?: continue
-                    val end = (raw["endMillis"] as? Number)?.toLong() ?: continue
+                    val title = raw["title"] as? String
+                    val sourceId = raw["sourceId"] as? String
+                    val start = (raw["startMillis"] as? Number)?.toLong()
+                    val end = (raw["endMillis"] as? Number)?.toLong()
+                    if (title.isNullOrEmpty() || sourceId.isNullOrEmpty() || start == null || end == null) {
+                        skipped++
+                        continue
+                    }
+                    val marker = "OneGZUS-ID:$sourceId"
+                    val description = listOfNotNull(
+                        raw["description"]?.toString()?.takeIf { it.isNotEmpty() }, marker
+                    ).joinToString("\n\n")
                     val values = ContentValues().apply {
                         put(CalendarContract.Events.CALENDAR_ID, calendarId)
                         put(CalendarContract.Events.TITLE, title)
@@ -585,17 +596,44 @@ class MainActivity : FlutterActivity() {
                         raw["location"]?.toString()?.takeIf { it.isNotEmpty() }?.let {
                             put(CalendarContract.Events.EVENT_LOCATION, it)
                         }
-                        raw["description"]?.toString()?.takeIf { it.isNotEmpty() }?.let {
-                            put(CalendarContract.Events.DESCRIPTION, it)
-                        }
+                        put(CalendarContract.Events.DESCRIPTION, description)
                     }
-                    val uri = contentResolver.insert(CalendarContract.Events.CONTENT_URI, values)
-                    if (uri != null) added++
+                    val existingId = contentResolver.query(
+                        CalendarContract.Events.CONTENT_URI,
+                        arrayOf(CalendarContract.Events._ID, CalendarContract.Events.DESCRIPTION),
+                        "${CalendarContract.Events.CALENDAR_ID}=?",
+                        arrayOf(calendarId.toString()),
+                        null,
+                    )?.use { cursor ->
+                        val idIndex = cursor.getColumnIndexOrThrow(CalendarContract.Events._ID)
+                        val descriptionIndex = cursor.getColumnIndexOrThrow(CalendarContract.Events.DESCRIPTION)
+                        var found: Long? = null
+                        while (cursor.moveToNext()) {
+                            if (cursor.getString(descriptionIndex)?.contains(marker) == true) {
+                                found = cursor.getLong(idIndex)
+                                break
+                            }
+                        }
+                        found
+                    }
+                    if (existingId != null) {
+                        contentResolver.update(
+                            CalendarContract.Events.CONTENT_URI,
+                            values,
+                            "${CalendarContract.Events._ID}=?",
+                            arrayOf(existingId.toString()),
+                        )
+                        updated++
+                    } else if (contentResolver.insert(CalendarContract.Events.CONTENT_URI, values) != null) {
+                        added++
+                    } else {
+                        skipped++
+                    }
                 }
-                val finalAdded = added
+                val resultMap = mapOf("added" to added, "updated" to updated, "skipped" to skipped)
                 runOnUiThread {
-                    if (finalAdded > 0) {
-                        result.success(finalAdded)
+                    if (added + updated + skipped > 0) {
+                        result.success(resultMap)
                     } else {
                         result.error("CALENDAR_INSERT_FAILED", "未能写入系统日历", null)
                     }

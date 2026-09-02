@@ -308,6 +308,7 @@ class _MorePageState extends State<MorePage> {
                             const Text('学年'),
                             const Spacer(),
                             DropdownMenu<int>(
+                              key: ValueKey('more-year-${widget.year}'),
                               initialSelection: widget.year,
                               enableSearch: false,
                               requestFocusOnTap: false,
@@ -334,6 +335,7 @@ class _MorePageState extends State<MorePage> {
                             const Text('学期'),
                             const Spacer(),
                             DropdownMenu<int>(
+                              key: ValueKey('more-term-${widget.term}'),
                               initialSelection: widget.term,
                               enableSearch: false,
                               requestFocusOnTap: false,
@@ -687,6 +689,7 @@ class _MorePageState extends State<MorePage> {
               icon: Icons.calendar_today_outlined,
               label: '学年',
               child: DropdownMenu<int>(
+                key: ValueKey('more-year-${widget.year}'),
                 initialSelection: widget.year,
                 enableSearch: false,
                 requestFocusOnTap: false,
@@ -706,6 +709,7 @@ class _MorePageState extends State<MorePage> {
               icon: Icons.view_week_outlined,
               label: '学期',
               child: DropdownMenu<int>(
+                key: ValueKey('more-term-${widget.term}'),
                 initialSelection: widget.term,
                 enableSearch: false,
                 requestFocusOnTap: false,

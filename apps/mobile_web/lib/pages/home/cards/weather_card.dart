@@ -51,11 +51,22 @@ class WeatherSmallCard extends StatelessWidget {
       badge: '${w.temperature.round()}°',
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text(
-            '${w.temperature.round()}°',
-            style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800),
+          Row(
+            children: [
+              Icon(
+                _weatherIcon(w.weather),
+                color: _weatherColor(w.weather, context),
+                size: 28,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                '${w.temperature.round()}°',
+                style:
+                    const TextStyle(fontSize: 24, fontWeight: FontWeight.w800),
+              ),
+            ],
           ),
           Text(
             w.weather,
@@ -91,7 +102,7 @@ class _WeatherCard extends StatelessWidget {
       );
     }
 
-    final forecast = w.forecast.skip(1).take(3).toList();
+    final forecast = w.forecast.take(3).toList();
 
     return HomeCardShell(
       title: '今日天气',
@@ -101,32 +112,7 @@ class _WeatherCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(
-            children: [
-              Icon(_weatherIcon(w.weather),
-                  size: 40, color: _weatherColor(w.weather, context)),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('${w.temperature.round()}°',
-                        style: const TextStyle(
-                            fontSize: 36, fontWeight: FontWeight.w200)),
-                    Text(
-                      '${w.weather}  ${w.tempMin != null ? w.tempMin!.round() : '--'}°~${w.tempMax != null ? w.tempMax!.round() : '--'}°',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                          fontSize: 13,
-                          color:
-                              Theme.of(context).colorScheme.onSurfaceVariant),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
+          _WeatherHero(weather: w),
           const SizedBox(height: GzusSpacing.m),
           Row(
             children: [
@@ -147,34 +133,81 @@ class _WeatherCard extends StatelessWidget {
           ),
           if (showForecast && forecast.isNotEmpty) ...[
             const Divider(height: 24),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceAround,
-              children: [
-                for (final f in forecast)
-                  Column(
-                    children: [
-                      Text(f.week,
-                          style: TextStyle(
-                              fontSize: 12,
-                              color: Theme.of(context)
-                                  .colorScheme
-                                  .onSurfaceVariant)),
-                      const SizedBox(height: GzusSpacing.xs),
-                      Icon(_weatherIcon(f.weatherDay),
-                          size: 20,
-                          color:
-                              Theme.of(context).colorScheme.onSurfaceVariant),
-                      const SizedBox(height: GzusSpacing.xs),
-                      Text('${f.tempMax.round()}°',
-                          style: const TextStyle(
-                              fontSize: 14, fontWeight: FontWeight.w700)),
-                    ],
-                  ),
-              ],
+            Expanded(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  for (final f in forecast)
+                    Expanded(child: _ForecastDay(forecast: f)),
+                ],
+              ),
             ),
           ],
         ],
       ),
+    );
+  }
+}
+
+class _WeatherHero extends StatelessWidget {
+  const _WeatherHero({required this.weather});
+
+  final WeatherData weather;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(
+          _weatherIcon(weather.weather),
+          size: 48,
+          color: _weatherColor(weather.weather, context),
+        ),
+        const SizedBox(width: 14),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('${weather.temperature.round()}°',
+                  style: const TextStyle(
+                      fontSize: 38, fontWeight: FontWeight.w200)),
+              Text(
+                '${weather.weather}  ${weather.tempMin?.round() ?? '--'}°~${weather.tempMax?.round() ?? '--'}°',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                    fontSize: 13,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ForecastDay extends StatelessWidget {
+  const _ForecastDay({required this.forecast});
+
+  final WeatherForecast forecast;
+
+  @override
+  Widget build(BuildContext context) {
+    final muted = Theme.of(context).colorScheme.onSurfaceVariant;
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Text(forecast.week, style: TextStyle(color: muted, fontSize: 12)),
+        const SizedBox(height: GzusSpacing.xs),
+        Icon(_weatherIcon(forecast.weatherDay), size: 24, color: muted),
+        const SizedBox(height: GzusSpacing.xs),
+        Text('${forecast.tempMax.round()}°',
+            style: const TextStyle(fontWeight: FontWeight.w700)),
+        Text('${forecast.tempMin.round()}°',
+            style: TextStyle(color: muted, fontSize: 12)),
+      ],
     );
   }
 }

@@ -227,18 +227,19 @@ def _send_with_retry(
     raise last_error
 
 
-def send_apns_to_student(student_id: str, title: str, body: str, extras: dict | None) -> None:
+def send_apns_to_student(student_id: str, title: str, body: str, extras: dict | None) -> int:
     settings = get_settings()
     if not is_apns_enabled():
         configuration_error = apns_configuration_error()
         if configuration_error is not None:
             logger.error("apns_configuration_invalid", extra={"error": configuration_error})
-        return
+        return 0
     credentials = _credentials(settings)
     payload = build_apns_payload(title, body, extras)
     factory = get_sync_session_factory()
     with factory() as db:
         subscriptions = db.query(IosPushToken).filter(IosPushToken.student_id == student_id).all()
+        delivered = 0
         for subscription in subscriptions:
             try:
                 _send_with_retry(
@@ -247,6 +248,7 @@ def send_apns_to_student(student_id: str, title: str, body: str, extras: dict | 
                     subscription.environment,
                     payload,
                 )
+                delivered += 1
             except ApnsUnregisteredError:
                 db.delete(subscription)
                 db.commit()
@@ -260,3 +262,4 @@ def send_apns_to_student(student_id: str, title: str, body: str, extras: dict | 
                         "error": str(exc),
                     },
                 )
+        return delivered
