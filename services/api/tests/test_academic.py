@@ -257,6 +257,42 @@ def test_dashboard_runs_modules_in_parallel():
     assert response.json()["modules"]["schedule"]["status"] == "ok"
 
 
+def test_dashboard_can_load_only_requested_modules():
+    client, headers = client_with_session()
+
+    response = client.get(
+        "/dashboard?year=2025&term=2&modules=me,schedule,grades",
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    assert set(response.json()["modules"]) == {"me", "schedule", "grades"}
+
+
+def test_widget_snapshot_is_authenticated_compact_and_etagged():
+    client, headers = client_with_session()
+
+    assert client.get("/widget-snapshot?year=2025&term=2").status_code == 401
+    first = client.get("/widget-snapshot?year=2025&term=2", headers=headers)
+
+    assert first.status_code == 200
+    assert set(first.json()["modules"]) == {
+        "schedule",
+        "grades",
+        "exams",
+        "progress",
+        "ecard",
+    }
+    assert "jwxtCookies" not in first.text
+    assert "ehallCookies" not in first.text
+    etag = first.headers["etag"]
+    second = client.get(
+        "/widget-snapshot?year=2025&term=2",
+        headers={**headers, "If-None-Match": etag},
+    )
+    assert second.status_code == 304
+
+
 def test_dashboard_returns_cached_ecard_summary_for_bound_room():
     app = create_app()
     session = app.state.sessions.create(FakeClient(), "测试学生")

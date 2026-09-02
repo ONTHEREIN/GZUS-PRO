@@ -66,7 +66,15 @@ void main() {
 
     await _pumpHome(tester, api, const Size(390, 844));
 
-    final weatherCard = find.byKey(const ValueKey('home-card-天气'));
+    await tester.scrollUntilVisible(
+      find.byKey(const ValueKey('home-more-modules-toggle')),
+      200,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.tap(find.text('更多模块'));
+    await tester.pumpAndSettle();
+
+    final weatherCard = find.byKey(const ValueKey('home-card-今日天气'));
     await tester.scrollUntilVisible(
       weatherCard,
       200,
@@ -104,27 +112,28 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('首页水电卡使用生活缴费摘要而非旧 dashboard 快照', (tester) async {
+  testWidgets('首页水电卡使用核心 dashboard 快照', (tester) async {
     final api = ApiClient(
       baseUrl: 'https://api.example.test',
       httpClient: MockClient((request) async {
-        if (request.url.path == '/ecard/summary') {
-          return http.Response(
-            jsonEncode({
+        if (request.url.path == '/dashboard') {
+          final body = _dashboardBody();
+          final modules = Map<String, Object?>.from(
+            body['modules']! as Map<String, Object?>,
+          );
+          modules['ecard'] = {
+            'status': 'ok',
+            'data': {
               'status': 'ok',
               'roomId': 'CGCOMMON1111|1|A2|932',
               'roomDisplay': '校本部 A2 A2-932',
               'powerText': '9 度',
               'coldWaterText': '2 吨',
               'hotWaterText': '12 元',
-            }),
-            200,
-            headers: {'content-type': 'application/json'},
-          );
-        }
-        if (request.url.path == '/dashboard') {
+            },
+          };
           return http.Response(
-            jsonEncode(_dashboardBody()),
+            jsonEncode({...body, 'modules': modules}),
             200,
             headers: {'content-type': 'application/json'},
           );
@@ -137,12 +146,8 @@ void main() {
 
     await _pumpHome(tester, api, const Size(800, 1400));
 
-    final utilityCard = find.byKey(const ValueKey('home-card-水电余额'));
-    await tester.scrollUntilVisible(
-      utilityCard,
-      200,
-      scrollable: find.byType(Scrollable).first,
-    );
+    final utilityCard = find.byKey(const ValueKey('utilities-small'));
+    expect(utilityCard, findsOneWidget);
     expect(find.text('9 度'), findsOneWidget);
     expect(find.text('点击绑定宿舍'), findsNothing);
   });

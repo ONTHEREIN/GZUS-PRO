@@ -49,6 +49,10 @@
 	<string>用于录制视频时采集声音（如作业视频上传）。</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>用于从相册选择图片上传作业、头像等。</string>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>cn.gzus.pro.widget-refresh</string>
+	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

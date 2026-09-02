@@ -5,9 +5,9 @@
     android:targetCellWidth="2"
     android:targetCellHeight="2"
     android:updatePeriodMillis="1800000"
-    android:initialLayout="@layout/widget_today_schedule"
-    android:description="@string/widget_desc_today_schedule"
-    android:previewImage="@drawable/widget_preview_today_schedule"
-    android:previewLayout="@layout/widget_today_schedule"
+    android:initialLayout="@layout/widget_home_card_small"
+    android:description="@string/widget_desc_grades"
+    android:previewImage="@drawable/widget_preview_business_progress"
+    android:previewLayout="@layout/widget_home_card_small"
     android:resizeMode="horizontal|vertical"
     android:widgetCategory="home_screen" />

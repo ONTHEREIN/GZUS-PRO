@@ -2,6 +2,8 @@
 <resources>
     <string name="widget_desc_next_class">查看下一节课的信息</string>
     <string name="widget_desc_today_schedule">查看今日课程安排</string>
+    <string name="widget_desc_exams">查看考试倒计时</string>
+    <string name="widget_desc_grades">查看本学期成绩摘要</string>
     <string name="widget_desc_utilities">查看水电费余额</string>
     <string name="widget_desc_business_progress">查看办事进度</string>
 </resources>

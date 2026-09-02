@@ -354,7 +354,46 @@ class MainActivity : FlutterActivity() {
                         .putString("progressDetail", args["progressDetail"]?.toString() ?: "")
                         .putString("todayCoursesJson", args["todayCoursesJson"]?.toString() ?: "[]")
                         .putString("progressItemsJson", args["progressItemsJson"]?.toString() ?: "[]")
+                        .putString("examItemsJson", args["examItemsJson"]?.toString() ?: "[]")
+                        .putString("gradeItemsJson", args["gradeItemsJson"]?.toString() ?: "[]")
+                        .putString("gradeGpa", args["gradeGpa"]?.toString() ?: "0.00")
+                        .putString("gradeAverage", args["gradeAverage"]?.toString() ?: "0.0")
+                        .putString("gradeCount", args["gradeCount"]?.toString() ?: "0")
+                        .putBoolean("utilityIsBound", args["utilityIsBound"] as? Boolean ?: false)
+                        .putBoolean("utilityLowPower", args["utilityLowPower"] as? Boolean ?: false)
                         .apply()
+                    val baseUrl = args["widgetApiBaseUrl"]?.toString().orEmpty()
+                    val sessionId = args["widgetSessionId"]?.toString().orEmpty()
+                    val year = (args["widgetYear"] as? Number)?.toInt() ?: 0
+                    val term = (args["widgetTerm"] as? Number)?.toInt() ?: 0
+                    val week = (args["widgetCurrentWeek"] as? Number)?.toInt() ?: 0
+                    if (baseUrl.isNotBlank() && sessionId.isNotBlank()) {
+                        try {
+                            WidgetRefreshScheduler.configure(this, baseUrl, sessionId, year, term, week)
+                        } catch (error: IllegalArgumentException) {
+                            result.error("WIDGET_REFRESH_CONFIG_INVALID", error.message, null)
+                            return@setMethodCallHandler
+                        }
+                    }
+                    HomeWidgetProvider.updateAll(this)
+                    result.success(true)
+                }
+                "replaceRefreshSession" -> {
+                    val args = call.arguments as? Map<*, *> ?: emptyMap<Any, Any>()
+                    try {
+                        WidgetRefreshScheduler.replaceSession(
+                            this,
+                            args["widgetApiBaseUrl"]?.toString().orEmpty(),
+                            args["widgetSessionId"]?.toString().orEmpty(),
+                        )
+                        result.success(true)
+                    } catch (error: IllegalArgumentException) {
+                        result.error("WIDGET_REFRESH_CONFIG_INVALID", error.message, null)
+                    }
+                }
+                "clearRefreshConfiguration" -> {
+                    WidgetRefreshScheduler.clear(this)
+                    getSharedPreferences("gzus_home_widgets", MODE_PRIVATE).edit().clear().apply()
                     HomeWidgetProvider.updateAll(this)
                     result.success(true)
                 }

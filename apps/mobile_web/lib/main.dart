@@ -151,8 +151,12 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
       if (!loggedIn && !_scheduleOnlyMode) return;
       _enterScheduleOnlyMode();
     };
-    api.onSessionReplaced = (_) async {
+    api.onSessionReplaced = (sessionId) async {
       if (!mounted || !loggedIn) return;
+      await HomeWidgetBridge.replaceRefreshSession(
+        apiBaseUrl: api.baseUrl,
+        sessionId: sessionId,
+      );
       await _initPushServices();
     };
     _loadThemePreference();
@@ -707,6 +711,7 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
     final activeStudentId = api.studentId;
     api.clearCredentials();
     LoginRequiredServices.disconnect();
+    unawaited(HomeWidgetBridge.clearRefreshConfiguration());
 
     if (!mounted) {
       unawaited(_performLogoutCleanup(activeSessionId, activeStudentId));
@@ -731,6 +736,7 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
 
   void _enterScheduleOnlyMode() {
     LoginRequiredServices.disconnect();
+    unawaited(HomeWidgetBridge.clearRefreshConfiguration());
     unawaited(LoginRequiredServices.disableBackgroundService());
     LoginRequiredServices.cancelCourseReminders();
     if (!mounted) return;

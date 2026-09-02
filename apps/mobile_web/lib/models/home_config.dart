@@ -5,18 +5,16 @@ import '../test_flags.dart';
 
 /// 首页模块在 Bento Grid 中的视觉分量。
 ///
-/// 布局规则：页面基于 2 列网格。
-/// - large：占 2 列 × 2 行（整宽、信息最全）。
-/// - medium：占 1 列 × 2 行（半宽）。
-/// - small：占 1 列 × 1 行（半宽、高度折半）。
+/// 布局规则遵循桌面组件的信息密度：小卡只呈现一个状态，
+/// 中卡提供一项主信息，大卡提供完整上下文。
 enum HomeModuleSize {
-  /// 大模块：占满整宽，信息密度最高。
+  /// 大模块：最强的时间敏感信息。
   large,
 
-  /// 中模块：半宽，约为大模块一半的宽度。
+  /// 中模块：一项主信息和两项辅助信息。
   medium,
 
-  /// 小模块：半宽、高度折半，用于轻量入口或摘要。
+  /// 小模块：轻量状态或单一摘要。
   small,
 }
 
@@ -38,27 +36,28 @@ class HomePreferences {
   static const orderKey = 'home.moduleOrder';
   static const hiddenKey = 'home.hiddenModules';
   static const sizesKey = 'home.moduleSizes';
+  static const expandedKey = 'home.moreModulesExpanded';
   static const defaultModules = [
-    // large：时间敏感、信息密度高
+    // 首屏：按 iOS 桌面组件的视觉优先级排列。
     HomeModuleConfig('nextClass', '下一节课', Icons.watch_later,
         size: HomeModuleSize.large),
     HomeModuleConfig('todayTimeline', '今日时间线', Icons.view_timeline,
-        size: HomeModuleSize.large),
+        size: HomeModuleSize.medium),
     HomeModuleConfig('examCountdown', '考试倒计时', Icons.timer,
-        size: HomeModuleSize.large),
-    HomeModuleConfig('weekGrid', '周课表', Icons.grid_view,
-        size: HomeModuleSize.large),
-
-    // medium：常规数据卡片，默认半宽
+        size: HomeModuleSize.small),
+    HomeModuleConfig('utilities', '水电余额', Icons.water_drop,
+        size: HomeModuleSize.small),
     HomeModuleConfig('grades', '本学期成绩', Icons.school,
         size: HomeModuleSize.medium),
+    HomeModuleConfig('progress', '业务进度', Icons.route,
+        size: HomeModuleSize.medium),
+
+    // 更多模块：按需展开，避免首次进入首页加载无关信息。
+    HomeModuleConfig('weekGrid', '周课表', Icons.grid_view,
+        size: HomeModuleSize.large),
     HomeModuleConfig('attendance', '考勤统计', Icons.fact_check,
         size: HomeModuleSize.medium),
     HomeModuleConfig('credits', '学分进度', Icons.workspace_premium,
-        size: HomeModuleSize.medium),
-    HomeModuleConfig('utilities', '水电余额', Icons.water_drop,
-        size: HomeModuleSize.medium),
-    HomeModuleConfig('progress', '业务进度', Icons.route,
         size: HomeModuleSize.medium),
     HomeModuleConfig('notifications', '通知摘要', Icons.notifications_active,
         size: HomeModuleSize.medium),
@@ -106,6 +105,16 @@ class HomePreferences {
     return result;
   }
 
+  static Future<bool> loadMoreModulesExpanded() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(expandedKey) ?? false;
+  }
+
+  static Future<void> saveMoreModulesExpanded(bool expanded) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(expandedKey, expanded);
+  }
+
   static Future<void> save({
     required List<String> order,
     required Set<String> hidden,
@@ -125,6 +134,7 @@ class HomePreferences {
     await prefs.remove(orderKey);
     await prefs.remove(hiddenKey);
     await prefs.remove(sizesKey);
+    await prefs.remove(expandedKey);
   }
 
   static List<String> _normalizeOrder(List<String> value) {

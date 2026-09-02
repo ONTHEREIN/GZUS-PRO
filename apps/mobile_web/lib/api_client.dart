@@ -1295,12 +1295,15 @@ class ApiClient {
     required int year,
     required int term,
     required int week,
+    List<String> modules = const [],
     bool forceRefresh = false,
   }) async {
+    final moduleQuery = modules.isEmpty ? '' : '&modules=${modules.join(',')}';
+    final cacheSuffix = modules.isEmpty ? 'all' : modules.join('_');
     final result = await _cacheFirstObject<DashboardSnapshot>(
-      cacheKey: 'dashboard_${year}_${term}_$week',
+      cacheKey: 'dashboard_${year}_${term}_${week}_$cacheSuffix',
       fetch: () => _plainObject(_getDashboardObject(
-        '/dashboard?year=$year&term=$term&week=$week${forceRefresh ? '&refresh=true' : ''}',
+        '/dashboard?year=$year&term=$term&week=$week$moduleQuery${forceRefresh ? '&refresh=true' : ''}',
       )),
       fromJson: (json) => DashboardSnapshot.fromJson(json),
       forceRefresh: forceRefresh,

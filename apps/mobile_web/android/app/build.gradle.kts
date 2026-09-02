@@ -81,6 +81,8 @@ android {
 }
 
 dependencies {
+    implementation("androidx.work:work-runtime-ktx:2.10.0")
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
     implementation("commons-net:commons-net:3.11.1")
     implementation("com.tencent.shiply:upgrade:2.2.2")
     implementation("com.tencent.shiply:upgrade-ui:2.2.2")

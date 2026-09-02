@@ -7,6 +7,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Bundle
 import android.view.View
 import android.widget.RemoteViews
 import org.json.JSONArray
@@ -28,6 +29,15 @@ open class HomeWidgetProvider : AppWidgetProvider() {
         }
     }
 
+    override fun onAppWidgetOptionsChanged(
+        context: Context,
+        appWidgetManager: AppWidgetManager,
+        appWidgetId: Int,
+        newOptions: Bundle,
+    ) {
+        updateWidget(context, appWidgetManager, appWidgetId, kind)
+    }
+
     companion object {
         private const val PREFS = "gzus_home_widgets"
         const val EXTRA_INITIAL_TAB = "initialTab"
@@ -38,6 +48,8 @@ open class HomeWidgetProvider : AppWidgetProvider() {
             val providers = listOf(
                 NextClassWidgetProvider::class.java to "next",
                 TodayScheduleWidgetProvider::class.java to "today",
+                ExamCountdownWidgetProvider::class.java to "exams",
+                GradesWidgetProvider::class.java to "grades",
                 UtilitiesWidgetProvider::class.java to "utilities",
                 BusinessProgressWidgetProvider::class.java to "progress"
             )
@@ -55,6 +67,10 @@ open class HomeWidgetProvider : AppWidgetProvider() {
         ) {
             try {
                 val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                if (isSmallWidget(manager, widgetId)) {
+                    updateGenericWidget(context, manager, widgetId, widgetData(prefs, kind), kind)
+                    return
+                }
 
                 when (kind) {
                     "utilities" -> updateUtilitiesWidget(context, manager, widgetId, prefs)
@@ -63,6 +79,10 @@ open class HomeWidgetProvider : AppWidgetProvider() {
                         updateNextClassWidget(context, manager, widgetId, prefs, data)
                     }
                     "today" -> updateTodayWidget(context, manager, widgetId, prefs)
+                    "exams", "grades" -> {
+                        val data = widgetData(prefs, kind)
+                        updateGenericWidget(context, manager, widgetId, data, kind)
+                    }
                     "progress" -> updateProgressWidget(context, manager, widgetId, prefs)
                     else -> {
                         val data = widgetData(prefs, kind)
@@ -106,6 +126,12 @@ open class HomeWidgetProvider : AppWidgetProvider() {
             manager.updateAppWidget(widgetId, views)
         }
 
+        private fun isSmallWidget(manager: AppWidgetManager, widgetId: Int): Boolean {
+            val options = manager.getAppWidgetOptions(widgetId)
+            return options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH) < 180 &&
+                options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT) < 180
+        }
+
         private fun updateGenericWidget(
             context: Context,
             manager: AppWidgetManager,
@@ -113,11 +139,21 @@ open class HomeWidgetProvider : AppWidgetProvider() {
             data: WidgetData,
             kind: String
         ) {
-            val views = RemoteViews(context.packageName, R.layout.widget_home_card)
+            val options = manager.getAppWidgetOptions(widgetId)
+            val minWidth = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH)
+            val minHeight = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT)
+            val layout = if (minWidth < 180 && minHeight < 180) {
+                R.layout.widget_home_card_small
+            } else {
+                R.layout.widget_home_card
+            }
+            val views = RemoteViews(context.packageName, layout)
 
             val iconRes = when (kind) {
                 "today" -> R.drawable.widget_icon_today
                 "progress" -> R.drawable.widget_icon_progress
+                "exams" -> R.drawable.widget_icon_next
+                "grades" -> R.drawable.widget_icon_progress
                 else -> R.drawable.widget_icon_next
             }
             views.setImageViewResource(R.id.widget_icon, iconRes)
@@ -232,6 +268,26 @@ open class HomeWidgetProvider : AppWidgetProvider() {
                     detail = prefText(prefs, "progressDetail", "点击查看办事大厅"),
                     tab = "business"
                 )
+                "exams" -> {
+                    val exams = JSONArray(prefs.getString("examItemsJson", "[]") ?: "[]")
+                    val first = exams.optJSONObject(0)
+                    val title = first?.optString("courseName").orEmpty()
+                        .ifBlank { first?.optString("name").orEmpty() }
+                    WidgetData(
+                        headerTitle = "考试倒计时",
+                        title = title.ifBlank { "暂无考试" },
+                        meta = prefText(prefs, "examCount", "0") + " 场考试",
+                        detail = first?.optString("time", "点击查看考试安排") ?: "点击查看考试安排",
+                        tab = "exams"
+                    )
+                }
+                "grades" -> WidgetData(
+                    headerTitle = "本学期成绩",
+                    title = prefText(prefs, "gradeGpa", "暂无成绩"),
+                    meta = "平均绩点 · " + prefText(prefs, "gradeAverage", "-") + " 分",
+                    detail = prefText(prefs, "gradeCount", "0") + " 门课程",
+                    tab = "grades"
+                )
                 else -> WidgetData(
                     headerTitle = "下一节课",
                     title = prefText(prefs, "nextTitle", "下一节课"),
@@ -295,6 +351,14 @@ class NextClassWidgetProvider : HomeWidgetProvider() {
 
 class TodayScheduleWidgetProvider : HomeWidgetProvider() {
     override val kind: String = "today"
+}
+
+class ExamCountdownWidgetProvider : HomeWidgetProvider() {
+    override val kind: String = "exams"
+}
+
+class GradesWidgetProvider : HomeWidgetProvider() {
+    override val kind: String = "grades"
 }
 
 class UtilitiesWidgetProvider : HomeWidgetProvider() {

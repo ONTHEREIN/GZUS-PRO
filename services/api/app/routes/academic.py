@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import logging
 import re
@@ -8,7 +9,7 @@ from datetime import UTC, datetime
 from typing import TypeVar
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from app.cache_service import (
     ACADEMIC_CACHE_MAX_AGE_SECONDS,
@@ -68,6 +69,37 @@ _DASHBOARD_MODULE_LABELS = {
     "apps": "常用服务",
     "progress": "业务进度",
 }
+
+_DASHBOARD_MODULE_IDS = frozenset((*_DASHBOARD_MODULE_LABELS, "ecard", "weather"))
+_WIDGET_SNAPSHOT_MODULE_IDS = frozenset({"schedule", "grades", "exams", "progress", "ecard"})
+
+
+def _parse_dashboard_modules(raw_modules: str | None) -> set[str]:
+    """解析可选首页模块，缺省时保持原有完整首页行为。"""
+    if raw_modules is None or not raw_modules.strip():
+        return set(_DASHBOARD_MODULE_IDS)
+    module_ids = {item.strip() for item in raw_modules.split(",") if item.strip()}
+    invalid = module_ids.difference(_DASHBOARD_MODULE_IDS)
+    if invalid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"不支持的首页模块：{', '.join(sorted(invalid))}",
+        )
+    if not module_ids:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="至少选择一个首页模块")
+    return module_ids
+
+
+def _compact_widget_modules(modules: dict[str, dict]) -> dict[str, dict]:
+    """移除调试和耗时字段，保证相同组件数据具有稳定 ETag。"""
+    return {
+        name: {
+            "status": module["status"],
+            "data": module["data"],
+            **({"error": module["error"]} if "error" in module else {}),
+        }
+        for name, module in modules.items()
+    }
 
 
 def _academic_upstream_error_detail(exc: Exception) -> str:
@@ -156,6 +188,7 @@ def _load_dashboard_caches(
     student_id: str,
     params: dict | None,
     refresh: bool,
+    resources: set[str],
 ) -> dict[str, tuple[tuple[dict | list | None, datetime | None], tuple[dict | list | None, datetime | None]]]:
     cache_params = {
         "me": None,
@@ -168,6 +201,8 @@ def _load_dashboard_caches(
     }
     cache_by_resource = {}
     for resource, resource_params in cache_params.items():
+        if resource not in resources:
+            continue
         fresh_cache = (
             (None, None)
             if refresh
@@ -202,7 +237,9 @@ def _save_dashboard_module_caches(
         "exams": params,
     }
     for resource, resource_params in cache_params.items():
-        module = modules[resource]
+        module = modules.get(resource)
+        if module is None:
+            continue
         if module["source"] != "api" or module["status"] == "error":
             continue
         try:
@@ -373,6 +410,7 @@ async def me(
 async def schedule(
     year: str | None = None,
     term: str | None = None,
+    week: str | None = None,
     request: Request = None,
     refresh: bool = False,
     session: AppSession = Depends(require_session),
@@ -493,6 +531,7 @@ async def dashboard(
     year: str | None = None,
     term: str | None = None,
     week: str | None = None,
+    modules: str | None = None,
     refresh: bool = False,
     session: AppSession = Depends(require_session),
 ) -> dict:
@@ -502,139 +541,79 @@ async def dashboard(
     """
     trace_id = request.headers.get("X-GZUS-Trace-Id") or f"api-{int(time.time() * 1000)}"
     student_id = _get_student_id(session)
+    requested_modules = _parse_dashboard_modules(modules)
     params = {"year": year, "term": term} if year or term else None
-    dashboard_caches = _load_dashboard_caches(student_id, params, refresh)
+    dashboard_caches = _load_dashboard_caches(
+        student_id,
+        params,
+        refresh,
+        requested_modules,
+    )
 
     ehall_client = getattr(session, "ehall_client", None)
-    module_jobs = [
-        _run_dashboard_module(
-            "me",
-            {},
-            lambda: _dashboard_module(
-                "me",
-                dashboard_caches["me"][0],
-                dashboard_caches["me"][1],
-                session.client.get_info if session.client else dict,
-                empty={},
-            ),
-        ),
-        _run_dashboard_module(
-            "schedule",
-            [],
-            lambda: _dashboard_module(
-                "schedule",
-                dashboard_caches["schedule"][0],
-                dashboard_caches["schedule"][1],
-                lambda: session.client.get_schedule(year, term) if session.client else [],
-                empty=[],
-            ),
-        ),
-        _run_dashboard_module(
-            "notices",
-            [],
-            lambda: _dashboard_module(
-                "notices",
-                dashboard_caches["notices"][0],
-                dashboard_caches["notices"][1],
-                lambda: _session_notices(
-                    session.client.get_notices() if session.client else [],
-                    ehall_client,
-                ),
-                empty=[],
-            ),
-        ),
-        _run_dashboard_module(
-            "attendance",
-            {"status": "empty", "items": []},
-            lambda: _dashboard_module(
-                "attendance",
-                dashboard_caches["attendance"][0],
-                dashboard_caches["attendance"][1],
-                lambda: {
-                    "status": "ok",
-                    "items": session.client.get_attendance(year, term),
-                }
-                if session.client
-                else {"status": "empty", "items": []},
-                empty={"status": "empty", "items": []},
-            ),
-        ),
-        _run_dashboard_module(
-            "credits",
-            [],
-            lambda: _dashboard_module(
-                "credits",
-                dashboard_caches["credits"][0],
-                dashboard_caches["credits"][1],
-                session.client.get_credits if session.client else list,
-                empty=[],
-            ),
-        ),
-        _run_dashboard_module(
-            "grades",
-            [],
-            lambda: _dashboard_module(
-                "grades",
-                dashboard_caches["grades"][0],
-                dashboard_caches["grades"][1],
-                lambda: session.client.get_grades(year, term) if session.client else [],
-                empty=[],
-            ),
-        ),
-        _run_dashboard_module(
-            "exams",
-            [],
-            lambda: _dashboard_module(
-                "exams",
-                dashboard_caches["exams"][0],
-                dashboard_caches["exams"][1],
-                lambda: session.client.get_exams(year, term) if session.client else [],
-                empty=[],
-            ),
-        ),
-        _run_dashboard_module(
-            "apps",
-            [],
-            lambda: _dashboard_ehall_module(
-                lambda: ehall_client.get_applications() if ehall_client else [],
-                empty=[],
-            ),
-        ),
-        _run_dashboard_module(
-            "progress",
-            {"items": []},
-            lambda: _dashboard_ehall_module(
-                lambda: ehall_client.get_progress_overview()
-                if ehall_client
-                else {"items": []},
-                empty={"items": []},
-            ),
-        ),
-    ]
+    module_jobs = []
+    if "me" in requested_modules:
+        module_jobs.append(_run_dashboard_module("me", {}, lambda: _dashboard_module("me", dashboard_caches["me"][0], dashboard_caches["me"][1], session.client.get_info if session.client else dict, empty={})))
+    if "schedule" in requested_modules:
+        module_jobs.append(_run_dashboard_module("schedule", [], lambda: _dashboard_module("schedule", dashboard_caches["schedule"][0], dashboard_caches["schedule"][1], lambda: session.client.get_schedule(year, term) if session.client else [], empty=[])))
+    if "notices" in requested_modules:
+        module_jobs.append(_run_dashboard_module("notices", [], lambda: _dashboard_module("notices", dashboard_caches["notices"][0], dashboard_caches["notices"][1], lambda: _session_notices(session.client.get_notices() if session.client else [], ehall_client), empty=[])))
+    if "attendance" in requested_modules:
+        module_jobs.append(_run_dashboard_module("attendance", {"status": "empty", "items": []}, lambda: _dashboard_module("attendance", dashboard_caches["attendance"][0], dashboard_caches["attendance"][1], lambda: {"status": "ok", "items": session.client.get_attendance(year, term)} if session.client else {"status": "empty", "items": []}, empty={"status": "empty", "items": []})))
+    if "credits" in requested_modules:
+        module_jobs.append(_run_dashboard_module("credits", [], lambda: _dashboard_module("credits", dashboard_caches["credits"][0], dashboard_caches["credits"][1], session.client.get_credits if session.client else list, empty=[])))
+    if "grades" in requested_modules:
+        module_jobs.append(_run_dashboard_module("grades", [], lambda: _dashboard_module("grades", dashboard_caches["grades"][0], dashboard_caches["grades"][1], lambda: session.client.get_grades(year, term) if session.client else [], empty=[])))
+    if "exams" in requested_modules:
+        module_jobs.append(_run_dashboard_module("exams", [], lambda: _dashboard_module("exams", dashboard_caches["exams"][0], dashboard_caches["exams"][1], lambda: session.client.get_exams(year, term) if session.client else [], empty=[])))
+    if "apps" in requested_modules:
+        module_jobs.append(_run_dashboard_module("apps", [], lambda: _dashboard_ehall_module(lambda: ehall_client.get_applications() if ehall_client else [], empty=[])))
+    if "progress" in requested_modules:
+        module_jobs.append(_run_dashboard_module("progress", {"items": []}, lambda: _dashboard_ehall_module(lambda: ehall_client.get_progress_overview() if ehall_client else {"items": []}, empty={"items": []})))
     modules = dict(await asyncio.gather(*module_jobs))
     _save_dashboard_module_caches(student_id, params, modules)
-    notices_module = modules["notices"]
-    if notices_module["status"] != "error":
+    notices_module = modules.get("notices")
+    if notices_module is not None and notices_module["status"] != "error":
         notices_module["data"] = _merge_public_notices(notices_module["data"])
-    ecard_summary = summary_for_student(student_id)
-    modules["ecard"] = {
-        "status": "ok" if ecard_summary["status"] == "ok" else "empty",
-        "data": ecard_summary,
-        "source": "cache",
-        "durationMs": 0,
-    }
-    modules["weather"] = {
-        "status": "empty",
-        "data": None,
-        "source": "client",
-        "durationMs": 0,
-    }
+    if "ecard" in requested_modules:
+        ecard_summary = summary_for_student(student_id)
+        modules["ecard"] = {"status": "ok" if ecard_summary["status"] == "ok" else "empty", "data": ecard_summary, "source": "cache", "durationMs": 0}
+    if "weather" in requested_modules:
+        modules["weather"] = {"status": "empty", "data": None, "source": "client", "durationMs": 0}
     return {
         "status": "ok",
         "generatedAt": datetime.now(UTC).isoformat(),
         "traceId": trace_id,
         "modules": modules,
     }
+
+
+@router.get("/widget-snapshot")
+async def widget_snapshot(
+    request: Request,
+    year: str | None = None,
+    term: str | None = None,
+    week: str | None = None,
+    session: AppSession = Depends(require_session),
+) -> Response:
+    """返回桌面组件需要的最小快照，并以 ETag 避免重复原生重绘。"""
+    payload = await dashboard(
+        request=request,
+        year=year,
+        term=term,
+        week=week,
+        modules=",".join(sorted(_WIDGET_SNAPSHOT_MODULE_IDS)),
+        session=session,
+    )
+    snapshot = {"modules": _compact_widget_modules(payload["modules"])}
+    canonical = json.dumps(snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    etag = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    if request.headers.get("if-none-match", "").strip('"') == etag:
+        return Response(status_code=status.HTTP_304_NOT_MODIFIED, headers={"ETag": f'"{etag}"'})
+    return JSONResponse(
+        content={"generatedAt": payload["generatedAt"], **snapshot},
+        headers={"ETag": f'"{etag}"', "Cache-Control": "private, no-store"},
+    )
 
 
 def _session_notices(jwxt_items: list[dict], ehall_client) -> list[dict]:

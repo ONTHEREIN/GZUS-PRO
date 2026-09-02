@@ -11,6 +11,7 @@ import '../../gzus_design.dart';
 import '../../location_service.dart';
 import '../../permission_service.dart';
 import '../../models/home_config.dart';
+import '../../models/grade_models.dart';
 import '../../responsive/spacing.dart';
 import '../../test_flags.dart';
 import '../../responsive/breakpoints.dart';
@@ -114,6 +115,25 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
   List<String> _moduleOrder = HomePreferences.defaultModuleIds;
   Set<String> _hiddenModules = {};
   Map<String, HomeModuleSize> _moduleSizes = {};
+  bool _moreModulesExpanded = false;
+  bool _moreModuleDataLoaded = false;
+
+  static const _primaryModuleIds = <String>{
+    'nextClass',
+    'todayTimeline',
+    'examCountdown',
+    'utilities',
+    'grades',
+    'progress',
+  };
+  static const _initialDashboardModules = <String>[
+    'me',
+    'schedule',
+    'grades',
+    'exams',
+    'progress',
+    'ecard',
+  ];
 
   @override
   void initState() {
@@ -123,6 +143,7 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
   }
 
   void _initFutures({bool forceRefresh = false}) {
+    _moreModuleDataLoaded = false;
     _dashboardFuture = _loadDashboardSnapshot(forceRefresh: forceRefresh);
     _infoFuture = _dashboardFuture.then(_parseInfo);
     _scheduleFuture = _dashboardFuture.then(
@@ -136,29 +157,19 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
         );
       },
     );
-    _noticesFuture = _dashboardFuture.then(
-      (snapshot) => _moduleList(snapshot, 'notices', '通知')
-          .map(NoticeItem.fromJson)
-          .toList(),
+    _noticesFuture = Future<List<NoticeItem>>.value(const <NoticeItem>[]);
+    _attendanceFuture = Future<AttendanceResponse>.value(
+      AttendanceResponse.fromJson(
+        const <String, dynamic>{'status': 'empty', 'items': <Object>[]},
+      ),
     );
-    _attendanceFuture = _dashboardFuture.then((snapshot) {
-      final data = _moduleObject(snapshot, 'attendance', '考勤');
-      return AttendanceResponse.fromJson(
-        data ?? <String, dynamic>{'status': 'empty', 'items': const []},
-      );
+    _creditsFuture = Future<List<CreditItem>>.value(const <CreditItem>[]);
+    _ecardFuture = _dashboardFuture.then((snapshot) {
+      final data = _moduleObject(snapshot, 'ecard', '水电费');
+      return EcardSummary.fromJson(data ?? const <String, dynamic>{});
     });
-    _creditsFuture = _dashboardFuture.then(
-      (snapshot) => _moduleList(snapshot, 'credits', '学分')
-          .map(CreditItem.fromJson)
-          .toList(),
-    );
-    // 宿舍绑定会直接更新生活缴费摘要；不要复用 dashboard 的旧快照，
-    // 否则从生活缴费页返回首页后仍可能显示“未绑定宿舍”。
-    _ecardFuture = widget.api.ecardSummary().then((result) => result.data);
-    _appsFuture = _dashboardFuture.then(
-      (snapshot) => _moduleList(snapshot, 'apps', '常用服务')
-          .map(EhallApplicationItem.fromJson)
-          .toList(),
+    _appsFuture = Future<List<EhallApplicationItem>>.value(
+      const <EhallApplicationItem>[],
     );
     _progressFuture = _dashboardFuture.then((snapshot) {
       final data = _moduleObject(snapshot, 'progress', '业务进度');
@@ -166,23 +177,8 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
           ? EhallProgressOverview.fromItems(const <EhallProgressItem>[])
           : EhallProgressOverview.fromJson(data);
     });
-    _weatherFuture = _dashboardFuture.then((snapshot) async {
-      final data = _moduleObject(snapshot, 'weather', '天气');
-      if (data != null) return WeatherData.fromJson(data);
-      try {
-        await PermissionService.requestLocationPermission();
-        await Future<void>.delayed(const Duration(milliseconds: 300));
-        final position = await LocationService.getCoarseLocation();
-        final result = await widget.api.weather(
-          lat: position?.lat,
-          lon: position?.lon,
-        );
-        unawaited(_saveLocalWeather(result.data));
-        return result.data;
-      } catch (_) {
-        return _loadLocalWeather();
-      }
-    });
+    // 天气属于“更多模块”，首屏不请求定位和天气服务。
+    _weatherFuture = Future<WeatherData?>.value(null);
     _gradesFuture = _dashboardFuture.then((snapshot) async {
       final grades = _moduleList(snapshot, 'grades', '成绩')
           .map(GradeItem.fromJson)
@@ -203,6 +199,9 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
       return _loadLocalExams();
     });
     unawaited(_updateHomeWidget());
+    if (_moreModulesExpanded) {
+      unawaited(_loadMoreModuleData(forceRefresh: forceRefresh));
+    }
   }
 
   @override
@@ -258,17 +257,66 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
 
   Future<DashboardSnapshot> _loadDashboardSnapshot({
     bool forceRefresh = false,
+    List<String>? modules,
   }) async {
     final result = await widget.api.dashboard(
       year: widget.year,
       term: widget.term,
       week: widget.currentWeek,
+      modules: modules ?? _initialDashboardModules,
       forceRefresh: forceRefresh,
     );
     if (result.data.status != 'ok') {
       throw ApiException('首页数据加载失败：服务器状态为 ${result.data.status}');
     }
     return result.data;
+  }
+
+  Future<void> _loadMoreModuleData({bool forceRefresh = false}) async {
+    if (_moreModuleDataLoaded && !forceRefresh) return;
+    final snapshotFuture = _loadDashboardSnapshot(
+      forceRefresh: forceRefresh,
+      modules: const ['notices', 'attendance', 'credits', 'apps'],
+    );
+    setState(() {
+      _moreModuleDataLoaded = true;
+      _noticesFuture = snapshotFuture.then(
+        (snapshot) => _moduleList(snapshot, 'notices', '通知')
+            .map(NoticeItem.fromJson)
+            .toList(),
+      );
+      _attendanceFuture = snapshotFuture.then((snapshot) {
+        final data = _moduleObject(snapshot, 'attendance', '考勤');
+        return AttendanceResponse.fromJson(
+          data ?? <String, dynamic>{'status': 'empty', 'items': const []},
+        );
+      });
+      _creditsFuture = snapshotFuture.then(
+        (snapshot) => _moduleList(snapshot, 'credits', '学分')
+            .map(CreditItem.fromJson)
+            .toList(),
+      );
+      _appsFuture = snapshotFuture.then(
+        (snapshot) => _moduleList(snapshot, 'apps', '常用服务')
+            .map(EhallApplicationItem.fromJson)
+            .toList(),
+      );
+      _weatherFuture = _loadWeatherForMoreModules();
+    });
+  }
+
+  Future<WeatherData?> _loadWeatherForMoreModules() async {
+    try {
+      await PermissionService.requestLocationPermission();
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+      final position = await LocationService.getCoarseLocation();
+      final result =
+          await widget.api.weather(lat: position?.lat, lon: position?.lon);
+      unawaited(_saveLocalWeather(result.data));
+      return result.data;
+    } catch (_) {
+      return _loadLocalWeather();
+    }
   }
 
   DashboardModule _module(
@@ -354,13 +402,18 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
       HomePreferences.loadOrder(),
       HomePreferences.loadHidden(),
       HomePreferences.loadSizes(),
+      HomePreferences.loadMoreModulesExpanded(),
     ]);
     if (mounted) {
       setState(() {
         _moduleOrder = results[0] as List<String>;
         _hiddenModules = results[1] as Set<String>;
         _moduleSizes = results[2] as Map<String, HomeModuleSize>;
+        _moreModulesExpanded = results[3] as bool;
       });
+      if (_moreModulesExpanded) {
+        unawaited(_loadMoreModuleData());
+      }
     }
   }
 
@@ -530,16 +583,18 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
                     breakpoint == GzusBreakpoint.compact ? 10.0 : 12.0;
                 final visible = _moduleOrder
                     .where((id) => !_hiddenModules.contains(id))
+                    .where(
+                      (id) =>
+                          _moreModulesExpanded ||
+                          _primaryModuleIds.contains(id),
+                    )
                     .toList();
                 final items = visible.map((id) {
                   final size = _sizeFor(id);
                   return _HomeLayoutItem(
                     id: id,
                     size: size,
-                    child: SizedBox(
-                      height: _moduleHeight(size, breakpoint),
-                      child: _homeModuleFor(id, size),
-                    ),
+                    child: _homeModuleFor(id, size),
                   );
                 }).toList();
                 ListView buildList() => ListView(
@@ -550,7 +605,35 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
                         items: items,
                         spacing: spacing,
                         compact: breakpoint == GzusBreakpoint.compact,
-                      ),
+                      )..add(
+                          Padding(
+                            padding: const EdgeInsets.only(top: 4),
+                            child: Center(
+                              child: FilledButton.tonalIcon(
+                                key: const ValueKey('home-more-modules-toggle'),
+                                onPressed: () async {
+                                  final next = !_moreModulesExpanded;
+                                  await HomePreferences.saveMoreModulesExpanded(
+                                      next);
+                                  if (mounted) {
+                                    setState(() => _moreModulesExpanded = next);
+                                  }
+                                  if (next) {
+                                    unawaited(_loadMoreModuleData());
+                                  }
+                                },
+                                icon: Icon(
+                                  _moreModulesExpanded
+                                      ? Icons.keyboard_arrow_up
+                                      : Icons.keyboard_arrow_down,
+                                ),
+                                label: Text(
+                                  _moreModulesExpanded ? '收起更多模块' : '更多模块',
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
                     );
                 return RefreshIndicator(
                   onRefresh: _refreshDashboard,
@@ -569,36 +652,35 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
       final results = await Future.wait([
         _infoFuture,
         _scheduleFuture,
-        _noticesFuture,
-        _attendanceFuture,
-        _creditsFuture,
         _ecardFuture,
-        _appsFuture,
         _progressFuture,
-        _weatherFuture,
         _gradesFuture,
         _examsFuture,
-      ]).catchError((_) => List.filled(11, null));
+      ].map((future) =>
+          future.then<Object?>((value) => value, onError: (_, __) => null)));
       final data = HomeDashboardData(
         info: results[0] as StudentInfo? ?? _fallbackStudentInfo(),
         courses: (results[1] as ScheduleResult?)?.items ?? const [],
-        notices: results[2] as List<NoticeItem>? ?? const [],
-        attendance: results[3] as AttendanceResponse? ??
+        notices: const [],
+        attendance:
             AttendanceResponse.fromJson({'status': 'empty', 'items': []}),
-        credits: results[4] as List<CreditItem>? ?? const [],
-        ecard: results[5] as EcardSummary? ??
+        credits: const [],
+        ecard: results[2] as EcardSummary? ??
             EcardSummary.fromJson({'status': 'not_bound'}),
-        apps: results[6] as List<EhallApplicationItem>? ?? const [],
-        progressOverview: results[7] as EhallProgressOverview? ??
+        apps: const [],
+        progressOverview: results[3] as EhallProgressOverview? ??
             EhallProgressOverview.fromItems(const []),
-        weather: results[8] as WeatherData?,
-        grades: results[9] as List<GradeItem>?,
-        exams: results[10] as List<ExamItem>?,
+        grades: results[4] as List<GradeItem>?,
+        exams: results[5] as List<ExamItem>?,
       );
       await HomeWidgetBridge.update(
         data: data,
         currentWeek: widget.currentWeek,
         firstWeekStart: widget.firstWeekStart,
+        apiBaseUrl: widget.api.baseUrl,
+        sessionId: widget.api.sessionId ?? '',
+        year: widget.year,
+        term: widget.term,
       );
     } catch (_) {}
   }
@@ -607,20 +689,14 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
   int _rowSpanFor(HomeModuleSize size) {
     return switch (size) {
       HomeModuleSize.large => 2,
-      HomeModuleSize.medium => 2,
+      HomeModuleSize.medium => 1,
       HomeModuleSize.small => 1,
     };
   }
 
   double _moduleHeight(HomeModuleSize size, GzusBreakpoint breakpoint) {
-    if (breakpoint == GzusBreakpoint.compact) {
-      return switch (size) {
-        HomeModuleSize.large => 288,
-        HomeModuleSize.medium => 216,
-        HomeModuleSize.small => 144,
-      };
-    }
-    return _kSmallRowHeight * _rowSpanFor(size);
+    final rowHeight = breakpoint == GzusBreakpoint.compact ? 170.0 : 180.0;
+    return rowHeight * _rowSpanFor(size);
   }
 
   HomeModuleSize _sizeFor(String id) {
@@ -1109,6 +1185,10 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
                           hidden = {};
                           sizes = {};
                           await persist();
+                          await HomePreferences.saveMoreModulesExpanded(false);
+                          if (mounted) {
+                            setState(() => _moreModulesExpanded = false);
+                          }
                           localSetState(() {});
                         },
                         child: const Text('恢复默认'),
@@ -1256,136 +1336,138 @@ class _HomeLayoutItem {
   final Widget child;
 }
 
-/// Bento Grid 行高基准：小模块高度。
-const double _kSmallRowHeight = 140;
-
-/// 将模块按 2 列 Bento Grid 排列。
-///
-/// 大模块占 2 列 × 2 行，中模块占 1 列 × 2 行，小模块占 1 列 × 1 行。
-/// 算法按顺序填充，当前行剩余列数不足时换行。
+/// 将模块排入真正的二维网格；每个单元只可被一个模块占用。
 List<Widget> _buildHomeBentoGrid({
   required List<_HomeLayoutItem> items,
   required double spacing,
   required bool compact,
 }) {
-  if (compact) return _buildCompactHomeGrid(items: items, spacing: spacing);
-  final rows = <Widget>[];
-  const columnCount = 2;
-  final currentRow = <Widget>[];
-  final currentRowSpans = <int>[];
-  var currentRowMaxSpan = 1;
-
-  void flushRow() {
-    if (currentRow.isEmpty) return;
-    final expanded = <Widget>[];
-    for (var i = 0; i < columnCount; i++) {
-      if (i > 0) expanded.add(SizedBox(width: spacing));
-      final span = i < currentRowSpans.length ? currentRowSpans[i] : 1;
-      expanded.add(
-        Expanded(
-          flex: span,
-          child:
-              i < currentRow.length ? currentRow[i] : const SizedBox.shrink(),
-        ),
-      );
-    }
-    rows.add(
-      SizedBox(
-        height: _kSmallRowHeight * currentRowMaxSpan,
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: expanded,
-        ),
-      ),
-    );
-    currentRow.clear();
-    currentRowSpans.clear();
-    currentRowMaxSpan = 1;
-  }
-
-  void addToRow(_HomeLayoutItem item, int colSpan, int rowSpan) {
-    final remaining =
-        columnCount - currentRowSpans.fold<int>(0, (sum, span) => sum + span);
-    if (remaining < colSpan) flushRow();
-    currentRow.add(item.child);
-    currentRowSpans.add(colSpan);
-    if (rowSpan > currentRowMaxSpan) currentRowMaxSpan = rowSpan;
-    if (currentRowSpans.fold<int>(0, (sum, span) => sum + span) >=
-        columnCount) {
-      flushRow();
-    }
-  }
-
-  for (final item in items) {
-    final (colSpan, rowSpan) = switch (item.size) {
-      HomeModuleSize.large => (2, 2),
-      HomeModuleSize.medium => (1, 2),
-      HomeModuleSize.small => (1, 1),
-    };
-    if (colSpan == 2) {
-      if (currentRow.isNotEmpty) flushRow();
-      rows.add(
-        SizedBox(
-          height: _kSmallRowHeight * rowSpan,
-          child: item.child,
-        ),
-      );
-      continue;
-    }
-    addToRow(item, colSpan, rowSpan);
-  }
-  flushRow();
-
-  // 插入行间距。
-  final result = <Widget>[];
-  for (var i = 0; i < rows.length; i++) {
-    if (i > 0) result.add(SizedBox(height: spacing));
-    result.add(rows[i]);
-  }
-  result.add(const SizedBox(height: 24));
-  return result;
+  return [
+    _HomeBentoGrid(items: items, spacing: spacing, compact: compact),
+    const SizedBox(height: 24),
+  ];
 }
 
-List<Widget> _buildCompactHomeGrid({
-  required List<_HomeLayoutItem> items,
-  required double spacing,
-}) {
-  final rows = <Widget>[];
-  final pendingSmall = <_HomeLayoutItem>[];
+class _HomeBentoGrid extends StatelessWidget {
+  const _HomeBentoGrid({
+    required this.items,
+    required this.spacing,
+    required this.compact,
+  });
 
-  void addRow(Widget child) {
-    if (rows.isNotEmpty) rows.add(SizedBox(height: spacing));
-    rows.add(child);
+  final List<_HomeLayoutItem> items;
+  final double spacing;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    final columns = compact ? 2 : 4;
+    final unitHeight = compact ? 170.0 : 180.0;
+    final placements = _placeHomeModules(items, columns, compact);
+    if (placements.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    final rows = placements.fold<int>(
+      0,
+      (maxRows, item) =>
+          maxRows > item.row + item.rowSpan ? maxRows : item.row + item.rowSpan,
+    );
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final unitWidth =
+            (constraints.maxWidth - spacing * (columns - 1)) / columns;
+        return SizedBox(
+          height: rows * unitHeight + (rows - 1) * spacing,
+          child: Stack(
+            children: [
+              for (final placement in placements)
+                Positioned(
+                  left: placement.column * (unitWidth + spacing),
+                  top: placement.row * (unitHeight + spacing),
+                  width: placement.columnSpan * unitWidth +
+                      (placement.columnSpan - 1) * spacing,
+                  height: placement.rowSpan * unitHeight +
+                      (placement.rowSpan - 1) * spacing,
+                  child: placement.item.child,
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _HomeModulePlacement {
+  const _HomeModulePlacement({
+    required this.item,
+    required this.column,
+    required this.row,
+    required this.columnSpan,
+    required this.rowSpan,
+  });
+
+  final _HomeLayoutItem item;
+  final int column;
+  final int row;
+  final int columnSpan;
+  final int rowSpan;
+}
+
+List<_HomeModulePlacement> _placeHomeModules(
+  List<_HomeLayoutItem> items,
+  int columns,
+  bool compact,
+) {
+  final occupied = <List<bool>>[];
+  final result = <_HomeModulePlacement>[];
+
+  void ensureRows(int count) {
+    while (occupied.length < count) {
+      occupied.add(List<bool>.filled(columns, false));
+    }
   }
 
-  void flushSmall() {
-    if (pendingSmall.isEmpty) return;
-    final first = pendingSmall.removeAt(0);
-    final second = pendingSmall.isEmpty ? null : pendingSmall.removeAt(0);
-    addRow(
-      Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(child: first.child),
-          SizedBox(width: spacing),
-          Expanded(child: second?.child ?? const SizedBox.shrink()),
-        ],
-      ),
-    );
+  bool fits(int row, int column, int columnSpan, int rowSpan) {
+    if (column + columnSpan > columns) return false;
+    ensureRows(row + rowSpan);
+    for (var y = row; y < row + rowSpan; y++) {
+      for (var x = column; x < column + columnSpan; x++) {
+        if (occupied[y][x]) return false;
+      }
+    }
+    return true;
   }
 
   for (final item in items) {
-    if (item.size != HomeModuleSize.small) {
-      flushSmall();
-      addRow(item.child);
-      continue;
+    final (columnSpan, rowSpan) = switch (item.size) {
+      HomeModuleSize.small => (1, 1),
+      HomeModuleSize.medium => (2, 1),
+      HomeModuleSize.large => (compact ? 2 : 4, 2),
+    };
+    var row = 0;
+    var column = 0;
+    while (!fits(row, column, columnSpan, rowSpan)) {
+      column++;
+      if (column >= columns) {
+        column = 0;
+        row++;
+      }
     }
-    pendingSmall.add(item);
-    if (pendingSmall.length == 2) flushSmall();
+    for (var y = row; y < row + rowSpan; y++) {
+      for (var x = column; x < column + columnSpan; x++) {
+        occupied[y][x] = true;
+      }
+    }
+    result.add(_HomeModulePlacement(
+      item: item,
+      column: column,
+      row: row,
+      columnSpan: columnSpan,
+      rowSpan: rowSpan,
+    ));
   }
-  flushSmall();
-  rows.add(const SizedBox(height: 24));
-  return rows;
+  return result;
 }
 
 String _two(int value) => value.toString().padLeft(2, '0');
@@ -1410,6 +1492,10 @@ class HomeWidgetBridge {
     required HomeDashboardData data,
     required int currentWeek,
     required DateTime firstWeekStart,
+    required String apiBaseUrl,
+    required String sessionId,
+    required int year,
+    required int term,
   }) async {
     if (kIsWeb) return;
     final timedCourses = homeTimedCourses(
@@ -1434,6 +1520,12 @@ class HomeWidgetBridge {
             _notBlank(progress.currentNode),
             _notBlank(progress.category),
           ], ' · ');
+    final upcomingExams = _widgetUpcomingExams(data.exams ?? const []);
+    final validGrades = (data.grades ?? const [])
+        .where((grade) => int.tryParse(grade.score ?? '') != null)
+        .toList()
+      ..sort((a, b) => int.parse(b.score!).compareTo(int.parse(a.score!)));
+    final gradeStats = _widgetGradeStats(validGrades);
     try {
       await _channel.invokeMethod('update', {
         'nextTitle': next?.course.name ?? '暂无下一节课',
@@ -1501,6 +1593,37 @@ class HomeWidgetBridge {
                   'date': item.date ?? '',
                 })
             .toList()),
+        'examCount': '${upcomingExams.length}',
+        'examItemsJson': jsonEncode(upcomingExams.take(3).map((exam) {
+          final days = _widgetExamCountdown(exam);
+          return {
+            'name': exam.name,
+            'date': exam.date,
+            'time': exam.timeDisplay,
+            'location': exam.location ?? '',
+            'days': days,
+            'urgent': days >= 0 && days <= 3,
+          };
+        }).toList()),
+        'gradeGpa': gradeStats.gpa,
+        'gradeAverage': gradeStats.average,
+        'gradeCount': '${gradeStats.count}',
+        'gradeItemsJson': jsonEncode(validGrades
+            .take(2)
+            .map((grade) => {
+                  'name': grade.courseName,
+                  'score': grade.score ?? '-',
+                  'credit': grade.credit ?? '',
+                  'gpa': _widgetGpa(grade.score).toStringAsFixed(1),
+                })
+            .toList()),
+        'utilityIsBound': data.ecard.isBound,
+        'utilityLowPower': data.ecard.isLowPower,
+        'widgetApiBaseUrl': apiBaseUrl,
+        'widgetSessionId': sessionId,
+        'widgetYear': year,
+        'widgetTerm': term,
+        'widgetCurrentWeek': currentWeek,
       }).timeout(const Duration(milliseconds: 300));
     } catch (_) {}
   }
@@ -1516,6 +1639,30 @@ class HomeWidgetBridge {
     }
   }
 
+  static Future<void> clearRefreshConfiguration() async {
+    if (kIsWeb) return;
+    try {
+      await _channel.invokeMethod<void>('clearRefreshConfiguration');
+    } on PlatformException {
+      return;
+    }
+  }
+
+  static Future<void> replaceRefreshSession({
+    required String apiBaseUrl,
+    required String sessionId,
+  }) async {
+    if (kIsWeb) return;
+    try {
+      await _channel.invokeMethod<void>('replaceRefreshSession', {
+        'widgetApiBaseUrl': apiBaseUrl,
+        'widgetSessionId': sessionId,
+      });
+    } on PlatformException {
+      return;
+    }
+  }
+
   static String? _notBlank(String? value) {
     final trimmed = value?.trim();
     return trimmed == null || trimmed.isEmpty ? null : trimmed;
@@ -1527,6 +1674,64 @@ class HomeWidgetBridge {
         .where((item) => item.isNotEmpty)
         .join(separator);
   }
+}
+
+({String gpa, String average, int count}) _widgetGradeStats(
+  List<GradeItem> grades,
+) {
+  if (grades.isEmpty) return (gpa: '0.00', average: '0.0', count: 0);
+  final scores = grades.map((grade) => int.parse(grade.score!)).toList();
+  final gpa =
+      scores.map((score) => _widgetGpa('$score')).reduce((a, b) => a + b) /
+          scores.length;
+  final average = scores.reduce((a, b) => a + b) / scores.length;
+  return (
+    gpa: gpa.toStringAsFixed(2),
+    average: average.toStringAsFixed(1),
+    count: scores.length,
+  );
+}
+
+double _widgetGpa(String? scoreText) {
+  final score = int.tryParse(scoreText ?? '') ?? 0;
+  if (score >= 90) return 4.0;
+  if (score >= 85) return 3.7;
+  if (score >= 82) return 3.3;
+  if (score >= 78) return 3.0;
+  if (score >= 75) return 2.7;
+  if (score >= 72) return 2.3;
+  if (score >= 68) return 2.0;
+  if (score >= 66) return 1.7;
+  if (score >= 64) return 1.3;
+  if (score >= 60) return 1.0;
+  return 0;
+}
+
+DateTime? _widgetExamDate(ExamItem exam) {
+  return examDateTime(exam.date) ?? examDateTime(exam.time);
+}
+
+int _widgetExamCountdown(ExamItem exam) {
+  final target = _widgetExamDate(exam);
+  if (target == null) return 9999;
+  final now = DateTime.now();
+  final today = DateTime(now.year, now.month, now.day);
+  return target.difference(today).inDays;
+}
+
+List<ExamItem> _widgetUpcomingExams(List<ExamItem> exams) {
+  final upcoming = exams.where((exam) {
+    final days = _widgetExamCountdown(exam);
+    return days >= -7 || days == 9999;
+  }).toList();
+  upcoming.sort((a, b) {
+    final left = _widgetExamCountdown(a);
+    final right = _widgetExamCountdown(b);
+    if (left == 9999) return right == 9999 ? 0 : 1;
+    if (right == 9999) return -1;
+    return left.compareTo(right);
+  });
+  return upcoming;
 }
 
 class NotificationOpenBridge {
@@ -1674,44 +1879,47 @@ class _AsyncModuleError extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.error_outline, color: cs.error, size: 22),
-          const SizedBox(height: 4),
-          Text(
-            '加载失败',
-            style: TextStyle(
-              color: cs.error,
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-            child: Text(
-              message,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              textAlign: TextAlign.center,
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.error_outline, color: cs.error, size: 22),
+            const SizedBox(height: 4),
+            Text(
+              '加载失败',
               style: TextStyle(
-                color: cs.onSurfaceVariant,
-                fontSize: 11,
+                color: cs.error,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
               ),
             ),
-          ),
-          const SizedBox(height: 4),
-          TextButton(
-            onPressed: onRetry,
-            style: TextButton.styleFrom(
-              padding: EdgeInsets.zero,
-              minimumSize: Size.zero,
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            const SizedBox(height: 4),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: Text(
+                message,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: cs.onSurfaceVariant,
+                  fontSize: 11,
+                ),
+              ),
             ),
-            child: const Text('重试', style: TextStyle(fontSize: 11)),
-          ),
-        ],
+            const SizedBox(height: 4),
+            TextButton(
+              onPressed: onRetry,
+              style: TextButton.styleFrom(
+                padding: EdgeInsets.zero,
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              child: const Text('重试', style: TextStyle(fontSize: 11)),
+            ),
+          ],
+        ),
       ),
     );
   }
