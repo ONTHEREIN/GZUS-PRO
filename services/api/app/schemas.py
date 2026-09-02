@@ -535,6 +535,19 @@ class BackgroundNotificationStatus(BaseModel):
     last_checked_at: datetime | None = Field(default=None, alias="lastCheckedAt")
     last_error: str | None = Field(default=None, alias="lastError")
     course_sync_error: str | None = Field(default=None, alias="courseSyncError")
+    notices_enabled: bool = Field(alias="noticesEnabled")
+    grades_enabled: bool = Field(alias="gradesEnabled")
+    exams_enabled: bool = Field(alias="examsEnabled")
+    attendance_enabled: bool = Field(alias="attendanceEnabled")
+
+
+class NotificationPreferencesUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    notices_enabled: bool | None = Field(default=None, alias="noticesEnabled")
+    grades_enabled: bool | None = Field(default=None, alias="gradesEnabled")
+    exams_enabled: bool | None = Field(default=None, alias="examsEnabled")
+    attendance_enabled: bool | None = Field(default=None, alias="attendanceEnabled")
 
 
 class ScheduleSettingsUpdate(BaseModel):

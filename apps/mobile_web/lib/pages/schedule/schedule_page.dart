@@ -2043,6 +2043,16 @@ class _CalendarScheduleViewState extends State<_CalendarScheduleView> {
     super.dispose();
   }
 
+  @override
+  void didUpdateWidget(covariant _CalendarScheduleView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.currentWeek != widget.currentWeek &&
+        widget.currentWeek >= 1 &&
+        widget.currentWeek <= 30) {
+      _goToWeek(widget.currentWeek);
+    }
+  }
+
   void _goToWeek(int week) {
     final target = week.clamp(1, 30);
     if (target == _weekIndex) return;
@@ -2287,10 +2297,12 @@ class _CalendarScheduleViewState extends State<_CalendarScheduleView> {
                   children: [
                     IconButton(
                       tooltip: '上一周',
-                      onPressed: () => _pageController.previousPage(
-                        duration: const Duration(milliseconds: 220),
-                        curve: Curves.easeOutCubic,
-                      ),
+                      onPressed: _weekIndex <= 1
+                          ? null
+                          : () => _pageController.previousPage(
+                                duration: const Duration(milliseconds: 220),
+                                curve: Curves.easeOutCubic,
+                              ),
                       icon: const Icon(Icons.chevron_left),
                     ),
                     Expanded(
@@ -2325,10 +2337,12 @@ class _CalendarScheduleViewState extends State<_CalendarScheduleView> {
                     ),
                     IconButton(
                       tooltip: '下一周',
-                      onPressed: () => _pageController.nextPage(
-                        duration: const Duration(milliseconds: 220),
-                        curve: Curves.easeOutCubic,
-                      ),
+                      onPressed: _weekIndex >= 30
+                          ? null
+                          : () => _pageController.nextPage(
+                                duration: const Duration(milliseconds: 220),
+                                curve: Curves.easeOutCubic,
+                              ),
                       icon: const Icon(Icons.chevron_right),
                     ),
                     const SizedBox(width: 4),
@@ -2345,6 +2359,7 @@ class _CalendarScheduleViewState extends State<_CalendarScheduleView> {
                 child: PageView.builder(
                   controller: _pageController,
                   onPageChanged: (page) => setState(() => _weekIndex = page),
+                  itemCount: 32,
                   itemBuilder: (context, index) {
                     final week = index;
                     final days = _daysOfWeek(week);

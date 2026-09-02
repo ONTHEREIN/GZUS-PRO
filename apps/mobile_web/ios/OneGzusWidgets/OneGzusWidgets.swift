@@ -237,6 +237,40 @@ private struct ExamRow: View {
         }
     }
 }
+private struct ExamColumn: View {
+    let exam: Exam
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Text(exam.days == 9999 ? "?" : exam.days == 0 ? "!" : "\(abs(exam.days))")
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(exam.urgent ? Color.red : Color.accentColor)
+                Text(exam.days == 0 ? "今天" : exam.days == 9999 ? "待定" : "天")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            Text(exam.name)
+                .font(.caption.weight(.semibold))
+                .lineLimit(2)
+                .minimumScaleFactor(0.78)
+            Text(exam.date)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Text(exam.time)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Text(exam.location)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .padding(8)
+        .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
+    }
+}
 private struct ExamCountdownView: View {
     @Environment(\.widgetFamily) private var family
     let entry: Entry
@@ -246,9 +280,39 @@ private struct ExamCountdownView: View {
         VStack(alignment: .leading, spacing: 8) {
             Header(title: family == .systemSmall ? "考试" : "考试倒计时", icon: "timer", badge: "\(exams.count)")
             if let first = exams.first {
-                if family == .systemSmall { Text(first.name).font(.headline).lineLimit(1); Text(countdown(first)).font(.caption.weight(first.urgent ? .bold : .regular)).foregroundStyle(first.urgent ? Color.red : Color.secondary) }
-                else { ForEach(Array(exams.prefix(limit).enumerated()), id: \.offset) { _, exam in ExamRow(exam: exam) } }
-            } else { Spacer(); Text(family == .systemSmall ? "暂无考试" : "暂无即将到来的考试").font(.headline); Spacer() }
+                if family == .systemSmall {
+                    Spacer(minLength: 0)
+                    Text(first.name)
+                        .font(.headline.weight(.semibold))
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.75)
+                    Text(countdown(first))
+                        .font(.title3.weight(first.urgent ? .bold : .semibold))
+                        .foregroundStyle(first.urgent ? Color.red : Color.accentColor)
+                        .lineLimit(1)
+                    Text("\(first.date) · \(first.time)")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Text(first.location)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                } else if family == .systemMedium {
+                    HStack(alignment: .top, spacing: 8) {
+                        ForEach(Array(exams.prefix(2).enumerated()), id: \.offset) { _, exam in
+                            ExamColumn(exam: exam)
+                        }
+                    }
+                } else {
+                    ForEach(Array(exams.prefix(limit).enumerated()), id: \.offset) { _, exam in ExamRow(exam: exam) }
+                }
+            } else {
+                Spacer()
+                Text(family == .systemSmall ? "暂无考试" : "暂无即将到来的考试")
+                    .font(.headline)
+                Spacer()
+            }
         }.padding().widgetURL(targetURL("exams"))
     }
 }

@@ -21,39 +21,45 @@ class NextClassMediumCard extends StatelessWidget {
       density: HomeCardDensity.medium,
       badge: item?.isOngoing == true ? '进行中' : '下一节',
       onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.all(GzusSpacing.m),
-        decoration: BoxDecoration(
-          color: cs.primaryContainer,
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: item == null
-            ? Center(
-                child: Text('今日无课',
-                    style: TextStyle(color: cs.onPrimaryContainer)))
-            : Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Text(
-                    item.course.name,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: cs.onPrimaryContainer,
-                      fontSize: 18,
-                      fontWeight: FontWeight.w900,
-                    ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final tight = constraints.maxHeight < 120;
+          return Container(
+            padding: EdgeInsets.all(tight ? 10 : GzusSpacing.m),
+            decoration: BoxDecoration(
+              color: cs.primaryContainer,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: item == null
+                ? Center(
+                    child: Text('今日无课',
+                        style: TextStyle(color: cs.onPrimaryContainer)))
+                : Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisAlignment: MainAxisAlignment.start,
+                    children: [
+                      Text(
+                        item.course.name,
+                        maxLines: tight ? 1 : 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: cs.onPrimaryContainer,
+                          fontSize: tight ? 16 : 18,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      SizedBox(height: tight ? 4 : 10),
+                      HomeMeta(icon: Icons.schedule, text: item.timeText),
+                      if (!tight && item.course.classroom != null) ...[
+                        const SizedBox(height: 6),
+                        HomeMeta(
+                            icon: Icons.location_on,
+                            text: item.course.classroom!),
+                      ],
+                    ],
                   ),
-                  const SizedBox(height: 10),
-                  HomeMeta(icon: Icons.schedule, text: item.timeText),
-                  if (item.course.classroom != null) ...[
-                    const SizedBox(height: 6),
-                    HomeMeta(
-                        icon: Icons.location_on, text: item.course.classroom!),
-                  ],
-                ],
-              ),
+          );
+        },
       ),
     );
   }

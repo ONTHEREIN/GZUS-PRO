@@ -36,6 +36,7 @@ class MorePage extends StatefulWidget {
     this.autoHideNavBar = true,
     this.onAutoHideNavBarChanged,
     this.onShowBackgroundGuide,
+    this.onShowNotificationSettings,
     this.isAdmin = false,
     this.isOwner = false,
   });
@@ -57,6 +58,7 @@ class MorePage extends StatefulWidget {
   final bool autoHideNavBar;
   final ValueChanged<bool>? onAutoHideNavBarChanged;
   final VoidCallback? onShowBackgroundGuide;
+  final VoidCallback? onShowNotificationSettings;
 
   /// 管理后台身份（由 main.dart 传入，控制「管理后台」入口显隐与 owner 权限）
   final bool isAdmin;
@@ -782,6 +784,16 @@ class _MorePageState extends State<MorePage> {
               titleColor: null,
               iconColor: null,
               onTap: widget.onShowBackgroundGuide!,
+            ),
+          if (widget.onShowNotificationSettings != null)
+            _settingTile(
+              key: const ValueKey('notification-settings-tile'),
+              icon: Icons.notifications_active_outlined,
+              title: '通知设置',
+              subtitle: '统一管理教务、课程和水电提醒',
+              titleColor: null,
+              iconColor: null,
+              onTap: widget.onShowNotificationSettings!,
             ),
           if (widget.isAdmin)
             _settingTile(

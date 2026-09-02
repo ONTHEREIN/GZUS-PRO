@@ -17,11 +17,11 @@ class WeekGridLargeCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const days = ['一', '二', '三', '四', '五'];
+    const days = ['一', '二', '三', '四', '五', '六', '日'];
     const slots = [1, 3, 5, 7];
     return HomeCardShell(
       title: '周课表',
-      icon: Icons.grid_view,
+      icon: Icons.calendar_month,
       density: HomeCardDensity.large,
       badge: '紧凑',
       onTap: onTap,
@@ -67,17 +67,21 @@ class WeekGridLargeCard extends StatelessWidget {
                                           .onSurfaceVariant,
                                       fontSize: fontSize + 1)),
                             ),
-                            for (var day = 1; day <= 5; day++)
+                            for (var day = 1; day <= 7; day++)
                               Expanded(
-                                child: _WeekGridCell(
-                                  course: firstOrNull(courses.where((item) {
-                                    final start = item.startSection ?? 0;
-                                    return item.weekday == day &&
-                                        start >= slot &&
-                                        start <= slot + 1;
-                                  })),
-                                  height: cellHeight,
-                                  fontSize: fontSize,
+                                child: InkWell(
+                                  borderRadius: BorderRadius.circular(8),
+                                  onTap: onTap,
+                                  child: _WeekGridCell(
+                                    course: firstOrNull(courses.where((item) {
+                                      final start = item.startSection ?? 0;
+                                      return item.weekday == day &&
+                                          start >= slot &&
+                                          start <= slot + 1;
+                                    })),
+                                    height: cellHeight,
+                                    fontSize: fontSize,
+                                  ),
                                 ),
                               ),
                           ],
@@ -108,7 +112,7 @@ class WeekGridMediumCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return HomeCardShell(
       title: '周课表',
-      icon: Icons.grid_view,
+      icon: Icons.calendar_month,
       density: HomeCardDensity.medium,
       badge: '本周',
       onTap: onTap,
@@ -137,7 +141,7 @@ class WeekGridSmallCard extends StatelessWidget {
       ..sort((a, b) => (a.startSection ?? 0).compareTo(b.startSection ?? 0));
     return HomeCardShell(
       title: '周课表',
-      icon: Icons.grid_view,
+      icon: Icons.calendar_month,
       density: HomeCardDensity.small,
       badge: '今天',
       onTap: onTap,

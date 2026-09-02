@@ -18,6 +18,7 @@ from app.schemas import (
     BackgroundNotificationAccessRequest,
     BackgroundNotificationStatus,
     CourseReminderSyncRequest,
+    NotificationPreferencesUpdate,
 )
 from app.sessions import (
     AppSession,
@@ -45,6 +46,10 @@ def _status(row: BackgroundNotificationProfile | None) -> BackgroundNotification
             lastCheckedAt=None,
             lastError=None,
             courseSyncError=None,
+            noticesEnabled=True,
+            gradesEnabled=True,
+            examsEnabled=True,
+            attendanceEnabled=True,
         )
     return BackgroundNotificationStatus(
         enabled=True,
@@ -52,7 +57,30 @@ def _status(row: BackgroundNotificationProfile | None) -> BackgroundNotification
         lastCheckedAt=row.last_checked_at,
         lastError=row.last_error,
         courseSyncError=row.course_sync_error,
+        noticesEnabled=row.notices_enabled,
+        gradesEnabled=row.grades_enabled,
+        examsEnabled=row.exams_enabled,
+        attendanceEnabled=row.attendance_enabled,
     )
+
+
+@router.patch("/preferences", response_model=BackgroundNotificationStatus)
+def patch_notification_preferences(
+    payload: NotificationPreferencesUpdate,
+    session: AppSession = Depends(require_session),
+) -> BackgroundNotificationStatus:
+    student_id = _student_id(session)
+    with get_sync_session_factory()() as db:
+        row = db.query(BackgroundNotificationProfile).filter_by(student_id=student_id).first()
+        if row is None:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="请先开启后台持续通知")
+        updates = payload.model_dump(exclude_unset=True, by_alias=False)
+        for field, value in updates.items():
+            setattr(row, field, value)
+        row.updated_at = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(row)
+        return _status(row)
 
 
 @router.get("/background", response_model=BackgroundNotificationStatus)

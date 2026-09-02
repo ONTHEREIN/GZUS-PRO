@@ -117,6 +117,7 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
   Map<String, HomeModuleSize> _moduleSizes = {};
   bool _moreModulesExpanded = false;
   bool _moreModuleDataLoaded = false;
+  bool _homeEditMode = false;
 
   static const _primaryModuleIds = <String>{
     'nextClass',
@@ -213,6 +214,43 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
   void _retryDashboard() {
     if (!mounted) return;
     setState(() => _initFutures(forceRefresh: true));
+  }
+
+  void _enterHomeEditMode() {
+    if (!mounted || _homeEditMode) return;
+    setState(() => _homeEditMode = true);
+  }
+
+  void _exitHomeEditMode() {
+    if (!mounted || !_homeEditMode) return;
+    setState(() => _homeEditMode = false);
+  }
+
+  void _resizeHomeModule(String id, HomeModuleSize size) {
+    final nextSize = HomePreferences.effectiveSize(id, size);
+    if (_moduleSizes[id] == nextSize) return;
+    setState(() => _moduleSizes = {..._moduleSizes, id: nextSize});
+  }
+
+  Future<void> _persistHomeLayout() {
+    return HomePreferences.save(
+      order: _moduleOrder,
+      hidden: _hiddenModules,
+      sizes: _moduleSizes,
+    );
+  }
+
+  void _reorderHomeModule(String draggedId, String targetId) {
+    if (draggedId == targetId) return;
+    final reordered = [..._moduleOrder];
+    final draggedIndex = reordered.indexOf(draggedId);
+    if (draggedIndex < 0) return;
+    reordered.removeAt(draggedIndex);
+    final targetIndex = reordered.indexOf(targetId);
+    if (targetIndex < 0) return;
+    reordered.insert(targetIndex, draggedId);
+    setState(() => _moduleOrder = reordered);
+    unawaited(_persistHomeLayout());
   }
 
   Future<void> _refreshDashboard() async {
@@ -568,10 +606,21 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
       icon: Icons.home,
       expandChild: true,
       headerScrollProgress: widget.headerScrollProgress,
-      trailing: TextButton.icon(
-        onPressed: () => _showCustomizeSheet(context),
-        icon: const Icon(Icons.tune, size: 18),
-        label: const Text('自定义'),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (_homeEditMode)
+            TextButton(
+              key: const ValueKey('home-layout-done'),
+              onPressed: _exitHomeEditMode,
+              child: const Text('完成'),
+            ),
+          TextButton.icon(
+            onPressed: () => _showCustomizeSheet(context),
+            icon: const Icon(Icons.tune, size: 18),
+            label: const Text('自定义'),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -605,6 +654,11 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
                         items: items,
                         spacing: spacing,
                         compact: breakpoint == GzusBreakpoint.compact,
+                        editing: _homeEditMode,
+                        onDragStarted: _enterHomeEditMode,
+                        onReorder: _reorderHomeModule,
+                        onResize: _resizeHomeModule,
+                        onResizeEnd: () => unawaited(_persistHomeLayout()),
                       )..add(
                           Padding(
                             padding: const EdgeInsets.only(top: 4),
@@ -1337,9 +1391,23 @@ List<Widget> _buildHomeBentoGrid({
   required List<_HomeLayoutItem> items,
   required double spacing,
   required bool compact,
+  required bool editing,
+  required VoidCallback onDragStarted,
+  required void Function(String draggedId, String targetId) onReorder,
+  required void Function(String id, HomeModuleSize size) onResize,
+  required VoidCallback onResizeEnd,
 }) {
   return [
-    _HomeBentoGrid(items: items, spacing: spacing, compact: compact),
+    _HomeBentoGrid(
+      items: items,
+      spacing: spacing,
+      compact: compact,
+      editing: editing,
+      onDragStarted: onDragStarted,
+      onReorder: onReorder,
+      onResize: onResize,
+      onResizeEnd: onResizeEnd,
+    ),
     const SizedBox(height: 24),
   ];
 }
@@ -1349,11 +1417,21 @@ class _HomeBentoGrid extends StatelessWidget {
     required this.items,
     required this.spacing,
     required this.compact,
+    required this.editing,
+    required this.onDragStarted,
+    required this.onReorder,
+    required this.onResize,
+    required this.onResizeEnd,
   });
 
   final List<_HomeLayoutItem> items;
   final double spacing;
   final bool compact;
+  final bool editing;
+  final VoidCallback onDragStarted;
+  final void Function(String draggedId, String targetId) onReorder;
+  final void Function(String id, HomeModuleSize size) onResize;
+  final VoidCallback onResizeEnd;
 
   @override
   Widget build(BuildContext context) {
@@ -1384,7 +1462,19 @@ class _HomeBentoGrid extends StatelessWidget {
                       (placement.columnSpan - 1) * spacing,
                   height: placement.rowSpan * unitHeight +
                       (placement.rowSpan - 1) * spacing,
-                  child: placement.item.child,
+                  child: _HomeBentoCard(
+                    item: placement.item,
+                    width: placement.columnSpan * unitWidth +
+                        (placement.columnSpan - 1) * spacing,
+                    height: placement.rowSpan * unitHeight +
+                        (placement.rowSpan - 1) * spacing,
+                    compact: compact,
+                    editing: editing,
+                    onDragStarted: onDragStarted,
+                    onReorder: onReorder,
+                    onResize: onResize,
+                    onResizeEnd: onResizeEnd,
+                  ),
                 ),
             ],
           ),
@@ -1464,6 +1554,167 @@ List<_HomeModulePlacement> _placeHomeModules(
     ));
   }
   return result;
+}
+
+class _HomeBentoCard extends StatelessWidget {
+  const _HomeBentoCard({
+    required this.item,
+    required this.width,
+    required this.height,
+    required this.compact,
+    required this.editing,
+    required this.onDragStarted,
+    required this.onReorder,
+    required this.onResize,
+    required this.onResizeEnd,
+  });
+
+  final _HomeLayoutItem item;
+  final double width;
+  final double height;
+  final bool compact;
+  final bool editing;
+  final VoidCallback onDragStarted;
+  final void Function(String draggedId, String targetId) onReorder;
+  final void Function(String id, HomeModuleSize size) onResize;
+  final VoidCallback onResizeEnd;
+
+  @override
+  Widget build(BuildContext context) {
+    final card = Stack(
+      clipBehavior: Clip.none,
+      children: [
+        Positioned.fill(child: item.child),
+        if (editing)
+          Positioned(
+            right: 5,
+            bottom: 5,
+            child: _ResizeHandle(
+              id: item.id,
+              size: item.size,
+              compact: compact,
+              onResize: onResize,
+              onResizeEnd: onResizeEnd,
+            ),
+          ),
+      ],
+    );
+
+    return DragTarget<String>(
+      onWillAcceptWithDetails: (details) => details.data != item.id,
+      onAcceptWithDetails: (details) => onReorder(details.data, item.id),
+      builder: (context, candidates, rejected) {
+        final isTarget = candidates.isNotEmpty;
+        final draggable = LongPressDraggable<String>(
+          data: item.id,
+          maxSimultaneousDrags: 1,
+          onDragStarted: onDragStarted,
+          feedback: Material(
+            color: Colors.transparent,
+            child: SizedBox(
+              width: width,
+              height: height,
+              child: Opacity(opacity: 0.88, child: card),
+            ),
+          ),
+          childWhenDragging: Opacity(opacity: 0.24, child: card),
+          child: card,
+        );
+        return AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          decoration: BoxDecoration(
+            border: isTarget
+                ? Border.all(
+                    color: Theme.of(context).colorScheme.primary,
+                    width: 2,
+                  )
+                : null,
+            borderRadius: BorderRadius.circular(GzusRadii.lg),
+          ),
+          child: draggable,
+        );
+      },
+    );
+  }
+}
+
+class _ResizeHandle extends StatefulWidget {
+  const _ResizeHandle({
+    required this.id,
+    required this.size,
+    required this.compact,
+    required this.onResize,
+    required this.onResizeEnd,
+  });
+
+  final String id;
+  final HomeModuleSize size;
+  final bool compact;
+  final void Function(String id, HomeModuleSize size) onResize;
+  final VoidCallback onResizeEnd;
+
+  @override
+  State<_ResizeHandle> createState() => _ResizeHandleState();
+}
+
+class _ResizeHandleState extends State<_ResizeHandle> {
+  Offset _dragDelta = Offset.zero;
+
+  void _updateSize(Offset delta) {
+    _dragDelta += delta;
+    final progress = _dragDelta.dx + _dragDelta.dy;
+    final next = switch (widget.size) {
+      HomeModuleSize.small => progress >= 120
+          ? HomeModuleSize.large
+          : progress >= 45
+              ? HomeModuleSize.medium
+              : HomeModuleSize.small,
+      HomeModuleSize.medium => progress >= 45
+          ? HomeModuleSize.large
+          : progress <= -45
+              ? HomeModuleSize.small
+              : HomeModuleSize.medium,
+      HomeModuleSize.large => progress <= -120
+          ? HomeModuleSize.small
+          : progress <= -45
+              ? HomeModuleSize.medium
+              : HomeModuleSize.large,
+    };
+    widget.onResize(widget.id, next);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Semantics(
+      button: true,
+      label: '拖动调整卡片大小',
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onPanStart: (_) => _dragDelta = Offset.zero,
+        onPanUpdate: (details) => _updateSize(details.delta),
+        onPanEnd: (_) {
+          _dragDelta = Offset.zero;
+          widget.onResizeEnd();
+        },
+        child: Container(
+          width: widget.compact ? 28 : 30,
+          height: widget.compact ? 28 : 30,
+          decoration: BoxDecoration(
+            color: colorScheme.primaryContainer.withValues(alpha: 0.94),
+            borderRadius: BorderRadius.circular(10),
+            border:
+                Border.all(color: colorScheme.primary.withValues(alpha: 0.55)),
+          ),
+          child: Icon(
+            Icons.open_in_full,
+            size: 15,
+            color: colorScheme.onPrimaryContainer,
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 String _two(int value) => value.toString().padLeft(2, '0');

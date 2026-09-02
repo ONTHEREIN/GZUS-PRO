@@ -200,6 +200,10 @@ class BackgroundNotificationProfile(Base):
     attendance_snapshot_json = Column(Text, nullable=True)
     exam_reminder_keys_json = Column(Text, nullable=True)
     course_sync_error = Column(Text, nullable=True)
+    notices_enabled = Column(Boolean, default=True, nullable=False)
+    grades_enabled = Column(Boolean, default=True, nullable=False)
+    exams_enabled = Column(Boolean, default=True, nullable=False)
+    attendance_enabled = Column(Boolean, default=True, nullable=False)
     last_checked_at = Column(DateTime, nullable=True)
     last_error = Column(Text, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
@@ -501,6 +505,10 @@ def init_db():
         "attendance_snapshot_json": "TEXT",
         "exam_reminder_keys_json": "TEXT",
         "course_sync_error": "TEXT",
+        "notices_enabled": "BOOLEAN DEFAULT TRUE",
+        "grades_enabled": "BOOLEAN DEFAULT TRUE",
+        "exams_enabled": "BOOLEAN DEFAULT TRUE",
+        "attendance_enabled": "BOOLEAN DEFAULT TRUE",
     })
     _ensure_columns(engine, "notification_deliveries", {
         "delivery_status": "TEXT DEFAULT 'delivered'",

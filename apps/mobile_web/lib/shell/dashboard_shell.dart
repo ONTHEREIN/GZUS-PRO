@@ -720,6 +720,22 @@ class _DashboardShellState extends State<DashboardShell> {
               });
             },
             onShowBackgroundGuide: widget.onSettingsPressed,
+            onShowNotificationSettings: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => NotificationSettingsPage(
+                      api: widget.api,
+                      onOpenBackgroundGuide: widget.onSettingsPressed,
+                      onOpenSchedule: () {
+                        Navigator.of(context).pop();
+                        _navigateToTab('schedule');
+                      },
+                      onOpenEcard: () {
+                        Navigator.of(context).pop();
+                        _navigateToTab('ecard');
+                      },
+                    ),
+                  ),
+                ),
             isAdmin: widget.isAdmin,
             isOwner: widget.isOwner);
       default:

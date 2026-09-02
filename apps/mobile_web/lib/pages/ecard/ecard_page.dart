@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 import '../../api_client.dart';
 import '../../gzus_design.dart';
 import '../../widgets/empty_state.dart';
-import '../../widgets/async_panel.dart';
 import '../../widgets/page_panel.dart';
 
 enum EcardConsumptionSort { dateNewest, dateOldest, usageHighest, usageLowest }

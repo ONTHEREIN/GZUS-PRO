@@ -998,6 +998,21 @@ class ApiClient {
     });
   }
 
+  Future<BackgroundNotificationStatus> updateNotificationPreferences({
+    bool? noticesEnabled,
+    bool? gradesEnabled,
+    bool? examsEnabled,
+    bool? attendanceEnabled,
+  }) async {
+    final data = await _patch('/notifications/preferences', {
+      if (noticesEnabled != null) 'noticesEnabled': noticesEnabled,
+      if (gradesEnabled != null) 'gradesEnabled': gradesEnabled,
+      if (examsEnabled != null) 'examsEnabled': examsEnabled,
+      if (attendanceEnabled != null) 'attendanceEnabled': attendanceEnabled,
+    });
+    return BackgroundNotificationStatus.fromJson(data);
+  }
+
   Future<void> revokeBackgroundNotificationAccess(
       String activeSessionId) async {
     final url = _requireBaseUrl();

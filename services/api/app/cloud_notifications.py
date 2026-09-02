@@ -253,12 +253,12 @@ def _poll_profile(profile: BackgroundNotificationProfile) -> int:
     delivered_exam_reminders = _json_set(profile.exam_reminder_keys_json)
     current_time = datetime.now(_SHANGHAI)
     delivered = 0
-    if previous_notices:
+    if profile.notices_enabled and previous_notices:
         for item in notices:
             key = notice_key(item)
             if key not in previous_notices and _deliver(profile.student_id, f"notice:{key}", "new_notice", "新通知", str(item.get("title") or "新通知"), {"type": "new_notice", "url": item.get("url") or ""}):
                 delivered += 1
-    if previous_grades:
+    if profile.grades_enabled and previous_grades:
         for item in grades:
             key = f"{item.get('term') or ''}|{item.get('courseName') or item.get('course_name') or ''}"
             if key and previous_grades.get(key) != grade_values.get(key):
@@ -266,7 +266,7 @@ def _poll_profile(profile: BackgroundNotificationProfile) -> int:
                 body = f"{item.get('courseName') or '课程'}：{item.get('score') or '已发布'}"
                 if _deliver(profile.student_id, f"grade:{key}:{grade_values.get(key)}", "grade_update", title, body, {"type": "grade_update"}):
                     delivered += 1
-    if previous_exams:
+    if profile.exams_enabled and previous_exams:
         for item in exams:
             key = f"{item.get('courseName', '')}|{item.get('time', '')}|{item.get('location', '')}"
             if key not in previous_exams:
@@ -274,7 +274,7 @@ def _poll_profile(profile: BackgroundNotificationProfile) -> int:
                 if _deliver(profile.student_id, f"exam:{key}", "exam_reminder", "考试提醒", body, {"type": "exam_reminder"}):
                     delivered += 1
     attendance_snapshot = _attendance_snapshot(attendance or [])
-    if previous_attendance and attendance is not None:
+    if profile.attendance_enabled and previous_attendance and attendance is not None:
         for key, body in _attendance_abnormal_changes(attendance, previous_attendance):
             event_key = f"attendance:{key}:{attendance_snapshot.get(key, '')}"
             if _deliver(profile.student_id, event_key, "attendance_update", "考勤异常", body, {"type": "attendance_update"}):
