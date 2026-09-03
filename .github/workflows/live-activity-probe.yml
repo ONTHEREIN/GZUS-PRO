@@ -1,0 +1,122 @@
+name: Live Activity server probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+      DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+    steps:
+      - name: Run probe on Tencent API host
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$DEPLOY_SSH_KEY" && test -n "$DEPLOY_KNOWN_HOSTS"
+          test -n "$DEPLOY_HOST" && test -n "$DEPLOY_USER"
+          umask 077
+          mkdir -p "$RUNNER_TEMP/ssh"
+          printf '%s' "$DEPLOY_SSH_KEY" > "$RUNNER_TEMP/ssh/deploy_key"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$RUNNER_TEMP/ssh/known_hosts"
+          ssh -i "$RUNNER_TEMP/ssh/deploy_key" \
+            -o "UserKnownHostsFile=$RUNNER_TEMP/ssh/known_hosts" \
+            -o StrictHostKeyChecking=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          cd /opt/onegzus/current/api
+          .venv/bin/python - <<'PY'
+          from __future__ import annotations
+
+          import os
+          import time
+          from datetime import datetime, timezone
+
+          with open("/opt/onegzus/shared/api.env", encoding="utf-8") as env_file:
+              for line in env_file:
+                  line = line.rstrip("\n")
+                  if not line or line.lstrip().startswith("#") or "=" not in line:
+                      continue
+                  key, value = line.split("=", 1)
+                  os.environ[key] = value
+
+          from app.apns_service import is_apns_enabled, send_live_activity_to_student
+          from app.database import IosLiveActivityToken, get_sync_session_factory
+
+          def has_activity_token(student_id: str, activity_id: str) -> bool:
+              with get_sync_session_factory()() as db:
+                  return db.query(IosLiveActivityToken).filter_by(
+                      student_id=student_id,
+                      token_type="activity",
+                      environment="sandbox",
+                      activity_id=activity_id,
+                  ).first() is not None
+
+          if not is_apns_enabled():
+              raise RuntimeError("生产 API 的 APNs 配置不可用")
+          with get_sync_session_factory()() as db:
+              token_row = db.query(IosLiveActivityToken).filter_by(
+                  token_type="start", environment="sandbox"
+              ).order_by(IosLiveActivityToken.updated_at.desc()).first()
+          if token_row is None:
+              raise RuntimeError("没有可用的 sandbox Live Activity start token")
+
+          student_id = token_row.student_id
+          activity_id = f"server-probe-{int(time.time())}"
+          start_ms = int(time.time() * 1000)
+          extras = {
+              "id": activity_id,
+              "type": "course_reminder",
+              "courseName": "服务器 Live Activity 验证",
+              "shortCriticalText": "验证",
+              "targetTab": "schedule",
+              "deepLink": "cn.gzus.pro://dashboard",
+              "startTime": start_ms,
+              "endTime": start_ms + 120_000,
+              "progress": 0.0,
+              "ongoing": True,
+          }
+          print("selected_start_token environment=sandbox")
+          start_delivered = send_live_activity_to_student(
+              student_id, "start", "课程提醒验证", "服务器端启动 Live Activity", extras
+          )
+          print(f"start_apns_delivered={start_delivered}")
+          if start_delivered < 1:
+              raise RuntimeError("APNs start 未返回成功投递")
+          for _ in range(60):
+              if has_activity_token(student_id, activity_id):
+                  break
+              time.sleep(1)
+          else:
+              raise RuntimeError("start 已投递，但未收到设备 activity token")
+
+          update_delivered = send_live_activity_to_student(
+              student_id,
+              "update",
+              "课程提醒验证",
+              "服务器端更新 Live Activity",
+              {**extras, "progress": 0.5},
+          )
+          print(f"update_apns_delivered={update_delivered}")
+          if update_delivered < 1:
+              raise RuntimeError("APNs update 未返回成功投递")
+
+          end_delivered = send_live_activity_to_student(
+              student_id,
+              "end",
+              "课程提醒验证",
+              "服务器端结束 Live Activity",
+              {**extras, "ongoing": False, "dismissImmediately": True},
+          )
+          print(f"end_apns_delivered={end_delivered}")
+          if end_delivered < 1:
+              raise RuntimeError("APNs end 未返回成功投递")
+          PY
+          REMOTE
