@@ -300,6 +300,7 @@ final class LiveActivityManager {
                 NSLog("live_activity_token_sync_failed: status=%ld", status)
                 return
             }
+            NSLog("live_activity_token_sync_succeeded: token_type=%@ status=%ld", tokenType, response.statusCode)
         }.resume()
     }
 
