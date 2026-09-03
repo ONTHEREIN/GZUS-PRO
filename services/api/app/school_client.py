@@ -1250,6 +1250,8 @@ class SchoolSdkClient:
                     "proxy_via_httpx: HTTP %d for %s %s (url=%s)",
                     status, method, url_or_endpoint, full_url,
                 )
+                if status == 401:
+                    raise AuthenticationError("登录状态已失效，请重新登录") from exc
                 if status == 404:
                     raise RuntimeError(
                         f"JWXT 接口返回 404 (url={full_url})，可能接口路径已变更"
@@ -1264,7 +1266,9 @@ class SchoolSdkClient:
                     import time as _time
                     _time.sleep(wait)
                     continue
-                raise AuthenticationError("登录状态已失效，请重新登录") from exc
+                raise RuntimeError(
+                    f"JWXT 接口返回 HTTP {status} (url={full_url})，请稍后重试"
+                ) from exc
 
     @staticmethod
     def _looks_like_captcha(exc: Exception) -> bool:

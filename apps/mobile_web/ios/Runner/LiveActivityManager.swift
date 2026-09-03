@@ -237,11 +237,11 @@ final class LiveActivityManager {
                 self.syncToken(
                     token: value,
                     tokenType: "activity",
-                    activityId: activity.id,
+                    activityId: activity.attributes.activityId,
                     activityType: activity.attributes.activityType
                 )
                 self.send(method: "activityToken", arguments: [
-                    "activityId": activity.id,
+                    "activityId": activity.attributes.activityId,
                     "token": value,
                     "activityType": activity.attributes.activityType,
                 ])

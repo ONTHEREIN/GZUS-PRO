@@ -1,5 +1,6 @@
 from json import JSONDecodeError
 
+import httpx
 import pytest
 import requests
 
@@ -399,6 +400,22 @@ def test_httpx_proxy_collapses_repeated_jwglxt_prefix():
     assert httpx_client.calls[0][1] == (
         "https://jwxt.gzus.edu.cn/jwglxt/xtgl/index_cxDbsy.html"
     )
+
+
+def test_httpx_proxy_does_not_treat_upstream_5xx_as_authentication_error(monkeypatch):
+    class FailingHttpxClient:
+        def request(self, method, url, **kwargs):
+            request = httpx.Request(method, url)
+            return httpx.Response(502, request=request)
+
+    monkeypatch.setattr("app.school_client.time.sleep", lambda _seconds: None)
+    client = SchoolSdkClient(
+        "https://jwxt.gzus.edu.cn/jwglxt",
+        httpx_client=FailingHttpxClient(),
+    )
+
+    with pytest.raises(RuntimeError, match="HTTP 502"):
+        client._proxy_response("POST", "/jwglxt/cjcx/cjcx_cxDgXscj.html")
 
 
 def test_missing_exam_sdk_method_uses_proxy_request_slot():
