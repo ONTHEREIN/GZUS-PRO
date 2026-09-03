@@ -15,15 +15,16 @@ void main() {
   testWidgets('单个 dashboard 模块失败时保留其他首页模块', (tester) async {
     final api = _homeApi(
       transform: (body, requestIndex) {
+        final stableBody = _withUpcomingClass(body);
         final modules = Map<String, Object?>.from(
-          body['modules']! as Map<String, Object?>,
+          stableBody['modules']! as Map<String, Object?>,
         );
         modules['exams'] = {
           'status': 'error',
           'data': <Object>[],
           'error': '考试服务暂时不可用',
         };
-        return {...body, 'modules': modules};
+        return {...stableBody, 'modules': modules};
       },
     );
 
@@ -477,4 +478,22 @@ Map<String, Object?> _dashboardBody() {
       'exams': {'status': 'empty', 'data': <Object>[]},
     },
   };
+}
+
+Map<String, Object?> _withUpcomingClass(Map<String, Object?> body) {
+  final now = DateTime.now();
+  final nextWeekday =
+      now.weekday == DateTime.sunday ? DateTime.monday : now.weekday + 1;
+  final modules = Map<String, Object?>.from(
+    body['modules']! as Map<String, Object?>,
+  );
+  final schedule = Map<String, Object?>.from(
+    modules['schedule']! as Map<String, Object?>,
+  );
+  final courses = List<Object?>.from(schedule['data']! as List<Object?>);
+  final course =
+      Map<String, Object?>.from(courses.first! as Map<String, Object?>);
+  courses[0] = {...course, 'weekday': nextWeekday};
+  modules['schedule'] = {...schedule, 'data': courses};
+  return {...body, 'modules': modules};
 }
