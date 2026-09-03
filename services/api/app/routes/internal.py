@@ -39,7 +39,16 @@ def _run_maintenance_job(job_name: str, runner: Callable[[], dict[str, object]])
         logger.exception("maintenance_job_failed", extra={"job_name": job_name, "duration_ms": duration_ms})
         raise
     duration_ms = round((time.perf_counter() - started) * 1000)
-    record_maintenance_job_result(job_name, started_at, duration_ms, None, 0, 0)
+    processed = result.get("processed", 0)
+    delivered = result.get("delivered", result.get("notified", 0))
+    record_maintenance_job_result(
+        job_name,
+        started_at,
+        duration_ms,
+        None,
+        processed if isinstance(processed, int) else 0,
+        delivered if isinstance(delivered, int) else 0,
+    )
     return result
 
 
@@ -66,11 +75,16 @@ def ecard_reminder_cron(x_internal_key: str | None = Header(None)) -> dict[str, 
         if not get_settings().ecard_openid:
             return {"ok": True, "reason": "ecard not configured", "processed": 0}
         from app.database import EcardBinding, get_sync_session_factory
-        from app.jobs import prepare_ecard_reminders
-        from app.push import send_push_to_student
+        from app.cloud_notifications import deliver_notification
+        from app.jobs import (
+            ecard_reminder_event_key,
+            mark_ecard_reminder_sent,
+            prepare_ecard_reminders,
+        )
 
         processed = 0
         notified = 0
+        reminder_time = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%H:%M")
         with get_sync_session_factory()() as db:
             bindings = db.query(EcardBinding).filter(EcardBinding.reminder_enabled.is_(True)).all()
             today_key = datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
@@ -99,12 +113,24 @@ def ecard_reminder_cron(x_internal_key: str | None = Header(None)) -> dict[str, 
                         "style": "progress",
                         "shortCriticalText": "水电",
                     }
-                    try:
-                        send_push_to_student(binding.student_id, title, body, live_payload)
-                    except RuntimeError:
-                        logger.exception("ecard_reminder_push_failed", extra={"student_id": binding.student_id})
-                    else:
+                    event_key = ecard_reminder_event_key(
+                        binding.student_id, today_key, reminder_time, item_key
+                    )
+                    if deliver_notification(
+                        binding.student_id,
+                        event_key,
+                        "ecard_reminder",
+                        title,
+                        body,
+                        live_payload,
+                    ):
+                        mark_ecard_reminder_sent(binding, item_key, today_key)
                         notified += 1
+                    else:
+                        logger.warning(
+                            "ecard_reminder_not_delivered",
+                            extra={"student_id": binding.student_id, "item_key": item_key},
+                        )
                 processed += 1
             db.commit()
 

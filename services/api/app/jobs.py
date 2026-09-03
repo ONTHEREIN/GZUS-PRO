@@ -9,9 +9,8 @@ from app.config import get_settings
 from app.database import EcardBinding, get_sync_session_factory
 from app.ecard_client import EcardApiError, EcardClient, EcardConfigurationError, EcardRoomRef, safe_float
 from app.notice_utils import merge_notices, notice_key, valid_notice_items
-from app.push import send_push_to_student
 from app.sessions import student_id_of
-from app.cloud_notifications import has_background_notification_profile
+from app.cloud_notifications import deliver_notification, has_background_notification_profile
 
 __all__ = [
     "ExamReminderCache",
@@ -78,6 +77,18 @@ def _session_notices(session) -> list[dict]:
     return merge_notices(items, ehall_items)
 
 
+def _active_push_succeeded(
+    student_id: str,
+    event_key: str,
+    notification_type: str,
+    title: str,
+    body: str,
+    extras: dict,
+) -> bool:
+    """活动会话的推送必须成功或已持久化成功，否则下次轮询重试。"""
+    return deliver_notification(student_id, event_key, notification_type, title, body, extras)
+
+
 async def run_notice_poller_once(app) -> None:
     cache: NoticeCache = getattr(app.state, "notice_cache", NoticeCache())
     app.state.notice_cache = cache
@@ -95,8 +106,8 @@ async def run_notice_poller_once(app) -> None:
 
         current_keys = {_notice_key(item) for item in items}
         previous_keys = cache.get_cached_titles(session_id)
-        cache.update(session_id, current_keys)
         if not previous_keys:
+            cache.update(session_id, current_keys)
             return
 
         student_id = await asyncio.get_event_loop().run_in_executor(
@@ -109,6 +120,7 @@ async def run_notice_poller_once(app) -> None:
             for item in items
             if _notice_key(item) not in previous_keys
         ][:5]
+        acknowledged_keys = set(current_keys)
         for item in reversed(new_items):
             title = str(item.get("title") or "新通知")
             body = str(item.get("summary") or item.get("category") or "有新的教务通知")
@@ -129,23 +141,26 @@ async def run_notice_poller_once(app) -> None:
                 "endTime": end_time,
             }
             await manager.send_to_session(session_id, message)
-            if student_id:
-                send_push_to_student(
-                    student_id,
-                    "新通知",
-                    title if not body else f"{title}\n{body}",
-                    {
-                        "id": event_id,
-                        "type": "new_notice",
-                        "targetTab": "notices",
-                        "url": item.get("url") or "",
-                        "liveUpdate": True,
-                        "ongoing": False,
-                        "shortCriticalText": "通知",
-                        "progress": 1,
-                        "endTime": end_time,
-                    },
-                )
+            if student_id and not _active_push_succeeded(
+                student_id,
+                event_id,
+                "new_notice",
+                "新通知",
+                title if not body else f"{title}\n{body}",
+                {
+                    "id": event_id,
+                    "type": "new_notice",
+                    "targetTab": "notices",
+                    "url": item.get("url") or "",
+                    "liveUpdate": True,
+                    "ongoing": False,
+                    "shortCriticalText": "通知",
+                    "progress": 1,
+                    "endTime": end_time,
+                },
+            ):
+                acknowledged_keys.discard(_notice_key(item))
+        cache.update(session_id, acknowledged_keys)
 
     tasks = [
         poll_session(session_id, session)
@@ -245,7 +260,7 @@ def prepare_ecard_reminders(
     summary: dict,
     today_key: str,
 ) -> tuple[list[tuple[str, str, str]], list[str]]:
-    """计算绑定当前待发送的水电提醒，并就地更新每日去重计数。
+    """计算绑定当前待发送的水电提醒，不提前消耗每日次数。
 
     返回 (待发送的 (item_key, title, body) 列表, 启用的提醒项)。
     调用方负责推送与 db.commit()。
@@ -273,10 +288,30 @@ def prepare_ecard_reminders(
         count = reminded_times.get(item_key, 0)
         if count >= ECARD_DAILY_REMINDER_LIMIT:
             continue
-        reminded_times[item_key] = count + 1
         pending.append((item_key, title, body))
     binding.last_reminded_times = json.dumps(reminded_times)
     return pending, enabled_items
+
+
+def mark_ecard_reminder_sent(binding, item_key: str, today_key: str) -> None:
+    """仅在推送成功后增加对应水电项的每日提醒次数。"""
+    reminded_times = json.loads(binding.last_reminded_times or "{}")
+    if binding.last_reminded_date != today_key:
+        reminded_times = {}
+        binding.last_reminded_date = today_key
+    count = int(reminded_times.get(item_key, 0))
+    reminded_times[item_key] = min(ECARD_DAILY_REMINDER_LIMIT, count + 1)
+    binding.last_reminded_times = json.dumps(reminded_times)
+
+
+def ecard_reminder_event_key(
+    student_id: str,
+    today_key: str,
+    reminder_time: str,
+    item_key: str,
+) -> str:
+    """生成同一学生、日期、提醒时刻和水电项的持久化去重键。"""
+    return f"ecard:{student_id}:{today_key}:{reminder_time}:{item_key}"
 
 
 def _next_reminder_at(now: datetime, reminder_times: list[str] | None = None) -> datetime:
@@ -319,6 +354,7 @@ async def run_ecard_reminder_once(app) -> None:
         return
 
     factory = get_sync_session_factory()
+    reminder_time = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%H:%M")
     with factory() as db:
         bindings = db.query(EcardBinding).filter(EcardBinding.reminder_enabled.is_(True)).all()
         for binding in bindings:
@@ -361,12 +397,23 @@ async def run_ecard_reminder_once(app) -> None:
                     "endTime": int((datetime.now(timezone.utc) + timedelta(minutes=30)).timestamp() * 1000),
                 }
                 await _send_ecard_ws(app, binding.student_id, title, body, summary, live_payload)
-                send_push_to_student(
+                event_key = ecard_reminder_event_key(
+                    binding.student_id, today_key, reminder_time, item_key
+                )
+                if _active_push_succeeded(
                     binding.student_id,
+                    event_key,
+                    "ecard_reminder",
                     title,
                     body,
                     live_payload,
-                )
+                ):
+                    mark_ecard_reminder_sent(binding, item_key, today_key)
+                else:
+                    logger.warning(
+                        "ecard_reminder_not_delivered",
+                        extra={"student_id": binding.student_id, "item_key": item_key},
+                    )
         db.commit()
 
 
@@ -523,14 +570,15 @@ async def run_exam_reminder_once(app) -> None:
             }
             if end_time is not None:
                 extras["endTime"] = end_time
-            if student_id:
-                send_push_to_student(
-                    student_id,
-                    "考试提醒",
-                    body,
-                    extras,
-                )
-            cache.mark_reminded(session_id, key)
+            if not student_id or _active_push_succeeded(
+                student_id,
+                f"exam:{key}",
+                "exam_reminder",
+                "考试提醒",
+                body,
+                extras,
+            ):
+                cache.mark_reminded(session_id, key)
 
     tasks = [
         poll_session(session_id, session)
@@ -570,15 +618,17 @@ async def run_grade_update_once(app) -> None:
 
         current = grade_snapshot(grades)
         previous = cache.get(student_id)
-        cache.update(student_id, current)
         if not previous:
+            cache.update(student_id, current)
             return
 
-        changed = changed_grade_items(grades, previous)[:3]
+        changed = changed_grade_items(grades, previous)
         if not changed:
+            cache.update(student_id, current)
             return
 
-        for grade in changed:
+        retry_snapshot = dict(current)
+        for grade in changed[:3]:
             course_name = str(grade.get("courseName") or "课程")
             score = str(grade.get("score") or "").strip()
             title = "成绩更新"
@@ -601,7 +651,26 @@ async def run_grade_update_once(app) -> None:
             }
             await manager.send_to_session(session_id, payload)
             extras = {key: value for key, value in payload.items() if key not in {"title", "body"}}
-            send_push_to_student(student_id, title, body, extras)
+            if not _active_push_succeeded(
+                student_id,
+                f"grade:{_grade_key(grade)}:{_grade_signature(grade)}",
+                "grade_update",
+                title,
+                body,
+                extras,
+            ):
+                key = _grade_key(grade)
+                if key in previous:
+                    retry_snapshot[key] = previous[key]
+                else:
+                    retry_snapshot.pop(key, None)
+        for grade in changed[3:]:
+            key = _grade_key(grade)
+            if key in previous:
+                retry_snapshot[key] = previous[key]
+            else:
+                retry_snapshot.pop(key, None)
+        cache.update(student_id, retry_snapshot)
 
     tasks = [
         poll_session(session_id, session)

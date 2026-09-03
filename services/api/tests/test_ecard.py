@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
@@ -6,7 +7,11 @@ from app.academic_period import now_shanghai
 from app.config import get_settings
 from app.database import EcardBinding, EcardPowerConsumption, get_sync_session_factory
 from app.ecard_client import EcardClient, EcardConfigurationError, EcardRoomRef, calc_sign
-from app.jobs import ecard_reminder_message
+from app.jobs import (
+    ecard_reminder_message,
+    mark_ecard_reminder_sent,
+    prepare_ecard_reminders,
+)
 from app.main import app
 from app.routes import ecard
 from app.sessions import AppSession
@@ -732,3 +737,22 @@ def test_ecard_reminder_message_levels():
         ]
         == "今日水电费"
     )
+
+
+def test_ecard_reminder_count_changes_only_after_successful_delivery():
+    binding = EcardBinding(
+        student_id="20240001",
+        room_id="CGCOMMON1111|1|A2|932",
+        reminder_items='["power"]',
+        last_reminded_date="2026-09-03",
+        last_reminded_times="{}",
+        low_power_threshold=30,
+    )
+    summary = {"powerBalance": 20, "powerText": "20 度"}
+
+    pending, _ = prepare_ecard_reminders(binding, summary, "2026-09-03")
+    assert pending
+    assert binding.last_reminded_times == "{}"
+
+    mark_ecard_reminder_sent(binding, "power", "2026-09-03")
+    assert json.loads(binding.last_reminded_times) == {"power": 1}

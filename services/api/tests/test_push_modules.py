@@ -1,9 +1,12 @@
+import app.jobs as jobs
 from app.ws import ConnectionManager
 from app.jobs import (
     NoticeCache,
     changed_grade_items,
     ecard_progress_current,
     grade_snapshot,
+    run_exam_reminder_once,
+    run_grade_update_once,
     run_notice_poller_once,
 )
 
@@ -174,6 +177,27 @@ class TestNoticePoller:
         assert message["type"] == "new_notice"
         assert message["body"] == "新通知"
 
+    async def test_notice_poller_retries_when_persistent_push_fails(self, monkeypatch):
+        app = FakeApp()
+        app.session.client.get_info = lambda: {"studentId": "20260001"}
+        attempts = []
+
+        def deliver(*_args, **_kwargs):
+            attempts.append(True)
+            return len(attempts) > 1
+
+        monkeypatch.setattr(jobs, "_active_push_succeeded", deliver)
+        await run_notice_poller_once(app)
+
+        app.session.client.items.insert(0, {"title": "新通知", "url": "/new"})
+        await run_notice_poller_once(app)
+        assert len(app.state.ws_manager.sent) == 1
+        assert "|新通知|/new" not in app.state.notice_cache.get_cached_titles("sid1")
+
+        await run_notice_poller_once(app)
+        assert len(app.state.ws_manager.sent) == 2
+        assert "|新通知|/new" in app.state.notice_cache.get_cached_titles("sid1")
+
     async def test_notice_poller_ignores_garbled_items(self):
         app = FakeApp()
         await run_notice_poller_once(app)
@@ -182,3 +206,75 @@ class TestNoticePoller:
         await run_notice_poller_once(app)
 
         assert app.state.ws_manager.sent == []
+
+
+class _RetryGradeClient:
+    def __init__(self):
+        self.grades = [{"term": "2026-1", "courseName": "高等数学", "score": "90"}]
+
+    def get_info(self):
+        return {"studentId": "20260001"}
+
+    def get_grades(self, _start, _term):
+        return list(self.grades)
+
+
+def _academic_app(client):
+    session = type("Session", (), {"id": "sid1", "client": client})()
+    sessions = type("Sessions", (), {"_sessions": {session.id: session}})()
+    app = type("App", (), {})()
+    app.state = type("State", (), {})()
+    app.state.sessions = sessions
+    app.state.ws_manager = FakeWsManager()
+    return app
+
+
+async def test_grade_update_retries_after_push_failure(monkeypatch):
+    client = _RetryGradeClient()
+    app = _academic_app(client)
+    attempts = []
+
+    def deliver(*_args, **_kwargs):
+        attempts.append(True)
+        return len(attempts) > 1
+
+    monkeypatch.setattr(jobs, "_active_push_succeeded", deliver)
+    await run_grade_update_once(app)
+    client.grades[0]["score"] = "92"
+    await run_grade_update_once(app)
+    await run_grade_update_once(app)
+
+    assert len(attempts) == 2
+    assert len(app.state.ws_manager.sent) == 2
+
+
+async def test_exam_reminder_retries_after_push_failure(monkeypatch):
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    exam_time = datetime.now(ZoneInfo("Asia/Shanghai")) + timedelta(hours=1)
+    client = type(
+        "ExamClient",
+        (),
+        {
+            "get_info": lambda self: {"studentId": "20260001"},
+            "get_exams": lambda self, _start, _term: [{
+                "courseName": "高等数学",
+                "time": exam_time.strftime("%Y-%m-%d %H:%M-11:00"),
+                "location": "A101",
+            }],
+        },
+    )()
+    app = _academic_app(client)
+    attempts = []
+
+    def deliver(*_args, **_kwargs):
+        attempts.append(True)
+        return len(attempts) > 1
+
+    monkeypatch.setattr(jobs, "_active_push_succeeded", deliver)
+    await run_exam_reminder_once(app)
+    await run_exam_reminder_once(app)
+
+    assert len(attempts) == 2
+    assert len(app.state.ws_manager.sent) == 2

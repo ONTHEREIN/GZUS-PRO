@@ -280,6 +280,20 @@ def _deliver(student_id: str, event_key: str, notification_type: str, title: str
     return _record_successful_delivery(student_id, event_key, notification_type, delivered)
 
 
+def deliver_notification(
+    student_id: str,
+    event_key: str,
+    notification_type: str,
+    title: str,
+    body: str,
+    extras: dict,
+) -> bool:
+    """投递一次持久化通知，并仅在首次成功或已成功去重时返回真。"""
+    return _deliver(student_id, event_key, notification_type, title, body, extras) or _delivery_recorded(
+        student_id, event_key
+    )
+
+
 def _poll_profile(profile: BackgroundNotificationProfile) -> int:
     client, ehall_client = _authenticated_client(profile.encrypted_credentials)
     notices = valid_notice_items(list(client.get_notices()))
@@ -415,6 +429,7 @@ def run_background_notification_poll_once() -> dict[str, int]:
     started = datetime.now(timezone.utc)
     delivered = 0
     processed = 0
+    poll_error: str | None = None
     with get_sync_session_factory()() as db:
         profiles = db.query(BackgroundNotificationProfile).all()
         for profile in profiles:
@@ -430,11 +445,12 @@ def run_background_notification_poll_once() -> dict[str, int]:
                 profile.last_checked_at = datetime.now(timezone.utc)
             except Exception as exc:
                 profile.last_error = f"{type(exc).__name__}: {str(exc)[:300]}"
+                poll_error = profile.last_error
                 logger.warning("background_notification_poll_failed", extra={"student_id": profile.student_id}, exc_info=True)
         db.commit()
     duration = int((datetime.now(timezone.utc) - started).total_seconds() * 1000)
     record_maintenance_job_result(
-        "background-notifications", started, duration, None, processed, delivered
+        "background-notifications", started, duration, poll_error, processed, delivered
     )
     return {"processed": processed, "delivered": delivered}
 

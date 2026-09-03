@@ -172,6 +172,8 @@ class TestPushRoutes:
             headers={"X-Session-Id": session_id},
         )
         assert test_response.status_code == 200
+        assert test_response.json()["delivered_channels"] == "0"
+        assert test_response.json()["delivery_status"] == "queued_only"
 
         poll_response = client.get("/push/poll", headers={"X-Session-Id": session_id})
         assert poll_response.status_code == 200
@@ -225,6 +227,32 @@ def test_apns_invalid_token_is_removed(monkeypatch):
 
     with factory() as db:
         assert db.query(IosPushToken).count() == 0
+
+
+def test_apns_token_for_old_bundle_is_removed(monkeypatch):
+    factory = get_sync_session_factory()
+    with factory() as db:
+        db.add(
+            IosPushToken(
+                student_id="20260001",
+                device_token="c" * 64,
+                environment="sandbox",
+            )
+        )
+        db.commit()
+
+    monkeypatch.setattr(apns_service, "is_apns_enabled", lambda: True)
+    monkeypatch.setattr(apns_service, "_credentials", lambda _: object())
+
+    def _raise_old_bundle(*_args):
+        raise apns_service.ApnsUnregisteredError("DeviceTokenNotForTopic")
+
+    monkeypatch.setattr(apns_service, "_send_with_retry", _raise_old_bundle)
+
+    apns_service.send_apns_to_student("20260001", "测试", "测试通知", {"type": "test"})
+
+    with factory() as db:
+        assert db.query(IosPushToken).filter_by(environment="sandbox").count() == 0
 
 
 def test_live_activity_payload_supports_start_update_and_end():

@@ -241,7 +241,7 @@ def _send_once(
     if response.status_code == 200:
         return
     reason = _response_reason(response)
-    if response.status_code == 410 or reason == "BadDeviceToken":
+    if response.status_code == 410 or reason in {"BadDeviceToken", "DeviceTokenNotForTopic"}:
         raise ApnsUnregisteredError(
             f"APNs 设备令牌已失效: status={response.status_code}, reason={reason}"
         )

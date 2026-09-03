@@ -239,9 +239,15 @@ async def test_push(
     from app.push import send_push_to_student
 
     student_id = student_id_of(session)
+    delivered_channels = 0
     if student_id:
-        send_push_to_student(student_id, title, alert, message)
-    return {"status": "ok", "sent_to": session.id[:8]}
+        delivered_channels = send_push_to_student(student_id, title, alert, message)
+    return {
+        "status": "ok",
+        "sent_to": session.id[:8],
+        "delivered_channels": str(delivered_channels),
+        "delivery_status": "delivered" if delivered_channels > 0 else "queued_only",
+    }
 
 
 @router.get("/poll")
