@@ -188,18 +188,18 @@ def build_live_activity_payload(
     }
     if action == "start":
         aps["alert"] = {"title": title[:256], "body": body[:512]}
-    if action == "end" and not bool(extras.get("dismissImmediately", False)):
-        aps["dismissal-date"] = int(time.time()) + 30 * 60
-    payload: dict[str, object] = {"aps": aps}
-    if action == "start":
-        payload["input-push-token"] = 1
-        payload["attributes-type"] = "GzusLiveActivityAttributes"
-        payload["attributes"] = {
+        aps["attributes-type"] = "GzusLiveActivityAttributes"
+        aps["attributes"] = {
             "activityId": activity_id,
             "activityType": activity_type,
             "targetTab": str(extras.get("targetTab") or "home"),
             "deepLink": str(extras.get("deepLink") or "cn.gzus.pro://activity"),
         }
+    if action == "end" and not bool(extras.get("dismissImmediately", False)):
+        aps["dismissal-date"] = int(time.time()) + 30 * 60
+    payload: dict[str, object] = {"aps": aps}
+    if action == "start":
+        payload["input-push-token"] = 1
     encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     if len(encoded) > _APNS_MAX_PAYLOAD_BYTES:
         raise ApnsDeliveryError("ActivityKit APNs payload 超过 4 KB 限制")
