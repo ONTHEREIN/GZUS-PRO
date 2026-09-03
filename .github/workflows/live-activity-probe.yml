@@ -34,14 +34,20 @@ jobs:
             "$DEPLOY_USER@$DEPLOY_HOST" 'bash -s' <<'REMOTE'
           set -euo pipefail
           cd /opt/onegzus/current/api
-          set -a
-          . /opt/onegzus/shared/api.env
-          set +a
           .venv/bin/python - <<'PY'
           from __future__ import annotations
 
+          import os
           import time
           from datetime import datetime, timezone
+
+          with open("/opt/onegzus/shared/api.env", encoding="utf-8") as env_file:
+              for line in env_file:
+                  line = line.rstrip("\n")
+                  if not line or line.lstrip().startswith("#") or "=" not in line:
+                      continue
+                  key, value = line.split("=", 1)
+                  os.environ[key] = value
 
           from app.apns_service import is_apns_enabled, send_live_activity_to_student
           from app.database import IosLiveActivityToken, get_sync_session_factory
