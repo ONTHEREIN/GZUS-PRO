@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
+
 import 'api_client.dart';
 import 'web_push_service.dart' deferred as web_push_service;
 import 'local_notification_service.dart' deferred as local_notification_service;
@@ -85,7 +87,16 @@ class LoginRequiredServices {
   }) async {
     final sameSession =
         _initialized && _apiBaseUrl == apiBaseUrl && _sessionId == sessionId;
-    if (sameSession) return;
+    if (sameSession) {
+      // 初始化过程中的权限、网络或原生通道失败不能永久阻断推送注册。
+      // 同一会话再次进入前台/完成身份刷新时，重新同步可恢复的推送令牌。
+      await Future.wait([
+        _initWebPushService(api, onNotificationTap),
+        _initLiveActivityService(api),
+        _syncIosPushToken(api),
+      ]);
+      return;
+    }
 
     final inFlight = _initializing;
     if (inFlight != null) {
@@ -136,7 +147,9 @@ class LoginRequiredServices {
         apiBaseUrl: api.baseUrl,
         sessionId: api.sessionId ?? '',
       );
-    } catch (_) {}
+    } catch (error) {
+      debugPrint('[Push] Web Push 初始化或订阅失败: $error');
+    }
   }
 
   static Future<void> _initLocalNotificationService(
@@ -145,7 +158,9 @@ class LoginRequiredServices {
       await local_notification_service.loadLibrary();
       await local_notification_service.LocalNotificationService.init(
           onTap: onTap);
-    } catch (_) {}
+    } catch (error) {
+      debugPrint('[Push] 本地通知初始化失败: $error');
+    }
   }
 
   static Future<void> _initPushService(
@@ -153,27 +168,35 @@ class LoginRequiredServices {
     try {
       await push_service.loadLibrary();
       await push_service.PushService.init(api: api, onTap: onTap);
-    } catch (_) {}
+    } catch (error) {
+      debugPrint('[Push] 推送服务初始化失败: $error');
+    }
   }
 
   static Future<void> _syncIosPushToken(ApiClient api) async {
     try {
       await push_service.loadLibrary();
       await push_service.PushService.syncIosPushToken(api);
-    } catch (_) {}
+    } catch (error) {
+      debugPrint('[Push] iOS APNs 令牌同步失败: $error');
+    }
   }
 
   static Future<void> _initLiveActivityService(ApiClient api) async {
     try {
       await live_activity_service.loadLibrary();
       await live_activity_service.LiveActivityService.initialize(api: api);
-    } catch (_) {}
+    } catch (error) {
+      debugPrint('[Push] Live Activity 初始化失败: $error');
+    }
   }
 
   static Future<void> _initPersistentCache() async {
     try {
       await persistent_cache.loadLibrary();
-    } catch (_) {}
+    } catch (error) {
+      debugPrint('[Push] 持久化缓存初始化失败: $error');
+    }
   }
 
   static Future<void> _initWsService(
@@ -185,7 +208,9 @@ class LoginRequiredServices {
         sessionId: sessionId,
       );
       await ws_service.WsService.connect();
-    } catch (_) {}
+    } catch (error) {
+      debugPrint('[Push] WebSocket 通知通道初始化失败: $error');
+    }
   }
 
   static Future<void> _initReminderService() async {

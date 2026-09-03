@@ -64,7 +64,7 @@ import WidgetKit
   ) -> Bool {
     ShiplyManager.shared().initializeSDK()
     registerWidgetRefreshTask()
-    UNUserNotificationCenter.current().delegate = self as? UNUserNotificationCenterDelegate
+    UNUserNotificationCenter.current().delegate = self
     if let userInfo = launchOptions?[.remoteNotification] as? [AnyHashable: Any] {
       cacheNotificationOpen(userInfo)
     }

@@ -116,6 +116,13 @@ def send_push_to_student(student_id: str, title: str, body: str, extras: dict | 
         delivered += send_web_push_to_student(student_id, title, body, extras)
     except Exception:
         logger.exception("web_push_channel_unexpected", extra={"student_id": student_id})
+    apns_delivered = 0
+    try:
+        # Live Activity 是附加展示，不能替代普通通知。
+        apns_delivered = send_apns_to_student(student_id, title, body, extras)
+    except Exception:
+        logger.exception("apns_channel_unexpected", extra={"student_id": student_id})
+
     live_delivered = 0
     if extras and extras.get("liveUpdate") is True:
         live_event = extras.get("liveEvent") or "start"
@@ -131,11 +138,4 @@ def send_push_to_student(student_id: str, title: str, body: str, extras: dict | 
             )
         except Exception:
             logger.exception("live_activity_channel_unexpected", extra={"student_id": student_id})
-    try:
-        if live_delivered == 0:
-            delivered += send_apns_to_student(student_id, title, body, extras)
-        else:
-            delivered += live_delivered
-    except Exception:
-        logger.exception("apns_channel_unexpected", extra={"student_id": student_id})
-    return delivered
+    return delivered + apns_delivered + live_delivered

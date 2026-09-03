@@ -40,6 +40,32 @@ def test_push_keeps_success_from_one_channel_when_the_other_raises(monkeypatch):
     assert push_service.send_push_to_student("20260001", "测试", "通知") == 1
 
 
+def test_push_sends_regular_apns_when_live_activity_succeeds(monkeypatch):
+    calls: list[str] = []
+
+    monkeypatch.setattr(push_service, "send_web_push_to_student", lambda *_args, **_kwargs: 0)
+    monkeypatch.setattr(
+        push_service,
+        "send_apns_to_student",
+        lambda *_args, **_kwargs: calls.append("apns") or 1,
+    )
+    monkeypatch.setattr(
+        push_service,
+        "send_live_activity_to_student",
+        lambda *_args, **_kwargs: calls.append("live_activity") or 1,
+    )
+
+    delivered = push_service.send_push_to_student(
+        "20260001",
+        "新通知",
+        "通知内容",
+        {"type": "new_notice", "liveUpdate": True},
+    )
+
+    assert delivered == 2
+    assert calls == ["apns", "live_activity"]
+
+
 @pytest.fixture
 def client():
     app.state.sessions = SessionStore(ttl_seconds=7200, db_factory=get_sync_session_factory)

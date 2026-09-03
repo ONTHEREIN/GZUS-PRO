@@ -205,6 +205,8 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
     final prefs = await SharedPreferences.getInstance();
     await _tryBackgroundRefresh(prefs);
     if (!mounted || !loggedIn) return;
+    // 恢复前台时重试一次推送通道注册，避免首次启动的权限/网络时序失败导致本次会话永久无推送。
+    unawaited(_initPushServices());
     try {
       await push_service.loadLibrary();
       push_service.PushService.resume();

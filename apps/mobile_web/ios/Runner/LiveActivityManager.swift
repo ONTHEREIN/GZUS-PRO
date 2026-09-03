@@ -206,7 +206,9 @@ final class LiveActivityManager {
     }
 
     private func activeActivity(id: String) -> Activity<GzusLiveActivityAttributes>? {
-        Activity<GzusLiveActivityAttributes>.activities.first { $0.id == id }
+        Activity<GzusLiveActivityAttributes>.activities.first {
+            $0.attributes.activityId == id
+        }
     }
 
     private func observePushToStartTokens() {
