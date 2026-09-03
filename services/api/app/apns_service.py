@@ -192,6 +192,7 @@ def build_live_activity_payload(
         aps["dismissal-date"] = int(time.time()) + 30 * 60
     payload: dict[str, object] = {"aps": aps}
     if action == "start":
+        payload["input-push-token"] = 1
         payload["attributes-type"] = "GzusLiveActivityAttributes"
         payload["attributes"] = {
             "activityId": activity_id,
