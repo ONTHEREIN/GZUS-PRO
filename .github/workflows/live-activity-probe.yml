@@ -84,7 +84,10 @@ jobs:
 
           if token_row is None:
               raise RuntimeError("没有可用的 sandbox Live Activity start token")
-          age_seconds = (now - token_row.updated_at).total_seconds()
+          updated_at = token_row.updated_at
+          if updated_at.tzinfo is None:
+              updated_at = updated_at.replace(tzinfo=timezone.utc)
+          age_seconds = (now - updated_at).total_seconds()
           if age_seconds > 1800:
               raise RuntimeError(f"最近 start token 已过期: age_seconds={age_seconds:.0f}")
 
