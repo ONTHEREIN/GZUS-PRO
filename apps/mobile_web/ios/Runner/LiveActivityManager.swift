@@ -68,7 +68,9 @@ final class LiveActivityManager {
               let baseUrl = values["baseUrl"] as? String,
               !baseUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               let sessionId = values["sessionId"] as? String,
-              !sessionId.isEmpty else {
+              !sessionId.isEmpty,
+              let environment = values["environment"] as? String,
+              environment == "sandbox" || environment == "production" else {
             result(error(code: "INVALID_ARGUMENT", message: "灵动岛后台同步配置不完整"))
             return
         }
@@ -77,7 +79,10 @@ final class LiveActivityManager {
             return
         }
         UserDefaults(suiteName: appGroupIdentifier)?.set(
-            ["baseUrl": baseUrl.trimmingCharacters(in: CharacterSet(charactersIn: "/"))],
+            [
+                "baseUrl": baseUrl.trimmingCharacters(in: CharacterSet(charactersIn: "/")),
+                "environment": environment,
+            ],
             forKey: liveActivityConfigKey
         )
         if let token = currentPushToStartToken() {
@@ -263,14 +268,17 @@ final class LiveActivityManager {
     ) {
         guard let config = UserDefaults(suiteName: appGroupIdentifier)?.dictionary(forKey: liveActivityConfigKey),
               let baseUrl = config["baseUrl"] as? String,
+              let environment = config["environment"] as? String,
+              environment == "sandbox" || environment == "production",
               let sessionId = loadSession(),
               let url = URL(string: "\(baseUrl)/push/ios/live-activity-tokens") else {
+            NSLog("live_activity_token_sync_failed: invalid_configuration")
             return
         }
         var body: [String: Any] = [
             "tokenType": tokenType,
             "token": token,
-            "environment": apnsEnvironment(),
+            "environment": environment,
         ]
         if let activityId, !activityId.isEmpty { body["activityId"] = activityId }
         if let activityType, !activityType.isEmpty { body["activityType"] = activityType }
@@ -293,14 +301,6 @@ final class LiveActivityManager {
                 return
             }
         }.resume()
-    }
-
-    private func apnsEnvironment() -> String {
-        #if DEBUG
-        return "sandbox"
-        #else
-        return "production"
-        #endif
     }
 
     private func saveSession(_ sessionId: String) -> Bool {

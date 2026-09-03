@@ -47,6 +47,12 @@ def client():
 
 
 class TestPushRoutes:
+    def test_live_activity_routes_are_registered(self):
+        paths = set(app.openapi()["paths"])
+
+        assert "/push/ios/live-activity-tokens" in paths
+        assert "/push/ios/live-activity-tokens/unregister" in paths
+
     def test_native_registration_routes_are_removed(self, client):
         register_response = client.post("/push/register", json={"registrationId": "abc123"})
         unregister_response = client.post("/push/unregister", json={})

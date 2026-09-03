@@ -28,6 +28,7 @@ class LiveActivityService {
     await _channel.invokeMethod<bool>('configure', {
       'baseUrl': api.baseUrl,
       'sessionId': api.sessionId,
+      'environment': _iosPushEnvironment,
     });
     if (!_initialized) {
       _channel.setMethodCallHandler(_handleNativeEvent);

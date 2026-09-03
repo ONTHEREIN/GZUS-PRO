@@ -728,10 +728,12 @@ class SessionStore:
 
         self._cleanup_task = asyncio.create_task(_cleanup_loop())
 
-    def stop_cleanup_task(self) -> None:
-        if self._cleanup_task is not None:
-            self._cleanup_task.cancel()
-            self._cleanup_task = None
+    async def stop_cleanup_task(self) -> None:
+        task = self._cleanup_task
+        self._cleanup_task = None
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
     def _purge_expired(self) -> None:
         from app.database import AppSessionModel

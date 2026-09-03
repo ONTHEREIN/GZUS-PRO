@@ -49,21 +49,22 @@ async def lifespan(app: FastAPI):
     )
 
     init_db()
-    poller_task = asyncio.create_task(run_notice_poller(app))
-    ecard_task = asyncio.create_task(run_ecard_reminder_poller(app))
-    exam_task = asyncio.create_task(run_exam_reminder_poller(app))
-    grade_task = asyncio.create_task(run_grade_update_poller(app))
-    background_notification_task = asyncio.create_task(run_background_notification_poller())
-    course_reminder_task = asyncio.create_task(run_course_reminder_dispatcher())
+    poller_tasks = [
+        asyncio.create_task(run_notice_poller(app)),
+        asyncio.create_task(run_ecard_reminder_poller(app)),
+        asyncio.create_task(run_exam_reminder_poller(app)),
+        asyncio.create_task(run_grade_update_poller(app)),
+        asyncio.create_task(run_background_notification_poller()),
+        asyncio.create_task(run_course_reminder_dispatcher()),
+    ]
     await app.state.sessions.start_cleanup_task()
-    yield
-    poller_task.cancel()
-    ecard_task.cancel()
-    exam_task.cancel()
-    grade_task.cancel()
-    background_notification_task.cancel()
-    course_reminder_task.cancel()
-    app.state.sessions.stop_cleanup_task()
+    try:
+        yield
+    finally:
+        for task in poller_tasks:
+            task.cancel()
+        await asyncio.gather(*poller_tasks, return_exceptions=True)
+        await app.state.sessions.stop_cleanup_task()
 
 
 def create_app() -> FastAPI:
