@@ -147,15 +147,19 @@ class WsService {
         '[WsService] Showing notification: type=${msg['type'] ?? 'unknown'}, bodyLength=${body.length}');
     final extras = _extrasForMessage(msg);
     final notificationId = notificationIdForMessage(msg);
-    LiveActivityController.instance.show(
-      LiveActivityEvent.fromMessage({
-        ...msg,
-        'id': msg['id'] ?? notificationId.toString(),
-        'title': title,
-        'body': body,
-        'extras': extras,
-      }),
-    );
+    final event = LiveActivityEvent.fromMessage({
+      ...msg,
+      'id': msg['id'] ?? notificationId.toString(),
+      'title': title,
+      'body': body,
+      'extras': extras,
+    });
+    LiveActivityController.instance.show(event);
+    if (defaultTargetPlatform == TargetPlatform.iOS &&
+        msg['liveUpdate'] == true) {
+      final posted = await LiveActivityService.startOrUpdate(event);
+      if (posted) return;
+    }
     final liveUpdate =
         msg['liveUpdate'] == true || extras['liveUpdate'] == true;
     if (!liveUpdate) {

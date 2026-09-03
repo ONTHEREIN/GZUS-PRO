@@ -860,7 +860,7 @@ class SchoolSdkClient:
             data = self._proxy_json(
                 "POST",
                 ATTENDANCE_DETAIL_URL,
-                params={"doType": "query"},
+                params={"doType": "query", "gnmkdm": ATTENDANCE_GNMKDM},
                 data={
                     "xnm": str(year),
                     "xqm": TERM_TO_XQM.get(term, ""),

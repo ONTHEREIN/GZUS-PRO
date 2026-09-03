@@ -67,33 +67,35 @@ class ReminderService {
     for (final slot in slots) {
       final delay = slot.remindAt.difference(now);
       _courseTimers.add(Timer(delay, () async {
+        final event = LiveActivityEvent(
+          id: slot.id.toString(),
+          type: 'course_reminder',
+          title: slot.title,
+          body: slot.body,
+          style: 'progress',
+          startTime: slot.remindAt,
+          endTime: slot.countdownTarget,
+          shortText: '上课',
+          targetTab: 'schedule',
+          ongoing: true,
+          progress: _slotProgress(slot),
+        );
         final extras = {
           'type': 'course_reminder',
           'courseName': slot.courseName,
         };
-        LiveActivityController.instance.show(
-          LiveActivityEvent(
-            id: slot.id.toString(),
-            type: 'course_reminder',
-            title: slot.title,
-            body: slot.body,
-            style: 'progress',
-            endTime: slot.countdownTarget,
-            shortText: '上课',
-            targetTab: 'schedule',
-            ongoing: true,
-            progress: _slotProgress(slot),
-          ),
-        );
-        final posted = await LiveUpdateService.postTimedProgressLiveUpdate(
-          id: slot.id,
-          title: slot.title,
-          body: slot.body,
-          startTimeMillis: slot.remindAt.millisecondsSinceEpoch,
-          endTimeMillis: slot.countdownTarget.millisecondsSinceEpoch,
-          shortCriticalText: '上课',
-          extras: extras,
-        );
+        LiveActivityController.instance.show(event);
+        final iosPosted = await LiveActivityService.startOrUpdate(event);
+        final posted = iosPosted ||
+            await LiveUpdateService.postTimedProgressLiveUpdate(
+              id: slot.id,
+              title: slot.title,
+              body: slot.body,
+              startTimeMillis: slot.remindAt.millisecondsSinceEpoch,
+              endTimeMillis: slot.countdownTarget.millisecondsSinceEpoch,
+              shortCriticalText: '上课',
+              extras: extras,
+            );
         if (!posted) {
           await LocalNotificationService.show(
             id: slot.id,
@@ -105,9 +107,11 @@ class ReminderService {
         final cancelDelay = slot.countdownTarget.difference(DateTime.now());
         if (cancelDelay.isNegative) {
           LiveUpdateService.cancelLiveUpdate(id: slot.id);
+          unawaited(LiveActivityService.end(event, immediate: false));
         } else {
           _cancelTimers.add(Timer(cancelDelay, () {
             LiveUpdateService.cancelLiveUpdate(id: slot.id);
+            unawaited(LiveActivityService.end(event, immediate: false));
           }));
         }
       }));

@@ -15,6 +15,7 @@ class NextClassMediumCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final item = course;
+    final location = item?.course.classroom?.trim();
     return HomeCardShell(
       title: '下一节课',
       icon: Icons.watch_later,
@@ -49,12 +50,32 @@ class NextClassMediumCard extends StatelessWidget {
                         ),
                       ),
                       SizedBox(height: tight ? 4 : 10),
-                      HomeMeta(icon: Icons.schedule, text: item.timeText),
-                      if (!tight && item.course.classroom != null) ...[
+                      if (tight)
+                        Row(
+                          children: [
+                            Expanded(
+                              child: HomeMeta(
+                                  icon: Icons.schedule, text: item.timeText),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: HomeMeta(
+                                icon: Icons.location_on,
+                                text: location?.isNotEmpty == true
+                                    ? location!
+                                    : '地点待定',
+                              ),
+                            ),
+                          ],
+                        )
+                      else ...[
+                        HomeMeta(icon: Icons.schedule, text: item.timeText),
                         const SizedBox(height: 6),
                         HomeMeta(
-                            icon: Icons.location_on,
-                            text: item.course.classroom!),
+                          icon: Icons.location_on,
+                          text:
+                              location?.isNotEmpty == true ? location! : '地点待定',
+                        ),
                       ],
                     ],
                   ),

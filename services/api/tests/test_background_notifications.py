@@ -1,5 +1,8 @@
+import json
+
 from fastapi.testclient import TestClient
 
+from app import cloud_notifications
 from app.cloud_notifications import run_background_notification_poll_once
 from app.database import (
     BackgroundNotificationProfile,
@@ -17,6 +20,67 @@ class _StudentClient:
 
     def logout(self) -> None:
         return None
+
+
+class _NotificationPollClient:
+    def get_notices(self) -> list[dict[str, str]]:
+        return [
+            {"category": "教务", "title": "旧通知", "url": "https://example.test/old"},
+            {"category": "教务", "title": "新通知", "url": "https://example.test/new"},
+        ]
+
+    def get_grades(self, _start: object, _end: object) -> list[dict[str, str]]:
+        return []
+
+    def get_exams(self, _start: object, _end: object) -> list[dict[str, str]]:
+        return []
+
+    def get_attendance(self, _start: object, _end: object) -> list[dict[str, str]]:
+        return []
+
+
+def test_failed_cloud_notification_is_retried_and_only_success_is_recorded(monkeypatch):
+    client = _NotificationPollClient()
+    monkeypatch.setattr(
+        cloud_notifications,
+        "_authenticated_client",
+        lambda _credentials: (client, None),
+    )
+    attempts: list[str] = []
+
+    def send_push(student_id: str, title: str, body: str, extras: dict) -> int:
+        attempts.append(extras["url"])
+        return 0 if len(attempts) == 1 else 1
+
+    monkeypatch.setattr(cloud_notifications, "send_push_to_student", send_push)
+
+    with get_sync_session_factory()() as db:
+        db.add(
+            BackgroundNotificationProfile(
+                student_id="20260001",
+                credential_fingerprint="test-fingerprint",
+                encrypted_credentials="test-credentials",
+                notice_keys_json=json.dumps(["教务|旧通知|https://example.test/old"]),
+            )
+        )
+        db.commit()
+
+    assert run_background_notification_poll_once() == {"processed": 1, "delivered": 0}
+    with get_sync_session_factory()() as db:
+        profile = db.query(BackgroundNotificationProfile).one()
+        assert json.loads(profile.notice_keys_json) == ["教务|旧通知|https://example.test/old"]
+        assert db.query(NotificationDelivery).count() == 0
+
+    assert run_background_notification_poll_once() == {"processed": 1, "delivered": 1}
+    with get_sync_session_factory()() as db:
+        profile = db.query(BackgroundNotificationProfile).one()
+        assert set(json.loads(profile.notice_keys_json)) == {
+            "教务|旧通知|https://example.test/old",
+            "教务|新通知|https://example.test/new",
+        }
+        delivery = db.query(NotificationDelivery).one()
+        assert delivery.delivery_status == "delivered"
+    assert attempts == ["https://example.test/new", "https://example.test/new"]
 
 
 def _client() -> tuple[TestClient, str]:

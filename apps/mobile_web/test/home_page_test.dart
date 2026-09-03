@@ -33,6 +33,8 @@ void main() {
     expect(scheduleCard, findsOneWidget);
     expect(find.descendant(of: scheduleCard, matching: find.text('下一节')),
         findsOneWidget);
+    expect(find.descendant(of: scheduleCard, matching: find.text('A101')),
+        findsOneWidget);
     expect(find.textContaining('考试模块加载失败'), findsOneWidget);
     expect(find.textContaining('考试服务暂时不可用'), findsOneWidget);
     expect(tester.takeException(), isNull);

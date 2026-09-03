@@ -34,7 +34,7 @@ void main() {
             utf8.encode(jsonEncode({
               'title': '课程调整通知',
               'date': '2026-08-29',
-              'contentHtml': '<p>这是应用抓取的详情正文。</p>',
+              'contentHtml': '<p>这是应用抓取的详情正文。</p><p>&nbsp;</p><p>第二段正文。</p>',
               'url': 'https://jwxt.example.test/notice/1.html',
             })),
             200,
@@ -66,7 +66,10 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('这是应用抓取的详情正文。'), findsOneWidget);
+    final content = tester.widget<Text>(
+      find.byKey(const ValueKey('notice-detail-content')),
+    );
+    expect(content.data, '这是应用抓取的详情正文。\n第二段正文。');
     expect(find.byKey(const ValueKey('notice-open-original')), findsOneWidget);
   });
 }

@@ -115,6 +115,7 @@ private func targetURL(_ tab: String) -> URL {
     return url
 }
 private func nextLocation(_ dashboard: Dashboard) -> String { dashboard.nextLocation.isEmpty ? "地点待定" : dashboard.nextLocation }
+private func nextTimeText(_ dashboard: Dashboard) -> String { dashboard.nextTime.isEmpty ? "时间待定" : dashboard.nextTime }
 private func nextHeading(_ dashboard: Dashboard, _ now: Date) -> String {
     guard dashboard.nextStatus != "none", let start = dashboard.nextStart else { return "暂无课程" }
     if let end = dashboard.nextEnd, now >= end { return "课程已结束" }
@@ -423,11 +424,26 @@ private struct NextClassLockScreenView: View {
         let dashboard = entry.dashboard
         switch family {
         case .accessoryInline:
-            Text("\(nextText(dashboard, entry.date)) · \(nextLocation(dashboard))")
+            Text("\(nextTimeText(dashboard)) · \(nextText(dashboard, entry.date)) · \(nextLocation(dashboard))")
         case .accessoryCircular:
-            VStack(spacing: 1) { Text(String(nextLocation(dashboard).prefix(6))).font(.system(size: 10, weight: .semibold)).lineLimit(1); Text(dashboard.nextTime.prefix(5)).font(.system(size: 11, weight: .bold, design: .rounded)) }
+            VStack(spacing: 1) {
+                Text(nextTimeText(dashboard).prefix(5))
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .lineLimit(1)
+                Text(nextText(dashboard, entry.date))
+                    .font(.system(size: 9, weight: .semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.65)
+            }
         case .accessoryRectangular:
-            VStack(alignment: .leading, spacing: 2) { Text(nextHeading(dashboard, entry.date)).font(.caption2); Text(nextText(dashboard, entry.date)).font(.headline).lineLimit(1); Text("\(dashboard.nextTime.isEmpty ? "时间待定" : dashboard.nextTime) · \(nextLocation(dashboard))").font(.caption).lineLimit(1) }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(nextHeading(dashboard, entry.date)).font(.caption2)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(nextTimeText(dashboard)).font(.caption2)
+                    Text(nextText(dashboard, entry.date)).font(.headline).lineLimit(1)
+                }
+                Text(nextLocation(dashboard)).font(.caption).lineLimit(1)
+            }
         default:
             Text("\(nextText(dashboard, entry.date)) · \(nextLocation(dashboard))")
         }
@@ -441,6 +457,132 @@ private struct NextClassLockScreenWidget: Widget {
     }
 }
 
+@available(iOS 16.1, *)
+private struct GzusLiveActivityWidget: Widget {
+    var body: some WidgetConfiguration {
+        ActivityConfiguration(for: GzusLiveActivityAttributes.self) { context in
+            GzusLiveActivityLockScreenView(context: context)
+                .activityBackgroundTint(Color.black)
+                .activitySystemActionForegroundColor(.white)
+                .widgetURL(URL(string: context.attributes.deepLink))
+        } dynamicIsland: { context in
+            DynamicIsland {
+                DynamicIslandExpandedRegion(.leading) {
+                    Text(context.state.shortText)
+                        .font(.caption.weight(.bold))
+                        .lineLimit(1)
+                }
+                DynamicIslandExpandedRegion(.trailing) {
+                    GzusLiveActivityTimer(state: context.state)
+                }
+                DynamicIslandExpandedRegion(.center) {
+                    Text(context.state.title)
+                        .font(.subheadline.weight(.bold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                }
+                DynamicIslandExpandedRegion(.bottom) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(context.state.body)
+                            .font(.caption)
+                            .lineLimit(2)
+                        if let progress = context.state.progress {
+                            SwiftUI.ProgressView(value: progress, total: 1)
+                                .tint(.accentColor)
+                        }
+                    }
+                }
+            } compactLeading: {
+                Image(systemName: liveActivityIcon(context.attributes.activityType))
+                    .foregroundStyle(liveActivityColor(context.attributes.activityType))
+            } compactTrailing: {
+                GzusLiveActivityTimer(state: context.state)
+            } minimal: {
+                Image(systemName: liveActivityIcon(context.attributes.activityType))
+                    .foregroundStyle(liveActivityColor(context.attributes.activityType))
+            }
+            .widgetURL(URL(string: context.attributes.deepLink))
+        }
+        .configurationDisplayName("软帮手动态")
+        .description("在灵动岛和锁屏查看教务动态。")
+    }
+}
+
+@available(iOS 16.1, *)
+private struct GzusLiveActivityLockScreenView: View {
+    let context: ActivityViewContext<GzusLiveActivityAttributes>
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: liveActivityIcon(context.attributes.activityType))
+                .font(.title2.weight(.bold))
+                .foregroundStyle(liveActivityColor(context.attributes.activityType))
+            VStack(alignment: .leading, spacing: 4) {
+                Text(context.state.title)
+                    .font(.headline.weight(.bold))
+                    .lineLimit(1)
+                Text(context.state.body)
+                    .font(.subheadline)
+                    .lineLimit(2)
+                if let progress = context.state.progress {
+                    SwiftUI.ProgressView(value: progress, total: 1)
+                        .tint(liveActivityColor(context.attributes.activityType))
+                }
+            }
+            Spacer(minLength: 8)
+            GzusLiveActivityTimer(state: context.state)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+    }
+}
+
+@available(iOS 16.1, *)
+private struct GzusLiveActivityTimer: View {
+    let state: GzusLiveActivityAttributes.ContentState
+
+    var body: some View {
+        if let start = activityDate(state.startEpochMillis),
+           let end = activityDate(state.endEpochMillis),
+           end > start {
+            Text(timerInterval: start...end, countsDown: true)
+                .font(.caption.weight(.bold).monospacedDigit())
+                .minimumScaleFactor(0.7)
+        } else {
+            Text(state.shortText)
+                .font(.caption.weight(.bold))
+                .lineLimit(1)
+        }
+    }
+}
+
+@available(iOS 16.1, *)
+private func activityDate(_ milliseconds: Int64) -> Date? {
+    milliseconds > 0 ? Date(timeIntervalSince1970: TimeInterval(milliseconds) / 1_000) : nil
+}
+
+@available(iOS 16.1, *)
+private func liveActivityIcon(_ type: String) -> String {
+    switch type {
+    case "course_reminder": return "calendar"
+    case "exam_reminder": return "doc.text.magnifyingglass"
+    case "grade_update": return "graduationcap"
+    case "ecard_reminder": return "drop"
+    case "attendance_update": return "checkmark.seal"
+    default: return "bell"
+    }
+}
+
+@available(iOS 16.1, *)
+private func liveActivityColor(_ type: String) -> Color {
+    switch type {
+    case "exam_reminder", "attendance_update": return .orange
+    case "ecard_reminder": return .cyan
+    case "grade_update": return .green
+    default: return .blue
+    }
+}
+
 @main
 struct OneGzusWidgets: WidgetBundle {
     var body: some Widget {
@@ -451,5 +593,8 @@ struct OneGzusWidgets: WidgetBundle {
         UtilitiesWidget()
         ProgressWidget()
         NextClassLockScreenWidget()
+        if #available(iOS 16.1, *) {
+            GzusLiveActivityWidget()
+        }
     }
 }

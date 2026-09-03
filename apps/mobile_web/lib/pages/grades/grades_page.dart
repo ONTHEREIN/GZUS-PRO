@@ -297,7 +297,7 @@ class _GradesPageState extends State<GradesPage>
       'progressMax': 100,
       'progressCurrent': 100,
     };
-    LiveActivityController.instance.show(LiveActivityEvent(
+    final event = LiveActivityEvent(
       id: eventId,
       type: 'grade_update',
       title: title,
@@ -307,7 +307,9 @@ class _GradesPageState extends State<GradesPage>
       targetTab: 'grades',
       ongoing: false,
       progress: 1,
-    ));
+    );
+    LiveActivityController.instance.show(event);
+    if (await LiveActivityService.startOrUpdate(event)) return;
     final notificationId = eventId.hashCode.abs();
     await live_update_service.loadLibrary();
     final posted = await live_update_service.LiveUpdateService.postLiveUpdate(

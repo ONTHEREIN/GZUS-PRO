@@ -681,6 +681,7 @@ class _SchedulePageState extends State<SchedulePage> {
     final savedY = prefs.getDouble('schedule.floatingMenu.y');
     final mode = switch (savedMode) {
       'today' => ScheduleViewMode.today,
+      // 旧版本的 week 即「本周」，恢复为独立的可选项。
       'week' => ScheduleViewMode.week,
       'calendar' => ScheduleViewMode.calendar,
       'all' => ScheduleViewMode.all,
@@ -1681,7 +1682,12 @@ class _ScheduleFloatingMenuState extends State<_ScheduleFloatingMenu> {
                                 key: ValueKey('schedule-menu-${entry.$1.name}'),
                                 avatar: Icon(entry.$2, size: 16),
                                 label: Text(entry.$3),
-                                selected: widget.selected == entry.$1,
+                                // 「本周」与「周课表」展示同一套周日历；
+                                // 旧版本保存的 week 仍让周课表入口保持高亮。
+                                selected: widget.selected == entry.$1 ||
+                                    (entry.$1 == ScheduleViewMode.calendar &&
+                                        widget.selected ==
+                                            ScheduleViewMode.week),
                                 onSelected: (_) {
                                   widget.onViewChanged(entry.$1);
                                   setState(() => _isOpen = false);
@@ -1753,8 +1759,8 @@ class _ScheduleFloatingMenuState extends State<_ScheduleFloatingMenu> {
 
   static const _viewItems = [
     (ScheduleViewMode.today, Icons.today, '今日'),
-    (ScheduleViewMode.week, Icons.view_week, '本周'),
-    (ScheduleViewMode.calendar, Icons.calendar_view_month, '日历'),
+    (ScheduleViewMode.week, Icons.calendar_today, '本周'),
+    (ScheduleViewMode.calendar, Icons.calendar_view_week, '周课表'),
     (ScheduleViewMode.all, Icons.format_list_bulleted, '全部'),
   ];
 }
@@ -1792,16 +1798,6 @@ class ScheduleReadableView extends StatelessWidget {
             onAdjustCourse: onAdjustCourse,
             onMoveToDay: onMoveToDay);
       case ScheduleViewMode.week:
-        if (MediaQuery.sizeOf(context).width < 600) {
-          return _WeekReadableSchedule(
-              items: weekItems,
-              onAdjustCourse: onAdjustCourse,
-              onMoveToDay: onMoveToDay);
-        }
-        return TimetableView(
-            items: weekItems,
-            onAdjustCourse: onAdjustCourse,
-            onMoveToDay: onMoveToDay);
       case ScheduleViewMode.calendar:
         return _CalendarScheduleView(
           items: allItems,
@@ -1851,81 +1847,6 @@ class _TodayReadableSchedule extends StatelessWidget {
         onAdjustCourse: onAdjustCourse,
         onMoveToDay: onMoveToDay,
       ),
-    );
-  }
-}
-
-class _WeekReadableSchedule extends StatelessWidget {
-  const _WeekReadableSchedule({
-    required this.items,
-    this.onAdjustCourse,
-    this.onMoveToDay,
-  });
-
-  final List<ScheduleCourse> items;
-  final void Function(ScheduleCourse course)? onAdjustCourse;
-  final void Function(ScheduleCourse course)? onMoveToDay;
-
-  @override
-  Widget build(BuildContext context) {
-    final byDay = <int, List<ScheduleCourse>>{
-      for (var day = 1; day <= 7; day++) day: <ScheduleCourse>[],
-    };
-    for (final item in items) {
-      final weekday = item.weekday;
-      if (weekday != null && weekday >= 1 && weekday <= 7) {
-        byDay[weekday]!.add(item);
-      }
-    }
-    for (final list in byDay.values) {
-      list.sort(_compareScheduleCourses);
-    }
-    return ListView.separated(
-      physics: const AlwaysScrollableScrollPhysics(),
-      itemCount: 7,
-      separatorBuilder: (_, __) => const SizedBox(height: 10),
-      itemBuilder: (context, index) {
-        final day = index + 1;
-        final courses = byDay[day]!;
-        return Container(
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.surfaceContainerLow,
-            borderRadius: BorderRadius.circular(18),
-            border:
-                Border.all(color: Theme.of(context).colorScheme.outlineVariant),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                children: [
-                  Text(_scheduleWeekdayText(day),
-                      style: Theme.of(context)
-                          .textTheme
-                          .titleMedium
-                          ?.copyWith(fontWeight: FontWeight.w900)),
-                  const Spacer(),
-                  Text(courses.isEmpty ? '无课' : '${courses.length}节',
-                      style: Theme.of(context).textTheme.bodySmall),
-                ],
-              ),
-              if (courses.isNotEmpty) ...[
-                const SizedBox(height: 10),
-                for (final course in courses)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 8),
-                    child: _CompactScheduleCourseTile(
-                      course: course,
-                      onAdjustCourse: onAdjustCourse,
-                      onMoveToDay: onMoveToDay,
-                    ),
-                  ),
-              ],
-            ],
-          ),
-        );
-      },
     );
   }
 }
@@ -2355,6 +2276,7 @@ class _CalendarScheduleViewState extends State<_CalendarScheduleView> {
               ),
               const SizedBox(height: 4),
               SizedBox(
+                key: const ValueKey('schedule-calendar-view'),
                 height: pageViewHeight,
                 child: PageView.builder(
                   controller: _pageController,

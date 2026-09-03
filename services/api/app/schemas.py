@@ -497,6 +497,16 @@ class IosPushTokenRequest(BaseModel):
     environment: Literal["sandbox", "production"]
 
 
+class IosLiveActivityTokenRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    token_type: Literal["start", "activity"] = Field(alias="tokenType")
+    token: str = Field(min_length=32, max_length=512, pattern=r"^[A-Fa-f0-9]+$")
+    environment: Literal["sandbox", "production"]
+    activity_id: str | None = Field(default=None, alias="activityId", max_length=200)
+    activity_type: str | None = Field(default=None, alias="activityType", max_length=80)
+
+
 class CourseReminderSyncCourse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

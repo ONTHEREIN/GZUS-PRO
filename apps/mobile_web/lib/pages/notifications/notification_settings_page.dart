@@ -2,8 +2,10 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../api_client.dart';
+import '../../live_activity_service.dart';
 import '../../models/background_notification_status.dart';
 import '../../test_flags.dart';
 import '../../widgets/page_panel.dart';
@@ -36,12 +38,45 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
   EcardSummary? _ecard;
   String? _error;
   bool _loading = true;
+  bool _liveActivityEnabled = true;
   String? _savingKey;
 
   @override
   void initState() {
     super.initState();
     unawaited(_load());
+    unawaited(_loadLiveActivityPreference());
+  }
+
+  Future<void> _loadLiveActivityPreference() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.iOS) return;
+    final prefs = await SharedPreferences.getInstance();
+    if (mounted) {
+      setState(() => _liveActivityEnabled =
+          prefs.getBool('live_activities_enabled') ?? true);
+    }
+  }
+
+  Future<void> _setLiveActivityEnabled(bool value) async {
+    if (_savingKey != null) return;
+    setState(() {
+      _savingKey = 'live_activity';
+      _liveActivityEnabled = value;
+    });
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('live_activities_enabled', value);
+      await LiveActivityService.setEnabled(enabled: value);
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          _liveActivityEnabled = !value;
+          _error = error.toString();
+        });
+      }
+    } finally {
+      if (mounted) setState(() => _savingKey = null);
+    }
   }
 
   Future<void> _load() async {
@@ -109,6 +144,7 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
     return PagePanel(
       title: '通知设置',
       icon: Icons.notifications_active,
+      expandChild: true,
       child: _loading
           ? const Center(child: CircularProgressIndicator())
           : RefreshIndicator(
@@ -158,6 +194,17 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
                         icon: Icons.fact_check_outlined,
                         value: _background?.attendanceEnabled ?? true,
                       ),
+                      if (!kIsWeb &&
+                          defaultTargetPlatform == TargetPlatform.iOS)
+                        SwitchListTile(
+                          secondary: const Icon(Icons.dynamic_feed_outlined),
+                          title: const Text('灵动岛活动'),
+                          subtitle: const Text('在灵动岛或锁屏显示课程、考试和教务动态摘要'),
+                          value: _liveActivityEnabled,
+                          onChanged: _savingKey == null
+                              ? _setLiveActivityEnabled
+                              : null,
+                        ),
                     ],
                   ),
                   const SizedBox(height: 14),

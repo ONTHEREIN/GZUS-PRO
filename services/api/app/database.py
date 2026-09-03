@@ -80,6 +80,23 @@ class IosPushToken(Base):
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
 
 
+class IosLiveActivityToken(Base):
+    __tablename__ = "ios_live_activity_tokens"
+    __table_args__ = (
+        UniqueConstraint("token", "environment", "token_type", name="uq_ios_live_activity_token"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    student_id = Column(String(100), nullable=False, index=True)
+    token_type = Column(String(20), nullable=False)
+    token = Column(String(512), nullable=False)
+    environment = Column(String(20), nullable=False)
+    activity_id = Column(String(200), nullable=True, index=True)
+    activity_type = Column(String(80), nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+
+
 class DataCache(Base):
     __tablename__ = "data_cache"
 
@@ -211,7 +228,7 @@ class BackgroundNotificationProfile(Base):
 
 
 class NotificationDelivery(Base):
-    """持久化投递去重键与结果，失败记录可在后续轮询重试。"""
+    """持久化成功投递的去重键；失败尝试不保留记录，由轮询快照触发重试。"""
 
     __tablename__ = "notification_deliveries"
     __table_args__ = (UniqueConstraint("student_id", "event_key", name="uq_notification_delivery"),)

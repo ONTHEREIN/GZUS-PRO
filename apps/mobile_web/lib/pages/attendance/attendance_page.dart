@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../api_client.dart';
 import '../../app_providers.dart';
+import '../../live_activity_service.dart';
 import '../../schedule_utils.dart';
 import '../../local_notification_service.dart'
     deferred as local_notification_service;
@@ -349,6 +350,18 @@ class _AttendancePageState extends ConsumerState<AttendancePage>
     }
     final first = changes.first;
     final more = changes.length > 1 ? ' 等 ${changes.length} 条' : '';
+    final event = LiveActivityEvent(
+      id: 'attendance_update:${first.item.compareKey}:${signature.hashCode}',
+      type: 'attendance_update',
+      title: '考勤异常更新',
+      body:
+          '${first.item.courseName} 新增${first.statusLabel} ${first.delta} 次$more',
+      shortText: '考勤',
+      targetTab: 'attendance',
+      ongoing: false,
+    );
+    LiveActivityController.instance.show(event);
+    if (await LiveActivityService.startOrUpdate(event)) return;
     try {
       await local_notification_service.loadLibrary();
       await local_notification_service.LocalNotificationService.show(

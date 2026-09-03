@@ -1912,6 +1912,32 @@ class ApiClient {
     );
   }
 
+  Future<void> registerIosLiveActivityToken({
+    required String tokenType,
+    required String token,
+    required String environment,
+    String? activityId,
+    String? activityType,
+  }) async {
+    await _post('/push/ios/live-activity-tokens', {
+      'tokenType': tokenType,
+      'token': token,
+      'environment': environment,
+      if (activityId != null && activityId.isNotEmpty) 'activityId': activityId,
+      if (activityType != null && activityType.isNotEmpty)
+        'activityType': activityType,
+    });
+  }
+
+  Future<void> unregisterIosLiveActivityTokens(
+    String activeSessionId,
+  ) async {
+    await _postSessionCleanup(
+      '/push/ios/live-activity-tokens/unregister',
+      activeSessionId,
+    );
+  }
+
   // ─── 管理后台 ──────────────────────────────────────────────
   // 所有 /admin/* 端点由 require_admin 鉴权（会话 is_admin 标记）。
 

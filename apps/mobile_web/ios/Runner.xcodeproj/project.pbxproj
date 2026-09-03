@@ -17,6 +17,9 @@
 		97C146FE1CF9000F007C117D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FD1CF9000F007C117D /* Assets.xcassets */; };
 		97C147011CF9000F007C117D /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FF1CF9000F007C117D /* LaunchScreen.storyboard */; };
 		A10000000000000000000001 /* OneGzusWidgets.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000011 /* OneGzusWidgets.swift */; };
+		A10000000000000000000003 /* GzusLiveActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000016 /* GzusLiveActivityAttributes.swift */; };
+		A10000000000000000000004 /* GzusLiveActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000016 /* GzusLiveActivityAttributes.swift */; };
+		A10000000000000000000005 /* LiveActivityManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000017 /* LiveActivityManager.swift */; };
 		A10000000000000000000002 /* OneGzusWidgets.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = A10000000000000000000014 /* OneGzusWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		A10000000000000000000051 /* ShiplyManager.m in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000052 /* ShiplyManager.m */; };
 		C6E7DD39A1489757D4230CB5 /* Pods_Runner.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A1FF598204FF81067D62F3C8 /* Pods_Runner.framework */; };
@@ -87,6 +90,8 @@
 		A10000000000000000000013 /* OneGzusWidgets.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = OneGzusWidgets.entitlements; sourceTree = "<group>"; };
 		A10000000000000000000014 /* OneGzusWidgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = OneGzusWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		A10000000000000000000015 /* Runner.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Runner.entitlements; sourceTree = "<group>"; };
+		A10000000000000000000016 /* GzusLiveActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GzusLiveActivityAttributes.swift; sourceTree = "<group>"; };
+		A10000000000000000000017 /* LiveActivityManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveActivityManager.swift; sourceTree = "<group>"; };
 		A10000000000000000000052 /* ShiplyManager.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.m; path = ShiplyManager.m; sourceTree = "<group>"; };
 		A10000000000000000000053 /* ShiplyManager.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = ShiplyManager.h; sourceTree = "<group>"; };
 		A1FF598204FF81067D62F3C8 /* Pods_Runner.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_Runner.framework; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -188,6 +193,7 @@
 				7884E8672EC3CC0400C636F2 /* SceneDelegate.swift */,
 				A10000000000000000000052 /* ShiplyManager.m */,
 				A10000000000000000000053 /* ShiplyManager.h */,
+				A10000000000000000000017 /* LiveActivityManager.swift */,
 				74858FAD1ED2DC5600515810 /* Runner-Bridging-Header.h */,
 				A10000000000000000000015 /* Runner.entitlements */,
 			);
@@ -198,6 +204,7 @@
 			isa = PBXGroup;
 			children = (
 				A10000000000000000000011 /* OneGzusWidgets.swift */,
+				A10000000000000000000016 /* GzusLiveActivityAttributes.swift */,
 				A10000000000000000000012 /* Info.plist */,
 				A10000000000000000000013 /* OneGzusWidgets.entitlements */,
 			);
@@ -429,6 +436,8 @@
 				1498D2341E8E89220040F4C2 /* GeneratedPluginRegistrant.m in Sources */,
 				7884E8682EC3CC0700C636F2 /* SceneDelegate.swift in Sources */,
 				A10000000000000000000051 /* ShiplyManager.m in Sources */,
+				A10000000000000000000005 /* LiveActivityManager.swift in Sources */,
+				A10000000000000000000003 /* GzusLiveActivityAttributes.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -437,6 +446,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A10000000000000000000001 /* OneGzusWidgets.swift in Sources */,
+				A10000000000000000000004 /* GzusLiveActivityAttributes.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

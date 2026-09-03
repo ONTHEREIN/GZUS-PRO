@@ -2,9 +2,19 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request, Header, status
 
 from app.config import get_settings
-from app.database import IosPushToken, WebPushSubscription, get_sync_session_factory
+from app.database import (
+    IosLiveActivityToken,
+    IosPushToken,
+    WebPushSubscription,
+    get_sync_session_factory,
+)
 from app.routes.deps import require_session
-from app.schemas import IosPushTokenRequest, WebPushConfigResponse, WebPushSubscriptionRequest
+from app.schemas import (
+    IosLiveActivityTokenRequest,
+    IosPushTokenRequest,
+    WebPushConfigResponse,
+    WebPushSubscriptionRequest,
+)
 from app.sessions import AppSession, student_id_of
 
 router = APIRouter(prefix="/push", tags=["push"])
@@ -151,6 +161,59 @@ def unregister_ios_push(
     return {"status": "ok"}
 
 
+@router.post("/ios/live-activity-tokens")
+def register_ios_live_activity_token(
+    payload: IosLiveActivityTokenRequest,
+    session: AppSession = Depends(require_session),
+) -> dict[str, str]:
+    student_id = student_id_of(session)
+    if not student_id:
+        return {"status": "error", "message": "Student ID not found"}
+    if payload.token_type == "activity" and not payload.activity_id:
+        raise HTTPException(status_code=422, detail="activity token 缺少 activityId")
+
+    token = payload.token.lower()
+    factory = get_sync_session_factory()
+    with factory() as db:
+        existing = db.query(IosLiveActivityToken).filter(
+            IosLiveActivityToken.token == token,
+            IosLiveActivityToken.environment == payload.environment,
+            IosLiveActivityToken.token_type == payload.token_type,
+        ).first()
+        if existing:
+            existing.student_id = student_id
+            existing.activity_id = payload.activity_id
+            existing.activity_type = payload.activity_type
+            existing.updated_at = datetime.now(timezone.utc)
+        else:
+            db.add(IosLiveActivityToken(
+                student_id=student_id,
+                token_type=payload.token_type,
+                token=token,
+                environment=payload.environment,
+                activity_id=payload.activity_id,
+                activity_type=payload.activity_type,
+            ))
+        db.commit()
+    return {"status": "ok"}
+
+
+@router.post("/ios/live-activity-tokens/unregister")
+def unregister_ios_live_activity_tokens(
+    session: AppSession = Depends(require_session),
+) -> dict[str, str]:
+    student_id = student_id_of(session)
+    if not student_id:
+        return {"status": "error", "message": "Student ID not found"}
+    factory = get_sync_session_factory()
+    with factory() as db:
+        db.query(IosLiveActivityToken).filter(
+            IosLiveActivityToken.student_id == student_id
+        ).delete()
+        db.commit()
+    return {"status": "ok"}
+
+
 @router.post("/test")
 async def test_push(
     request: Request,
@@ -201,13 +264,17 @@ def poll_push(
 def _copy_live_update_fields(source: dict, target: dict) -> None:
     for key in (
         "id",
+        "targetTab",
         "liveUpdate",
+        "liveEvent",
         "style",
+        "startTime",
         "endTime",
         "shortCriticalText",
         "ongoing",
         "progressMax",
         "progressCurrent",
+        "progress",
     ):
         if key in source:
             target[key] = source[key]

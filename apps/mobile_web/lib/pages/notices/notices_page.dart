@@ -344,7 +344,11 @@ class _NoticeDetailBody extends StatelessWidget {
             ],
           ],
           if (content != null && content!.trim().isNotEmpty)
-            Text(content!, style: const TextStyle(fontSize: 15, height: 1.7))
+            Text(
+              content!,
+              key: const ValueKey('notice-detail-content'),
+              style: const TextStyle(fontSize: 15, height: 1.55),
+            )
           else if (error == null)
             const Text('暂无可展示的详情内容'),
           if (hasUrl) ...[
@@ -363,11 +367,33 @@ class _NoticeDetailBody extends StatelessWidget {
 }
 
 String _noticePlainText(String value) {
-  return value
+  final text = value
       .replaceAll(
-          RegExp(r'<(?:br|/p|/div|/li)[^>]*>', caseSensitive: false), '\n')
+        RegExp(
+          r'<(?:br|/p|/div|/li|/tr|/h[1-6]|/blockquote|/section|/article)[^>]*>',
+          caseSensitive: false,
+        ),
+        '\n',
+      )
       .replaceAll(RegExp(r'<[^>]*>'), '')
-      .replaceAll(RegExp(r'\n{3,}'), '\n\n')
+      .replaceAll(RegExp(r'&(?:nbsp|#160|#x0*a0);', caseSensitive: false), ' ')
+      .replaceAll('&amp;', '&')
+      .replaceAll('&lt;', '<')
+      .replaceAll('&gt;', '>')
+      .replaceAll('&quot;', '"')
+      .replaceAll('&#39;', "'")
+      .replaceAll('\r\n', '\n')
+      .replaceAll('\r', '\n');
+
+  return text
+      .split('\n')
+      .map(
+        (line) => line
+            .replaceAll(RegExp(r'[ \t\f\v\u00a0\u2007\u202f]+'), ' ')
+            .trim(),
+      )
+      .where((line) => line.isNotEmpty)
+      .join('\n')
       .trim();
 }
 

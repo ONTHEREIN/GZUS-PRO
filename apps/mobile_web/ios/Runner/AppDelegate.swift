@@ -3,6 +3,7 @@ import UIKit
 import CoreLocation
 import BackgroundTasks
 import EventKit
+import ActivityKit
 import Security
 import UserNotifications
 import WidgetKit
@@ -112,6 +113,9 @@ import WidgetKit
     let calendar = FlutterMethodChannel(name: calendarChannelName, binaryMessenger: messenger)
     calendar.setMethodCallHandler { [weak self] call, result in
       self?.handleCalendarMethod(call: call, result: result)
+    }
+    if #available(iOS 16.1, *) {
+      LiveActivityManager.shared.register(with: messenger)
     }
   }
 
@@ -810,10 +814,10 @@ import WidgetKit
     open url: URL,
     options: [UIApplication.OpenURLOptionsKey: Any] = [:]
   ) -> Bool {
-    guard url.scheme == "cn.gzus.pro", url.host == "widget",
+    guard url.scheme == "cn.gzus.pro", ["widget", "activity"].contains(url.host),
           let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
           let tab = components.queryItems?.first(where: { $0.name == "tab" })?.value,
-          ["schedule", "exams", "grades", "ecard", "business"].contains(tab) else {
+          ["schedule", "exams", "grades", "ecard", "business", "notices", "attendance"].contains(tab) else {
       return super.application(app, open: url, options: options)
     }
     UserDefaults.standard.set(tab, forKey: pendingWidgetTabDefaultsKey)

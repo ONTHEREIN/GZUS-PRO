@@ -6,7 +6,7 @@ import logging
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Final
+from typing import Final, Literal
 
 import httpx
 from cryptography.hazmat.primitives import hashes, serialization
@@ -14,7 +14,7 @@ from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePrivateKey
 from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
 
 from app.config import Settings, get_settings
-from app.database import IosPushToken, get_sync_session_factory
+from app.database import IosLiveActivityToken, IosPushToken, get_sync_session_factory
 
 logger = logging.getLogger(__name__)
 
@@ -159,6 +159,52 @@ def build_apns_payload(title: str, body: str, extras: dict | None) -> bytes:
     return encoded
 
 
+def build_live_activity_payload(
+    action: Literal["start", "update", "end"],
+    title: str,
+    body: str,
+    extras: dict,
+) -> bytes:
+    if action not in {"start", "update", "end"}:
+        raise ApnsDeliveryError(f"ActivityKit action 无效: {action}")
+    now_ms = int(time.time() * 1000)
+    activity_id = str(extras.get("id") or "").strip()
+    activity_type = str(extras.get("type") or "notification").strip()
+    start_epoch_millis = int(extras.get("startTime") or extras.get("progressStartTime") or now_ms)
+    end_epoch_millis = int(extras.get("endTime") or now_ms + 30 * 60 * 1000)
+    content_state = {
+        "title": title[:256],
+        "body": body[:512],
+        "shortText": str(extras.get("shortCriticalText") or title)[:64],
+        "startEpochMillis": start_epoch_millis,
+        "endEpochMillis": end_epoch_millis,
+        "progress": extras.get("progress"),
+        "ongoing": bool(extras.get("ongoing", action != "end")),
+    }
+    aps: dict[str, object] = {
+        "timestamp": int(time.time()),
+        "event": action,
+        "content-state": content_state,
+    }
+    if action == "start":
+        aps["alert"] = {"title": title[:256], "body": body[:512]}
+    if action == "end" and not bool(extras.get("dismissImmediately", False)):
+        aps["dismissal-date"] = int(time.time()) + 30 * 60
+    payload: dict[str, object] = {"aps": aps}
+    if action == "start":
+        payload["attributes-type"] = "GzusLiveActivityAttributes"
+        payload["attributes"] = {
+            "activityId": activity_id,
+            "activityType": activity_type,
+            "targetTab": str(extras.get("targetTab") or "home"),
+            "deepLink": str(extras.get("deepLink") or "cn.gzus.pro://activity"),
+        }
+    encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    if len(encoded) > _APNS_MAX_PAYLOAD_BYTES:
+        raise ApnsDeliveryError("ActivityKit APNs payload 超过 4 KB 限制")
+    return encoded
+
+
 def _endpoint(environment: str, device_token: str) -> str:
     base = _APNS_SANDBOX_URL if environment == "sandbox" else _APNS_PRODUCTION_URL
     return f"{base}/3/device/{device_token}"
@@ -202,6 +248,33 @@ def _send_once(
     raise ApnsDeliveryError(f"APNs 请求失败: status={response.status_code}, reason={reason}")
 
 
+def _send_live_activity_once(
+    credentials: _ApnsCredentials,
+    activity_token: str,
+    environment: str,
+    payload: bytes,
+) -> None:
+    headers = {
+        "authorization": f"bearer {_authorization_token(credentials, int(time.time()))}",
+        "apns-topic": f"{credentials.bundle_id}.push-type.liveactivity",
+        "apns-push-type": "liveactivity",
+        "apns-priority": "10",
+        "content-type": "application/json",
+    }
+    with httpx.Client(http2=True, timeout=_APNS_TIMEOUT_SECONDS) as client:
+        response = client.post(
+            _endpoint(environment, activity_token), content=payload, headers=headers
+        )
+    if response.status_code == 200:
+        return
+    reason = _response_reason(response)
+    if response.status_code == 410 or reason == "BadDeviceToken":
+        raise ApnsUnregisteredError(
+            f"ActivityKit token 已失效: status={response.status_code}, reason={reason}"
+        )
+    raise ApnsDeliveryError(f"ActivityKit APNs 请求失败: status={response.status_code}, reason={reason}")
+
+
 def _send_with_retry(
     credentials: _ApnsCredentials,
     device_token: str,
@@ -227,18 +300,48 @@ def _send_with_retry(
     raise last_error
 
 
+def _send_live_activity_with_retry(
+    credentials: _ApnsCredentials,
+    activity_token: str,
+    environment: str,
+    payload: bytes,
+) -> None:
+    last_error: ApnsDeliveryError | None = None
+    for attempt in range(1, _APNS_RETRY_COUNT + 1):
+        try:
+            _send_live_activity_once(credentials, activity_token, environment, payload)
+            return
+        except ApnsUnregisteredError:
+            raise
+        except (ApnsDeliveryError, httpx.HTTPError) as exc:
+            last_error = exc if isinstance(exc, ApnsDeliveryError) else ApnsDeliveryError(str(exc))
+            if attempt < _APNS_RETRY_COUNT:
+                logger.warning(
+                    "apns_live_activity_retry",
+                    extra={"attempt": attempt, "environment": environment},
+                )
+    if last_error is None:
+        raise ApnsDeliveryError("ActivityKit APNs 投递未执行")
+    raise last_error
+
+
 def send_apns_to_student(student_id: str, title: str, body: str, extras: dict | None) -> int:
     settings = get_settings()
     if not is_apns_enabled():
         configuration_error = apns_configuration_error()
         if configuration_error is not None:
             logger.error("apns_configuration_invalid", extra={"error": configuration_error})
+        else:
+            logger.error("apns_configuration_missing")
         return 0
     credentials = _credentials(settings)
     payload = build_apns_payload(title, body, extras)
     factory = get_sync_session_factory()
     with factory() as db:
         subscriptions = db.query(IosPushToken).filter(IosPushToken.student_id == student_id).all()
+        if not subscriptions:
+            logger.warning("apns_no_tokens", extra={"student_id": student_id})
+            return 0
         delivered = 0
         for subscription in subscriptions:
             try:
@@ -258,6 +361,56 @@ def send_apns_to_student(student_id: str, title: str, body: str, extras: dict | 
                     "apns_delivery_failed",
                     extra={
                         "student_id": student_id,
+                        "environment": subscription.environment,
+                        "error": str(exc),
+                    },
+                )
+        return delivered
+
+
+def send_live_activity_to_student(
+    student_id: str,
+    action: Literal["start", "update", "end"],
+    title: str,
+    body: str,
+    extras: dict,
+) -> int:
+    settings = get_settings()
+    if not is_apns_enabled():
+        return 0
+    credentials = _credentials(settings)
+    payload = build_live_activity_payload(action, title, body, extras)
+    token_type = "start" if action == "start" else "activity"
+    query = {"student_id": student_id, "token_type": token_type}
+    activity_id = str(extras.get("id") or "").strip()
+    if token_type == "activity":
+        query["activity_id"] = activity_id
+    factory = get_sync_session_factory()
+    with factory() as db:
+        subscriptions = db.query(IosLiveActivityToken).filter_by(**query).all()
+        delivered = 0
+        for subscription in subscriptions:
+            try:
+                _send_live_activity_with_retry(
+                    credentials,
+                    subscription.token,
+                    subscription.environment,
+                    payload,
+                )
+                delivered += 1
+            except ApnsUnregisteredError:
+                db.delete(subscription)
+                db.commit()
+                logger.info(
+                    "apns_live_activity_token_removed",
+                    extra={"student_id": student_id, "token_type": token_type},
+                )
+            except (ApnsConfigurationError, ApnsDeliveryError) as exc:
+                logger.error(
+                    "apns_live_activity_failed",
+                    extra={
+                        "student_id": student_id,
+                        "activity_id": activity_id,
                         "environment": subscription.environment,
                         "error": str(exc),
                     },

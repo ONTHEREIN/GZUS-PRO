@@ -457,7 +457,7 @@ def test_attendance_details_use_popup_endpoint_and_normalize_rows():
     detail_calls = [call for call in user.calls if "jxdmqk_cxXsmd" in call[1]]
     assert [call[2]["data"]["dmlbm"] for call in detail_calls] == ["01", "05"]
     assert detail_calls[0][1] == "/jwglxt/jxdmgl/jxdmqk_cxXsmd.html"
-    assert detail_calls[0][2]["params"] == {"doType": "query"}
+    assert detail_calls[0][2]["params"] == {"doType": "query", "gnmkdm": "N254315"}
     assert detail_calls[0][2]["data"] == {
         "xnm": "2025",
         "xqm": "3",

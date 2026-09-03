@@ -112,13 +112,21 @@ async def run_notice_poller_once(app) -> None:
         for item in reversed(new_items):
             title = str(item.get("title") or "新通知")
             body = str(item.get("summary") or item.get("category") or "有新的教务通知")
+            event_id = f"notice:{_notice_key(item)}"
+            end_time = int((datetime.now(timezone.utc) + timedelta(minutes=30)).timestamp() * 1000)
             message = {
+                "id": event_id,
                 "type": "new_notice",
                 "title": "新通知",
                 "body": title,
                 "url": item.get("url") or "",
                 "notice": item,
-                "liveUpdate": False,
+                "liveUpdate": True,
+                "targetTab": "notices",
+                "ongoing": False,
+                "shortCriticalText": "通知",
+                "progress": 1,
+                "endTime": end_time,
             }
             await manager.send_to_session(session_id, message)
             if student_id:
@@ -126,7 +134,17 @@ async def run_notice_poller_once(app) -> None:
                     student_id,
                     "新通知",
                     title if not body else f"{title}\n{body}",
-                    {"type": "new_notice", "url": item.get("url") or ""},
+                    {
+                        "id": event_id,
+                        "type": "new_notice",
+                        "targetTab": "notices",
+                        "url": item.get("url") or "",
+                        "liveUpdate": True,
+                        "ongoing": False,
+                        "shortCriticalText": "通知",
+                        "progress": 1,
+                        "endTime": end_time,
+                    },
                 )
 
     tasks = [
@@ -333,12 +351,14 @@ async def run_ecard_reminder_once(app) -> None:
                     "studentId": binding.student_id,
                     "itemKey": item_key,
                     "liveUpdate": True,
+                    "targetTab": "ecard",
                     "style": "progress",
                     "ongoing": False,
                     "shortCriticalText": "水电",
                     "progressMax": 100,
                     "progressCurrent": progress_current,
                     "progress": progress_current / 100,
+                    "endTime": int((datetime.now(timezone.utc) + timedelta(minutes=30)).timestamp() * 1000),
                 }
                 await _send_ecard_ws(app, binding.student_id, title, body, summary, live_payload)
                 send_push_to_student(
@@ -467,19 +487,22 @@ async def run_exam_reminder_once(app) -> None:
             if end_time is not None and end_time <= now_ms:
                 cache.mark_reminded(session_id, key)
                 continue
+            live_activity = end_time is not None and 0 < end_time - now_ms <= 2 * 60 * 60 * 1000
             message: dict = {
                 "id": f"exam_reminder:{session_id}:{key}",
                 "type": "exam_reminder",
                 "title": "考试提醒",
                 "body": body,
                 "courseName": course_name,
-                "liveUpdate": True,
+                "liveUpdate": live_activity,
+                "targetTab": "exams",
                 "style": "progress",
                 "shortCriticalText": "考试",
                 "progressStartTime": now_ms,
                 "progressMax": 100,
                 "progressCurrent": 0,
                 "progress": 0,
+                "startTime": now_ms,
             }
             if end_time is not None:
                 message["endTime"] = end_time
@@ -488,13 +511,15 @@ async def run_exam_reminder_once(app) -> None:
                 "id": f"exam_reminder:{student_id}:{key}",
                 "type": "exam_reminder",
                 "courseName": course_name,
-                "liveUpdate": True,
+                "liveUpdate": live_activity,
+                "targetTab": "exams",
                 "style": "progress",
                 "shortCriticalText": "考试",
                 "progressStartTime": now_ms,
                 "progressMax": 100,
                 "progressCurrent": 0,
                 "progress": 0,
+                "startTime": now_ms,
             }
             if end_time is not None:
                 extras["endTime"] = end_time
@@ -566,6 +591,7 @@ async def run_grade_update_once(app) -> None:
                 "body": body,
                 "grade": grade,
                 "liveUpdate": True,
+                "targetTab": "grades",
                 "style": "progress",
                 "ongoing": False,
                 "shortCriticalText": "成绩",

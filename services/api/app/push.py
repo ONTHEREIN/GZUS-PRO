@@ -8,7 +8,7 @@ from cryptography.hazmat.primitives import serialization
 
 from app.config import get_settings
 from app.database import WebPushSubscription, get_sync_session_factory
-from app.apns_service import send_apns_to_student
+from app.apns_service import send_apns_to_student, send_live_activity_to_student
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +43,10 @@ def send_web_push_to_student(student_id: str, title: str, body: str, extras: dic
     Send a web push notification to all subscriptions for a student.
     """
     if not is_web_push_enabled():
+        logger.error(
+            "web_push_configuration_unavailable",
+            extra={"student_id": student_id},
+        )
         return 0
 
     from pywebpush import WebPushException, webpush
@@ -57,6 +61,10 @@ def send_web_push_to_student(student_id: str, title: str, body: str, extras: dic
         ).all()
         
         if not subscriptions:
+            logger.warning(
+                "web_push_no_subscriptions",
+                extra={"student_id": student_id},
+            )
             return 0
 
         for sub in subscriptions:
@@ -103,6 +111,31 @@ def send_web_push_to_student(student_id: str, title: str, body: str, extras: dic
 
 def send_push_to_student(student_id: str, title: str, body: str, extras: dict | None = None) -> int:
     """向同一学生的 Web Push 与 iOS APNs 设备投递通知。"""
-    return send_web_push_to_student(student_id, title, body, extras) + send_apns_to_student(
-        student_id, title, body, extras
-    )
+    delivered = 0
+    try:
+        delivered += send_web_push_to_student(student_id, title, body, extras)
+    except Exception:
+        logger.exception("web_push_channel_unexpected", extra={"student_id": student_id})
+    live_delivered = 0
+    if extras and extras.get("liveUpdate") is True:
+        live_event = extras.get("liveEvent") or "start"
+        if live_event not in {"start", "update", "end"}:
+            raise ValueError(f"无效的 Live Activity 事件动作: {live_event}")
+        try:
+            live_delivered = send_live_activity_to_student(
+                student_id,
+                live_event,
+                title,
+                body,
+                extras,
+            )
+        except Exception:
+            logger.exception("live_activity_channel_unexpected", extra={"student_id": student_id})
+    try:
+        if live_delivered == 0:
+            delivered += send_apns_to_student(student_id, title, body, extras)
+        else:
+            delivered += live_delivered
+    except Exception:
+        logger.exception("apns_channel_unexpected", extra={"student_id": student_id})
+    return delivered

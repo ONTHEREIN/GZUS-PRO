@@ -1,8 +1,210 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
+import 'api_client.dart';
 import 'widgets/liquid_glass.dart';
+
+const _iosPushEnvironment = String.fromEnvironment(
+  'IOS_PUSH_ENVIRONMENT',
+  defaultValue: kDebugMode ? 'sandbox' : 'production',
+);
+
+class LiveActivityService {
+  static const MethodChannel _channel =
+      MethodChannel('cn.gzus.pro/live_activities');
+  static ApiClient? _api;
+  static bool _enabled = true;
+  static bool _initialized = false;
+
+  static Future<void> initialize({required ApiClient api}) async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.iOS) return;
+    _api = api;
+    final prefs = await SharedPreferences.getInstance();
+    _enabled = prefs.getBool('live_activities_enabled') ?? true;
+    await _channel.invokeMethod<bool>('configure', {
+      'baseUrl': api.baseUrl,
+      'sessionId': api.sessionId,
+    });
+    if (!_initialized) {
+      _channel.setMethodCallHandler(_handleNativeEvent);
+      _initialized = true;
+    }
+    final capabilities = await _getCapabilities();
+    if (capabilities['enabled'] != true) return;
+    final token = capabilities['pushToStartToken']?.toString();
+    if (_enabled && token != null && token.isNotEmpty) {
+      await _registerToken(token: token, tokenType: 'start');
+    }
+  }
+
+  static Future<void> stop() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.iOS) return;
+    final api = _api;
+    _api = null;
+    _enabled = false;
+    try {
+      await _channel.invokeMethod<bool>('endAll');
+    } on PlatformException {
+      // 没有原生实现时由系统自行清理，不影响登出流程。
+    }
+    final sessionId = api?.sessionId;
+    if (sessionId != null && sessionId.isNotEmpty) {
+      try {
+        await api!.unregisterIosLiveActivityTokens(sessionId);
+      } on ApiException {
+        // 会话可能已经失效，原生配置仍需清除。
+      }
+    }
+    try {
+      await _channel.invokeMethod<bool>('clearConfiguration');
+    } on PlatformException {
+      // 原生配置不存在时无需阻断登出。
+    }
+  }
+
+  static Future<void> setEnabled({required bool enabled}) async {
+    _enabled = enabled;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('live_activities_enabled', enabled);
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.iOS) return;
+    if (!enabled) {
+      try {
+        await _channel.invokeMethod<bool>('endAll');
+      } on PlatformException {
+        return;
+      }
+      final api = _api;
+      if (api != null && api.sessionId != null) {
+        await api.unregisterIosLiveActivityTokens(api.sessionId!);
+      }
+      return;
+    }
+    final token =
+        await _channel.invokeMethod<String>('registerPushToStartToken');
+    if (token != null && token.isNotEmpty) {
+      await _registerToken(token: token, tokenType: 'start');
+    }
+  }
+
+  static Future<bool> startOrUpdate(LiveActivityEvent event) async {
+    if (!_enabled || kIsWeb || defaultTargetPlatform != TargetPlatform.iOS) {
+      return false;
+    }
+    try {
+      final result = await _channel.invokeMethod<Map<Object?, Object?>>(
+        'start',
+        _arguments(event),
+      );
+      return result != null;
+    } on MissingPluginException {
+      return false;
+    } on PlatformException catch (error) {
+      debugPrint('[LiveActivityService] iOS 活动启动失败: ${error.code}');
+      return false;
+    }
+  }
+
+  static Future<bool> update(LiveActivityEvent event) async {
+    if (!_enabled || kIsWeb || defaultTargetPlatform != TargetPlatform.iOS) {
+      return false;
+    }
+    try {
+      final result =
+          await _channel.invokeMethod<bool>('update', _arguments(event));
+      return result == true;
+    } on PlatformException {
+      return false;
+    }
+  }
+
+  static Future<bool> end(
+    LiveActivityEvent event, {
+    required bool immediate,
+  }) async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.iOS) return false;
+    try {
+      final result = await _channel.invokeMethod<bool>('end', {
+        ..._arguments(event),
+        'dismissImmediately': immediate,
+      });
+      return result == true;
+    } on PlatformException {
+      return false;
+    }
+  }
+
+  static Future<Map<String, Object?>> _getCapabilities() async {
+    try {
+      final result = await _channel.invokeMethod<Map<Object?, Object?>>(
+        'getCapabilities',
+      );
+      return result?.map((key, value) => MapEntry(key.toString(), value)) ??
+          <String, Object?>{};
+    } on MissingPluginException {
+      return <String, Object?>{};
+    } on PlatformException {
+      return <String, Object?>{};
+    }
+  }
+
+  static Future<void> _handleNativeEvent(MethodCall call) async {
+    final arguments = call.arguments is Map
+        ? Map<String, dynamic>.from(call.arguments as Map)
+        : <String, dynamic>{};
+    final token = arguments['token']?.toString();
+    if (token == null || token.isEmpty || !_enabled) return;
+    final api = _api;
+    if (api == null) return;
+    if (call.method == 'pushToStartToken') {
+      await _registerToken(token: token, tokenType: 'start');
+    } else if (call.method == 'activityToken') {
+      await _registerToken(
+        token: token,
+        tokenType: 'activity',
+        activityId: arguments['activityId']?.toString(),
+        activityType: arguments['activityType']?.toString(),
+      );
+    }
+  }
+
+  static Future<void> _registerToken({
+    required String token,
+    required String tokenType,
+    String? activityId,
+    String? activityType,
+  }) async {
+    final api = _api;
+    if (api == null) return;
+    await api.registerIosLiveActivityToken(
+      tokenType: tokenType,
+      token: token,
+      environment: _iosPushEnvironment,
+      activityId: activityId,
+      activityType: activityType,
+    );
+  }
+
+  static Map<String, Object?> _arguments(LiveActivityEvent event) {
+    final end = event.effectiveEndTime;
+    return {
+      'activityId': event.id,
+      'activityType': event.type,
+      'title': event.title,
+      'body': event.body,
+      'shortText': event.shortText ?? event.title,
+      'startEpochMillis': event.startTime?.millisecondsSinceEpoch ?? 0,
+      'endEpochMillis': end?.millisecondsSinceEpoch ?? 0,
+      'progress': event.progress,
+      'ongoing': event.ongoing,
+      'targetTab': event.targetTab ?? 'home',
+      'deepLink': event.deepLink,
+    };
+  }
+}
 
 typedef LiveActivityOpenHandler = void Function(LiveActivityEvent event);
 
@@ -13,6 +215,7 @@ class LiveActivityEvent {
     required this.title,
     required this.body,
     this.style = 'metric',
+    this.startTime,
     this.endTime,
     this.shortText,
     this.targetTab,
@@ -76,12 +279,24 @@ class LiveActivityEvent {
   final String title;
   final String body;
   final String style;
+  final DateTime? startTime;
   final DateTime? endTime;
   final String? shortText;
   final String? targetTab;
   final String? url;
   final bool ongoing;
   final double? progress;
+
+  DateTime? get effectiveEndTime =>
+      endTime ?? DateTime.now().add(const Duration(minutes: 30));
+
+  String get deepLink {
+    return Uri(
+      scheme: 'cn.gzus.pro',
+      host: 'activity',
+      queryParameters: {'tab': targetTab ?? 'home'},
+    ).toString();
+  }
 
   bool get isTimer => style == 'timer' && endTime != null;
   bool get isMetric => style == 'metric';
@@ -103,6 +318,8 @@ class LiveActivityEvent {
         return 'grades';
       case 'new_notice':
         return 'notices';
+      case 'attendance_update':
+        return 'attendance';
       default:
         return null;
     }

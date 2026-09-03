@@ -1512,6 +1512,8 @@ void main() {
     SharedPreferences.setMockInitialValues({
       'schedule.${period.$1}.${period.$2}.firstWeekStart': startText,
       'schedule.autoWeek': true,
+      // 旧版本保存的周视图应自动迁移到新的周课表日历视图。
+      'schedule.viewMode': 'week',
     });
     tester.view.physicalSize = const Size(390, 844);
     tester.view.devicePixelRatio = 1;
@@ -1542,6 +1544,14 @@ void main() {
 
     expect(find.text('第1周'), findsNWidgets(2));
     expect(find.text('首周'), findsNothing);
+    expect(
+      tester
+          .widget<ChoiceChip>(
+            find.byKey(const ValueKey('schedule-menu-calendar')),
+          )
+          .selected,
+      isTrue,
+    );
 
     await tester.tap(find.byKey(const ValueKey('schedule-menu-tools')));
     await tester.pumpAndSettle();
@@ -1551,7 +1561,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('schedule switches between today week and all views',
+  testWidgets('schedule switches between today calendar and all views',
       (tester) async {
     SharedPreferences.setMockInitialValues({
       'schedule.2025.2.firstWeekStart': '2026-02-16',
@@ -1583,11 +1593,12 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('schedule-floating-menu')));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byKey(const ValueKey('schedule-menu-week')));
+    await tester.tap(find.byKey(const ValueKey('schedule-menu-calendar')));
     await tester.pumpAndSettle();
-    expect(find.text('09:00-10:20'), findsOneWidget);
+    expect(find.text('09:00'), findsWidgets);
     expect(find.text('周一'), findsWidgets);
-    expect(find.text('1节'), findsWidgets);
+    expect(
+        find.byKey(const ValueKey('schedule-calendar-view')), findsOneWidget);
 
     await tester.tap(find.byKey(const ValueKey('schedule-floating-menu')));
     await tester.pumpAndSettle();

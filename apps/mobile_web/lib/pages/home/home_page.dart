@@ -856,11 +856,15 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
             return switch (size) {
               HomeModuleSize.large => WeekGridLargeCard(
                   courses: courses,
+                  firstWeekStart: widget.firstWeekStart,
+                  currentWeek: widget.currentWeek,
                   onTap: onTap,
                   key: const ValueKey('weekGrid-large'),
                 ),
               HomeModuleSize.medium => WeekGridMediumCard(
                   courses: courses,
+                  firstWeekStart: widget.firstWeekStart,
+                  currentWeek: widget.currentWeek,
                   onTap: onTap,
                   key: const ValueKey('weekGrid-medium'),
                 ),

@@ -99,6 +99,7 @@ class LoginRequiredServices {
       if (!_initialized) _initWebPushService(api, onNotificationTap),
       if (!_initialized) _initLocalNotificationService(onNotificationTap),
       if (!_initialized) _initPushService(api, onNotificationTap),
+      _initLiveActivityService(api),
       _syncIosPushToken(api),
       if (!_initialized) _initPersistentCache(),
       _initWsService(apiBaseUrl, sessionId),
@@ -119,8 +120,7 @@ class LoginRequiredServices {
   }
 
   static Future<void> _initWebPushService(
-      ApiClient api,
-      void Function(Map<String, dynamic>)? onTap) async {
+      ApiClient api, void Function(Map<String, dynamic>)? onTap) async {
     try {
       await web_push_service.loadLibrary();
       final service = web_push_service.WebPushService.instance;
@@ -128,7 +128,9 @@ class LoginRequiredServices {
       if (await service.getPermissionStatus() != 'granted') return;
       final config = await api.getWebPushConfig();
       final publicKey = config['publicKey'] as String?;
-      if (config['enabled'] != true || publicKey == null || publicKey.isEmpty) return;
+      if (config['enabled'] != true || publicKey == null || publicKey.isEmpty) {
+        return;
+      }
       await service.subscribe(
         publicKey,
         apiBaseUrl: api.baseUrl,
@@ -158,6 +160,13 @@ class LoginRequiredServices {
     try {
       await push_service.loadLibrary();
       await push_service.PushService.syncIosPushToken(api);
+    } catch (_) {}
+  }
+
+  static Future<void> _initLiveActivityService(ApiClient api) async {
+    try {
+      await live_activity_service.loadLibrary();
+      await live_activity_service.LiveActivityService.initialize(api: api);
     } catch (_) {}
   }
 
@@ -205,6 +214,9 @@ class LoginRequiredServices {
   static void disconnect() {
     try {
       ws_service.WsService.disconnect();
+    } catch (_) {}
+    try {
+      live_activity_service.LiveActivityService.stop();
     } catch (_) {}
     _initialized = false;
     _apiBaseUrl = null;
