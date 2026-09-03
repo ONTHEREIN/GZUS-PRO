@@ -96,6 +96,8 @@ jobs:
           else:
               raise RuntimeError("start 已投递，但未收到设备 activity token")
 
+          time.sleep(20)
+
           update_delivered = send_live_activity_to_student(
               student_id,
               "update",
@@ -106,6 +108,8 @@ jobs:
           print(f"update_apns_delivered={update_delivered}")
           if update_delivered < 1:
               raise RuntimeError("APNs update 未返回成功投递")
+
+          time.sleep(20)
 
           end_delivered = send_live_activity_to_student(
               student_id,
