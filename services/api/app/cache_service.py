@@ -74,9 +74,8 @@ def is_cacheable_payload(resource: str, data: object) -> bool:
     if not isinstance(data, dict) or not data:
         return False
     if resource == "me":
-        student_id = str(data.get("studentId") or "").strip()
-        name = str(data.get("name") or "").strip()
-        return bool(student_id and name)
+        required_fields = ("studentId", "name", "college", "major", "className", "grade")
+        return all(str(data.get(field) or "").strip() for field in required_fields)
     return True
 
 

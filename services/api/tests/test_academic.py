@@ -19,6 +19,7 @@ class FakeClient:
             "college": "软件学院",
             "major": "软件工程",
             "className": "24软工1班",
+            "grade": "2024",
         }
 
     def get_schedule(self, year, term):
@@ -90,7 +91,7 @@ class CountingInfoClient(FakeClient):
 
 class IncompleteInfoClient(FakeClient):
     def get_info(self):
-        return {"studentId": "20240001", "name": ""}
+        return {"studentId": "20240001", "name": "测试学生"}
 
 
 class ExpiredClient(FakeClient):

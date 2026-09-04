@@ -34,6 +34,10 @@ void main() {
                 'data': {
                   'studentId': '20260001',
                   'name': '测试同学',
+                  'college': '软件学院',
+                  'major': '软件工程',
+                  'className': '软件2601',
+                  'grade': '2026',
                 },
               },
               'schedule': {
@@ -258,8 +262,8 @@ void main() {
         if (request.url.path == '/notices') {
           return http.Response('[]', 200);
         }
-        return http.Response(
-          jsonEncode({'studentId': '20240001', 'name': ''}),
+        return http.Response.bytes(
+          utf8.encode(jsonEncode({'studentId': '20240001', 'name': '测试学生'})),
           200,
         );
       }),
@@ -272,6 +276,40 @@ void main() {
     final prefs = await SharedPreferences.getInstance();
     expect(prefs.containsKey('pcache_default_notices'), isFalse);
     expect(prefs.containsKey('pcache_default_me'), isFalse);
+  });
+
+  test('已有的不完整个人信息缓存不会被页面采用', () async {
+    SharedPreferences.setMockInitialValues({
+      'pcache_default_me': jsonEncode({
+        'studentId': '20240001',
+        'name': '旧缓存学生',
+      }),
+      'pcache_default_me_at': DateTime(2026, 6, 1).toIso8601String(),
+    });
+    var calls = 0;
+    final api = ApiClient(
+      baseUrl: 'https://api.example.test',
+      httpClient: MockClient((request) async {
+        calls++;
+        return http.Response.bytes(
+          utf8.encode(jsonEncode({
+            'studentId': '20240001',
+            'name': '最新学生',
+            'college': '软件学院',
+            'major': '软件工程',
+            'className': '软件2401',
+            'grade': '2024',
+          })),
+          200,
+        );
+      }),
+    );
+
+    expect(api.cachedStudentInfo(), isNull);
+    final result = await api.me();
+
+    expect(result.data.name, '最新学生');
+    expect(calls, 1);
   });
 
   test('通知强制刷新绕过本地缓存并保留来源信息', () async {

@@ -714,6 +714,10 @@ void main() {
       'pcache_default_me': jsonEncode({
         'studentId': '2024000000',
         'name': '本地学生',
+        'college': '软件学院',
+        'major': '软件工程',
+        'className': '软件2401',
+        'grade': '2024',
       }),
       'pcache_default_me_at': DateTime(2026, 6, 3, 10).toIso8601String(),
     });
@@ -746,6 +750,10 @@ void main() {
             utf8.encode(jsonEncode({
               'studentId': '2024000000',
               'name': '服务器学生',
+              'college': '软件学院',
+              'major': '软件工程',
+              'className': '软件2401',
+              'grade': '2024',
             })),
             200,
           );
@@ -904,8 +912,14 @@ void main() {
             );
           }
           return http.Response.bytes(
-            utf8.encode(
-                jsonEncode({'studentId': '2024000000', 'name': '测试学生'})),
+            utf8.encode(jsonEncode({
+              'studentId': '2024000000',
+              'name': '测试学生',
+              'college': '软件学院',
+              'major': '软件工程',
+              'className': '软件2401',
+              'grade': '2024',
+            })),
             200,
           );
         }

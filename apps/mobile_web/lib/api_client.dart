@@ -270,6 +270,16 @@ class ApiClient {
     return cached;
   }
 
+  Map<String, dynamic>? _cachedMemoryObject(String key) {
+    final cached = _cache.get<Map<String, dynamic>>(key);
+    if (cached == null) return null;
+    if (!_isCacheableObject(key, cached)) {
+      _cache.remove(key);
+      return null;
+    }
+    return cached;
+  }
+
   List<Map<String, dynamic>>? _cachedList(PersistentCache cache, String key) {
     final cached = cache.getRaw(key);
     if (cached is! List<dynamic>) return null;
@@ -288,9 +298,18 @@ class ApiClient {
   bool _isCacheableObject(String key, Map<String, dynamic> data) {
     if (data.isEmpty) return false;
     if (key == 'me') {
-      final studentId = (data['studentId'] as String?)?.trim() ?? '';
-      final name = (data['name'] as String?)?.trim() ?? '';
-      return studentId.isNotEmpty && name.isNotEmpty;
+      const requiredFields = [
+        'studentId',
+        'name',
+        'college',
+        'major',
+        'className',
+        'grade',
+      ];
+      return requiredFields.every((field) {
+        final value = data[field];
+        return value is String && value.trim().isNotEmpty;
+      });
     }
     if (key.startsWith('dashboard_')) {
       final modules = data['modules'];
@@ -378,7 +397,7 @@ class ApiClient {
           source: _offlineSource(pcache.getCachedAt(cacheKey), e),
         );
       }
-      final memCached = _cache.get<Map<String, dynamic>>(cacheKey);
+      final memCached = _cachedMemoryObject(cacheKey);
       if (memCached != null) {
         return DataResult<T>(
           data: fromJson(memCached),
@@ -397,7 +416,7 @@ class ApiClient {
           source: _localSource(pcache.getCachedAt(cacheKey)),
         );
       }
-      final memCached = _cache.get<Map<String, dynamic>>(cacheKey);
+      final memCached = _cachedMemoryObject(cacheKey);
       if (memCached != null) {
         return DataResult<T>(
           data: fromJson(memCached),
@@ -869,7 +888,7 @@ class ApiClient {
       );
 
   StudentInfo? cachedStudentInfo() {
-    final cached = _cache.get<Map<String, dynamic>>('me');
+    final cached = _cachedMemoryObject('me');
     return cached == null ? null : StudentInfo.fromJson(cached);
   }
 

@@ -442,6 +442,10 @@ Map<String, Object?> _dashboardBody() {
         'data': {
           'studentId': '2024000000',
           'name': '测试学生',
+          'college': '软件学院',
+          'major': '软件工程',
+          'className': '软件2401',
+          'grade': '2024',
         },
       },
       'schedule': {
