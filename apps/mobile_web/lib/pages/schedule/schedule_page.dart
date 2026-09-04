@@ -565,6 +565,7 @@ class _SchedulePageState extends State<SchedulePage> {
   String? manageError;
   String? _lastNativeReminderSignature;
   String? _reminderSyncError;
+  bool _reminderSettingsLoaded = false;
 
   /// 本地调课条目（本学期），叠加到学校课表上显示。
   List<ScheduleOverride> _overrides = const [];
@@ -627,6 +628,7 @@ class _SchedulePageState extends State<SchedulePage> {
   /// 应用课程提醒配置：本地通知（reminder_service）+ 原生后台同步。
   /// 只在课表数据或提醒设置变化时实际执行，避免 build 内重复触发。
   Future<void> _applyCourseReminders(List<ScheduleCourse> courses) async {
+    if (!_reminderSettingsLoaded) return;
     try {
       final cloudStatus = await widget.api.fetchBackgroundNotificationStatus();
       if (cloudStatus?.enabled == true) {
@@ -1285,6 +1287,7 @@ class _SchedulePageState extends State<SchedulePage> {
           prefs.getInt('schedule.courseStartReminderMinutes') ?? 10;
       courseEndReminderMinutes =
           prefs.getInt('schedule.courseEndReminderMinutes') ?? 5;
+      _reminderSettingsLoaded = true;
     });
     // 设置加载完成后按最新配置应用一次提醒
     unawaited(_scheduleFuture.then((r) => _applyCourseReminders(r.items)));
