@@ -19,22 +19,22 @@ def test_cloud_course_reminder_is_due_after_dispatch_drift():
         course_reminders_enabled=True,
         before_start_minutes=10,
         before_end_minutes=5,
-        first_week_start="2026-08-31",
+        first_week_start="2026-09-01",
         courses_json=json.dumps([
             {
                 "name": "高等数学",
-                "weekday": 1,
+                "weekday": 5,
                 "startSection": 1,
                 "endSection": 2,
                 "classroom": "A101",
-                "weeks": [2],
+                "weeks": [1],
             }
         ]),
     )
 
     candidates = _course_reminder_candidates(
         profile,
-        datetime(2026, 9, 7, 8, 51, 30, tzinfo=ZoneInfo("Asia/Shanghai")),
+        datetime(2026, 9, 4, 8, 51, 30, tzinfo=ZoneInfo("Asia/Shanghai")),
     )
 
     assert len(candidates) == 1

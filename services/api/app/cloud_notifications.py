@@ -461,9 +461,10 @@ def _course_reminder_candidates(profile: BackgroundNotificationProfile, now: dat
         return []
     courses = json.loads(profile.courses_json)
     first_week = datetime.strptime(profile.first_week_start, "%Y-%m-%d").date()
+    first_monday = first_week - timedelta(days=first_week.weekday())
     current = now.astimezone(_SHANGHAI)
     monday = current.date() - timedelta(days=current.weekday())
-    week = ((monday - first_week).days // 7) + 1
+    week = ((monday - first_monday).days // 7) + 1
     result = []
     for course in courses:
         if course.get("weekday") != current.isoweekday() or week not in set(course.get("weeks") or []):
