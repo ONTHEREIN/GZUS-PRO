@@ -46,7 +46,11 @@ jobs:
                   key, value = line.split("=", 1)
                   os.environ[key] = value
 
-          from app.apns_service import is_apns_enabled, send_live_activity_to_student
+          from app.apns_service import (
+              is_apns_enabled,
+              send_apns_to_student,
+              send_live_activity_to_student,
+          )
           from app.database import IosLiveActivityToken, get_sync_session_factory
 
           def activity_token_exists(student_id: str, activity_id: str) -> bool:
@@ -70,6 +74,7 @@ jobs:
           student_id = token_row.student_id
           activity_id = f"visual-probe-{int(time.time())}"
           start_ms = int(time.time() * 1000)
+          print(f"regular_apns_delivered={send_apns_to_student(student_id, '课程提醒普通通知验证', '普通通知通道验证', {'id': activity_id, 'type': 'course_reminder', 'targetTab': 'schedule'})}")
           extras = {
               "id": activity_id,
               "type": "course_reminder",
