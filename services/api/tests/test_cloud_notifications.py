@@ -11,7 +11,7 @@ from app.cloud_notifications import (
 from app.database import BackgroundNotificationProfile
 
 
-def test_cloud_course_reminder_is_due_at_configured_minute():
+def test_cloud_course_reminder_is_due_after_dispatch_drift():
     profile = BackgroundNotificationProfile(
         student_id="20260001",
         credential_fingerprint="a" * 64,
@@ -34,7 +34,7 @@ def test_cloud_course_reminder_is_due_at_configured_minute():
 
     candidates = _course_reminder_candidates(
         profile,
-        datetime(2026, 9, 7, 8, 50, tzinfo=ZoneInfo("Asia/Shanghai")),
+        datetime(2026, 9, 7, 8, 51, 30, tzinfo=ZoneInfo("Asia/Shanghai")),
     )
 
     assert len(candidates) == 1

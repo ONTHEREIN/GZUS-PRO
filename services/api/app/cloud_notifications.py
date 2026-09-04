@@ -21,6 +21,7 @@ from app.sessions import decrypt_credentials
 
 logger = logging.getLogger(__name__)
 _SHANGHAI = ZoneInfo("Asia/Shanghai")
+_COURSE_REMINDER_DISPATCH_GRACE = timedelta(minutes=2)
 _SECTION_TIMES = (
     ("09:00", "09:40"), ("09:40", "10:20"), ("10:40", "11:20"), ("11:20", "12:00"),
     ("12:30", "13:10"), ("13:10", "13:50"), ("14:00", "14:40"), ("14:40", "15:20"),
@@ -477,7 +478,7 @@ def _course_reminder_candidates(profile: BackgroundNotificationProfile, now: dat
             end_hour, end_minute = (int(value) for value in _SECTION_TIMES[end - 1][1].split(":"))
             hour, minute = (int(value) for value in _SECTION_TIMES[section - 1][0 if kind == "start" else 1].split(":"))
             target = current.replace(hour=hour, minute=minute, second=0, microsecond=0) - timedelta(minutes=minutes)
-            if not (target <= current < target + timedelta(minutes=1)):
+            if not (target <= current < target + _COURSE_REMINDER_DISPATCH_GRACE):
                 continue
             course_name = str(course["name"])
             room = str(course.get("classroom") or "")
