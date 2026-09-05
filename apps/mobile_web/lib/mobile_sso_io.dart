@@ -9,6 +9,7 @@ import 'package:webview_flutter/webview_flutter.dart';
 import 'api_client.dart';
 import 'leave_attachment_models.dart';
 import 'leave_attachment_upload.dart';
+import 'leave_submission_flow.dart';
 import 'mobile_sso_cookies.dart';
 
 const _desktopBrowserUserAgent =
@@ -19,8 +20,11 @@ Future<bool> openAuthenticatedEhallUrl(
   BuildContext context,
   String url, {
   String? fillScript,
+  String? handlerScript,
   required List<PickedAttachment> attachments,
   required ApiClient api,
+  required String? leaveSummary,
+  required VoidCallback? onSessionExpired,
 }) async {
   final uri = Uri.tryParse(url);
   if (uri == null) return false;
@@ -30,8 +34,11 @@ Future<bool> openAuthenticatedEhallUrl(
       builder: (_) => _EhallWebViewPage(
         initialUrl: url,
         fillScript: fillScript,
+        handlerScript: handlerScript,
         attachments: attachments,
         api: api,
+        leaveSummary: leaveSummary,
+        onSessionExpired: onSessionExpired,
       ),
     ),
   );
@@ -47,13 +54,19 @@ class _EhallWebViewPage extends StatefulWidget {
     required this.initialUrl,
     required this.api,
     required this.attachments,
+    required this.leaveSummary,
+    required this.onSessionExpired,
+    required this.handlerScript,
     this.fillScript,
   });
 
   final String initialUrl;
   final String? fillScript;
+  final String? handlerScript;
   final List<PickedAttachment> attachments;
   final ApiClient api;
+  final String? leaveSummary;
+  final VoidCallback? onSessionExpired;
 
   @override
   State<_EhallWebViewPage> createState() => _EhallWebViewPageState();
@@ -68,6 +81,9 @@ class _EhallWebViewPageState extends State<_EhallWebViewPage> {
   bool attachmentsUploading = false;
   String? loadError;
   LeaveFormAttachmentMetadata? leaveFormMetadata;
+  LeaveSubmissionStage leaveStage = LeaveSubmissionStage.waitingForForm;
+  int _lastApprovalCycle = -1;
+  bool sessionExpired = false;
   String? _pendingUserLoginToken;
   Uri? _pendingTargetUrl;
 
@@ -77,15 +93,33 @@ class _EhallWebViewPageState extends State<_EhallWebViewPage> {
     controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setUserAgent(_desktopBrowserUserAgent)
+      ..addJavaScriptChannel(
+        'gzusLeaveWorkflow',
+        onMessageReceived: _handleLeaveWorkflowMessage,
+      )
       ..setNavigationDelegate(
         NavigationDelegate(
-          onPageStarted: (_) => setState(() {
-            loading = true;
-            loadError = null;
-          }),
+          onPageStarted: (_) {
+            if (!mounted) return;
+            if (leaveStage != LeaveSubmissionStage.submitting &&
+                leaveStage != LeaveSubmissionStage.submitted) {
+              scriptInjected = false;
+              leaveFormMetadata = null;
+              attachmentsUploaded = false;
+              leaveStage = LeaveSubmissionStage.waitingForForm;
+              _lastApprovalCycle = -1;
+            }
+            setState(() {
+              loading = true;
+              loadError = null;
+              sessionExpired = false;
+            });
+          },
           onPageFinished: (url) {
+            if (!mounted) return;
             setState(() => loading = false);
             unawaited(_handlePageFinished(url));
+            unawaited(_detectLeaveLoginPage(url));
             _injectFillScript();
           },
           onWebResourceError: (webError) {
@@ -93,7 +127,10 @@ class _EhallWebViewPageState extends State<_EhallWebViewPage> {
             if (!mounted) return;
             setState(() {
               loading = false;
-              loadError = '办事大厅页面加载失败，请复制脚本后用浏览器打开';
+              loadError = leaveStage == LeaveSubmissionStage.submitting
+                  ? '请假提交页面加载失败，请检查网络后重试'
+                  : '办事大厅页面加载失败，请复制脚本后用浏览器打开';
+              leaveStage = LeaveSubmissionStage.failed;
             });
           },
         ),
@@ -128,6 +165,7 @@ class _EhallWebViewPageState extends State<_EhallWebViewPage> {
       if (!mounted) return;
       setState(() {
         loadError = '表单尚未加载完成，请复制脚本后用浏览器打开';
+        leaveStage = LeaveSubmissionStage.failed;
       });
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('表单尚未加载完成，请稍后复制脚本手动执行')),
@@ -138,11 +176,13 @@ class _EhallWebViewPageState extends State<_EhallWebViewPage> {
       await _installLeaveSubmissionGate();
       await controller.runJavaScript(script);
       await _uploadLeaveAttachments();
+      await _installLeaveWorkflowObserver();
       if (mounted) setState(() => loadError = null);
     } catch (exc) {
       if (!mounted) return;
       setState(() {
         loadError = _leaveAutomationErrorMessage(exc);
+        leaveStage = LeaveSubmissionStage.failed;
       });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(loadError!)),
@@ -185,10 +225,16 @@ class _EhallWebViewPageState extends State<_EhallWebViewPage> {
     final attachments = widget.attachments;
     if (attachments.isEmpty) {
       await _unlockLeaveSubmissionGate();
+      leaveStage = LeaveSubmissionStage.waitingForApproval;
       attachmentsUploaded = true;
       return;
     }
-    if (mounted) setState(() => attachmentsUploading = true);
+    if (mounted) {
+      setState(() {
+        attachmentsUploading = true;
+        leaveStage = LeaveSubmissionStage.uploadingAttachments;
+      });
+    }
     try {
       final metadata = leaveFormMetadata ?? await _waitForLeaveFormMetadata();
       leaveFormMetadata = metadata;
@@ -205,6 +251,8 @@ class _EhallWebViewPageState extends State<_EhallWebViewPage> {
         ),
       );
       await _unlockLeaveSubmissionGate();
+      await _refreshLeaveAttachments();
+      leaveStage = LeaveSubmissionStage.waitingForApproval;
       attachmentsUploaded = true;
     } finally {
       if (mounted) setState(() => attachmentsUploading = false);
@@ -256,6 +304,117 @@ class _EhallWebViewPageState extends State<_EhallWebViewPage> {
     );
   }
 
+  Future<void> _refreshLeaveAttachments() {
+    return controller.runJavaScript('''
+(() => {
+  if (typeof window.LoadAttachments === 'function') {
+    window.LoadAttachments('file1');
+  }
+})();
+''');
+  }
+
+  Future<void> _installLeaveWorkflowObserver() {
+    return controller.runJavaScript(
+      buildLeaveWorkflowObserverScript('gzusLeaveWorkflow'),
+    );
+  }
+
+  void _handleLeaveWorkflowMessage(JavaScriptMessage message) {
+    if (!mounted) return;
+    final workflowMessage = LeaveWorkflowMessage.parse(message.message);
+    if (workflowMessage == null ||
+        !shouldShowLeaveSubmitConfirmation(
+          leaveStage,
+          workflowMessage,
+          _lastApprovalCycle,
+        )) {
+      return;
+    }
+    _lastApprovalCycle = workflowMessage.cycle;
+    setState(() => leaveStage = LeaveSubmissionStage.awaitingConfirmation);
+    unawaited(_prepareLeaveSubmitConfirmation());
+  }
+
+  Future<void> _prepareLeaveSubmitConfirmation() async {
+    try {
+      final handlerScript = widget.handlerScript?.trim();
+      if (handlerScript != null && handlerScript.isNotEmpty) {
+        await controller.runJavaScript(handlerScript);
+      }
+      await _showLeaveSubmitConfirmation();
+    } on Object catch (exc) {
+      _setLeaveSubmissionError('经办人选择失败，请重新点击“办理”：$exc');
+    }
+  }
+
+  Future<void> _showLeaveSubmitConfirmation() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('确认提交请假单'),
+        content: Text(
+          '${widget.leaveSummary ?? '请核对当前请假单详情'}。\n'
+          '附件：${widget.attachments.length} 张\n'
+          '确定后将点击学校页面的“提交”按钮。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('确定'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted) return;
+    if (confirmed != true) {
+      setState(() => leaveStage = LeaveSubmissionStage.waitingForApproval);
+      return;
+    }
+    await _submitLeaveForm();
+  }
+
+  Future<void> _submitLeaveForm() async {
+    if (leaveStage == LeaveSubmissionStage.submitting ||
+        leaveStage == LeaveSubmissionStage.submitted) {
+      return;
+    }
+    setState(() {
+      leaveStage = LeaveSubmissionStage.submitting;
+      loadError = null;
+    });
+    try {
+      final result = await controller.runJavaScriptReturningResult(
+        leaveWorkflowSubmitScript,
+      );
+      if (result != true && result.toString() != 'true') {
+        throw StateError('学校办理面板未找到可提交的“提交”按钮，请重新点击“办理”');
+      }
+      if (!mounted) return;
+      setState(() => leaveStage = LeaveSubmissionStage.submitted);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('已点击提交，请以学校页面显示的结果为准')),
+      );
+    } on StateError catch (exc) {
+      _setLeaveSubmissionError(exc.message);
+    } on Object catch (exc) {
+      _setLeaveSubmissionError('提交请假单失败：$exc');
+    }
+  }
+
+  void _setLeaveSubmissionError(String message) {
+    if (!mounted) return;
+    setState(() {
+      leaveStage = LeaveSubmissionStage.failed;
+      loadError = message;
+    });
+  }
+
   String _leaveAutomationErrorMessage(Object error) {
     if (error is StateError || error is FormatException) {
       return error.toString();
@@ -276,6 +435,11 @@ class _EhallWebViewPageState extends State<_EhallWebViewPage> {
         setState(() => loadError = _leaveAutomationErrorMessage(exc));
       }
     }
+  }
+
+  Future<void> _retryLeaveSubmission() async {
+    if (leaveStage != LeaveSubmissionStage.failed) return;
+    await _submitLeaveForm();
   }
 
   Future<bool> _waitForLeaveForm() async {
@@ -327,6 +491,30 @@ class _EhallWebViewPageState extends State<_EhallWebViewPage> {
     if (target != null) {
       await _loadUrl(target);
     }
+  }
+
+  Future<void> _detectLeaveLoginPage(String urlString) async {
+    if (leaveStage != LeaveSubmissionStage.submitting) return;
+    final uri = Uri.tryParse(urlString);
+    final path = uri?.path.toLowerCase() ?? '';
+    final likelyLoginPath = path.contains('login') || path.contains('sso');
+    var loginPage = likelyLoginPath;
+    if (!loginPage) {
+      try {
+        final result = await controller.runJavaScriptReturningResult('''
+Boolean(document.querySelector('input[type="password"], input[name*="password" i]'))
+''');
+        loginPage = result == true || result.toString() == 'true';
+      } on Object {
+        return;
+      }
+    }
+    if (!loginPage || !mounted) return;
+    setState(() {
+      sessionExpired = true;
+      leaveStage = LeaveSubmissionStage.failed;
+      loadError = '办事大厅登录状态已失效，请重新登录后再提交';
+    });
   }
 
   /// 若 ehall 首页长时间未完成（例如被重定向到统一认证），仍继续打开目标页。
@@ -450,12 +638,24 @@ class _EhallWebViewPageState extends State<_EhallWebViewPage> {
                 color: Theme.of(context).colorScheme.error,
               ),
               actions: [
+                if (sessionExpired && widget.onSessionExpired != null)
+                  TextButton(
+                    onPressed: widget.onSessionExpired,
+                    child: const Text('重新登录'),
+                  ),
                 if (widget.attachments.isNotEmpty && !attachmentsUploaded)
                   TextButton(
                     onPressed: attachmentsUploading
                         ? null
                         : _retryLeaveAttachmentUpload,
                     child: const Text('重试上传'),
+                  ),
+                if (leaveStage == LeaveSubmissionStage.failed &&
+                    attachmentsUploaded &&
+                    !sessionExpired)
+                  TextButton(
+                    onPressed: _retryLeaveSubmission,
+                    child: const Text('重试提交'),
                   ),
                 TextButton(
                   onPressed:

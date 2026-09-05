@@ -17,6 +17,9 @@ Future<void> openInAppBrowser(
     url,
     attachments: const [],
     api: api,
+    handlerScript: null,
+    leaveSummary: null,
+    onSessionExpired: null,
   );
   if (!opened && context.mounted) {
     ScaffoldMessenger.of(context).showSnackBar(

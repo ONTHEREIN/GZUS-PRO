@@ -310,8 +310,11 @@ class LoginRequiredServices {
     dynamic context,
     String url, {
     String? fillScript,
+    String? handlerScript,
     required List<PickedAttachment> attachments,
     required ApiClient api,
+    required String? leaveSummary,
+    required VoidCallback? onSessionExpired,
   }) async {
     try {
       await mobile_sso.loadLibrary();
@@ -319,8 +322,11 @@ class LoginRequiredServices {
         context,
         url,
         fillScript: fillScript,
+        handlerScript: handlerScript,
         attachments: attachments,
         api: api,
+        leaveSummary: leaveSummary,
+        onSessionExpired: onSessionExpired,
       );
     } catch (_) {
       return false;

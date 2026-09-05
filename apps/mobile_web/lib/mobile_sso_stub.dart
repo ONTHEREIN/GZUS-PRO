@@ -8,8 +8,11 @@ Future<bool> openAuthenticatedEhallUrl(
   BuildContext context,
   String url, {
   String? fillScript,
+  String? handlerScript,
   required List<PickedAttachment> attachments,
   required ApiClient api,
+  required String? leaveSummary,
+  required VoidCallback? onSessionExpired,
 }) {
   final uri = Uri.tryParse(url);
   if (uri == null) return Future.value(false);

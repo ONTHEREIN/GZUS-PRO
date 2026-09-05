@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gzus_pro_mobile_web/leave_attachment_models.dart';
 import 'package:gzus_pro_mobile_web/leave_attachment_upload.dart';
+import 'package:gzus_pro_mobile_web/leave_submission_flow.dart';
 
 void main() {
   const metadata = (
@@ -118,5 +119,75 @@ void main() {
     );
 
     expect(uploadedNames, ['first.jpg', 'failed.jpg']);
+  });
+
+  test('办理面板消息只在附件上传完成后触发确认', () {
+    const message = LeaveWorkflowMessage(
+      type: 'approval_panel_ready',
+      cycle: 1,
+    );
+
+    expect(
+      shouldShowLeaveSubmitConfirmation(
+        LeaveSubmissionStage.uploadingAttachments,
+        message,
+        -1,
+      ),
+      isFalse,
+    );
+    expect(
+      shouldShowLeaveSubmitConfirmation(
+        LeaveSubmissionStage.waitingForApproval,
+        message,
+        -1,
+      ),
+      isTrue,
+    );
+  });
+
+  test('同一办理周期不会重复弹出确认', () {
+    const message = LeaveWorkflowMessage(
+      type: 'approval_panel_ready',
+      cycle: 3,
+    );
+
+    expect(
+      shouldShowLeaveSubmitConfirmation(
+        LeaveSubmissionStage.waitingForApproval,
+        message,
+        3,
+      ),
+      isFalse,
+    );
+    expect(
+      shouldShowLeaveSubmitConfirmation(
+        LeaveSubmissionStage.waitingForApproval,
+        message,
+        2,
+      ),
+      isTrue,
+    );
+  });
+
+  test('办理监听和提交脚本使用已验证的页面控件', () {
+    final observer = buildLeaveWorkflowObserverScript('gzusLeaveWorkflow');
+
+    expect(observer, contains("a.submitbtn"));
+    expect(observer, contains("#ApprovalTable"));
+    expect(observer, contains("#BU1001"));
+    expect(observer, contains("approval_panel_ready"));
+    expect(observer, isNot(contains('button.click')));
+    expect(leaveWorkflowSubmitScript, contains("getElementById('BU1001')"));
+    expect(leaveWorkflowSubmitScript, contains('button.click()'));
+  });
+
+  test('非法办理消息不会进入确认流程', () {
+    expect(LeaveWorkflowMessage.parse('not-json'), isNull);
+    expect(
+      LeaveWorkflowMessage.parse(
+        '{"type":"approval_panel_ready","cycle":"1"}',
+      ),
+      isNull,
+    );
   });
 }

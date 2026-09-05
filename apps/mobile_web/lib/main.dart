@@ -557,6 +557,9 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
         url,
         attachments: const [],
         api: api,
+        handlerScript: null,
+        leaveSummary: null,
+        onSessionExpired: null,
       );
     } catch (_) {}
   }

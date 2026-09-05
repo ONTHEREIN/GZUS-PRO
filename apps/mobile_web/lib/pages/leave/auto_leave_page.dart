@@ -320,6 +320,9 @@ class _AutoLeavePageState extends State<AutoLeavePage> {
       result: result,
       api: widget.api,
       attachments: _generatedAttachments,
+      leaveSummary:
+          '${_startController.text} 至 ${_endController.text}，影响 ${result.items.length} 门课',
+      onSessionExpired: widget.onSessionExpired,
       onBack: _backToCourses,
     );
   }
@@ -994,12 +997,16 @@ class _LeaveReadyCard extends StatelessWidget {
     required this.result,
     required this.api,
     required this.attachments,
+    required this.leaveSummary,
+    required this.onSessionExpired,
     required this.onBack,
   });
 
   final LeaveFillResponse result;
   final ApiClient api;
   final List<PickedAttachment> attachments;
+  final String leaveSummary;
+  final VoidCallback? onSessionExpired;
   final VoidCallback onBack;
 
   @override
@@ -1069,8 +1076,11 @@ class _LeaveReadyCard extends StatelessWidget {
       context,
       formUrl,
       fillScript: fillScript,
+      handlerScript: result.handlerScript?.trim(),
       attachments: attachments,
       api: api,
+      leaveSummary: leaveSummary,
+      onSessionExpired: onSessionExpired,
     );
   }
 
