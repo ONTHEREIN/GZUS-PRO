@@ -228,7 +228,9 @@ class _EhallWebViewPageState extends State<_EhallWebViewPage> {
     docUnid: valueOf(['WF_DocUnid']),
     processId: valueOf(['WF_Processid', 'WF_ProcessId']),
     nodeName: valueOf(['WF_CurrentNodeName']),
-    localStore: valueOf(['localStore', 'LocalStore'])
+    // 学校附件 iframe 不读取该字段值，只以元素是否存在决定 localStore。
+    // 新建单据常见 value 为空，但 iframe 仍会上传 1。
+    localStore: document.getElementById('localStore') ? '1' : '0'
   });
 })()
 ''');

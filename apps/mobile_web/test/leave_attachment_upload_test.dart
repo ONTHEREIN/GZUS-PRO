@@ -41,6 +41,14 @@ void main() {
     expect(parsed, metadata);
   });
 
+  test('学校附件组件的存储标识会原样透传', () {
+    final parsed = parseLeaveFormAttachmentMetadata(
+      '{"docUnid":"doc-1","processId":"process-1","nodeName":"申请人","localStore":"1"}',
+    );
+
+    expect(parsed.localStore, '1');
+  });
+
   test('缺少当前表单附件字段时失败', () {
     expect(
       () => parseLeaveFormAttachmentMetadata('{"docUnid":"doc-1"}'),
