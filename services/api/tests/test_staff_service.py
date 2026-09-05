@@ -2,6 +2,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.database import Base, StaffMember
+from app import staff_service
 from app.staff_service import import_staff_records_to_session, resolve_teacher_in_session
 
 
@@ -70,3 +71,19 @@ def test_resolve_teacher_unmatched():
     assert result.status == "unmatched"
     assert result.match is None
     assert result.candidates == []
+
+
+def test_ensure_staff_loaded_reuses_staff_cache(monkeypatch):
+    monkeypatch.setattr(staff_service, "_staff_count", lambda: 100)
+    monkeypatch.setattr(
+        staff_service,
+        "sync_staff_from_ehall_cookie",
+        lambda cookie_header: (_ for _ in ()).throw(AssertionError("不应同步教职工目录")),
+    )
+    monkeypatch.setattr(
+        staff_service,
+        "import_staff_from_json_fallback",
+        lambda: (_ for _ in ()).throw(AssertionError("不应读取教职工兜底文件")),
+    )
+
+    assert staff_service.ensure_staff_loaded("JSESSIONID=cached") == 0

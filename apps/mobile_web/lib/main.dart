@@ -552,7 +552,12 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
     try {
       await mobile_sso.loadLibrary();
       if (!mounted) return;
-      await mobile_sso.openAuthenticatedEhallUrl(context, url, api: api);
+      await mobile_sso.openAuthenticatedEhallUrl(
+        context,
+        url,
+        attachments: const [],
+        api: api,
+      );
     } catch (_) {}
   }
 

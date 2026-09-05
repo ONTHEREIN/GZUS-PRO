@@ -1725,16 +1725,15 @@ String _two(int value) => value.toString().padLeft(2, '0');
 
 class HomeWidgetBridge {
   static const _channel = MethodChannel('cn.gzus.pro/home_widgets');
-  static ValueChanged<String?>? _onLaunch;
+  static ValueChanged<WidgetLaunchTarget?>? _onLaunch;
 
-  static void setLaunchHandler(ValueChanged<String?>? handler) {
+  static void setLaunchHandler(ValueChanged<WidgetLaunchTarget?>? handler) {
     if (kIsWeb) return;
     _onLaunch = handler;
     _channel.setMethodCallHandler((call) async {
       if (call.method != 'launch') return null;
       final args = call.arguments;
-      final tab = args is Map ? args['tab']?.toString() : null;
-      _onLaunch?.call(tab);
+      _onLaunch?.call(WidgetLaunchTarget.fromArguments(args));
       return true;
     });
   }
@@ -1756,6 +1755,28 @@ class HomeWidgetBridge {
     );
     final today = todayTimedCourses(timedCourses);
     final next = nextTimedCourse(timedCourses);
+    final tomorrowDate = DateTime.now().add(const Duration(days: 1));
+    final tomorrow = timedCourses.where((item) {
+      return item.start.year == tomorrowDate.year &&
+          item.start.month == tomorrowDate.month &&
+          item.start.day == tomorrowDate.day;
+    }).toList();
+    final noTodayOrTomorrow = today.isEmpty && tomorrow.isEmpty;
+    final weeklyCourses = timedCourses.map((item) {
+      final course = item.course;
+      return {
+        'itemKey': _widgetCourseKey(course),
+        'week': currentWeek,
+        'weekday': course.weekday ?? 0,
+        'startSection': course.startSection ?? 0,
+        'endSection': course.endSection ?? course.startSection ?? 0,
+        'time': item.timeText,
+        'name': course.name,
+        'classroom': course.classroom ?? '',
+        'teacher': course.teacher ?? '',
+        'ongoing': item.isOngoing,
+      };
+    }).toList();
     final nextLocation = _notBlank(next?.course.classroom) ?? '-';
     final utilityDetail = _cleanJoin([
       _notBlank(data.ecard.updatedAt) == null
@@ -1779,22 +1800,28 @@ class HomeWidgetBridge {
     final gradeStats = _widgetGradeStats(validGrades);
     try {
       await _channel.invokeMethod('update', {
-        'nextTitle': next?.course.name ?? '暂无下一节课',
-        'nextMeta':
-            next == null ? '今天没有更多课程' : '${next.timeText} · $nextLocation',
-        'nextDetail': next == null
+        'nextTitle':
+            noTodayOrTomorrow ? '今明无课' : (next?.course.name ?? '暂无下一节课'),
+        'nextMeta': noTodayOrTomorrow
+            ? '今日、明日暂无课程'
+            : (next == null ? '今天没有更多课程' : '${next.timeText} · $nextLocation'),
+        'nextDetail': noTodayOrTomorrow || next == null
             ? '点击查看课表'
             : _cleanJoin([
                 _notBlank(next.course.teacher),
                 next.isOngoing ? '进行中' : '待开始',
               ], ' · '),
-        'nextClassroom': next?.course.classroom ?? '',
-        'nextTeacher': next?.course.teacher ?? '',
-        'nextStatus':
-            next == null ? 'none' : (next.isOngoing ? 'ongoing' : 'upcoming'),
-        'nextTime': next?.timeText ?? '',
-        'nextStartEpochMillis': next?.start.millisecondsSinceEpoch ?? 0,
-        'nextEndEpochMillis': next?.end.millisecondsSinceEpoch ?? 0,
+        'nextClassroom':
+            noTodayOrTomorrow ? '' : (next?.course.classroom ?? ''),
+        'nextTeacher': noTodayOrTomorrow ? '' : (next?.course.teacher ?? ''),
+        'nextStatus': noTodayOrTomorrow || next == null
+            ? 'none'
+            : (next.isOngoing ? 'ongoing' : 'upcoming'),
+        'nextTime': noTodayOrTomorrow ? '' : (next?.timeText ?? ''),
+        'nextStartEpochMillis':
+            noTodayOrTomorrow ? 0 : (next?.start.millisecondsSinceEpoch ?? 0),
+        'nextEndEpochMillis':
+            noTodayOrTomorrow ? 0 : (next?.end.millisecondsSinceEpoch ?? 0),
         'widgetUpdatedAtEpochMillis': DateTime.now().millisecondsSinceEpoch,
         'todayTitle': today.isEmpty ? '今日无课' : '今日 ${today.length} 节课',
         'todayMeta': '第$currentWeek周 · ${today.length} 节课',
@@ -1804,6 +1831,10 @@ class HomeWidgetBridge {
             .toList(),
         'todayCoursesJson': jsonEncode(today
             .map((item) => {
+                  'itemKey': _widgetCourseKey(item.course),
+                  'week': currentWeek,
+                  'weekday': item.course.weekday ?? 0,
+                  'startSection': item.course.startSection ?? 0,
                   'time': '${_two(item.start.hour)}:${_two(item.start.minute)}',
                   'name': item.course.name,
                   'info': [item.course.classroom, item.course.teacher]
@@ -1812,6 +1843,7 @@ class HomeWidgetBridge {
                   'ongoing': item.isOngoing,
                 })
             .toList()),
+        'weeklyCoursesJson': jsonEncode(weeklyCourses),
         'utilityTitle':
             data.ecard.isBound ? (data.ecard.roomDisplay ?? '生活缴费') : '未绑定宿舍',
         'utilityMeta':
@@ -1848,6 +1880,7 @@ class HomeWidgetBridge {
         'examItemsJson': jsonEncode(upcomingExams.take(3).map((exam) {
           final days = _widgetExamCountdown(exam);
           return {
+            'itemKey': '${exam.name}:${exam.date}',
             'name': exam.name,
             'date': exam.date,
             'time': exam.timeDisplay,
@@ -1863,6 +1896,7 @@ class HomeWidgetBridge {
             .take(2)
             .map((grade) => {
                   'name': grade.courseName,
+                  'itemKey': grade.courseName,
                   'score': grade.score ?? '-',
                   'credit': grade.credit ?? '',
                   'gpa': _widgetGpa(grade.score).toStringAsFixed(1),
@@ -1875,16 +1909,19 @@ class HomeWidgetBridge {
         'widgetYear': year,
         'widgetTerm': term,
         'widgetCurrentWeek': currentWeek,
+        'widgetFirstWeekStartEpochMillis':
+            firstWeekStart.millisecondsSinceEpoch,
       }).timeout(const Duration(milliseconds: 300));
     } catch (_) {}
   }
 
-  static Future<String?> consumeInitialTab() async {
+  static Future<WidgetLaunchTarget?> consumeInitialTarget() async {
     if (kIsWeb) return null;
     try {
-      return await _channel
-          .invokeMethod<String>('consumeInitialTab')
+      final value = await _channel
+          .invokeMethod<dynamic>('consumeLaunchTarget')
           .timeout(const Duration(milliseconds: 300));
+      return WidgetLaunchTarget.fromArguments(value);
     } catch (_) {
       return null;
     }
@@ -1925,6 +1962,49 @@ class HomeWidgetBridge {
         .where((item) => item.isNotEmpty)
         .join(separator);
   }
+}
+
+class WidgetLaunchTarget {
+  const WidgetLaunchTarget({
+    required this.tab,
+    this.kind,
+    this.itemKey,
+    this.week,
+    this.weekday,
+    this.startSection,
+  });
+
+  final String tab;
+  final String? kind;
+  final String? itemKey;
+  final int? week;
+  final int? weekday;
+  final int? startSection;
+
+  static WidgetLaunchTarget? fromArguments(dynamic value) {
+    if (value is String && value.isNotEmpty) {
+      return WidgetLaunchTarget(tab: value);
+    }
+    if (value is! Map) return null;
+    final tab = value['tab']?.toString();
+    if (tab == null || tab.isEmpty) return null;
+    int? number(dynamic raw) =>
+        raw is num ? raw.toInt() : int.tryParse(raw?.toString() ?? '');
+    return WidgetLaunchTarget(
+      tab: tab,
+      kind: value['kind']?.toString(),
+      itemKey: value['itemKey']?.toString(),
+      week: number(value['week']),
+      weekday: number(value['weekday']),
+      startSection: number(value['startSection']),
+    );
+  }
+}
+
+String _widgetCourseKey(ScheduleCourse course) {
+  final raw = course.raw;
+  final source = raw['courseId'] ?? raw['kch_id'] ?? raw['courseCode'];
+  return '${source ?? course.name}:${course.weekday ?? 0}:${course.startSection ?? 0}';
 }
 
 ({String gpa, String average, int count}) _widgetGradeStats(

@@ -19,7 +19,9 @@ import WidgetKit
   private let gradesWidgetKind = "OneGzusGrades"
   private let utilitiesWidgetKind = "OneGzusUtilities"
   private let progressWidgetKind = "OneGzusProgress"
+  private let weeklyScheduleWidgetKind = "OneGzusWeeklySchedule"
   private let pendingWidgetTabDefaultsKey = "pending_widget_tab"
+  private let pendingWidgetTargetDefaultsKey = "pending_widget_target"
   private let widgetRefreshTaskIdentifier = "cn.gzus.pro.widget-refresh"
   private let widgetRefreshConfigDefaultsKey = "widget_refresh_configuration"
   private let widgetRefreshKeychainService = "cn.gzus.pro.widget-refresh"
@@ -459,6 +461,13 @@ import WidgetKit
       result(tab)
       return
     }
+    if call.method == "consumeLaunchTarget" {
+      let target = UserDefaults.standard.dictionary(forKey: pendingWidgetTargetDefaultsKey)
+      UserDefaults.standard.removeObject(forKey: pendingWidgetTargetDefaultsKey)
+      UserDefaults.standard.removeObject(forKey: pendingWidgetTabDefaultsKey)
+      result(target)
+      return
+    }
     if call.method == "clearRefreshConfiguration" {
       clearWidgetRefreshConfiguration()
       result(true)
@@ -492,6 +501,7 @@ import WidgetKit
     let stringKeys = [
       "nextTitle", "nextMeta", "nextDetail", "nextClassroom", "nextTeacher", "nextStatus", "nextTime",
       "todayTitle", "todayMeta", "todayItems", "todayCoursesJson",
+      "weeklyCoursesJson",
       "utilityTitle", "utilityMeta", "utilityDetail", "utilityColdWater", "utilityHotWater", "utilityElectricity", "utilityRoomInfo",
       "progressTitle", "progressMeta", "progressDetail", "progressItemsJson",
       "examCount", "examItemsJson", "gradeGpa", "gradeAverage", "gradeCount", "gradeItemsJson"
@@ -548,8 +558,25 @@ import WidgetKit
       result(FlutterError(code: "INVALID_ARGUMENT", message: "组件刷新缺少学年、学期或周次", details: nil))
       return
     }
+    let firstWeekStartEpochMillis = (values["widgetFirstWeekStartEpochMillis"] as? NSNumber)?.int64Value
+      ?? WidgetSnapshotStore.configuration()?.firstWeekStartEpochMillis
+      ?? 0
+    guard firstWeekStartEpochMillis > 0 else {
+      result(FlutterError(code: "INVALID_ARGUMENT", message: "组件刷新缺少开学第一周日期", details: nil))
+      return
+    }
     guard saveWidgetRefreshSession(sessionId) else {
       result(FlutterError(code: "KEYCHAIN_WRITE_FAILED", message: "无法安全保存组件刷新会话", details: nil))
+      return
+    }
+    guard WidgetSnapshotStore.configure(
+      baseURL: baseUrl,
+      sessionID: sessionId,
+      year: year,
+      term: term,
+      firstWeekStartEpochMillis: firstWeekStartEpochMillis
+    ) else {
+      result(FlutterError(code: "APP_GROUP_UNAVAILABLE", message: "无法保存组件刷新配置", details: nil))
       return
     }
     defaults.set(["baseUrl": baseUrl, "year": year, "term": term, "week": week], forKey: widgetRefreshConfigDefaultsKey)
@@ -580,7 +607,8 @@ import WidgetKit
       task.setTaskCompleted(success: false)
       return
     }
-    guard let url = URL(string: "\(baseUrl.trimmingCharacters(in: CharacterSet(charactersIn: "/")))/widget-snapshot?year=\(year)&term=\(term)&week=\(week)") else {
+    let currentWeek = WidgetSnapshotStore.configuration()?.currentWeek(now: Date()) ?? week
+    guard let url = URL(string: "\(baseUrl.trimmingCharacters(in: CharacterSet(charactersIn: "/")))/widget-snapshot?year=\(year)&term=\(term)&week=\(currentWeek)") else {
       task.setTaskCompleted(success: false)
       return
     }
@@ -612,7 +640,7 @@ import WidgetKit
       if let etag = response.value(forHTTPHeaderField: "ETag"), let self {
         UserDefaults.standard.set(etag, forKey: self.widgetRefreshEtagDefaultsKey)
       }
-      task.setTaskCompleted(success: self?.storeWidgetSnapshot(data, currentWeek: week) ?? false)
+      task.setTaskCompleted(success: self?.storeWidgetSnapshot(data, currentWeek: currentWeek) ?? false)
     }
     task.expirationHandler = { dataTask.cancel() }
     dataTask.resume()
@@ -728,17 +756,23 @@ import WidgetKit
         "ongoing": course["ongoing"] as? Bool ?? false,
       ]
     }
+    let tomorrowWeekday = weekday == 7 ? 1 : weekday + 1
+    let hasTomorrow = courses.contains { course in
+      intValue(course["weekday"]) == tomorrowWeekday &&
+        occursInWeek(course["weeks"] as? String ?? "", currentWeek: currentWeek)
+    }
+    let noTodayOrTomorrow = today.isEmpty && !hasTomorrow
     let next = today.first { ($0["end"] as? Date ?? now) > now }
     defaults.set(jsonString(visibleCourses), forKey: "todayCoursesJson")
     defaults.set(today.map { "\($0["time"] as? String ?? "") \($0["name"] as? String ?? "课程")" }, forKey: "todayItems")
     defaults.set(today.isEmpty ? "今日无课" : "今日 \(today.count) 节课", forKey: "todayTitle")
     defaults.set("第\(currentWeek)周 · \(today.count) 节课", forKey: "todayMeta")
-    defaults.set(next?["name"] as? String ?? "暂无下一节课", forKey: "nextTitle")
-    defaults.set(next?["time"] as? String ?? "", forKey: "nextTime")
-    defaults.set(next?["info"] as? String ?? "", forKey: "nextClassroom")
-    defaults.set(next == nil ? "none" : ((next?["ongoing"] as? Bool ?? false) ? "ongoing" : "upcoming"), forKey: "nextStatus")
-    defaults.set(Int64(((next?["start"] as? Date)?.timeIntervalSince1970 ?? 0) * 1_000), forKey: "nextStartEpochMillis")
-    defaults.set(Int64(((next?["end"] as? Date)?.timeIntervalSince1970 ?? 0) * 1_000), forKey: "nextEndEpochMillis")
+    defaults.set(noTodayOrTomorrow ? "今明无课" : (next?["name"] as? String ?? "暂无下一节课"), forKey: "nextTitle")
+    defaults.set(noTodayOrTomorrow ? "" : (next?["time"] as? String ?? ""), forKey: "nextTime")
+    defaults.set(noTodayOrTomorrow ? "" : (next?["info"] as? String ?? ""), forKey: "nextClassroom")
+    defaults.set(noTodayOrTomorrow || next == nil ? "none" : ((next?["ongoing"] as? Bool ?? false) ? "ongoing" : "upcoming"), forKey: "nextStatus")
+    defaults.set(noTodayOrTomorrow ? 0 : Int64(((next?["start"] as? Date)?.timeIntervalSince1970 ?? 0) * 1_000), forKey: "nextStartEpochMillis")
+    defaults.set(noTodayOrTomorrow ? 0 : Int64(((next?["end"] as? Date)?.timeIntervalSince1970 ?? 0) * 1_000), forKey: "nextEndEpochMillis")
   }
 
   private func intValue(_ value: Any?) -> Int? {
@@ -768,6 +802,7 @@ import WidgetKit
   private func widgetKinds(forValueKey key: String) -> Set<String> {
     if key.hasPrefix("next") { return [nextClassHomeScreenWidgetKind, nextClassLockScreenWidgetKind] }
     if key.hasPrefix("today") { return [todayCoursesWidgetKind] }
+    if key.hasPrefix("weekly") { return [weeklyScheduleWidgetKind] }
     if key.hasPrefix("utility") { return [utilitiesWidgetKind] }
     if key.hasPrefix("progress") { return [progressWidgetKind] }
     if key.hasPrefix("exam") { return [examCountdownWidgetKind] }
@@ -800,6 +835,7 @@ import WidgetKit
   }
 
   private func clearWidgetRefreshConfiguration() {
+    WidgetSnapshotStore.clearConfiguration()
     UserDefaults.standard.removeObject(forKey: widgetRefreshConfigDefaultsKey)
     UserDefaults.standard.removeObject(forKey: widgetRefreshEtagDefaultsKey)
     let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: widgetRefreshKeychainService, kSecAttrAccount as String: widgetRefreshKeychainAccount]
@@ -820,8 +856,16 @@ import WidgetKit
           ["schedule", "exams", "grades", "ecard", "business", "notices", "attendance"].contains(tab) else {
       return super.application(app, open: url, options: options)
     }
+    var target: [String: Any] = ["tab": tab]
+    for name in ["kind", "itemKey", "week", "weekday", "startSection"] {
+      if let value = components.queryItems?.first(where: { $0.name == name })?.value,
+         !value.isEmpty {
+        target[name] = value
+      }
+    }
     UserDefaults.standard.set(tab, forKey: pendingWidgetTabDefaultsKey)
-    homeWidgets?.invokeMethod("launch", arguments: ["tab": tab])
+    UserDefaults.standard.set(target, forKey: pendingWidgetTargetDefaultsKey)
+    homeWidgets?.invokeMethod("launch", arguments: target)
     return true
   }
 

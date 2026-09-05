@@ -6,4 +6,5 @@
     <string name="widget_desc_grades">查看本学期成绩摘要</string>
     <string name="widget_desc_utilities">查看水电费余额</string>
     <string name="widget_desc_business_progress">查看办事进度</string>
+    <string name="widget_desc_weekly_schedule">查看本周课程安排</string>
 </resources>

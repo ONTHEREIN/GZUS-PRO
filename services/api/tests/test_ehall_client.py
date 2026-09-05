@@ -1,5 +1,3 @@
-from datetime import date
-
 import pytest
 
 from app.ehall_client import (
@@ -455,7 +453,16 @@ def test_ehall_client_detects_login_page(monkeypatch):
         client.get_notice_items(page_size=1)
 
 
-def test_fill_leave_application_uploads_all_attachments(monkeypatch):
+def test_leave_application_url_does_not_create_draft():
+    client = EhallClient("https://ehall.gzus.edu.cn", "JSESSIONID=abc")
+
+    assert client.leave_application_url() == (
+        "https://ehall.gzus.edu.cn/bpm/r"
+        "?wf_num=R_S003_B036&wf_processid=c6a5de7f061020438c0a03707374e7b85d85#"
+    )
+
+
+def test_upload_leave_attachment_uses_current_form_fields(monkeypatch):
     requests = []
 
     class FakeResponse:
@@ -478,17 +485,6 @@ def test_fill_leave_application_uploads_all_attachments(monkeypatch):
         def __exit__(self, *args):
             pass
 
-        def get(self, endpoint, params):
-            requests.append(("get", endpoint, params))
-            return FakeResponse(
-                """
-                <title>学生课程请假申请(20240319版)</title>
-                <input id="WF_DocUnid" value="doc-1">
-                <input id="WF_Processid" value="proc-1">
-                <input id="WF_CurrentNodeName" value="申请人">
-                """
-            )
-
         def post(self, endpoint, params, data, files):
             requests.append(("post", endpoint, params, data, files))
             return FakeResponse("ok")
@@ -496,48 +492,22 @@ def test_fill_leave_application_uploads_all_attachments(monkeypatch):
     monkeypatch.setattr("app.ehall_client.httpx.Client", FakeHttpClient)
     client = EhallClient("https://ehall.gzus.edu.cn", "JSESSIONID=abc")
 
-    result = client.fill_leave_application(
-        start_date=date(2026, 6, 3),
-        end_date=date(2026, 6, 3),
-        leave_days=1,
-        reason="事假",
-        courses=[{"teacher": "张老师"}],
-        attachments=[("note-a.txt", b"first"), ("note-b.txt", b"second")],
+    uploaded = client.upload_leave_attachment(
+        doc_unid="current-doc-1",
+        process_id="current-process-1",
+        node_name="当前申请人",
+        local_store="0",
+        attachment_name="note-a.txt",
+        attachment_content=b"first",
     )
 
-    first_upload = requests[1]
-    second_upload = requests[2]
-    assert result["status"] == "filled"
-    assert result["attachmentUploaded"] is True
-    assert result["attachmentUploadedCount"] == 2
-    assert result["attachmentTotal"] == 2
-    assert first_upload[1] == "bpm/rule"
-    assert first_upload[2]["wf_num"] == "R_S004_B002"
-    assert first_upload[3]["DocUnid"] == "doc-1"
-    assert first_upload[3]["Processid"] == "proc-1"
-    assert first_upload[3]["FdName"] == "file1"
-    assert first_upload[4]["file"][0] == "note-a.txt"
-    assert second_upload[4]["file"][0] == "note-b.txt"
-
-
-def test_leave_attachment_upload_continues_after_partial_failure(monkeypatch):
-    client = EhallClient("https://ehall.gzus.edu.cn", "JSESSIONID=abc")
-    uploaded_names = []
-
-    def upload_attachment(**kwargs):
-        attachment_name = kwargs["attachment_name"]
-        uploaded_names.append(attachment_name)
-        return attachment_name != "failed.jpg"
-
-    monkeypatch.setattr(client, "upload_leave_attachment", upload_attachment)
-    uploaded_count = client._upload_leave_attachments_from_form(
-        '<input id="WF_DocUnid" value="doc-1">',
-        attachments=[
-            ("first.jpg", b"first"),
-            ("failed.jpg", b"failed"),
-            ("last.jpg", b"last"),
-        ],
-    )
-
-    assert uploaded_count == 2
-    assert uploaded_names == ["first.jpg", "failed.jpg", "last.jpg"]
+    assert uploaded is True
+    request = requests[0]
+    assert request[1] == "bpm/rule"
+    assert request[2]["wf_num"] == "R_S004_B002"
+    assert request[3]["DocUnid"] == "current-doc-1"
+    assert request[3]["Processid"] == "current-process-1"
+    assert request[3]["NodeName"] == "%E5%BD%93%E5%89%8D%E7%94%B3%E8%AF%B7%E4%BA%BA"
+    assert request[3]["localStore"] == "0"
+    assert request[3]["FdName"] == "file1"
+    assert request[4]["file"][0] == "note-a.txt"

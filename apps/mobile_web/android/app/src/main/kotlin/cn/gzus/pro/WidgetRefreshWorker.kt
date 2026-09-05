@@ -6,7 +6,9 @@ import androidx.security.crypto.MasterKey
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
@@ -19,6 +21,7 @@ import java.util.Calendar
 import java.util.concurrent.TimeUnit
 
 private const val WIDGET_REFRESH_WORK_NAME = "gzus-widget-refresh"
+private const val WIDGET_REFRESH_ONCE_WORK_NAME = "gzus-widget-refresh-once"
 private const val WIDGET_REFRESH_PREFS = "gzus_widget_refresh"
 private const val WIDGET_HOME_PREFS = "gzus_home_widgets"
 
@@ -29,6 +32,7 @@ object WidgetRefreshScheduler {
     private const val KEY_TERM = "term"
     private const val KEY_WEEK = "week"
     private const val KEY_ETAG = "etag"
+    private const val KEY_LAST_TRIGGER = "lastTrigger"
 
     fun configure(context: Context, baseUrl: String, sessionId: String, year: Int, term: Int, week: Int) {
         require(baseUrl.isNotBlank()) { "组件刷新 API 地址不能为空" }
@@ -61,6 +65,22 @@ object WidgetRefreshScheduler {
     fun clear(context: Context) {
         prefs(context).edit().clear().apply()
         WorkManager.getInstance(context).cancelUniqueWork(WIDGET_REFRESH_WORK_NAME)
+    }
+
+    fun triggerIfDue(context: Context) {
+        if (configuration(context) == null) return
+        val preferences = prefs(context)
+        val now = System.currentTimeMillis()
+        val last = preferences.getLong(KEY_LAST_TRIGGER, 0L)
+        if (now - last < 25 * 60 * 1000L) return
+        preferences.edit().putLong(KEY_LAST_TRIGGER, now).apply()
+        WorkManager.getInstance(context).enqueueUniqueWork(
+            WIDGET_REFRESH_ONCE_WORK_NAME,
+            ExistingWorkPolicy.KEEP,
+            OneTimeWorkRequestBuilder<WidgetRefreshWorker>()
+                .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+                .build(),
+        )
     }
 
     internal fun configuration(context: Context): WidgetRefreshConfiguration? {
@@ -148,6 +168,7 @@ class WidgetRefreshWorker(
         val prefs = applicationContext.getSharedPreferences(WIDGET_HOME_PREFS, Context.MODE_PRIVATE)
         val editor = prefs.edit().putString("widgetSnapshotPayload", snapshot.toString())
         modules.optJSONObject("schedule")?.optJSONArray("data")?.let { schedule ->
+            saveWeeklySchedule(editor, schedule, currentWeek)
             saveTodaySchedule(editor, schedule, currentWeek)
         }
         modules.optJSONObject("grades")?.optJSONArray("data")?.let { grades ->
@@ -192,6 +213,10 @@ class WidgetRefreshWorker(
                 val endMinutes = minutesOf(end)
                 add(
                     JSONObject()
+                        .put("itemKey", "${course.optString("courseId").ifBlank { course.optString("kch_id").ifBlank { course.optString("name", "课程") } }}:$weekday:$startSection")
+                        .put("week", currentWeek)
+                        .put("weekday", weekday)
+                        .put("startSection", startSection)
                         .put("time", start)
                         .put("name", course.optString("name", "课程"))
                         .put("info", listOf(course.optString("classroom"), course.optString("teacher")).filter { it.isNotBlank() }.joinToString(" · "))
@@ -203,23 +228,63 @@ class WidgetRefreshWorker(
         }.sortedBy { it.optInt("startMinutes") }
         val nowValue = nowMinutes(now)
         val next = today.firstOrNull { it.optInt("endMinutes") > nowValue }
-        val nextTitle = next?.optString("name") ?: "暂无下一节课"
+        val tomorrowWeekday = weekday % 7 + 1
+        val hasTomorrow = (0 until courses.length()).any { index ->
+            val course = courses.optJSONObject(index) ?: return@any false
+            course.optInt("weekday", 0) == tomorrowWeekday &&
+                occursInWeek(course.optString("weeks"), currentWeek)
+        }
+        val noTodayOrTomorrow = today.isEmpty() && !hasTomorrow
+        val nextTitle = if (noTodayOrTomorrow) "今明无课" else next?.optString("name") ?: "暂无下一节课"
         editor
             .putString("todayCoursesJson", org.json.JSONArray(today).toString())
             .putString("todayTitle", if (today.isEmpty()) "今日无课" else "今日 ${today.size} 节课")
             .putString("todayMeta", "第${currentWeek}周 · ${today.size} 节课")
             .putString("todayItems", org.json.JSONArray(today.map { "${it.optString("time")} ${it.optString("name")}" }).toString())
             .putString("nextTitle", nextTitle)
-            .putString("nextTime", next?.optString("time") ?: "")
-            .putString("nextMeta", next?.let { "${it.optString("time")} · ${it.optString("info")}" } ?: "今天没有更多课程")
-            .putString("nextDetail", if (next == null) "点击查看课表" else if (next.optBoolean("ongoing")) "进行中" else "待开始")
-            .putString("nextClassroom", next?.optString("info") ?: "")
+            .putString("nextTime", if (noTodayOrTomorrow) "" else next?.optString("time") ?: "")
+            .putString("nextMeta", if (noTodayOrTomorrow) "今日、明日暂无课程" else next?.let { "${it.optString("time")} · ${it.optString("info")}" } ?: "今天没有更多课程")
+            .putString("nextDetail", if (next == null || noTodayOrTomorrow) "点击查看课表" else if (next.optBoolean("ongoing")) "进行中" else "待开始")
+            .putString("nextClassroom", if (noTodayOrTomorrow) "" else next?.optString("info") ?: "")
             .putString("nextTeacher", "")
             .putString("nextStatus", when {
-                next == null -> "none"
+                noTodayOrTomorrow || next == null -> "none"
                 next.optBoolean("ongoing") -> "ongoing"
                 else -> "upcoming"
             })
+    }
+
+    private fun saveWeeklySchedule(
+        editor: android.content.SharedPreferences.Editor,
+        courses: org.json.JSONArray,
+        currentWeek: Int,
+    ) {
+        val result = org.json.JSONArray()
+        for (index in 0 until courses.length()) {
+            val course = courses.optJSONObject(index) ?: continue
+            val weekday = course.optInt("weekday", 0)
+            val startSection = course.optInt("startSection", 0)
+            val endSection = course.optInt("endSection", startSection)
+            if (weekday !in 1..7 || startSection !in 1..SECTION_TIMES.size || endSection !in startSection..SECTION_TIMES.size) continue
+            if (!occursInWeek(course.optString("weeks"), currentWeek)) continue
+            val source = course.optString("courseId").ifBlank {
+                course.optString("kch_id").ifBlank { course.optString("courseCode").ifBlank { course.optString("name", "课程") } }
+            }
+            result.put(
+                JSONObject()
+                    .put("itemKey", "$source:$weekday:$startSection")
+                    .put("week", currentWeek)
+                    .put("weekday", weekday)
+                    .put("startSection", startSection)
+                    .put("endSection", endSection)
+                    .put("time", "${SECTION_TIMES[startSection - 1].first}-${SECTION_TIMES[endSection - 1].second}")
+                    .put("name", course.optString("name", "课程"))
+                    .put("classroom", course.optString("classroom"))
+                    .put("teacher", course.optString("teacher"))
+                    .put("ongoing", false),
+            )
+        }
+        editor.putString("weeklyCoursesJson", result.toString())
     }
 
     private fun occursInWeek(spec: String, week: Int): Boolean {

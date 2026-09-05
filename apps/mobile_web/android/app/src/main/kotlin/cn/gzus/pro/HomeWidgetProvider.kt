@@ -11,6 +11,7 @@ import android.os.Bundle
 import android.view.View
 import android.widget.RemoteViews
 import org.json.JSONArray
+import java.util.Calendar
 
 open class HomeWidgetProvider : AppWidgetProvider() {
     open val kind: String = "next"
@@ -51,7 +52,8 @@ open class HomeWidgetProvider : AppWidgetProvider() {
                 ExamCountdownWidgetProvider::class.java to "exams",
                 GradesWidgetProvider::class.java to "grades",
                 UtilitiesWidgetProvider::class.java to "utilities",
-                BusinessProgressWidgetProvider::class.java to "progress"
+                BusinessProgressWidgetProvider::class.java to "progress",
+                WeeklyScheduleWidgetProvider::class.java to "weekly"
             )
             providers.forEach { (provider, kind) ->
                 val ids = manager.getAppWidgetIds(ComponentName(context, provider))
@@ -67,7 +69,7 @@ open class HomeWidgetProvider : AppWidgetProvider() {
         ) {
             try {
                 val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                if (isSmallWidget(manager, widgetId)) {
+                if (isSmallWidget(manager, widgetId) && kind != "weekly") {
                     updateGenericWidget(context, manager, widgetId, widgetData(prefs, kind), kind)
                     return
                 }
@@ -79,11 +81,10 @@ open class HomeWidgetProvider : AppWidgetProvider() {
                         updateNextClassWidget(context, manager, widgetId, prefs, data)
                     }
                     "today" -> updateTodayWidget(context, manager, widgetId, prefs)
-                    "exams", "grades" -> {
-                        val data = widgetData(prefs, kind)
-                        updateGenericWidget(context, manager, widgetId, data, kind)
-                    }
+                    "exams" -> updateExamsWidget(context, manager, widgetId, prefs)
+                    "grades" -> updateGradesWidget(context, manager, widgetId, prefs)
                     "progress" -> updateProgressWidget(context, manager, widgetId, prefs)
+                    "weekly" -> updateWeeklyScheduleWidget(context, manager, widgetId, prefs)
                     else -> {
                         val data = widgetData(prefs, kind)
                         updateGenericWidget(context, manager, widgetId, data, kind)
@@ -183,6 +184,7 @@ open class HomeWidgetProvider : AppWidgetProvider() {
             listIntent.putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, widgetId)
             listIntent.data = Uri.parse(listIntent.toUri(Intent.URI_INTENT_SCHEME))
             views.setRemoteAdapter(R.id.widget_list, listIntent)
+            views.setPendingIntentTemplate(R.id.widget_list, openAppIntent(context, "schedule", "today"))
             views.setEmptyView(R.id.widget_list, R.id.widget_empty)
 
             // Show/hide empty state based on whether there are courses
@@ -214,6 +216,7 @@ open class HomeWidgetProvider : AppWidgetProvider() {
             listIntent.putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, widgetId)
             listIntent.data = Uri.parse(listIntent.toUri(Intent.URI_INTENT_SCHEME))
             views.setRemoteAdapter(R.id.widget_list, listIntent)
+            views.setPendingIntentTemplate(R.id.widget_list, openAppIntent(context, "business", "progress"))
             views.setEmptyView(R.id.widget_list, R.id.widget_empty)
 
             // Show/hide empty state based on whether there are progress items
@@ -242,6 +245,142 @@ open class HomeWidgetProvider : AppWidgetProvider() {
             views.setTextViewText(R.id.widget_electricity, prefText(prefs, "utilityElectricity", "-"))
             views.setTextViewText(R.id.widget_room_info, prefText(prefs, "utilityRoomInfo", ""))
             views.setOnClickPendingIntent(R.id.widget_root, openAppIntent(context, "ecard", "utilities"))
+            manager.updateAppWidget(widgetId, views)
+        }
+
+        private fun updateWeeklyScheduleWidget(
+            context: Context,
+            manager: AppWidgetManager,
+            widgetId: Int,
+            prefs: android.content.SharedPreferences,
+        ) {
+            val views = RemoteViews(context.packageName, R.layout.widget_weekly_schedule)
+            views.setImageViewResource(R.id.widget_icon, R.drawable.widget_icon_today)
+            views.setTextViewText(R.id.widget_header_title, "本周课表")
+            val dayNames = listOf("一", "二", "三", "四", "五", "六", "日")
+            val courses = JSONArray(prefs.getString("weeklyCoursesJson", "[]") ?: "[]")
+            val dayIds = intArrayOf(
+                R.id.weekly_day_1, R.id.weekly_day_2, R.id.weekly_day_3,
+                R.id.weekly_day_4, R.id.weekly_day_5, R.id.weekly_day_6, R.id.weekly_day_7,
+            )
+            val courseIds = arrayOf(
+                intArrayOf(R.id.weekly_course_1_1, R.id.weekly_course_1_2, R.id.weekly_course_1_3, R.id.weekly_course_1_4, R.id.weekly_course_1_5, R.id.weekly_course_1_6, R.id.weekly_course_1_7, R.id.weekly_course_1_8),
+                intArrayOf(R.id.weekly_course_2_1, R.id.weekly_course_2_2, R.id.weekly_course_2_3, R.id.weekly_course_2_4, R.id.weekly_course_2_5, R.id.weekly_course_2_6, R.id.weekly_course_2_7, R.id.weekly_course_2_8),
+                intArrayOf(R.id.weekly_course_3_1, R.id.weekly_course_3_2, R.id.weekly_course_3_3, R.id.weekly_course_3_4, R.id.weekly_course_3_5, R.id.weekly_course_3_6, R.id.weekly_course_3_7, R.id.weekly_course_3_8),
+                intArrayOf(R.id.weekly_course_4_1, R.id.weekly_course_4_2, R.id.weekly_course_4_3, R.id.weekly_course_4_4, R.id.weekly_course_4_5, R.id.weekly_course_4_6, R.id.weekly_course_4_7, R.id.weekly_course_4_8),
+                intArrayOf(R.id.weekly_course_5_1, R.id.weekly_course_5_2, R.id.weekly_course_5_3, R.id.weekly_course_5_4, R.id.weekly_course_5_5, R.id.weekly_course_5_6, R.id.weekly_course_5_7, R.id.weekly_course_5_8),
+                intArrayOf(R.id.weekly_course_6_1, R.id.weekly_course_6_2, R.id.weekly_course_6_3, R.id.weekly_course_6_4, R.id.weekly_course_6_5, R.id.weekly_course_6_6, R.id.weekly_course_6_7, R.id.weekly_course_6_8),
+                intArrayOf(R.id.weekly_course_7_1, R.id.weekly_course_7_2, R.id.weekly_course_7_3, R.id.weekly_course_7_4, R.id.weekly_course_7_5, R.id.weekly_course_7_6, R.id.weekly_course_7_7, R.id.weekly_course_7_8),
+            )
+            val currentWeekday = ((Calendar.getInstance().get(Calendar.DAY_OF_WEEK) + 5) % 7) + 1
+            dayIds.forEachIndexed { index, id ->
+                val count = (0 until courses.length()).count { courses.optJSONObject(it)?.optInt("weekday", 0) == index + 1 }
+                views.setTextViewText(id, "${dayNames[index]}  $count")
+                views.setInt(id, "setBackgroundColor", if (index + 1 == currentWeekday) 0xFFE8DEF8.toInt() else 0xFFF3F1F6.toInt())
+                views.setViewVisibility(id, View.VISIBLE)
+                val dayCourses = buildList {
+                    for (courseIndex in 0 until courses.length()) {
+                        val course = courses.optJSONObject(courseIndex) ?: continue
+                        if (course.optInt("weekday", 0) == index + 1) add(course)
+                    }
+                }.sortedBy { it.optInt("startSection", 0) }
+                courseIds[index].forEachIndexed { slot, courseId ->
+                    val course = dayCourses.getOrNull(slot)
+                    if (course == null) {
+                        views.setViewVisibility(courseId, View.INVISIBLE)
+                    } else {
+                        val text = "${course.optString("time")}\n${course.optString("name", "课程")}"
+                        views.setTextViewText(courseId, text)
+                        views.setInt(courseId, "setBackgroundColor", if (course.optBoolean("ongoing")) 0xFF6750A4.toInt() else 0xFFE8DEF8.toInt())
+                        views.setTextColor(courseId, if (course.optBoolean("ongoing")) 0xFFFFFFFF.toInt() else 0xFF1D1B20.toInt())
+                        views.setViewVisibility(courseId, View.VISIBLE)
+                        views.setOnClickPendingIntent(
+                            courseId,
+                            openItemAppIntent(
+                                context,
+                                "schedule",
+                                "weekly",
+                                course.optString("itemKey"),
+                                course.optInt("week").takeIf { it > 0 },
+                                index + 1,
+                                course.optInt("startSection").takeIf { it > 0 },
+                            ),
+                        )
+                    }
+                }
+            }
+            views.setOnClickPendingIntent(R.id.widget_root, openAppIntent(context, "schedule", "weekly"))
+            manager.updateAppWidget(widgetId, views)
+        }
+
+        private fun updateExamsWidget(
+            context: Context,
+            manager: AppWidgetManager,
+            widgetId: Int,
+            prefs: android.content.SharedPreferences,
+        ) {
+            val views = RemoteViews(context.packageName, R.layout.widget_exams)
+            views.setTextViewText(R.id.widget_header_title, "考试倒计时")
+            val rows = intArrayOf(R.id.exam_row_1, R.id.exam_row_2, R.id.exam_row_3)
+            val exams = JSONArray(prefs.getString("examItemsJson", "[]") ?: "[]")
+            rows.forEachIndexed { index, id ->
+                val exam = exams.optJSONObject(index)
+                if (exam == null) {
+                    views.setViewVisibility(id, View.GONE)
+                } else {
+                    val days = exam.optInt("days", 9999)
+                    val countdown = when {
+                        days == 0 -> "今天"
+                        days == 9999 -> "日期待定"
+                        days < 0 -> "${-days} 天前"
+                        else -> "还有 $days 天"
+                    }
+                    views.setTextViewText(id, "$countdown  ${exam.optString("name", "考试")}\n${exam.optString("date")} · ${exam.optString("time")} · ${exam.optString("location")}")
+                    views.setViewVisibility(id, View.VISIBLE)
+                    views.setOnClickPendingIntent(
+                        id,
+                        openItemAppIntent(context, "exams", "exams", exam.optString("name"), null, null, null),
+                    )
+                }
+            }
+            views.setOnClickPendingIntent(R.id.widget_root, openAppIntent(context, "exams", "exams"))
+            manager.updateAppWidget(widgetId, views)
+        }
+
+        private fun updateGradesWidget(
+            context: Context,
+            manager: AppWidgetManager,
+            widgetId: Int,
+            prefs: android.content.SharedPreferences,
+        ) {
+            val views = RemoteViews(context.packageName, R.layout.widget_grades)
+            views.setTextViewText(R.id.widget_header_title, "本学期成绩")
+            views.setTextViewText(R.id.grade_gpa, "绩点\n${prefText(prefs, "gradeGpa", "-")}")
+            views.setTextViewText(R.id.grade_average, "平均分\n${prefText(prefs, "gradeAverage", "-")}")
+            val grades = JSONArray(prefs.getString("gradeItemsJson", "[]") ?: "[]")
+            val rows = buildList {
+                for (index in 0 until minOf(4, grades.length())) {
+                    val grade = grades.optJSONObject(index) ?: continue
+                    add(grade)
+                }
+            }
+            val rowIds = intArrayOf(R.id.grade_row_1, R.id.grade_row_2, R.id.grade_row_3, R.id.grade_row_4)
+            rowIds.forEachIndexed { index, id ->
+                val grade = rows.getOrNull(index)
+                if (grade == null) {
+                    views.setViewVisibility(id, if (index == 0 && rows.isEmpty()) View.VISIBLE else View.GONE)
+                    if (index == 0 && rows.isEmpty()) views.setTextViewText(id, "暂无成绩数据")
+                } else {
+                    val courseName = grade.optString("courseName", grade.optString("name", "课程"))
+                    views.setViewVisibility(id, View.VISIBLE)
+                    views.setTextViewText(id, "$courseName  ${grade.optString("score", "-")} 分")
+                    views.setOnClickPendingIntent(
+                        id,
+                        openItemAppIntent(context, "grades", "grades", courseName, null, null, null),
+                    )
+                }
+            }
+            views.setOnClickPendingIntent(R.id.widget_root, openAppIntent(context, "grades", "grades"))
             manager.updateAppWidget(widgetId, views)
         }
 
@@ -332,6 +471,41 @@ open class HomeWidgetProvider : AppWidgetProvider() {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
         }
+
+        private fun openItemAppIntent(
+            context: Context,
+            tab: String,
+            kind: String,
+            itemKey: String,
+            week: Int?,
+            weekday: Int?,
+            startSection: Int?,
+        ): PendingIntent {
+            val intent = Intent(context, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                putExtra(EXTRA_INITIAL_TAB, tab)
+                putExtra(EXTRA_WIDGET_KIND, kind)
+                putExtra("itemKey", itemKey)
+                week?.let { putExtra("week", it) }
+                weekday?.let { putExtra("weekday", it) }
+                startSection?.let { putExtra("startSection", it) }
+            }
+            return PendingIntent.getActivity(
+                context,
+                (kind + itemKey).hashCode(),
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+        }
+
+        fun itemIntent(itemKey: String, week: Int?, weekday: Int?, startSection: Int?): Intent {
+            return Intent().apply {
+                putExtra("itemKey", itemKey)
+                week?.let { putExtra("week", it) }
+                weekday?.let { putExtra("weekday", it) }
+                startSection?.let { putExtra("startSection", it) }
+            }
+        }
     }
 }
 
@@ -367,4 +541,8 @@ class UtilitiesWidgetProvider : HomeWidgetProvider() {
 
 class BusinessProgressWidgetProvider : HomeWidgetProvider() {
     override val kind: String = "progress"
+}
+
+class WeeklyScheduleWidgetProvider : HomeWidgetProvider() {
+    override val kind: String = "weekly"
 }

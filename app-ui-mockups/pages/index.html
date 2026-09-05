@@ -1,0 +1,863 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>应用界面视觉样例</title>
+    <style id="theme-vars">
+:root {
+  --gzus-background: #FAFAF8;
+  --gzus-foreground: #17191D;
+  --gzus-card: #FFFFFF;
+  --gzus-card-foreground: #17191D;
+  --gzus-popover: #FFFFFF;
+  --gzus-popover-foreground: #17191D;
+  --gzus-primary: #2563EB;
+  --gzus-primary-foreground: #FFFFFF;
+  --gzus-muted: #F4F6FA;
+  --gzus-muted-foreground: #6B7280;
+  --gzus-border: #E5E7EB;
+  --gzus-input: #E5E7EB;
+  --gzus-ring: #2563EB;
+
+  --gzus-radius-sm: 12px;
+  --gzus-radius-md: 16px;
+  --gzus-radius-lg: 16px;
+  --gzus-radius-xl: 16px;
+
+  --gzus-state-success: #059669;
+  --gzus-state-warning: #EA580C;
+  --gzus-state-error: #DC2626;
+  --gzus-state-info: #0EA5E9;
+}
+
+.dark {
+  --gzus-background: #0B0D10;
+  --gzus-foreground: #F5F7FA;
+  --gzus-card: #15171C;
+  --gzus-card-foreground: #F5F7FA;
+  --gzus-popover: #15171C;
+  --gzus-popover-foreground: #F5F7FA;
+  --gzus-primary: #2563EB;
+  --gzus-primary-foreground: #FFFFFF;
+  --gzus-muted: #1E2128;
+  --gzus-muted-foreground: #A4ABB8;
+  --gzus-border: #2A2F3A;
+  --gzus-input: #2A2F3A;
+  --gzus-ring: #2563EB;
+}
+
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.1/dist/index.global.js"></script>
+    <script src="https://unpkg.com/lucide@1.8.0/dist/umd/lucide.min.js"></script>
+    <style type="text/tailwindcss">
+  @theme inline {
+    --color-background: var(--gzus-background);
+    --color-foreground: var(--gzus-foreground);
+    --color-card: var(--gzus-card);
+    --color-card-foreground: var(--gzus-card-foreground);
+    --color-popover: var(--gzus-popover);
+    --color-popover-foreground: var(--gzus-popover-foreground);
+    --color-primary: var(--gzus-primary);
+    --color-primary-foreground: var(--gzus-primary-foreground);
+    --color-muted: var(--gzus-muted);
+    --color-muted-foreground: var(--gzus-muted-foreground);
+    --color-border: var(--gzus-border);
+    --color-input: var(--gzus-input);
+    --color-ring: var(--gzus-ring);
+    --radius-sm: var(--gzus-radius-sm);
+    --radius-md: var(--gzus-radius-md);
+    --radius-lg: var(--gzus-radius-lg);
+    --radius-xl: var(--gzus-radius-xl);
+  }
+  @layer base {
+    body { background: var(--gzus-background); color: var(--gzus-foreground); }
+    td, th { @apply break-words; word-break: break-all; word-break: auto-phrase; }
+    th { @apply whitespace-nowrap; }
+  }
+    </style>
+    <style id="semantic-token-fallback">
+      .bg-background { background-color: var(--gzus-background); }
+      .text-background { color: var(--gzus-background); }
+      .border-background { border-color: var(--gzus-background); }
+      .ring-background { --tw-ring-color: var(--gzus-background); }
+      .bg-foreground { background-color: var(--gzus-foreground); }
+      .text-foreground { color: var(--gzus-foreground); }
+      .border-foreground { border-color: var(--gzus-foreground); }
+      .ring-foreground { --tw-ring-color: var(--gzus-foreground); }
+      .bg-card { background-color: var(--gzus-card); }
+      .text-card { color: var(--gzus-card); }
+      .border-card { border-color: var(--gzus-card); }
+      .ring-card { --tw-ring-color: var(--gzus-card); }
+      .bg-card-foreground { background-color: var(--gzus-card-foreground); }
+      .text-card-foreground { color: var(--gzus-card-foreground); }
+      .border-card-foreground { border-color: var(--gzus-card-foreground); }
+      .ring-card-foreground { --tw-ring-color: var(--gzus-card-foreground); }
+      .bg-popover { background-color: var(--gzus-popover); }
+      .text-popover { color: var(--gzus-popover); }
+      .border-popover { border-color: var(--gzus-popover); }
+      .ring-popover { --tw-ring-color: var(--gzus-popover); }
+      .bg-popover-foreground { background-color: var(--gzus-popover-foreground); }
+      .text-popover-foreground { color: var(--gzus-popover-foreground); }
+      .border-popover-foreground { border-color: var(--gzus-popover-foreground); }
+      .ring-popover-foreground { --tw-ring-color: var(--gzus-popover-foreground); }
+      .bg-primary { background-color: var(--gzus-primary); }
+      .text-primary { color: var(--gzus-primary); }
+      .border-primary { border-color: var(--gzus-primary); }
+      .ring-primary { --tw-ring-color: var(--gzus-primary); }
+      .bg-primary-foreground { background-color: var(--gzus-primary-foreground); }
+      .text-primary-foreground { color: var(--gzus-primary-foreground); }
+      .border-primary-foreground { border-color: var(--gzus-primary-foreground); }
+      .ring-primary-foreground { --tw-ring-color: var(--gzus-primary-foreground); }
+      .bg-muted { background-color: var(--gzus-muted); }
+      .text-muted { color: var(--gzus-muted); }
+      .border-muted { border-color: var(--gzus-muted); }
+      .ring-muted { --tw-ring-color: var(--gzus-muted); }
+      .bg-muted-foreground { background-color: var(--gzus-muted-foreground); }
+      .text-muted-foreground { color: var(--gzus-muted-foreground); }
+      .border-muted-foreground { border-color: var(--gzus-muted-foreground); }
+      .ring-muted-foreground { --tw-ring-color: var(--gzus-muted-foreground); }
+      .bg-border { background-color: var(--gzus-border); }
+      .text-border { color: var(--gzus-border); }
+      .border-border { border-color: var(--gzus-border); }
+      .ring-border { --tw-ring-color: var(--gzus-border); }
+      .bg-input { background-color: var(--gzus-input); }
+      .text-input { color: var(--gzus-input); }
+      .border-input { border-color: var(--gzus-input); }
+      .ring-input { --tw-ring-color: var(--gzus-input); }
+      .bg-ring { background-color: var(--gzus-ring); }
+      .text-ring { color: var(--gzus-ring); }
+      .border-ring { border-color: var(--gzus-ring); }
+      .ring-ring { --tw-ring-color: var(--gzus-ring); }
+    </style>
+    <style>
+      .no-scrollbar::-webkit-scrollbar { display: none; }
+      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      [data-icon] {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        -webkit-mask-size: contain;
+        mask-size: contain;
+        -webkit-mask-repeat: no-repeat;
+        mask-repeat: no-repeat;
+        -webkit-mask-position: center;
+        mask-position: center;
+        background-color: currentColor;
+      }
+    </style>
+</head>
+<body>
+<main id="mockups-root" class="bg-background text-foreground">
+  <section class="py-12 md:py-16 text-center px-6">
+    <h1 class="text-3xl md:text-4xl font-bold tracking-tight mb-3" style="font-family: Noto Sans SC, PingFang SC, system-ui, sans-serif;">应用界面视觉样例</h1>
+    <p class="text-muted-foreground text-base md:text-lg">OneGZUS 关键界面高保真示意</p>
+  </section>
+
+  <section class="mockups-grid container mx-auto px-6 pb-20">
+    <!-- Frame 1: LoginPage -->
+    <article id="frame-login" class="phone-frame">
+      <div class="phone-screen">
+        <div class="device-notch"></div>
+        <div class="h-11 flex items-end justify-between px-6 pb-2 text-xs font-semibold">
+          <span>9:41</span>
+          <div class="flex items-center gap-1.5">
+            <i data-lucide="signal" class="w-4 h-4"></i>
+            <i data-lucide="wifi" class="w-4 h-4"></i>
+            <i data-lucide="battery-full" class="w-5 h-5"></i>
+          </div>
+        </div>
+        <div class="screen-content px-6 pt-8 pb-6">
+          <div class="flex flex-col items-center">
+            <div class="w-16 h-16 rounded-2xl bg-primary flex items-center justify-center mb-6">
+              <i data-lucide="box" class="w-8 h-8 text-primary-foreground"></i>
+            </div>
+            <div class="flex gap-2 mb-8">
+              <span class="w-2 h-2 rounded-full bg-primary"></span>
+              <span class="w-2 h-2 rounded-full bg-border"></span>
+              <span class="w-2 h-2 rounded-full bg-border"></span>
+            </div>
+          </div>
+
+          <div class="space-y-4 mb-6">
+            <div class="h-12 rounded-2xl border border-border bg-muted flex items-center px-4 text-muted-foreground text-sm">
+              学号/工号
+            </div>
+            <div class="h-12 rounded-2xl border border-border bg-muted flex items-center justify-between px-4 text-muted-foreground text-sm">
+              <span>密码</span>
+              <i data-lucide="eye" class="w-5 h-5"></i>
+            </div>
+          </div>
+
+          <div class="space-y-3 mb-8">
+            <label class="flex items-center gap-3 text-sm">
+              <div class="w-5 h-5 rounded border border-border bg-primary flex items-center justify-center">
+                <i data-lucide="check" class="w-3.5 h-3.5 text-primary-foreground"></i>
+              </div>
+              记住密码
+            </label>
+            <label class="flex items-center gap-3 text-sm">
+              <div class="w-5 h-5 rounded border border-border bg-primary flex items-center justify-center">
+                <i data-lucide="check" class="w-3.5 h-3.5 text-primary-foreground"></i>
+              </div>
+              我已阅读并同意《用户协议》
+            </label>
+          </div>
+
+          <button class="w-full h-12 rounded-2xl bg-primary text-primary-foreground font-semibold text-base mb-4">登录</button>
+
+          <div class="bg-error-soft text-error text-sm p-3 rounded-2xl mb-auto">
+            提示：请使用学校统一身份认证账号登录。
+          </div>
+
+          <p class="text-center text-xs text-muted-foreground mt-6">OneGZUS v1.2.0 build 2024090401</p>
+        </div>
+      </div>
+    </article>
+
+    <!-- Frame 2: HomePage -->
+    <article id="frame-home" class="phone-frame">
+      <div class="phone-screen">
+        <div class="device-notch"></div>
+        <div class="h-11 flex items-end justify-between px-6 pb-2 text-xs font-semibold">
+          <span>9:41</span>
+          <div class="flex items-center gap-1.5">
+            <i data-lucide="signal" class="w-4 h-4"></i>
+            <i data-lucide="wifi" class="w-4 h-4"></i>
+            <i data-lucide="battery-full" class="w-5 h-5"></i>
+          </div>
+        </div>
+        <div class="screen-content px-5 pt-5 pb-0">
+          <div class="mb-4">
+            <h2 class="text-xl font-bold">早上好，张三</h2>
+            <p class="text-sm text-muted-foreground mt-1">2024-2025 第一学期 · 第 5 周</p>
+          </div>
+
+          <div class="h-11 rounded-full bg-muted border border-border flex items-center px-4 gap-2 text-sm text-muted-foreground mb-5">
+            <i data-lucide="search" class="w-4 h-4"></i>
+            搜索课程、通知...
+          </div>
+
+          <div class="grid grid-cols-2 gap-3 mb-auto">
+            <div class="h-28 rounded-2xl bg-primary-soft p-4 flex flex-col justify-between">
+              <i data-lucide="clock" class="w-6 h-6 text-primary"></i>
+              <div>
+                <p class="text-sm font-semibold">下一节课</p>
+                <p class="text-xs text-muted-foreground">08:00 高数</p>
+              </div>
+            </div>
+            <div class="h-28 rounded-2xl bg-muted p-4 flex flex-col justify-between">
+              <i data-lucide="list" class="w-6 h-6 text-foreground"></i>
+              <div>
+                <p class="text-sm font-semibold">今日时间线</p>
+                <p class="text-xs text-muted-foreground">3 项安排</p>
+              </div>
+            </div>
+            <div class="h-28 rounded-2xl bg-muted p-4 flex flex-col justify-between">
+              <i data-lucide="calendar" class="w-6 h-6 text-foreground"></i>
+              <div>
+                <p class="text-sm font-semibold">本周课表</p>
+                <p class="text-xs text-muted-foreground">第 5 周</p>
+              </div>
+            </div>
+            <div class="h-28 rounded-2xl bg-info-soft p-4 flex flex-col justify-between">
+              <i data-lucide="cloud" class="w-6 h-6 text-info"></i>
+              <div>
+                <p class="text-sm font-semibold">天气</p>
+                <p class="text-xs text-muted-foreground">多云 24°C</p>
+              </div>
+            </div>
+            <div class="h-28 rounded-2xl bg-warning-soft p-4 flex flex-col justify-between">
+              <i data-lucide="bell" class="w-6 h-6 text-warning"></i>
+              <div>
+                <p class="text-sm font-semibold">通知</p>
+                <p class="text-xs text-muted-foreground">2 条未读</p>
+              </div>
+            </div>
+            <div class="h-28 rounded-2xl bg-success-soft p-4 flex flex-col justify-between">
+              <i data-lucide="trending-up" class="w-6 h-6 text-success"></i>
+              <div>
+                <p class="text-sm font-semibold">成绩</p>
+                <p class="text-xs text-muted-foreground">平均 3.72</p>
+              </div>
+            </div>
+            <div class="h-28 rounded-2xl bg-purple-soft p-4 flex flex-col justify-between">
+              <i data-lucide="award" class="w-6 h-6 text-purple"></i>
+              <div>
+                <p class="text-sm font-semibold">学分</p>
+                <p class="text-xs text-muted-foreground">已修 86</p>
+              </div>
+            </div>
+            <div class="h-28 rounded-2xl bg-rose-soft p-4 flex flex-col justify-between">
+              <i data-lucide="check-circle" class="w-6 h-6 text-rose"></i>
+              <div>
+                <p class="text-sm font-semibold">考勤</p>
+                <p class="text-xs text-muted-foreground">全勤</p>
+              </div>
+            </div>
+          </div>
+
+          <nav class="bottom-nav flex items-center justify-around px-2">
+            <div class="flex flex-col items-center gap-1 text-primary">
+              <i data-lucide="home" class="w-6 h-6"></i>
+              <span class="text-xs font-semibold">首页</span>
+            </div>
+            <div class="flex flex-col items-center gap-1 text-muted-foreground">
+              <i data-lucide="calendar-days" class="w-6 h-6"></i>
+              <span class="text-xs font-semibold">课表</span>
+            </div>
+            <div class="flex flex-col items-center gap-1 text-muted-foreground">
+              <i data-lucide="trending-up" class="w-6 h-6"></i>
+              <span class="text-xs font-semibold">成绩</span>
+            </div>
+            <div class="flex flex-col items-center gap-1 text-muted-foreground">
+              <i data-lucide="menu" class="w-6 h-6"></i>
+              <span class="text-xs font-semibold">更多</span>
+            </div>
+          </nav>
+        </div>
+      </div>
+    </article>
+
+    <!-- Frame 3: SchedulePage -->
+    <article id="frame-schedule" class="phone-frame">
+      <div class="phone-screen">
+        <div class="device-notch"></div>
+        <div class="h-11 flex items-end justify-between px-6 pb-2 text-xs font-semibold">
+          <span>9:41</span>
+          <div class="flex items-center gap-1.5">
+            <i data-lucide="signal" class="w-4 h-4"></i>
+            <i data-lucide="wifi" class="w-4 h-4"></i>
+            <i data-lucide="battery-full" class="w-5 h-5"></i>
+          </div>
+        </div>
+        <div class="screen-content px-5 pt-3 pb-0">
+          <div class="h-12 flex items-center justify-between mb-3">
+            <h2 class="text-xl font-bold">课表</h2>
+            <div class="flex items-center gap-4">
+              <i data-lucide="calendar" class="w-5 h-5 text-muted-foreground"></i>
+              <i data-lucide="share-2" class="w-5 h-5 text-muted-foreground"></i>
+            </div>
+          </div>
+
+          <div class="flex items-center justify-between mb-4">
+            <button class="flex items-center gap-1 text-sm font-semibold">
+              第 4 周
+              <i data-lucide="chevron-down" class="w-4 h-4"></i>
+            </button>
+            <div class="flex items-center gap-2">
+              <button class="w-8 h-8 rounded-full border border-border flex items-center justify-center">
+                <i data-lucide="chevron-left" class="w-4 h-4"></i>
+              </button>
+              <button class="w-8 h-8 rounded-full border border-border flex items-center justify-center">
+                <i data-lucide="chevron-right" class="w-4 h-4"></i>
+              </button>
+            </div>
+          </div>
+
+          <div class="flex justify-between mb-5">
+            <div class="flex flex-col items-center gap-1 w-9">
+              <span class="text-xs text-muted-foreground">一</span>
+              <span class="text-sm font-semibold">14</span>
+            </div>
+            <div class="flex flex-col items-center gap-1 w-9">
+              <span class="text-xs text-muted-foreground">二</span>
+              <span class="text-sm font-semibold">15</span>
+            </div>
+            <div class="flex flex-col items-center gap-1 w-9 rounded-full bg-primary text-primary-foreground py-1">
+              <span class="text-xs opacity-90">三</span>
+              <span class="text-sm font-semibold">16</span>
+            </div>
+            <div class="flex flex-col items-center gap-1 w-9">
+              <span class="text-xs text-muted-foreground">四</span>
+              <span class="text-sm font-semibold">17</span>
+            </div>
+            <div class="flex flex-col items-center gap-1 w-9">
+              <span class="text-xs text-muted-foreground">五</span>
+              <span class="text-sm font-semibold">18</span>
+            </div>
+            <div class="flex flex-col items-center gap-1 w-9">
+              <span class="text-xs text-muted-foreground">六</span>
+              <span class="text-sm font-semibold">19</span>
+            </div>
+            <div class="flex flex-col items-center gap-1 w-9">
+              <span class="text-xs text-muted-foreground">日</span>
+              <span class="text-sm font-semibold">20</span>
+            </div>
+          </div>
+
+          <div class="space-y-3 mb-auto">
+            <div class="rounded-2xl border border-border bg-card p-4 border-l-4 border-l-primary">
+              <div class="flex justify-between items-start mb-2">
+                <h3 class="font-semibold">高等数学</h3>
+                <span class="text-xs text-muted-foreground">08:00-09:35</span>
+              </div>
+              <p class="text-sm text-muted-foreground">教学楼 A-301</p>
+            </div>
+            <div class="rounded-2xl border border-border bg-card p-4">
+              <div class="flex justify-between items-start mb-2">
+                <h3 class="font-semibold">大学英语</h3>
+                <span class="text-xs text-muted-foreground">10:00-11:35</span>
+              </div>
+              <p class="text-sm text-muted-foreground">教学楼 B-202</p>
+            </div>
+            <div class="rounded-2xl border border-border bg-card p-4">
+              <div class="flex justify-between items-start mb-2">
+                <h3 class="font-semibold">计算机基础</h3>
+                <span class="text-xs text-muted-foreground">14:00-15:35</span>
+              </div>
+              <p class="text-sm text-muted-foreground">机房 C-105</p>
+            </div>
+          </div>
+
+          <nav class="bottom-nav flex items-center justify-around px-2">
+            <div class="flex flex-col items-center gap-1 text-muted-foreground">
+              <i data-lucide="home" class="w-6 h-6"></i>
+              <span class="text-xs font-semibold">首页</span>
+            </div>
+            <div class="flex flex-col items-center gap-1 text-primary">
+              <i data-lucide="calendar-days" class="w-6 h-6"></i>
+              <span class="text-xs font-semibold">课表</span>
+            </div>
+            <div class="flex flex-col items-center gap-1 text-muted-foreground">
+              <i data-lucide="trending-up" class="w-6 h-6"></i>
+              <span class="text-xs font-semibold">成绩</span>
+            </div>
+            <div class="flex flex-col items-center gap-1 text-muted-foreground">
+              <i data-lucide="menu" class="w-6 h-6"></i>
+              <span class="text-xs font-semibold">更多</span>
+            </div>
+          </nav>
+        </div>
+      </div>
+    </article>
+
+    <!-- Frame 4: GradesPage -->
+    <article id="frame-grades" class="phone-frame">
+      <div class="phone-screen">
+        <div class="device-notch"></div>
+        <div class="h-11 flex items-end justify-between px-6 pb-2 text-xs font-semibold">
+          <span>9:41</span>
+          <div class="flex items-center gap-1.5">
+            <i data-lucide="signal" class="w-4 h-4"></i>
+            <i data-lucide="wifi" class="w-4 h-4"></i>
+            <i data-lucide="battery-full" class="w-5 h-5"></i>
+          </div>
+        </div>
+        <div class="screen-content px-5 pt-3 pb-0">
+          <div class="h-12 flex items-center mb-4">
+            <h2 class="text-xl font-bold">成绩</h2>
+          </div>
+
+          <div class="rounded-2xl border border-border bg-card p-4 grid grid-cols-3 gap-2 mb-5">
+            <div class="text-center">
+              <p class="text-lg font-bold">8</p>
+              <p class="text-xs text-muted-foreground">共修课程</p>
+            </div>
+            <div class="text-center">
+              <p class="text-lg font-bold">0</p>
+              <p class="text-xs text-muted-foreground">补考/重修</p>
+            </div>
+            <div class="text-center">
+              <p class="text-lg font-bold">3.72</p>
+              <p class="text-xs text-muted-foreground">平均绩点</p>
+            </div>
+          </div>
+
+          <div class="flex gap-2 mb-5 overflow-x-auto no-scrollbar">
+            <span class="chip px-4 py-1.5 text-sm font-semibold bg-primary text-primary-foreground">2024-2025-1</span>
+            <span class="chip px-4 py-1.5 text-sm font-semibold bg-muted text-foreground border border-border">2024-2025-2</span>
+          </div>
+
+          <div class="space-y-3 mb-auto">
+            <div class="rounded-2xl border border-border bg-card p-4 flex items-center justify-between">
+              <div class="flex items-center gap-3">
+                <span class="w-2.5 h-2.5 rounded-full bg-primary"></span>
+                <span class="text-sm font-medium">高等数学</span>
+              </div>
+              <div class="flex items-center gap-3">
+                <span class="px-2.5 py-1 rounded-full bg-primary-soft text-primary text-sm font-semibold">92</span>
+                <span class="text-sm text-muted-foreground">4.0</span>
+              </div>
+            </div>
+            <div class="rounded-2xl border border-border bg-card p-4 flex items-center justify-between">
+              <div class="flex items-center gap-3">
+                <span class="w-2.5 h-2.5 rounded-full bg-info"></span>
+                <span class="text-sm font-medium">大学英语</span>
+              </div>
+              <div class="flex items-center gap-3">
+                <span class="px-2.5 py-1 rounded-full bg-primary-soft text-primary text-sm font-semibold">85</span>
+                <span class="text-sm text-muted-foreground">3.5</span>
+              </div>
+            </div>
+            <div class="rounded-2xl border border-border bg-card p-4 flex items-center justify-between">
+              <div class="flex items-center gap-3">
+                <span class="w-2.5 h-2.5 rounded-full bg-success"></span>
+                <span class="text-sm font-medium">计算机基础</span>
+              </div>
+              <div class="flex items-center gap-3">
+                <span class="px-2.5 py-1 rounded-full bg-primary-soft text-primary text-sm font-semibold">88</span>
+                <span class="text-sm text-muted-foreground">3.7</span>
+              </div>
+            </div>
+            <div class="rounded-2xl border border-border bg-card p-4 flex items-center justify-between">
+              <div class="flex items-center gap-3">
+                <span class="w-2.5 h-2.5 rounded-full bg-warning"></span>
+                <span class="text-sm font-medium">体育</span>
+              </div>
+              <div class="flex items-center gap-3">
+                <span class="px-2.5 py-1 rounded-full bg-primary-soft text-primary text-sm font-semibold">78</span>
+                <span class="text-sm text-muted-foreground">3.0</span>
+              </div>
+            </div>
+          </div>
+
+          <nav class="bottom-nav flex items-center justify-around px-2">
+            <div class="flex flex-col items-center gap-1 text-muted-foreground">
+              <i data-lucide="home" class="w-6 h-6"></i>
+              <span class="text-xs font-semibold">首页</span>
+            </div>
+            <div class="flex flex-col items-center gap-1 text-muted-foreground">
+              <i data-lucide="calendar-days" class="w-6 h-6"></i>
+              <span class="text-xs font-semibold">课表</span>
+            </div>
+            <div class="flex flex-col items-center gap-1 text-primary">
+              <i data-lucide="trending-up" class="w-6 h-6"></i>
+              <span class="text-xs font-semibold">成绩</span>
+            </div>
+            <div class="flex flex-col items-center gap-1 text-muted-foreground">
+              <i data-lucide="menu" class="w-6 h-6"></i>
+              <span class="text-xs font-semibold">更多</span>
+            </div>
+          </nav>
+        </div>
+      </div>
+    </article>
+
+    <!-- Frame 5: MorePage -->
+    <article id="frame-more" class="phone-frame">
+      <div class="phone-screen">
+        <div class="device-notch"></div>
+        <div class="h-11 flex items-end justify-between px-6 pb-2 text-xs font-semibold">
+          <span>9:41</span>
+          <div class="flex items-center gap-1.5">
+            <i data-lucide="signal" class="w-4 h-4"></i>
+            <i data-lucide="wifi" class="w-4 h-4"></i>
+            <i data-lucide="battery-full" class="w-5 h-5"></i>
+          </div>
+        </div>
+        <div class="screen-content px-5 pt-3 pb-0">
+          <div class="h-12 flex items-center justify-between mb-4">
+            <h2 class="text-xl font-bold">更多</h2>
+            <i data-lucide="pencil" class="w-5 h-5 text-muted-foreground"></i>
+          </div>
+
+          <div class="mb-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide">外观</div>
+          <div class="rounded-2xl border border-border bg-card p-4 mb-5 space-y-4">
+            <div class="flex items-center justify-between">
+              <span class="text-sm font-medium">主题模式</span>
+              <div class="flex gap-2">
+                <span class="chip px-3 py-1 text-xs font-semibold bg-primary text-primary-foreground">跟随系统</span>
+                <span class="chip px-3 py-1 text-xs font-semibold bg-muted text-foreground border border-border">浅色</span>
+                <span class="chip px-3 py-1 text-xs font-semibold bg-muted text-foreground border border-border">深色</span>
+              </div>
+            </div>
+            <div class="flex items-center justify-between">
+              <span class="text-sm font-medium">主题色</span>
+              <div class="flex items-center gap-2">
+                <span class="w-6 h-6 rounded-full bg-primary ring-2 ring-offset-2 ring-primary"></span>
+                <span class="w-6 h-6 rounded-full bg-teal"></span>
+                <span class="w-6 h-6 rounded-full bg-green"></span>
+                <span class="w-6 h-6 rounded-full bg-purple-solid"></span>
+                <span class="w-6 h-6 rounded-full bg-rose-solid"></span>
+                <span class="w-6 h-6 rounded-full bg-amber"></span>
+              </div>
+            </div>
+          </div>
+
+          <div class="mb-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide">导航</div>
+          <div class="rounded-2xl border border-border bg-card p-4 mb-5 space-y-4">
+            <div class="flex items-center justify-between">
+              <span class="text-sm font-medium">自动隐藏底部导航</span>
+              <div class="w-11 h-6 rounded-full bg-primary relative">
+                <div class="absolute right-1 top-1 w-4 h-4 rounded-full bg-primary-foreground"></div>
+              </div>
+            </div>
+            <div class="grid grid-cols-4 gap-3 pt-2">
+              <div class="flex flex-col items-center gap-1 text-muted-foreground">
+                <i data-lucide="home" class="w-5 h-5"></i>
+                <span class="text-xs">首页</span>
+              </div>
+              <div class="flex flex-col items-center gap-1 text-muted-foreground">
+                <i data-lucide="calendar-days" class="w-5 h-5"></i>
+                <span class="text-xs">课表</span>
+              </div>
+              <div class="flex flex-col items-center gap-1 text-muted-foreground">
+                <i data-lucide="trending-up" class="w-5 h-5"></i>
+                <span class="text-xs">成绩</span>
+              </div>
+              <div class="flex flex-col items-center gap-1 text-primary">
+                <i data-lucide="menu" class="w-5 h-5"></i>
+                <span class="text-xs">更多</span>
+              </div>
+              <div class="flex flex-col items-center gap-1 text-muted-foreground">
+                <i data-lucide="bell" class="w-5 h-5"></i>
+                <span class="text-xs">通知</span>
+              </div>
+              <div class="flex flex-col items-center gap-1 text-muted-foreground">
+                <i data-lucide="award" class="w-5 h-5"></i>
+                <span class="text-xs">学分</span>
+              </div>
+              <div class="flex flex-col items-center gap-1 text-muted-foreground">
+                <i data-lucide="check-circle" class="w-5 h-5"></i>
+                <span class="text-xs">考勤</span>
+              </div>
+              <div class="flex flex-col items-center gap-1 text-muted-foreground">
+                <i data-lucide="cloud" class="w-5 h-5"></i>
+                <span class="text-xs">天气</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="mb-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide">账户</div>
+          <div class="rounded-2xl border border-border bg-card mb-auto overflow-hidden">
+            <div class="flex items-center justify-between p-4 border-b border-border">
+              <span class="text-sm font-medium">管理后台</span>
+              <i data-lucide="chevron-right" class="w-5 h-5 text-muted-foreground"></i>
+            </div>
+            <div class="flex items-center justify-between p-4 border-b border-border">
+              <span class="text-sm font-medium">通知设置</span>
+              <i data-lucide="chevron-right" class="w-5 h-5 text-muted-foreground"></i>
+            </div>
+            <div class="flex items-center justify-between p-4">
+              <span class="text-sm font-medium text-error">退出登录</span>
+              <i data-lucide="log-out" class="w-5 h-5 text-error"></i>
+            </div>
+          </div>
+
+          <nav class="bottom-nav flex items-center justify-around px-2">
+            <div class="flex flex-col items-center gap-1 text-muted-foreground">
+              <i data-lucide="home" class="w-6 h-6"></i>
+              <span class="text-xs font-semibold">首页</span>
+            </div>
+            <div class="flex flex-col items-center gap-1 text-muted-foreground">
+              <i data-lucide="calendar-days" class="w-6 h-6"></i>
+              <span class="text-xs font-semibold">课表</span>
+            </div>
+            <div class="flex flex-col items-center gap-1 text-muted-foreground">
+              <i data-lucide="trending-up" class="w-6 h-6"></i>
+              <span class="text-xs font-semibold">成绩</span>
+            </div>
+            <div class="flex flex-col items-center gap-1 text-primary">
+              <i data-lucide="menu" class="w-6 h-6"></i>
+              <span class="text-xs font-semibold">更多</span>
+            </div>
+          </nav>
+        </div>
+      </div>
+    </article>
+
+    <!-- Frame 6: AdminPage -->
+    <article id="frame-admin" class="phone-frame">
+      <div class="phone-screen">
+        <div class="device-notch"></div>
+        <div class="h-11 flex items-end justify-between px-6 pb-2 text-xs font-semibold">
+          <span>9:41</span>
+          <div class="flex items-center gap-1.5">
+            <i data-lucide="signal" class="w-4 h-4"></i>
+            <i data-lucide="wifi" class="w-4 h-4"></i>
+            <i data-lucide="battery-full" class="w-5 h-5"></i>
+          </div>
+        </div>
+        <div class="screen-content px-5 pt-3 pb-0">
+          <div class="h-12 flex items-center justify-between mb-4">
+            <div>
+              <h2 class="text-xl font-bold">管理后台</h2>
+              <p class="text-xs text-muted-foreground">总览</p>
+            </div>
+          </div>
+
+          <div class="flex gap-2 overflow-x-auto no-scrollbar mb-5">
+            <span class="chip px-3 py-1.5 text-sm font-semibold bg-primary text-primary-foreground whitespace-nowrap">总览</span>
+            <span class="chip px-3 py-1.5 text-sm font-semibold bg-muted text-foreground border border-border whitespace-nowrap">会话</span>
+            <span class="chip px-3 py-1.5 text-sm font-semibold bg-muted text-foreground border border-border whitespace-nowrap">管理员</span>
+            <span class="chip px-3 py-1.5 text-sm font-semibold bg-muted text-foreground border border-border whitespace-nowrap">数据统计</span>
+            <span class="chip px-3 py-1.5 text-sm font-semibold bg-muted text-foreground border border-border whitespace-nowrap">系统</span>
+            <span class="chip px-3 py-1.5 text-sm font-semibold bg-muted text-foreground border border-border whitespace-nowrap">校历</span>
+            <span class="chip px-3 py-1.5 text-sm font-semibold bg-muted text-foreground border border-border whitespace-nowrap">登录轮播</span>
+            <span class="chip px-3 py-1.5 text-sm font-semibold bg-muted text-foreground border border-border whitespace-nowrap">公众号</span>
+          </div>
+
+          <div class="grid grid-cols-3 gap-3 mb-5">
+            <div class="rounded-2xl border border-border bg-card p-3 text-center">
+              <p class="text-lg font-bold text-primary">128</p>
+              <p class="text-xs text-muted-foreground">在线会话</p>
+            </div>
+            <div class="rounded-2xl border border-border bg-card p-3 text-center">
+              <p class="text-lg font-bold text-success">45</p>
+              <p class="text-xs text-muted-foreground">今日登录</p>
+            </div>
+            <div class="rounded-2xl border border-border bg-card p-3 text-center">
+              <p class="text-lg font-bold text-warning">3</p>
+              <p class="text-xs text-muted-foreground">未读通知</p>
+            </div>
+          </div>
+
+          <div class="rounded-2xl bg-muted h-40 p-4 mb-5 flex items-end justify-between gap-2">
+            <div class="flex-1 rounded-t-md bg-primary/20" style="height:45%"></div>
+            <div class="flex-1 rounded-t-md bg-primary/30" style="height:65%"></div>
+            <div class="flex-1 rounded-t-md bg-primary/50" style="height:55%"></div>
+            <div class="flex-1 rounded-t-md bg-primary" style="height:80%"></div>
+            <div class="flex-1 rounded-t-md bg-primary/60" style="height:60%"></div>
+            <div class="flex-1 rounded-t-md bg-primary/40" style="height:70%"></div>
+            <div class="flex-1 rounded-t-md bg-primary/20" style="height:50%"></div>
+          </div>
+
+          <div class="mb-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide">最近操作</div>
+          <div class="rounded-2xl border border-border bg-card mb-auto overflow-hidden">
+            <div class="p-4 border-b border-border flex items-start gap-3">
+              <div class="w-8 h-8 rounded-full bg-primary-soft flex items-center justify-center flex-shrink-0">
+                <i data-lucide="shield" class="w-4 h-4 text-primary"></i>
+              </div>
+              <div class="flex-1 min-w-0">
+                <p class="text-sm font-medium">新增管理员 2024001</p>
+                <p class="text-xs text-muted-foreground">操作人：root · 10 分钟前</p>
+              </div>
+            </div>
+            <div class="p-4 border-b border-border flex items-start gap-3">
+              <div class="w-8 h-8 rounded-full bg-info-soft flex items-center justify-center flex-shrink-0">
+                <i data-lucide="bell" class="w-4 h-4 text-info"></i>
+              </div>
+              <div class="flex-1 min-w-0">
+                <p class="text-sm font-medium">发布校历通知</p>
+                <p class="text-xs text-muted-foreground">操作人：root · 1 小时前</p>
+              </div>
+            </div>
+            <div class="p-4 flex items-start gap-3">
+              <div class="w-8 h-8 rounded-full bg-error-soft flex items-center justify-center flex-shrink-0">
+                <i data-lucide="user-x" class="w-4 h-4 text-error"></i>
+              </div>
+              <div class="flex-1 min-w-0">
+                <p class="text-sm font-medium">强制下线会话 12</p>
+                <p class="text-xs text-muted-foreground">操作人：root · 2 小时前</p>
+              </div>
+            </div>
+          </div>
+
+          <nav class="bottom-nav flex items-center justify-around px-2">
+            <div class="flex flex-col items-center gap-1 text-muted-foreground">
+              <i data-lucide="home" class="w-6 h-6"></i>
+              <span class="text-xs font-semibold">首页</span>
+            </div>
+            <div class="flex flex-col items-center gap-1 text-muted-foreground">
+              <i data-lucide="calendar-days" class="w-6 h-6"></i>
+              <span class="text-xs font-semibold">课表</span>
+            </div>
+            <div class="flex flex-col items-center gap-1 text-muted-foreground">
+              <i data-lucide="trending-up" class="w-6 h-6"></i>
+              <span class="text-xs font-semibold">成绩</span>
+            </div>
+            <div class="flex flex-col items-center gap-1 text-primary">
+              <i data-lucide="menu" class="w-6 h-6"></i>
+              <span class="text-xs font-semibold">更多</span>
+            </div>
+          </nav>
+        </div>
+      </div>
+    </article>
+  </section>
+</main>
+
+<style id="gzus-soft-tokens">
+  :root {
+    --gzus-primary-soft: #EAF2FF;
+    --gzus-success-soft: #EAFBF2;
+    --gzus-amber-soft: #FFF7E6;
+    --gzus-error-soft: #FFECEC;
+    --gzus-info-soft: #E0F2FE;
+    --gzus-purple-soft: #F3E8FF;
+    --gzus-rose-soft: #FFF1F2;
+    --gzus-purple: #7C3AED;
+    --gzus-rose: #E11D48;
+  }
+  .bg-primary-soft { background-color: var(--gzus-primary-soft); }
+  .bg-success-soft { background-color: var(--gzus-success-soft); }
+  .bg-warning-soft { background-color: var(--gzus-amber-soft); }
+  .bg-error-soft { background-color: var(--gzus-error-soft); }
+  .bg-info-soft { background-color: var(--gzus-info-soft); }
+  .bg-purple-soft { background-color: var(--gzus-purple-soft); }
+  .bg-rose-soft { background-color: var(--gzus-rose-soft); }
+  .text-success { color: var(--gzus-state-success); }
+  .text-warning { color: var(--gzus-state-warning); }
+  .text-error { color: var(--gzus-state-error); }
+  .text-info { color: var(--gzus-state-info); }
+  .text-purple { color: var(--gzus-purple); }
+  .text-rose { color: var(--gzus-rose); }
+  .border-primary-soft { border-color: var(--gzus-primary-soft); }
+  .chip { border-radius: 999px; }
+  .bg-teal { background-color: #14B8A6; }
+  .bg-green { background-color: #22C55E; }
+  .bg-amber { background-color: #F59E0B; }
+  .bg-purple-solid { background-color: #7C3AED; }
+  .bg-rose-solid { background-color: #F43F5E; }
+</style>
+<style id="critical-layout">
+  #mockups-root { min-height: 100vh; }
+  .phone-frame {
+    width: 375px;
+    min-height: 810px;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--gzus-border);
+    border-radius: 40px;
+    background: #000;
+    padding: 10px;
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+  }
+  .phone-screen {
+    position: relative;
+    width: 100%;
+    flex: 1 1 auto;
+    overflow: visible;
+    display: flex;
+    flex-direction: column;
+    border-radius: 32px;
+    background: var(--gzus-background);
+    color: var(--gzus-foreground);
+  }
+  .screen-content { flex: 1 1 auto; display: flex; flex-direction: column; }
+  .screen-scroll { flex: 1 1 auto; }
+  .bottom-nav {
+    height: 76px;
+    flex-shrink: 0;
+    border-top: 1px solid var(--gzus-border);
+    background: var(--gzus-card);
+  }
+  .device-notch {
+    position: absolute;
+    left: 50%;
+    top: 10px;
+    transform: translateX(-50%);
+    width: 96px;
+    height: 28px;
+    background: #000;
+    border-radius: 999px;
+    z-index: 10;
+  }
+  .mockups-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 40px;
+    justify-items: center;
+  }
+  @media (min-width: 860px) {
+    .mockups-grid { grid-template-columns: repeat(2, 1fr); }
+  }
+</style>
+<script>
+  if (typeof lucide !== 'undefined') {
+    lucide.createIcons();
+  }
+</script>
+</body>
+</html>

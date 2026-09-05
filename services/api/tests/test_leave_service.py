@@ -52,16 +52,15 @@ class FakeClient:
 class FakeEhallClient:
     def __init__(self):
         self.calls = []
+        self.upload_calls = []
         self.cookie_header = "JSESSIONID=fake"
 
-    def fill_leave_application(self, **kwargs):
-        self.calls.append(kwargs)
-        return {
-            "status": "filled",
-            "message": "已填好，请在办事大厅确认提交",
-            "unmatchedTeachers": [],
-            "formUrl": "https://ehall.gzus.edu.cn/bpm/r?wf_num=R_S003_B036",
-        }
+    def leave_application_url(self):
+        return "https://ehall.gzus.edu.cn/bpm/r?wf_num=R_S003_B036"
+
+    def upload_leave_attachment(self, **kwargs):
+        self.upload_calls.append(kwargs)
+        return True
 
     def search_staff(self, keyword):
         if keyword != "张老师":
@@ -438,8 +437,10 @@ def test_leave_fill_calls_ehall_client_when_ready():
     assert "'KCMC', '课程名称'" in response.json()["fillScript"]
     assert "WF_T10004" in response.json()["handlerScript"]
     assert response.json()["matchedTeachers"][0]["userid"] == "u100"
-    assert ehall.calls[0]["courses"][0]["courseName"] == "移动应用开发"
-    assert ehall.calls[0]["attachments"] == [("note.txt", b"ok")]
+    assert response.json()["attachmentUploaded"] is False
+    assert response.json()["attachmentUploadedCount"] == 0
+    assert response.json()["attachmentTotal"] == 1
+    assert ehall.calls == []
 
 
 def test_leave_fill_uses_manual_teacher_handler_selection():
@@ -480,3 +481,36 @@ def test_leave_fill_uses_manual_teacher_handler_selection():
     assert body["unmatchedTeachers"] == []
     assert body["matchedTeachers"][0]["userid"] == "manual1"
     assert "manual1" in body["handlerScript"]
+
+
+def test_leave_attachment_uses_current_page_metadata():
+    ehall = FakeEhallClient()
+    app = create_app()
+    session = app.state.sessions.create(FakeClient(), "测试学生", ehall_client=ehall)
+    client = TestClient(app)
+
+    response = client.post(
+        "/ehall/leave/attachment",
+        headers={"X-Session-Id": session.id},
+        json={
+            "docUnid": "current-doc-1",
+            "processId": "current-process-1",
+            "nodeName": "当前申请人",
+            "localStore": "0",
+            "attachmentName": "proof.jpg",
+            "attachmentContentBase64": "aW1hZ2U=",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok", "uploaded": True}
+    assert ehall.upload_calls == [
+        {
+            "doc_unid": "current-doc-1",
+            "process_id": "current-process-1",
+            "node_name": "当前申请人",
+            "local_store": "0",
+            "attachment_name": "proof.jpg",
+            "attachment_content": b"image",
+        }
+    ]

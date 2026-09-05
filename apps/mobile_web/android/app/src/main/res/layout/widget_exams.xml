@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="16dp"
+    android:background="@drawable/widget_home_background">
+    <TextView
+        android:id="@+id/widget_header_title"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="考试倒计时"
+        android:textColor="@color/widget_on_surface"
+        android:textSize="14sp"
+        android:textStyle="bold" />
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:layout_marginTop="10dp"
+        android:orientation="vertical">
+        <TextView android:id="@+id/exam_row_1" style="@style/WidgetExamRow" />
+        <TextView android:id="@+id/exam_row_2" style="@style/WidgetExamRow" />
+        <TextView android:id="@+id/exam_row_3" style="@style/WidgetExamRow" />
+    </LinearLayout>
+</LinearLayout>

@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>登录页重新设计</title>
+    <style id="theme-vars">
+:root {
+  --gzus-background: #FAFAF8;
+  --gzus-foreground: #17191D;
+  --gzus-card: #FFFFFF;
+  --gzus-card-foreground: #17191D;
+  --gzus-popover: #FFFFFF;
+  --gzus-popover-foreground: #17191D;
+  --gzus-primary: #2563EB;
+  --gzus-primary-foreground: #FFFFFF;
+  --gzus-muted: #F4F6FA;
+  --gzus-muted-foreground: #6B7280;
+  --gzus-border: #E5E7EB;
+  --gzus-input: #E5E7EB;
+  --gzus-ring: #2563EB;
+
+  --gzus-radius-sm: 12px;
+  --gzus-radius-md: 16px;
+  --gzus-radius-lg: 16px;
+  --gzus-radius-xl: 16px;
+
+  --gzus-state-success: #059669;
+  --gzus-state-warning: #EA580C;
+  --gzus-state-error: #DC2626;
+  --gzus-state-info: #0EA5E9;
+}
+
+.dark {
+  --gzus-background: #0B0D10;
+  --gzus-foreground: #F5F7FA;
+  --gzus-card: #15171C;
+  --gzus-card-foreground: #F5F7FA;
+  --gzus-popover: #15171C;
+  --gzus-popover-foreground: #F5F7FA;
+  --gzus-primary: #2563EB;
+  --gzus-primary-foreground: #FFFFFF;
+  --gzus-muted: #1E2128;
+  --gzus-muted-foreground: #A4ABB8;
+  --gzus-border: #2A2F3A;
+  --gzus-input: #2A2F3A;
+  --gzus-ring: #2563EB;
+}
+
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.1/dist/index.global.js"></script>
+    <script src="https://unpkg.com/lucide@1.8.0/dist/umd/lucide.min.js"></script>
+    <style type="text/tailwindcss">
+  @theme inline {
+    --color-background: var(--gzus-background);
+    --color-foreground: var(--gzus-foreground);
+    --color-card: var(--gzus-card);
+    --color-card-foreground: var(--gzus-card-foreground);
+    --color-popover: var(--gzus-popover);
+    --color-popover-foreground: var(--gzus-popover-foreground);
+    --color-primary: var(--gzus-primary);
+    --color-primary-foreground: var(--gzus-primary-foreground);
+    --color-muted: var(--gzus-muted);
+    --color-muted-foreground: var(--gzus-muted-foreground);
+    --color-border: var(--gzus-border);
+    --color-input: var(--gzus-input);
+    --color-ring: var(--gzus-ring);
+    --radius-sm: var(--gzus-radius-sm);
+    --radius-md: var(--gzus-radius-md);
+    --radius-lg: var(--gzus-radius-lg);
+    --radius-xl: var(--gzus-radius-xl);
+  }
+  @layer base {
+    body { background: var(--gzus-background); color: var(--gzus-foreground); }
+    td, th { @apply break-words; word-break: break-all; word-break: auto-phrase; }
+    th { @apply whitespace-nowrap; }
+  }
+    </style>
+    <style id="semantic-token-fallback">
+      .bg-background { background-color: var(--gzus-background); }
+      .text-background { color: var(--gzus-background); }
+      .border-background { border-color: var(--gzus-background); }
+      .ring-background { --tw-ring-color: var(--gzus-background); }
+      .bg-foreground { background-color: var(--gzus-foreground); }
+      .text-foreground { color: var(--gzus-foreground); }
+      .border-foreground { border-color: var(--gzus-foreground); }
+      .ring-foreground { --tw-ring-color: var(--gzus-foreground); }
+      .bg-card { background-color: var(--gzus-card); }
+      .text-card { color: var(--gzus-card); }
+      .border-card { border-color: var(--gzus-card); }
+      .ring-card { --tw-ring-color: var(--gzus-card); }
+      .bg-card-foreground { background-color: var(--gzus-card-foreground); }
+      .text-card-foreground { color: var(--gzus-card-foreground); }
+      .border-card-foreground { border-color: var(--gzus-card-foreground); }
+      .ring-card-foreground { --tw-ring-color: var(--gzus-card-foreground); }
+      .bg-popover { background-color: var(--gzus-popover); }
+      .text-popover { color: var(--gzus-popover); }
+      .border-popover { border-color: var(--gzus-popover); }
+      .ring-popover { --tw-ring-color: var(--gzus-popover); }
+      .bg-popover-foreground { background-color: var(--gzus-popover-foreground); }
+      .text-popover-foreground { color: var(--gzus-popover-foreground); }
+      .border-popover-foreground { border-color: var(--gzus-popover-foreground); }
+      .ring-popover-foreground { --tw-ring-color: var(--gzus-popover-foreground); }
+      .bg-primary { background-color: var(--gzus-primary); }
+      .text-primary { color: var(--gzus-primary); }
+      .border-primary { border-color: var(--gzus-primary); }
+      .ring-primary { --tw-ring-color: var(--gzus-primary); }
+      .bg-primary-foreground { background-color: var(--gzus-primary-foreground); }
+      .text-primary-foreground { color: var(--gzus-primary-foreground); }
+      .border-primary-foreground { border-color: var(--gzus-primary-foreground); }
+      .ring-primary-foreground { --tw-ring-color: var(--gzus-primary-foreground); }
+      .bg-muted { background-color: var(--gzus-muted); }
+      .text-muted { color: var(--gzus-muted); }
+      .border-muted { border-color: var(--gzus-muted); }
+      .ring-muted { --tw-ring-color: var(--gzus-muted); }
+      .bg-muted-foreground { background-color: var(--gzus-muted-foreground); }
+      .text-muted-foreground { color: var(--gzus-muted-foreground); }
+      .border-muted-foreground { border-color: var(--gzus-muted-foreground); }
+      .ring-muted-foreground { --tw-ring-color: var(--gzus-muted-foreground); }
+      .bg-border { background-color: var(--gzus-border); }
+      .text-border { color: var(--gzus-border); }
+      .border-border { border-color: var(--gzus-border); }
+      .ring-border { --tw-ring-color: var(--gzus-border); }
+      .bg-input { background-color: var(--gzus-input); }
+      .text-input { color: var(--gzus-input); }
+      .border-input { border-color: var(--gzus-input); }
+      .ring-input { --tw-ring-color: var(--gzus-input); }
+      .bg-ring { background-color: var(--gzus-ring); }
+      .text-ring { color: var(--gzus-ring); }
+      .border-ring { border-color: var(--gzus-ring); }
+      .ring-ring { --tw-ring-color: var(--gzus-ring); }
+    </style>
+    <style>
+      .no-scrollbar::-webkit-scrollbar { display: none; }
+      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      [data-icon] {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        -webkit-mask-size: contain;
+        mask-size: contain;
+        -webkit-mask-repeat: no-repeat;
+        mask-repeat: no-repeat;
+        -webkit-mask-position: center;
+        mask-position: center;
+        background-color: currentColor;
+      }
+    </style>
+</head>
+<body class="min-h-screen font-sans antialiased">
+    <main id="login-redesign-root" class="relative min-h-screen overflow-x-hidden px-6 py-12 flex flex-col">
+        <div class="gzus-blob gzus-blob-top" aria-hidden="true"></div>
+        <div class="gzus-blob gzus-blob-bottom" aria-hidden="true"></div>
+
+        <div class="relative z-10 w-full max-w-md mx-auto flex-1 flex flex-col">
+            <section id="login-hero" class="pt-8 pb-10 text-center">
+                <div class="relative inline-flex items-center justify-center mb-6">
+                    <div class="gzus-orb absolute inset-0 -m-6 rounded-full bg-primary-soft opacity-60 blur-2xl"></div>
+                    <div class="relative w-16 h-16 rounded-2xl bg-primary flex items-center justify-center shadow-sm">
+                        <i data-lucide="box" class="w-8 h-8 text-primary-foreground"></i>
+                    </div>
+                </div>
+                <h1 class="text-[28px] leading-tight font-bold tracking-tight text-foreground mb-2">OneGZUS</h1>
+                <p class="text-base text-muted-foreground">贵州师范学院教务助手</p>
+            </section>
+
+            <section id="login-card" class="bg-card border border-border rounded-2xl p-6 shadow-sm">
+                <div class="mb-6">
+                    <h2 class="text-xl font-bold text-foreground mb-1">欢迎回来</h2>
+                    <p class="text-sm text-muted-foreground">请登录你的教务账号</p>
+                </div>
+
+                <form id="login-form" class="space-y-5" onsubmit="event.preventDefault();">
+                    <div id="login-account-field">
+                        <label class="block text-sm font-medium text-foreground mb-2">学号/工号</label>
+                        <div class="h-[52px] rounded-2xl border border-border bg-muted px-4 flex items-center gap-3 focus-within:ring-2 focus-within:ring-primary focus-within:border-primary transition-shadow">
+                            <i data-lucide="user" class="w-5 h-5 text-muted-foreground flex-shrink-0"></i>
+                            <input type="text" class="w-full bg-transparent outline-none text-base text-foreground placeholder:text-muted-foreground" placeholder="请输入学号或工号">
+                        </div>
+                    </div>
+
+                    <div id="login-password-field">
+                        <label class="block text-sm font-medium text-foreground mb-2">密码</label>
+                        <div class="h-[52px] rounded-2xl border border-border bg-muted px-4 flex items-center gap-3 focus-within:ring-2 focus-within:ring-primary focus-within:border-primary transition-shadow">
+                            <i data-lucide="lock" class="w-5 h-5 text-muted-foreground flex-shrink-0"></i>
+                            <input type="password" class="w-full bg-transparent outline-none text-base text-foreground placeholder:text-muted-foreground" placeholder="请输入密码">
+                            <button type="button" class="p-1 rounded-full hover:bg-muted-foreground/10 text-muted-foreground transition-colors" aria-label="切换密码可见性">
+                                <i data-lucide="eye" class="w-5 h-5"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div id="login-remember-row" class="flex items-center justify-between">
+                        <label class="flex items-center gap-2.5 cursor-pointer group">
+                            <div class="w-5 h-5 rounded border border-border bg-primary flex items-center justify-center">
+                                <i data-lucide="check" class="w-3.5 h-3.5 text-primary-foreground"></i>
+                            </div>
+                            <span class="text-sm text-foreground group-hover:text-foreground/90 transition-colors">记住密码</span>
+                        </label>
+                        <a href="#" class="text-sm text-muted-foreground hover:text-primary transition-colors">忘记密码？</a>
+                    </div>
+
+                    <label id="login-agreement" class="flex items-start gap-2.5 cursor-pointer group">
+                        <div class="w-5 h-5 mt-0.5 rounded border border-border bg-primary flex items-center justify-center flex-shrink-0">
+                            <i data-lucide="check" class="w-3.5 h-3.5 text-primary-foreground"></i>
+                        </div>
+                        <span class="text-sm text-muted-foreground leading-relaxed group-hover:text-foreground/80 transition-colors">我已阅读并同意《用户协议》和《隐私政策》</span>
+                    </label>
+
+                    <button id="login-submit" type="submit" class="w-full h-[52px] rounded-2xl bg-primary text-primary-foreground font-semibold text-base hover:bg-primary/90 active:scale-[0.99] transition-all">登录</button>
+
+                    <div id="login-hint" class="bg-error-soft text-error text-sm p-3 rounded-2xl flex items-start gap-2">
+                        <i data-lucide="alert-circle" class="w-4 h-4 mt-0.5 flex-shrink-0"></i>
+                        <span>请输入正确的学号和密码</span>
+                    </div>
+                </form>
+            </section>
+
+            <footer id="login-footer" class="mt-auto pt-10 pb-6 text-center">
+                <p class="text-xs text-muted-foreground mb-2">v2.5.1+20240904</p>
+                <a href="#" class="text-xs text-muted-foreground hover:text-primary transition-colors">遇到问题？联系客服</a>
+            </footer>
+        </div>
+    </main>
+
+    <style id="gzus-login-styles">
+        :root {
+            --gzus-primary-soft: #EAF2FF;
+            --gzus-error-soft: #FFECEC;
+        }
+        .dark {
+            --gzus-primary-soft: rgba(37, 99, 235, 0.18);
+            --gzus-error-soft: rgba(220, 38, 38, 0.15);
+        }
+        body { font-family: Noto Sans SC, PingFang SC, system-ui, sans-serif; }
+        .bg-primary-soft { background-color: var(--gzus-primary-soft); }
+        .bg-error-soft { background-color: var(--gzus-error-soft); }
+        .text-error { color: var(--gzus-state-error); }
+        .gzus-blob {
+            position: fixed;
+            pointer-events: none;
+            border-radius: 999px;
+            z-index: 0;
+        }
+        .gzus-blob-top {
+            top: -80px;
+            right: -80px;
+            width: 260px;
+            height: 260px;
+            background: var(--gzus-primary-soft);
+            opacity: 0.55;
+            filter: blur(80px);
+        }
+        .gzus-blob-bottom {
+            bottom: -100px;
+            left: -100px;
+            width: 300px;
+            height: 300px;
+            background: var(--gzus-primary-soft);
+            opacity: 0.4;
+            filter: blur(80px);
+        }
+        .gzus-orb { filter: blur(20px); }
+    </style>
+    <script>lucide.createIcons();</script>
+</body>
+</html>

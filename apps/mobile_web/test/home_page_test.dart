@@ -88,6 +88,46 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('业务进度中卡在窄屏下不发生纵向溢出', (tester) async {
+    final api = _homeApi(
+      transform: (body, requestIndex) {
+        final modules = Map<String, Object?>.from(
+          body['modules']! as Map<String, Object?>,
+        );
+        modules['progress'] = {
+          'status': 'ok',
+          'data': {
+            'categories': [
+              {'label': '待办', 'count': 0},
+              {'label': '申请', 'count': 0},
+              {'label': '已办', 'count': 1},
+              {'label': '关注', 'count': 0},
+              {'label': '待阅', 'count': 0},
+              {'label': '草稿', 'count': 1},
+            ],
+            'items': [
+              {
+                'id': 'progress-overflow',
+                'title': '学生课程请假申请（20240319版）',
+                'category': '已办',
+                'status': 'done',
+                'statusLabel': '已完结',
+                'currentNode': '任课教师审批',
+                'progress': 100,
+                'date': '2026-05-06',
+              },
+            ],
+          },
+        };
+        return {...body, 'modules': modules};
+      },
+    );
+
+    await _pumpHome(tester, api, const Size(390, 844));
+
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('dashboard 整体失败后重试会创建新的强制刷新请求', (tester) async {
     var requestCount = 0;
     final api = _homeApi(

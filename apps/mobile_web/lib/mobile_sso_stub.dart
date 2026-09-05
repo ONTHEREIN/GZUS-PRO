@@ -2,11 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'api_client.dart';
+import 'leave_attachment_models.dart';
 
 Future<bool> openAuthenticatedEhallUrl(
   BuildContext context,
   String url, {
   String? fillScript,
+  required List<PickedAttachment> attachments,
   required ApiClient api,
 }) {
   final uri = Uri.tryParse(url);

@@ -1,0 +1,558 @@
+{
+  "skillProvenance": {
+    "name": "solo-design",
+    "version": "2026.07.06.8",
+    "version_source": "skill-release-manifest.json",
+    "resolvedLane": "free_exploration"
+  },
+  "project": {
+    "name": "软帮手桌面与锁屏小组件设计",
+    "designProjectPath": "/Users/decrein/Coding_Project/GZUS-PRO/widgets-design",
+    "resolvedLane": "free_exploration",
+    "selectedIntentWorkflowRead": true,
+    "contextRequirementsLoaded": [
+      {
+        "path": "shared-runtime/runtime-boundaries/lane-runtime-contracts.md",
+        "readStatus": "loaded",
+        "bodyRead": true
+      },
+      {
+        "path": "shared-runtime/agent-dispatch-runtime/lane-dispatch-index.md",
+        "readStatus": "loaded",
+        "bodyRead": true
+      },
+      {
+        "path": "delivery-quality/page-rendering-quality-gate.md",
+        "readStatus": "loaded",
+        "bodyRead": true
+      },
+      {
+        "path": "delivery-quality/design-artifact-validation.md",
+        "readStatus": "loaded",
+        "bodyRead": true
+      },
+      {
+        "path": "delivery-quality/delivery-evidence-contract.md",
+        "readStatus": "loaded",
+        "bodyRead": true
+      },
+      {
+        "path": "visual-experience/visual-experience-guidelines.md",
+        "readStatus": "loaded",
+        "bodyRead": true
+      }
+    ],
+    "contextReadScope": {
+      "mainAgent": {
+        "forbiddenReads": [
+          "other intent-workflows/**",
+          "Sub-Agent implementation files before dispatch"
+        ]
+      },
+      "pageSubAgent": {
+        "allowedReads": [
+          "current lane page runtime guide",
+          "current lane dispatch contract excerpt",
+          "current Page Packet",
+          "supplementaryReads[] only"
+        ],
+        "forbiddenReads": [
+          "SKILL.md full re-read",
+          "other intent-workflows/**",
+          "full runtime-orchestration-summary.json unless explicitly sliced"
+        ]
+      },
+      "readScopeLedgerWriter": "shared-runtime/deterministic-tooling/build-page-dispatch-manifest.mjs"
+    },
+    "intentProfile": {
+      "caseFamily": "free_exploration",
+      "sourceType": "code_reference",
+      "routingReason": "No existing .design project for home screen / lock screen widgets; open-ended UI presentation of existing iOS WidgetKit implementation from OneGzusWidgets.swift.",
+      "deviceType": "mobile",
+      "pageCount": 1,
+      "stateful": false
+    },
+    "validationRunDiscipline": {
+      "maxFullValidationRuns": 2,
+      "softWarningsTriggerRepair": false,
+      "blockingRepairMode": "targeted-once",
+      "forbiddenRepairTriggers": [
+        "soft-warning-only",
+        "provenance-warning-only",
+        "style-warning-only"
+      ]
+    },
+    "lowValueCallWatchdog": {
+      "applies": true,
+      "noProgressSignals": [
+        "no_tool_call",
+        "no_artifact_diff",
+        "no_structured_decision"
+      ],
+      "noProgressNextAction": "enter_readiness_or_blocked_summary"
+    },
+    "styleContinuityAnchors": {
+      "primaryColor": "#2563EB",
+      "typeStack": "Inter, Noto Sans SC, PingFang SC, system-ui, sans-serif",
+      "radiusScale": [
+        "12px",
+        "16px",
+        "20px"
+      ],
+      "surfaceModel": "light canvas with white cards; dark mode uses near-black canvas and elevated surface"
+    },
+    "cssPreflightEvidence": {
+      "applies": true,
+      "status": "passed",
+      "command": "node /Users/decrein/.trae-cn/builtin/design/default/skills/solo-design/shared-runtime/deterministic-tooling/apply-html-head-contract.mjs /Users/decrein/Coding_Project/GZUS-PRO/widgets-design/colors_and_type.css /Users/decrein/Coding_Project/GZUS-PRO/widgets-design/.preflight/preflight.html --title=\"Preflight\" --lang=zh-CN --prefix=gzus --force-skeleton",
+      "brandPrefix": "gzus",
+      "checks": {
+        "themeVars": "present",
+        "semanticTokenFallback": "present",
+        "themeInline": "present",
+        "tailwindCdn": "present",
+        "htmlClass": "present",
+        "semanticMappings": "resolved"
+      },
+      "retryCount": 0,
+      "blockingReason": null
+    },
+    "pageCompletenessGate": {
+      "expectedPages": [
+        "index"
+      ],
+      "requiredStates": [
+        "home-screen-widgets",
+        "lock-screen-widgets"
+      ],
+      "requiredInteractions": [],
+      "requiredNavigation": [],
+      "missingAllowed": []
+    },
+    "defaultDeliverableVisibility": {
+      "applies": true,
+      "requiredVisibleRegions": [
+        {
+          "htmlSrc": "pages/index.html",
+          "selector": "#section-home-small",
+          "label": "home screen small widgets",
+          "source": "user requirement"
+        },
+        {
+          "htmlSrc": "pages/index.html",
+          "selector": "#section-home-medium",
+          "label": "home screen medium widgets",
+          "source": "user requirement"
+        },
+        {
+          "htmlSrc": "pages/index.html",
+          "selector": "#section-home-large",
+          "label": "home screen large widgets",
+          "source": "user requirement"
+        },
+        {
+          "htmlSrc": "pages/index.html",
+          "selector": "#section-lock-screen",
+          "label": "lock screen accessory widgets",
+          "source": "user requirement"
+        },
+        {
+          "htmlSrc": "pages/index.html",
+          "selector": "#section-live-activity",
+          "label": "live activity lock screen widget",
+          "source": "user requirement"
+        }
+      ],
+      "hiddenAllowed": []
+    },
+    "deviceType": "mobile",
+    "dispatchPreflightManifest": [
+      {
+        "recorded_at": "2026-09-04T12:43:21.619Z",
+        "generatedBy": "build-page-dispatch-manifest.mjs",
+        "packetType": "FreePagePacket",
+        "laneContract": {
+          "resolvedLane": "free_exploration",
+          "packetType": "FreePagePacket",
+          "pageRuntimeGuide": "intent-workflows/intent-page-free-exploration/free-exploration-page-runtime.md",
+          "dispatchContract": "intent-workflows/intent-page-free-exploration/dispatch-contract.md"
+        },
+        "taskLinePresent": true,
+        "outputPathPresent": true,
+        "sharedTemplate": "intent-workflows/intent-page-free-exploration/free-exploration-page-runtime.md",
+        "nodeId": "page-index",
+        "htmlSrc": "pages/index.html",
+        "supplementaryReads": [],
+        "allowedWritePaths": [
+          "pages/index.html",
+          "assets/"
+        ],
+        "forbiddenWriteRoots": [
+          "*.design",
+          "runtime-orchestration-summary.json",
+          "validation-report.json",
+          "finish-readiness-report.json",
+          "restore-contract-report.json",
+          "page-generation-summary.json"
+        ],
+        "toolPolicy": {
+          "todoWriteAllowed": false,
+          "validationScriptsAllowed": false,
+          "previewAllowed": false,
+          "helperScriptsAllowed": false,
+          "designFileWriteAllowed": false,
+          "allowedWritePaths": [
+            "pages/index.html",
+            "assets/"
+          ]
+        },
+        "skillRuntime": {
+          "skillDir": "/Users/decrein/.trae-cn/builtin/design/default/skills/solo-design",
+          "deterministicToolDir": "/Users/decrein/.trae-cn/builtin/design/default/skills/solo-design/shared-runtime/deterministic-tooling",
+          "toolPaths": {
+            "applyHtmlHeadContract": "/Users/decrein/.trae-cn/builtin/design/default/skills/solo-design/shared-runtime/deterministic-tooling/apply-html-head-contract.mjs",
+            "recordDispatchCompletion": "/Users/decrein/.trae-cn/builtin/design/default/skills/solo-design/shared-runtime/deterministic-tooling/record-dispatch-completion.mjs",
+            "buildPageDispatchManifest": "/Users/decrein/.trae-cn/builtin/design/default/skills/solo-design/shared-runtime/deterministic-tooling/build-page-dispatch-manifest.mjs",
+            "validateDesignWorkspace": "/Users/decrein/.trae-cn/builtin/design/default/skills/solo-design/shared-runtime/deterministic-tooling/validate-design-workspace.mjs",
+            "validateFinishReadiness": "/Users/decrein/.trae-cn/builtin/design/default/skills/solo-design/shared-runtime/deterministic-tooling/validate-finish-readiness.mjs",
+            "validateRestoreContract": "/Users/decrein/.trae-cn/builtin/design/default/skills/solo-design/shared-runtime/deterministic-tooling/validate-restore-contract.mjs"
+          },
+          "requiredForPageSubAgent": [
+            "applyHtmlHeadContract",
+            "recordDispatchCompletion"
+          ],
+          "pathInjection": "absolute",
+          "pathContract": "Do not use {SKILL_DIR} placeholders inside Page Sub-Agent packets; use toolPaths.* absolute paths.",
+          "commandTemplates": {
+            "recordDispatchCompletion": "node '/Users/decrein/.trae-cn/builtin/design/default/skills/solo-design/shared-runtime/deterministic-tooling/record-dispatch-completion.mjs' '/Users/decrein/Coding_Project/GZUS-PRO/widgets-design' --node-id='page-index' --html-src='pages/index.html' --status=completed --changed-files=<comma-separated-project-relative-files> --trace-digest=<main-agent-runtime-trace-digest> --tool-ledger-json=<tool-ledger-json-or-file>"
+          }
+        },
+        "cssFilePath": "/Users/decrein/Coding_Project/GZUS-PRO/widgets-design/colors_and_type.css",
+        "htmlFilePath": "/Users/decrein/Coding_Project/GZUS-PRO/widgets-design/pages/index.html",
+        "brandPrefix": "gzus",
+        "aestheticsMode": "free-explore",
+        "toolDisciplineBlockPresent": true,
+        "fillHtmlHeadCommand": "node '/Users/decrein/.trae-cn/builtin/design/default/skills/solo-design/shared-runtime/deterministic-tooling/apply-html-head-contract.mjs' '/Users/decrein/Coding_Project/GZUS-PRO/widgets-design/colors_and_type.css' '/Users/decrein/Coding_Project/GZUS-PRO/widgets-design/pages/index.html' --title='桌面与锁屏小组件设计' --lang='zh-CN' --prefix='gzus'",
+        "headFillMode": "skeleton-first",
+        "viewportMode": "document-scroll",
+        "completionSchemaExpected": "compact",
+        "restoreFields": null,
+        "restoreContractStatus": null,
+        "restoreCompactPacket": null,
+        "deterministicCommands": null,
+        "sourceAuthorityLock": null,
+        "preDispatchFileHashes": {
+          ".design": "41c90c7af56c4468ac5523c51955a51840d353b2a622853a56df45fdcd772c9b",
+          "pages/index.html": "978e9655b3e01d1ca86ee46039d7c1c4d5419e87e42516dda18761e319fedc70"
+        },
+        "contextPreflight": {
+          "workflowPath": "intent-workflows/intent-page-free-exploration/INTENT_WORKFLOW.md",
+          "requiredContextFiles": [
+            "shared-runtime/runtime-boundaries/lane-runtime-contracts.md",
+            "shared-runtime/agent-dispatch-runtime/lane-dispatch-index.md",
+            "delivery-quality/page-rendering-quality-gate.md",
+            "delivery-quality/design-artifact-validation.md",
+            "delivery-quality/delivery-evidence-contract.md",
+            "visual-experience/visual-experience-guidelines.md"
+          ],
+          "optionalContextFiles": [],
+          "passed": true
+        },
+        "pageSliceOnly": true,
+        "requiredFieldsPresent": true,
+        "missingFields": [],
+        "fillHtmlHeadCommandValid": true,
+        "mobileNavigation": {
+          "required": false,
+          "appliesToThisPage": false,
+          "canonicalHtmlIncluded": false,
+          "missingFields": []
+        },
+        "persistedToSummary": true,
+        "taskQueryAudited": false,
+        "proofSource": "summary-only",
+        "largeWorkflowFilesInTaskQuery": null
+      }
+    ],
+    "readScopeLedger": [
+      {
+        "actor": "page-sub-agent",
+        "lane": "free_exploration",
+        "path": "intent-workflows/intent-page-free-exploration/free-exploration-page-runtime.md",
+        "reason": "page runtime guide",
+        "scopeClass": "page-runtime",
+        "declaredBeforeRead": true,
+        "recordedAt": "2026-09-04T12:43:21.619Z",
+        "nodeId": "page-index",
+        "htmlSrc": "pages/index.html"
+      },
+      {
+        "actor": "page-sub-agent",
+        "lane": "free_exploration",
+        "path": "intent-workflows/intent-page-free-exploration/dispatch-contract.md",
+        "reason": "dispatch contract",
+        "scopeClass": "dispatch-contract",
+        "declaredBeforeRead": true,
+        "recordedAt": "2026-09-04T12:43:21.619Z",
+        "nodeId": "page-index",
+        "htmlSrc": "pages/index.html"
+      }
+    ],
+    "expectedDispatches": [
+      {
+        "nodeId": "page-index",
+        "pageId": "page-index",
+        "targetPageId": "page-index",
+        "htmlSrc": "pages/index.html",
+        "packetType": "FreePagePacket",
+        "status": "completed",
+        "changedFiles": [
+          "pages/index.html"
+        ],
+        "toolCallLedger": {
+          "source": "main-agent-runtime-trace",
+          "traceDigest": "widgets-redesign-hig",
+          "todoWriteCalls": 0,
+          "previewCalls": 0,
+          "validationScriptCalls": 0,
+          "helperScriptWrites": 0
+        },
+        "recordedAt": "2026-09-04T13:55:42.781Z",
+        "source": "record-dispatch-completion.mjs"
+      }
+    ],
+    "mainAgentPostDispatchMutations": [
+      {
+        "mutation": "in-place-overwrite-redesign-per-apple-hig",
+        "nodeId": "page-index",
+        "htmlSrc": "pages/index.html",
+        "reason": "User requested redesign referencing Apple HIG widgets guidelines. Page Sub-Agent overwrote pages/index.html with HIG-aligned content. Main agent bumped .design page version from 1 to 2.",
+        "filesChanged": [
+          {
+            "path": "pages/index.html",
+            "preMutationHash": "978e9655b3e01d1ca86ee46039d7c1c4d5419e87e42516dda18761e319fedc70",
+            "postMutationHash": "978e9655b3e01d1ca86ee46039d7c1c4d5419e87e42516dda18761e319fedc70",
+            "changeType": "sub-agent-overwrite"
+          },
+          {
+            "path": ".design",
+            "preMutationHash": "39160b2365ea3779133ebb11def73dcad6da0b8ce0831f3426a1046a3fef09cb",
+            "postMutationHash": "41c90c7af56c4468ac5523c51955a51840d353b2a622853a56df45fdcd772c9b",
+            "changeType": "main-agent-version-bump"
+          }
+        ],
+        "recordedAt": "2026-09-04T13:57:00.000Z"
+      }
+    ],
+    "validationHistory": [
+      {
+        "reportPath": "validation-report.json",
+        "reportHash": "a2ff384c464bba6fe030fa51d45ee1296d3bc11a7e49008ea6d234d49e3f92be",
+        "checkedAt": "2026-09-04T12:51:26.133Z",
+        "success": false,
+        "exitCode": 1,
+        "renderBlockingErrorCount": 1,
+        "repairPlanHints": [
+          "hardcoded-color-in-body"
+        ],
+        "errorSignatures": [
+          {
+            "errorClass": "directory-structure",
+            "normalized": "[directory-structure] Missing required directory: assets/",
+            "signature": "c78e26a864205b3d5e2ce8a2a5ce7a295d7b1ae82a70af3e0bbf90d6fe191bc2"
+          }
+        ],
+        "terminalState": null
+      },
+      {
+        "reportPath": "validation-report.json",
+        "reportHash": "359c761b495e359ee3b8b1c0362714f78170ef2b48109dc332d562bd7ab7e465",
+        "checkedAt": "2026-09-04T12:52:11.174Z",
+        "success": true,
+        "exitCode": 0,
+        "renderBlockingErrorCount": 0,
+        "repairPlanHints": [
+          "hardcoded-color-in-body"
+        ],
+        "errorSignatures": [],
+        "terminalState": null
+      },
+      {
+        "reportPath": "validation-report.json",
+        "reportHash": "c117982d65e4a0c3066b4e1c8f1db5f65f5dfa49cc2012e23894f178474329b8",
+        "checkedAt": "2026-09-04T13:54:58.019Z",
+        "success": false,
+        "exitCode": 1,
+        "renderBlockingErrorCount": 1,
+        "repairPlanHints": [
+          "hardcoded-color-in-body"
+        ],
+        "errorSignatures": [
+          {
+            "errorClass": "artifact-readiness",
+            "normalized": "[dispatch-changed-files] pages/index.html: controlled file changed after dispatch preflight without mainAgentPostDispatchMutations evidence: .design",
+            "signature": "8a7482f97820e4a6a47d2da836918bd31eb6df12445ec5b1d464a0f727c7450f"
+          }
+        ],
+        "terminalState": null
+      }
+    ],
+    "validationRepairLedger": [
+      {
+        "failedReportPath": "validation-report.json",
+        "failedReportHash": "a2ff384c464bba6fe030fa51d45ee1296d3bc11a7e49008ea6d234d49e3f92be",
+        "repairWorkflowReadPath": "intent-workflows/intent-project-mutation/main-agent-repair-workflow.md",
+        "repairStartedAt": "2026-09-04T12:51:49.640Z",
+        "repairEntryStatus": "revalidated-success",
+        "ownerTriage": [
+          {
+            "owner": "sub-agent",
+            "errorClass": "hardcoded-color-in-body",
+            "affectedFiles": [
+              "index.html"
+            ],
+            "repairScope": "targeted-token-replace",
+            "strategy": "targeted_token_replace_once"
+          }
+        ],
+        "repairPlanHints": [
+          {
+            "errorClass": "hardcoded-color-in-body",
+            "owner": "sub-agent",
+            "repairScope": "targeted-token-replace",
+            "strategy": "targeted_token_replace_once",
+            "affectedFiles": [
+              "index.html"
+            ],
+            "repairReportPath": null,
+            "repairAlreadyAttempted": false,
+            "allowSourceRead": "no-full-html-read",
+            "maxValidationRuns": 2
+          }
+        ],
+        "repairActions": [
+          {
+            "owner": "main-agent",
+            "errorClass": "unknown-blocking",
+            "affectedFiles": [
+              "assets/"
+            ],
+            "action": "create_assets_directory",
+            "observedFileHashes": [],
+            "preEditFileHashes": [],
+            "postEditFileHashes": [],
+            "repairOwnedFields": [
+              "unknown-blocking"
+            ],
+            "recordedAt": "2026-09-04T12:52:05.398Z",
+            "repairActionTableRequired": true
+          }
+        ],
+        "revalidationReportPath": "validation-report.json",
+        "revalidationReportHash": "359c761b495e359ee3b8b1c0362714f78170ef2b48109dc332d562bd7ab7e465",
+        "revalidationSuccess": true,
+        "blockedReason": null,
+        "revalidationRecordedAt": "2026-09-04T12:52:17.525Z"
+      },
+      {
+        "failedReportPath": "validation-report.json",
+        "failedReportHash": "c117982d65e4a0c3066b4e1c8f1db5f65f5dfa49cc2012e23894f178474329b8",
+        "repairWorkflowReadPath": "intent-workflows/intent-project-mutation/main-agent-repair-workflow.md",
+        "repairStartedAt": "2026-09-04T13:55:25.441Z",
+        "repairEntryStatus": "action-recorded-awaiting-revalidation",
+        "ownerTriage": [
+          {
+            "owner": "sub-agent",
+            "errorClass": "hardcoded-color-in-body",
+            "affectedFiles": [
+              "index.html"
+            ],
+            "repairScope": "targeted-token-replace",
+            "strategy": "targeted_token_replace_once"
+          }
+        ],
+        "repairPlanHints": [
+          {
+            "errorClass": "hardcoded-color-in-body",
+            "owner": "sub-agent",
+            "repairScope": "targeted-token-replace",
+            "strategy": "targeted_token_replace_once",
+            "affectedFiles": [
+              "index.html"
+            ],
+            "repairReportPath": null,
+            "repairAlreadyAttempted": false,
+            "allowSourceRead": "no-full-html-read",
+            "maxValidationRuns": 2
+          }
+        ],
+        "repairActions": [
+          {
+            "owner": "main-agent",
+            "errorClass": "artifact-readiness",
+            "affectedFiles": [
+              "pages/index.html"
+            ],
+            "action": "repair_design_registration",
+            "observedFileHashes": [
+              {
+                "path": "pages/index.html",
+                "hash": "978e9655b3e01d1ca86ee46039d7c1c4d5419e87e42516dda18761e319fedc70"
+              }
+            ],
+            "preEditFileHashes": [],
+            "postEditFileHashes": [],
+            "repairOwnedFields": [
+              "artifact-readiness"
+            ],
+            "recordedAt": "2026-09-04T13:55:48.065Z",
+            "repairActionTableRequired": true
+          }
+        ],
+        "revalidationReportPath": null,
+        "revalidationReportHash": null,
+        "revalidationSuccess": null,
+        "blockedReason": null
+      }
+    ],
+    "repairEntryEvidence": [
+      {
+        "failedReportPath": "validation-report.json",
+        "failedReportHash": "a2ff384c464bba6fe030fa51d45ee1296d3bc11a7e49008ea6d234d49e3f92be",
+        "repairWorkflowReadPath": "intent-workflows/intent-project-mutation/main-agent-repair-workflow.md",
+        "repairStartedAt": "2026-09-04T12:51:49.640Z",
+        "ledgerIndex": 0,
+        "ownerTriageCount": 1,
+        "repairActionCount": 1,
+        "revalidationReportPath": "validation-report.json",
+        "revalidationReportHash": "359c761b495e359ee3b8b1c0362714f78170ef2b48109dc332d562bd7ab7e465",
+        "revalidationSuccess": true
+      },
+      {
+        "failedReportPath": "validation-report.json",
+        "failedReportHash": "c117982d65e4a0c3066b4e1c8f1db5f65f5dfa49cc2012e23894f178474329b8",
+        "repairWorkflowReadPath": "intent-workflows/intent-project-mutation/main-agent-repair-workflow.md",
+        "repairStartedAt": "2026-09-04T13:55:25.441Z",
+        "ledgerIndex": 1,
+        "ownerTriageCount": 1,
+        "repairActionCount": 1,
+        "revalidationReportPath": null,
+        "revalidationReportHash": null,
+        "revalidationSuccess": null
+      }
+    ]
+  },
+  "pages": [
+    {
+      "nodeId": "page-index",
+      "htmlSrc": "pages/index.html",
+      "title": "桌面与锁屏小组件设计",
+      "deviceType": "mobile",
+      "viewportMode": "document-scroll",
+      "qualityRisks": [
+        "dense-ui-mockup",
+        "multi-state-presentation"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,55 @@
+{
+  "data": [
+    {
+      "id": "page-index",
+      "title": "应用界面视觉样例",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1788513000000,
+      "canvasData": {
+        "x": 0,
+        "y": 0,
+        "group": 0,
+        "layoutSnapshot": {
+          "version": 1,
+          "contentHeight": 5308,
+          "viewportWidth": 375,
+          "sourceHash": "fnv1a-c8e9ffd6",
+          "measuredAt": 1788514395256
+        }
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/index.html",
+        "interactions": []
+      }
+    },
+    {
+      "id": "page-login-redesign",
+      "title": "登录页重新设计",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1788515000000,
+      "canvasData": {
+        "x": 169,
+        "y": 0,
+        "group": 0,
+        "layoutSnapshot": {
+          "version": 1,
+          "contentHeight": 983,
+          "viewportWidth": 375,
+          "sourceHash": "fnv1a-fe41ba27",
+          "measuredAt": 1788522521442
+        }
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/login-redesign.html",
+        "interactions": []
+      }
+    }
+  ],
+  "config": {
+    "autoLayout": true,
+    "deviceType": "mobile",
+    "projectName": "软帮手应用界面视觉样例"
+  }
+}

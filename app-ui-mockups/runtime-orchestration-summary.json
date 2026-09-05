@@ -1,0 +1,187 @@
+{
+  "skillProvenance": {
+    "name": "solo-design",
+    "version": "2026.07.06.8",
+    "version_source": "skill-release-manifest.json",
+    "resolvedLane": "free_exploration"
+  },
+  "project": {
+    "name": "软帮手应用界面视觉样例",
+    "designProjectPath": "/Users/decrein/Coding_Project/GZUS-PRO/app-ui-mockups",
+    "resolvedLane": "free_exploration",
+    "selectedIntentWorkflowRead": true,
+    "contextRequirementsLoaded": [
+      {"path": "shared-runtime/runtime-boundaries/lane-runtime-contracts.md", "readStatus": "loaded", "bodyRead": true},
+      {"path": "shared-runtime/agent-dispatch-runtime/lane-dispatch-index.md", "readStatus": "loaded", "bodyRead": true},
+      {"path": "delivery-quality/page-rendering-quality-gate.md", "readStatus": "loaded", "bodyRead": true},
+      {"path": "delivery-quality/design-artifact-validation.md", "readStatus": "loaded", "bodyRead": true},
+      {"path": "delivery-quality/delivery-evidence-contract.md", "readStatus": "loaded", "bodyRead": true},
+      {"path": "visual-experience/visual-experience-guidelines.md", "readStatus": "loaded", "bodyRead": true}
+    ],
+    "contextReadScope": {
+      "mainAgent": {
+        "forbiddenReads": ["other intent-workflows/**", "Sub-Agent implementation files before dispatch"]
+      },
+      "pageSubAgent": {
+        "allowedReads": ["current lane page runtime guide", "current lane dispatch contract excerpt", "current Page Packet", "supplementaryReads[] only"],
+        "forbiddenReads": ["SKILL.md full re-read", "other intent-workflows/**", "full runtime-orchestration-summary.json unless explicitly sliced"]
+      },
+      "readScopeLedgerWriter": "shared-runtime/deterministic-tooling/build-page-dispatch-manifest.mjs"
+    },
+    "intentProfile": {
+      "caseFamily": "free_exploration",
+      "sourceType": "code_reference",
+      "routingReason": "User requests actual UI style mockups of OneGZUS Flutter app screens; new design project created for app interface visualization.",
+      "deviceType": "mobile",
+      "pageCount": 2,
+      "stateful": false
+    },
+    "validationRunDiscipline": {
+      "maxFullValidationRuns": 2,
+      "softWarningsTriggerRepair": false,
+      "blockingRepairMode": "targeted-once",
+      "forbiddenRepairTriggers": ["soft-warning-only", "provenance-warning-only", "style-warning-only"]
+    },
+    "lowValueCallWatchdog": {
+      "applies": true,
+      "noProgressSignals": ["no_tool_call", "no_artifact_diff", "no_structured_decision"],
+      "noProgressNextAction": "enter_readiness_or_blocked_summary"
+    },
+    "styleContinuityAnchors": {
+      "primaryColor": "#2563EB",
+      "typeStack": "Inter, Noto Sans SC, PingFang SC, system-ui, sans-serif",
+      "radiusScale": ["12px", "16px", "20px"],
+      "surfaceModel": "light canvas with white cards; dark mode uses near-black canvas and elevated surface"
+    },
+    "cssPreflightEvidence": {
+      "applies": true,
+      "status": "pending",
+      "command": "node /Users/decrein/.trae-cn/builtin/design/default/skills/solo-design/shared-runtime/deterministic-tooling/apply-html-head-contract.mjs /Users/decrein/Coding_Project/GZUS-PRO/app-ui-mockups/colors_and_type.css /Users/decrein/Coding_Project/GZUS-PRO/app-ui-mockups/.preflight/preflight.html --title=\"Preflight\" --lang=zh-CN --prefix=gzus --force-skeleton",
+      "brandPrefix": "gzus",
+      "checks": {
+        "themeVars": "pending",
+        "semanticTokenFallback": "pending",
+        "themeInline": "pending",
+        "tailwindCdn": "pending",
+        "htmlClass": "pending",
+        "semanticMappings": "pending"
+      },
+      "retryCount": 0,
+      "blockingReason": null
+    },
+    "dispatchPreflightManifest": [
+      {
+        "recorded_at": "2026-09-04T09:00:00.000Z",
+        "generatedBy": "build-page-dispatch-manifest.mjs",
+        "packetType": "FreePagePacket",
+        "laneContract": {
+          "resolvedLane": "free_exploration",
+          "packetType": "FreePagePacket",
+          "pageRuntimeGuide": "intent-workflows/intent-page-free-exploration/free-exploration-page-runtime.md",
+          "dispatchContract": "intent-workflows/intent-page-free-exploration/dispatch-contract.md"
+        },
+        "nodeId": "page-index",
+        "htmlSrc": "pages/index.html",
+        "allowedWritePaths": ["pages/index.html", "assets/"],
+        "toolPolicy": {
+          "todoWriteAllowed": false,
+          "validationScriptsAllowed": false,
+          "previewAllowed": false,
+          "helperScriptsAllowed": false,
+          "designFileWriteAllowed": false,
+          "allowedWritePaths": ["pages/index.html", "assets/"]
+        }
+      },
+      {
+        "recorded_at": "2026-09-04T09:30:00.000Z",
+        "generatedBy": "main-agent",
+        "packetType": "FreePagePacket",
+        "laneContract": {
+          "resolvedLane": "free_exploration",
+          "packetType": "FreePagePacket",
+          "pageRuntimeGuide": "intent-workflows/intent-page-free-exploration/free-exploration-page-runtime.md",
+          "dispatchContract": "intent-workflows/intent-page-free-exploration/dispatch-contract.md"
+        },
+        "nodeId": "page-login-redesign",
+        "htmlSrc": "pages/login-redesign.html",
+        "allowedWritePaths": ["pages/login-redesign.html", "assets/"],
+        "toolPolicy": {
+          "todoWriteAllowed": false,
+          "validationScriptsAllowed": false,
+          "previewAllowed": false,
+          "helperScriptsAllowed": false,
+          "designFileWriteAllowed": false,
+          "allowedWritePaths": ["pages/login-redesign.html", "assets/"]
+        }
+      }
+    ],
+    "expectedDispatches": [
+      {
+        "nodeId": "page-index",
+        "packetType": "FreePagePacket",
+        "status": "completed",
+        "changedFiles": ["pages/index.html"],
+        "toolCallLedger": {
+          "source": "main-agent-runtime-trace",
+          "traceDigest": "free-exploration-app-ui-mockups-page-index",
+          "todoWriteCalls": 0,
+          "previewCalls": 0,
+          "validationScriptCalls": 0,
+          "helperScriptWrites": 0
+        }
+      },
+      {
+        "nodeId": "page-login-redesign",
+        "packetType": "FreePagePacket",
+        "status": "completed",
+        "changedFiles": ["pages/login-redesign.html"],
+        "toolCallLedger": {
+          "source": "main-agent-runtime-trace",
+          "traceDigest": "free-exploration-login-redesign-page-login-redesign",
+          "todoWriteCalls": 0,
+          "previewCalls": 0,
+          "validationScriptCalls": 0,
+          "helperScriptWrites": 0
+        }
+      }
+    ],
+    "pageCompletenessGate": {
+      "expectedPages": ["index", "login-redesign"],
+      "requiredStates": [],
+      "requiredInteractions": [],
+      "requiredNavigation": [],
+      "missingAllowed": []
+    },
+    "defaultDeliverableVisibility": {
+      "applies": true,
+      "requiredVisibleRegions": [
+        {"htmlSrc": "pages/index.html", "selector": "#mockups-root", "label": "app screen mockups", "source": "user requirement"},
+        {"htmlSrc": "pages/login-redesign.html", "selector": "#login-redesign-root", "label": "redesigned login screen", "source": "user requirement"}
+      ],
+      "hiddenAllowed": []
+    },
+    "deviceType": "mobile"
+  },
+  "pages": [
+    {
+      "nodeId": "page-index",
+      "htmlSrc": "pages/index.html",
+      "title": "应用界面视觉样例",
+      "deviceType": "mobile",
+      "viewportMode": "document-scroll",
+      "pageType": "information-dense",
+      "businessScenario": "app-screen-mockups",
+      "qualityRisks": ["dense-ui-mockup", "multi-screen-presentation", "cjk-long-labels"]
+    },
+    {
+      "nodeId": "page-login-redesign",
+      "htmlSrc": "pages/login-redesign.html",
+      "title": "登录页重新设计",
+      "deviceType": "mobile",
+      "viewportMode": "document-scroll",
+      "pageType": "focused-screen",
+      "businessScenario": "login-screen-redesign",
+      "qualityRisks": ["form-layout", "cjk-long-labels"]
+    }
+  ]
+}

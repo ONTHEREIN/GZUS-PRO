@@ -1,0 +1,32 @@
+{
+  "data": [
+    {
+      "id": "page-index",
+      "title": "灵动岛设计总览",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1788509600000,
+      "canvasData": {
+        "x": 0,
+        "y": 0,
+        "group": 0,
+        "layoutSnapshot": {
+          "version": 1,
+          "contentHeight": 10859,
+          "viewportWidth": 375,
+          "sourceHash": "fnv1a-3c608371",
+          "measuredAt": 1788525456273
+        }
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/index.html",
+        "interactions": []
+      }
+    }
+  ],
+  "config": {
+    "autoLayout": true,
+    "deviceType": "mobile",
+    "projectName": "软帮手灵动岛设计呈现"
+  }
+}

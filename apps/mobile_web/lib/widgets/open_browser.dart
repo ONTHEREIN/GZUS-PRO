@@ -12,8 +12,12 @@ Future<void> openInAppBrowser(
   if (url == null || url.isEmpty) return;
   await mobile_sso.loadLibrary();
   if (!context.mounted) return;
-  final opened =
-      await mobile_sso.openAuthenticatedEhallUrl(context, url, api: api);
+  final opened = await mobile_sso.openAuthenticatedEhallUrl(
+    context,
+    url,
+    attachments: const [],
+    api: api,
+  );
   if (!opened && context.mounted) {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('无法打开链接')),

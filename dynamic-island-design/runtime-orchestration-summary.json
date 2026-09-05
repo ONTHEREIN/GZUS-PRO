@@ -1,0 +1,196 @@
+{
+  "skillProvenance": {
+    "name": "solo-design",
+    "version": "2026.07.06.8",
+    "version_source": "skill-release-manifest.json",
+    "resolvedLane": "free_exploration"
+  },
+  "project": {
+    "name": "软帮手灵动岛设计呈现",
+    "designProjectPath": "/Users/decrein/Coding_Project/GZUS-PRO/dynamic-island-design",
+    "resolvedLane": "free_exploration",
+    "selectedIntentWorkflowRead": true,
+    "contextRequirementsLoaded": [
+      {"path": "shared-runtime/runtime-boundaries/lane-runtime-contracts.md", "readStatus": "loaded", "bodyRead": true},
+      {"path": "shared-runtime/agent-dispatch-runtime/lane-dispatch-index.md", "readStatus": "loaded", "bodyRead": true},
+      {"path": "delivery-quality/page-rendering-quality-gate.md", "readStatus": "loaded", "bodyRead": true},
+      {"path": "delivery-quality/design-artifact-validation.md", "readStatus": "loaded", "bodyRead": true},
+      {"path": "delivery-quality/delivery-evidence-contract.md", "readStatus": "loaded", "bodyRead": true},
+      {"path": "visual-experience/visual-experience-guidelines.md", "readStatus": "loaded", "bodyRead": true}
+    ],
+    "contextReadScope": {
+      "mainAgent": {
+        "forbiddenReads": ["other intent-workflows/**", "Sub-Agent implementation files before dispatch"]
+      },
+      "pageSubAgent": {
+        "allowedReads": ["current lane page runtime guide", "current lane dispatch contract excerpt", "current Page Packet", "supplementaryReads[] only"],
+        "forbiddenReads": ["SKILL.md full re-read", "other intent-workflows/**", "full runtime-orchestration-summary.json unless explicitly sliced"]
+      },
+      "readScopeLedgerWriter": "shared-runtime/deterministic-tooling/build-page-dispatch-manifest.mjs"
+    },
+    "intentProfile": {
+      "caseFamily": "free_exploration",
+      "sourceType": "code_reference",
+      "routingReason": "No existing .design project or Design Library; open-ended UI presentation of existing Live Activity/Dynamic Island implementation.",
+      "deviceType": "mobile",
+      "pageCount": 1,
+      "stateful": true
+    },
+    "validationRunDiscipline": {
+      "maxFullValidationRuns": 2,
+      "softWarningsTriggerRepair": false,
+      "blockingRepairMode": "targeted-once",
+      "forbiddenRepairTriggers": ["soft-warning-only", "provenance-warning-only", "style-warning-only"]
+    },
+    "lowValueCallWatchdog": {
+      "applies": true,
+      "noProgressSignals": ["no_tool_call", "no_artifact_diff", "no_structured_decision"],
+      "noProgressNextAction": "enter_readiness_or_blocked_summary"
+    },
+    "styleContinuityAnchors": {
+      "primaryColor": "#2563EB",
+      "typeStack": "Inter, Noto Sans SC, PingFang SC, system-ui, sans-serif",
+      "radiusScale": ["12px", "16px", "20px"],
+      "surfaceModel": "light canvas with white cards; dark mode uses near-black canvas and elevated surface"
+    },
+    "cssPreflightEvidence": {
+      "applies": true,
+      "status": "passed",
+      "command": "node /Users/decrein/.trae-cn/builtin/design/default/skills/solo-design/shared-runtime/deterministic-tooling/apply-html-head-contract.mjs /Users/decrein/Coding_Project/GZUS-PRO/dynamic-island-design/colors_and_type.css /Users/decrein/Coding_Project/GZUS-PRO/dynamic-island-design/.preflight/preflight.html --title=\"Preflight\" --lang=zh-CN --prefix=gzus --force-skeleton",
+      "brandPrefix": "gzus",
+      "checks": {
+        "themeVars": "present",
+        "semanticTokenFallback": "present",
+        "themeInline": "present",
+        "tailwindCdn": "present",
+        "htmlClass": "present",
+        "semanticMappings": "resolved"
+      },
+      "retryCount": 0,
+      "blockingReason": null
+    },
+    "dispatchPreflightManifest": [
+      {
+        "recorded_at": "2026-09-04T08:15:36.987Z",
+        "generatedBy": "build-page-dispatch-manifest.mjs",
+        "packetType": "FreePagePacket",
+        "laneContract": {
+          "resolvedLane": "free_exploration",
+          "packetType": "FreePagePacket",
+          "pageRuntimeGuide": "intent-workflows/intent-page-free-exploration/free-exploration-page-runtime.md",
+          "dispatchContract": "intent-workflows/intent-page-free-exploration/dispatch-contract.md"
+        },
+        "nodeId": "page-index",
+        "htmlSrc": "pages/index.html",
+        "allowedWritePaths": ["pages/index.html", "assets/"],
+        "toolPolicy": {
+          "todoWriteAllowed": false,
+          "validationScriptsAllowed": false,
+          "previewAllowed": false,
+          "helperScriptsAllowed": false,
+          "designFileWriteAllowed": false,
+          "allowedWritePaths": ["pages/index.html", "assets/"]
+        }
+      }
+    ],
+    "expectedDispatches": [
+      {
+        "nodeId": "page-index",
+        "packetType": "FreePagePacket",
+        "status": "completed",
+        "changedFiles": ["pages/index.html"],
+        "toolCallLedger": {
+          "todoWriteCalls": 0,
+          "previewCalls": 0,
+          "validationScriptCalls": 0,
+          "helperScriptWrites": 0,
+          "source": "main-agent-runtime-trace",
+          "traceDigest": "free-exploration-dynamic-island-page-index"
+        }
+      }
+    ],
+    "mainAgentPostDispatchMutations": [
+      {
+        "timestamp": "2026-09-04T08:30:00.000Z",
+        "reason": "Sub-Agent wrote unauthorized pages/sitemap.html and added page-sitemap node to .design; removed both and restored project to single-page scope.",
+        "affectedFiles": [".design", "pages/sitemap.html"]
+      },
+      {
+        "timestamp": "2026-09-04T08:45:00.000Z",
+        "reason": "Second Sub-Agent created unauthorized pages/mockups.html, pages/sitemap.html, pages/widgets.html and overwrote .design/runtime-orchestration-summary.json with extra pages; removed unauthorized files and restored single-page project scope.",
+        "affectedFiles": ["pages/mockups.html", "pages/sitemap.html", "pages/widgets.html", ".design", "runtime-orchestration-summary.json"]
+      },
+      {
+        "timestamp": "2026-09-04T08:55:00.000Z",
+        "reason": "Main Agent added new #section-ios-compact region directly to pages/index.html and removed leftover unauthorized pages/widgets.html.",
+        "affectedFiles": ["pages/index.html", "pages/widgets.html"]
+      },
+      {
+        "timestamp": "2026-09-04T09:00:00.000Z",
+        "reason": "Main Agent moved iOS Dynamic Island expanded titles from center (camera occlusion zone) to bottom area for all six activity types.",
+        "affectedFiles": ["pages/index.html"]
+      },
+      {
+        "timestamp": "2026-09-04T09:10:00.000Z",
+        "reason": "Main Agent applied per-item accent colors to ecard (cold water blue, hot water orange, electricity green) and grade (each course a distinct accent) across compact, expanded, iOS Dynamic Island, lock screen, and iOS compact states; removed reappearing unauthorized pages/mockups.html.",
+        "affectedFiles": ["pages/index.html", "pages/mockups.html", ".design"]
+      },
+      {
+        "timestamp": "2026-09-04T09:15:00.000Z",
+        "reason": "Reorganized ecard utility data into full vertical list (cold water / hot water / electricity) with complete units and accent colors; compact reverted to concise summary with colored alert; iOS compact and Dynamic Island trailing labels now use full '度' unit.",
+        "affectedFiles": ["pages/index.html"]
+      },
+      {
+        "timestamp": "2026-09-04T09:25:00.000Z",
+        "reason": "Redesigned iOS Dynamic Island presentations according to Apple HIG: compact state now shows two separate leading/trailing elements on both sides of the island, minimal state shows one attached circular element and one detached elliptical element, expanded and lock screen layouts follow HIG margins and content grouping. Grade multi-course list also converted to vertical list for complete display.",
+        "affectedFiles": ["pages/index.html"]
+      },
+      {
+        "timestamp": "2026-09-04T09:30:00.000Z",
+        "reason": "Replaced ecard utility progress bars with three distinct colored rectangles (cold water / hot water / electricity) across Flutter Expanded, iOS Dynamic Island and Lock Screen. Updated course section to include class-start reminder (compact) and class-end reminder (expanded) states.",
+        "affectedFiles": ["pages/index.html"]
+      },
+      {
+        "timestamp": "2026-09-04T09:35:00.000Z",
+        "reason": "Removed the right-side large number and '度数' label from ecard iOS Lock Screen card; three colored rectangles now carry all utility details. Also removed unauthorized reappearing pages/mockups.html.",
+        "affectedFiles": ["pages/index.html", "pages/mockups.html", ".design"]
+      },
+      {
+        "timestamp": "2026-09-04T09:40:00.000Z",
+        "reason": "Added comprehensive 'Design Specs / Rules' section covering: multi-event priority queue, progress bar calculation definitions, countdown format standards, lock screen privacy mode with normal vs private visual comparison, event lifecycle timeline, Android/non-Dynamic-Island adaptation, offline asset notes, and button interaction states.",
+        "affectedFiles": ["pages/index.html", ".design"]
+      }
+    ],
+    "pageCompletenessGate": {
+      "expectedPages": ["index"],
+      "requiredStates": ["course", "exam", "ecard", "grade", "attendance", "business"],
+      "requiredInteractions": [],
+      "requiredNavigation": [],
+      "missingAllowed": []
+    },
+    "defaultDeliverableVisibility": {
+      "applies": true,
+      "requiredVisibleRegions": [
+        {"htmlSrc": "pages/index.html", "selector": "#section-course", "label": "course island state", "source": "user requirement"},
+        {"htmlSrc": "pages/index.html", "selector": "#section-exam", "label": "exam island state", "source": "user requirement"},
+        {"htmlSrc": "pages/index.html", "selector": "#section-ecard", "label": "ecard island state", "source": "user requirement"},
+        {"htmlSrc": "pages/index.html", "selector": "#section-grade", "label": "grade island state", "source": "user requirement"},
+        {"htmlSrc": "pages/index.html", "selector": "#section-attendance", "label": "attendance island state", "source": "user requirement"},
+        {"htmlSrc": "pages/index.html", "selector": "#section-business", "label": "business island state", "source": "user requirement"},
+        {"htmlSrc": "pages/index.html", "selector": "#section-ios-compact", "label": "iOS compact and minimal island states", "source": "user requirement"}
+      ],
+      "hiddenAllowed": []
+    },
+    "deviceType": "mobile"
+  },
+  "pages": [
+    {
+      "nodeId": "page-index",
+      "htmlSrc": "pages/index.html",
+      "title": "灵动岛设计总览",
+      "deviceType": "mobile",
+      "viewportMode": "document-scroll",
+      "qualityRisks": ["dense-ui-mockup", "multi-state-presentation"]
+    }
+  ]
+}

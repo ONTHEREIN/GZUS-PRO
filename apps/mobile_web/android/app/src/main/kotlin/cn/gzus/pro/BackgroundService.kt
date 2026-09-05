@@ -216,6 +216,7 @@ class BackgroundService : Service() {
                     return START_NOT_STICKY
                 }
                 startPolling()
+                WidgetRefreshScheduler.triggerIfDue(this)
                 scheduleKeepAlive(this)
                 checkAppProcessAlive()
                 CourseReminderScheduler(this).scheduleAll()

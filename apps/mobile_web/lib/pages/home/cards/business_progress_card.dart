@@ -34,7 +34,8 @@ class BusinessProgressLargeCard extends StatelessWidget {
               children: [
                 ProgressCategoryStrip(categories: overview.categories),
                 const SizedBox(height: GzusSpacing.m),
-                for (final item in items.take(3)) ProgressMiniRow(item: item),
+                // 大卡的可用高度固定为两行网格，最多展示两条，避免长文案把卡片顶出边界。
+                for (final item in items.take(2)) ProgressMiniRow(item: item),
               ],
             ),
     );
@@ -65,9 +66,9 @@ class BusinessProgressMediumCard extends StatelessWidget {
           ? const Center(child: Text('暂无业务进度'))
           : Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                ProgressCategoryStrip(categories: overview.categories),
-                const SizedBox(height: GzusSpacing.m),
+                // 中卡只有一行高度，分类条与进度详情同时展示会发生纵向溢出。
                 ProgressMiniRow(item: overview.items.first),
               ],
             ),
@@ -111,6 +112,8 @@ class BusinessProgressSmallCard extends StatelessWidget {
                 const SizedBox(height: 4),
                 Text(
                   first.statusLabel,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     color: Theme.of(context).colorScheme.onSurfaceVariant,
                     fontSize: 12,

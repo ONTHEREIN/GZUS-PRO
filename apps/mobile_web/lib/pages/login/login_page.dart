@@ -128,6 +128,7 @@ class _LoginPageState extends State<LoginPage>
   Widget buildLegacyLogin(BuildContext context) {
     return Scaffold(
       body: Stack(
+        fit: StackFit.expand,
         children: [
           Positioned.fill(
             child: LiquidGlassAmbientBackdrop(
@@ -487,6 +488,8 @@ class _LoginPageState extends State<LoginPage>
       backgroundColor: Colors.transparent,
       extendBody: true,
       body: Stack(
+        key: const ValueKey('login-background-stack'),
+        fit: StackFit.expand,
         children: [
           Positioned.fill(
             child: DecoratedBox(

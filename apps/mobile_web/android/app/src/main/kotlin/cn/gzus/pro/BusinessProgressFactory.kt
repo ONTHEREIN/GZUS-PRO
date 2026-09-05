@@ -15,7 +15,8 @@ class BusinessProgressFactory(private val context: Context, private val intent: 
         val status: String,
         val node: String,
         val progress: String,
-        val date: String
+        val date: String,
+        val itemKey: String,
     )
 
     override fun onCreate() {}
@@ -38,7 +39,8 @@ class BusinessProgressFactory(private val context: Context, private val intent: 
                     status = obj.optString("status", ""),
                     node = obj.optString("node", ""),
                     progress = obj.optString("progress", ""),
-                    date = obj.optString("date", "")
+                    date = obj.optString("date", ""),
+                    itemKey = obj.optString("itemKey", obj.optString("title", ""))
                 ))
             }
         } catch (_: Exception) {}
@@ -58,6 +60,10 @@ class BusinessProgressFactory(private val context: Context, private val intent: 
         if (item.progress.isNotEmpty()) infoParts.add("${item.progress}%")
         if (item.date.isNotEmpty()) infoParts.add(item.date)
         views.setTextViewText(R.id.item_info, infoParts.joinToString(" · "))
+        views.setOnClickFillInIntent(
+            R.id.progress_item_root,
+            HomeWidgetProvider.itemIntent(item.itemKey, null, null, null),
+        )
         // Set dot color based on status
         val dotColor = when {
             item.status.contains("待") || item.status.contains("进行") -> 0xFFB3261E.toInt()

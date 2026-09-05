@@ -37,6 +37,10 @@ class MainActivity : FlutterActivity() {
     private val CALENDAR_CHANNEL = "cn.gzus.pro/calendar"
     private var pendingInitialTab: String? = null
     private var pendingWidgetKind: String? = null
+    private var pendingWidgetItemKey: String? = null
+    private var pendingWidgetWeek: Int? = null
+    private var pendingWidgetWeekday: Int? = null
+    private var pendingWidgetStartSection: Int? = null
     private var homeWidgetsChannel: MethodChannel? = null
     private var pendingCalendarResult: MethodChannel.Result? = null
     private var pendingCalendarEvents: List<Map<*, *>>? = null
@@ -353,6 +357,7 @@ class MainActivity : FlutterActivity() {
                         .putString("progressDescription", args["progressDescription"]?.toString() ?: "")
                         .putString("progressDetail", args["progressDetail"]?.toString() ?: "")
                         .putString("todayCoursesJson", args["todayCoursesJson"]?.toString() ?: "[]")
+                        .putString("weeklyCoursesJson", args["weeklyCoursesJson"]?.toString() ?: "[]")
                         .putString("progressItemsJson", args["progressItemsJson"]?.toString() ?: "[]")
                         .putString("examItemsJson", args["examItemsJson"]?.toString() ?: "[]")
                         .putString("gradeItemsJson", args["gradeItemsJson"]?.toString() ?: "[]")
@@ -397,6 +402,25 @@ class MainActivity : FlutterActivity() {
                     HomeWidgetProvider.updateAll(this)
                     result.success(true)
                 }
+                "consumeLaunchTarget" -> {
+                    val target = pendingInitialTab?.let {
+                        mapOf(
+                            "tab" to it,
+                            "kind" to (pendingWidgetKind ?: ""),
+                            "itemKey" to (pendingWidgetItemKey ?: ""),
+                            "week" to pendingWidgetWeek,
+                            "weekday" to pendingWidgetWeekday,
+                            "startSection" to pendingWidgetStartSection,
+                        )
+                    }
+                    pendingInitialTab = null
+                    pendingWidgetKind = null
+                    pendingWidgetItemKey = null
+                    pendingWidgetWeek = null
+                    pendingWidgetWeekday = null
+                    pendingWidgetStartSection = null
+                    result.success(target)
+                }
                 "consumeInitialTab" -> {
                     val tab = pendingInitialTab
                     pendingInitialTab = null
@@ -414,6 +438,10 @@ class MainActivity : FlutterActivity() {
     private fun captureWidgetLaunch(intent: Intent?) {
         pendingInitialTab = intent?.getStringExtra(HomeWidgetProvider.EXTRA_INITIAL_TAB)
         pendingWidgetKind = intent?.getStringExtra(HomeWidgetProvider.EXTRA_WIDGET_KIND)
+        pendingWidgetItemKey = intent?.getStringExtra("itemKey")
+        pendingWidgetWeek = intent?.getIntExtra("week", 0)?.takeIf { it > 0 }
+        pendingWidgetWeekday = intent?.getIntExtra("weekday", 0)?.takeIf { it > 0 }
+        pendingWidgetStartSection = intent?.getIntExtra("startSection", 0)?.takeIf { it > 0 }
     }
 
     private fun schedulePendingWidgetLaunch() {
@@ -432,12 +460,20 @@ class MainActivity : FlutterActivity() {
             "launch",
             mapOf(
                 "tab" to tab,
-                "kind" to (pendingWidgetKind ?: "")
+                "kind" to (pendingWidgetKind ?: ""),
+                "itemKey" to (pendingWidgetItemKey ?: ""),
+                "week" to pendingWidgetWeek,
+                "weekday" to pendingWidgetWeekday,
+                "startSection" to pendingWidgetStartSection,
             )
         )
         if (clearAfterSend) {
             pendingInitialTab = null
             pendingWidgetKind = null
+            pendingWidgetItemKey = null
+            pendingWidgetWeek = null
+            pendingWidgetWeekday = null
+            pendingWidgetStartSection = null
         }
     }
 

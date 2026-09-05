@@ -838,13 +838,26 @@ class _DashboardShellState extends State<DashboardShell> {
   }
 
   Future<void> _consumeWidgetLaunch() async {
-    final tab = await HomeWidgetBridge.consumeInitialTab();
-    _handleWidgetLaunch(tab);
+    final target = await HomeWidgetBridge.consumeInitialTarget();
+    _handleWidgetLaunch(target);
   }
 
-  void _handleWidgetLaunch(String? tab) {
-    if (!mounted || tab == null || tab.isEmpty || tab == 'home') return;
-    _navigateToTab(tab);
+  void _handleWidgetLaunch(WidgetLaunchTarget? target) {
+    if (!mounted ||
+        target == null ||
+        target.tab.isEmpty ||
+        target.tab == 'home') {
+      return;
+    }
+    if ((target.tab == 'exams' || target.tab == 'grades') &&
+        target.itemKey != null &&
+        target.itemKey!.isNotEmpty) {
+      setState(() {
+        _highlightCourse = target.itemKey;
+        _pageGeneration++;
+      });
+    }
+    _navigateToTab(target.tab);
   }
 
   void _handleLiveActivityOpen(LiveActivityEvent event) {

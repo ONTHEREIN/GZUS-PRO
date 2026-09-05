@@ -1,0 +1,1452 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>灵动岛设计总览</title>
+    <style id="theme-vars">
+:root {
+  --gzus-background: #FAFAF8;
+  --gzus-foreground: #17191D;
+  --gzus-card: #FFFFFF;
+  --gzus-card-foreground: #17191D;
+  --gzus-popover: #FFFFFF;
+  --gzus-popover-foreground: #17191D;
+  --gzus-primary: #2563EB;
+  --gzus-primary-foreground: #FFFFFF;
+  --gzus-muted: #F4F6FA;
+  --gzus-muted-foreground: #6B7280;
+  --gzus-border: #E5E7EB;
+  --gzus-input: #E5E7EB;
+  --gzus-ring: #2563EB;
+
+  --gzus-radius-sm: 12px;
+  --gzus-radius-md: 16px;
+  --gzus-radius-lg: 16px;
+  --gzus-radius-xl: 16px;
+
+  --gzus-state-success: #059669;
+  --gzus-state-warning: #EA580C;
+  --gzus-state-error: #DC2626;
+  --gzus-state-info: #0EA5E9;
+}
+
+.dark {
+  --gzus-background: #0B0D10;
+  --gzus-foreground: #F5F7FA;
+  --gzus-card: #15171C;
+  --gzus-card-foreground: #F5F7FA;
+  --gzus-popover: #15171C;
+  --gzus-popover-foreground: #F5F7FA;
+  --gzus-primary: #2563EB;
+  --gzus-primary-foreground: #FFFFFF;
+  --gzus-muted: #1E2128;
+  --gzus-muted-foreground: #A4ABB8;
+  --gzus-border: #2A2F3A;
+  --gzus-input: #2A2F3A;
+  --gzus-ring: #2563EB;
+}
+
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.1/dist/index.global.js"></script>
+    <script src="https://unpkg.com/lucide@1.8.0/dist/umd/lucide.min.js"></script>
+    <style type="text/tailwindcss">
+  @theme inline {
+    --color-background: var(--gzus-background);
+    --color-foreground: var(--gzus-foreground);
+    --color-card: var(--gzus-card);
+    --color-card-foreground: var(--gzus-card-foreground);
+    --color-popover: var(--gzus-popover);
+    --color-popover-foreground: var(--gzus-popover-foreground);
+    --color-primary: var(--gzus-primary);
+    --color-primary-foreground: var(--gzus-primary-foreground);
+    --color-muted: var(--gzus-muted);
+    --color-muted-foreground: var(--gzus-muted-foreground);
+    --color-border: var(--gzus-border);
+    --color-input: var(--gzus-input);
+    --color-ring: var(--gzus-ring);
+    --radius-sm: var(--gzus-radius-sm);
+    --radius-md: var(--gzus-radius-md);
+    --radius-lg: var(--gzus-radius-lg);
+    --radius-xl: var(--gzus-radius-xl);
+  }
+  @layer base {
+    body { background: var(--gzus-background); color: var(--gzus-foreground); }
+    td, th { @apply break-words; word-break: break-all; word-break: auto-phrase; }
+    th { @apply whitespace-nowrap; }
+  }
+    </style>
+    <style id="semantic-token-fallback">
+      .bg-background { background-color: var(--gzus-background); }
+      .text-background { color: var(--gzus-background); }
+      .border-background { border-color: var(--gzus-background); }
+      .ring-background { --tw-ring-color: var(--gzus-background); }
+      .bg-foreground { background-color: var(--gzus-foreground); }
+      .text-foreground { color: var(--gzus-foreground); }
+      .border-foreground { border-color: var(--gzus-foreground); }
+      .ring-foreground { --tw-ring-color: var(--gzus-foreground); }
+      .bg-card { background-color: var(--gzus-card); }
+      .text-card { color: var(--gzus-card); }
+      .border-card { border-color: var(--gzus-card); }
+      .ring-card { --tw-ring-color: var(--gzus-card); }
+      .bg-card-foreground { background-color: var(--gzus-card-foreground); }
+      .text-card-foreground { color: var(--gzus-card-foreground); }
+      .border-card-foreground { border-color: var(--gzus-card-foreground); }
+      .ring-card-foreground { --tw-ring-color: var(--gzus-card-foreground); }
+      .bg-popover { background-color: var(--gzus-popover); }
+      .text-popover { color: var(--gzus-popover); }
+      .border-popover { border-color: var(--gzus-popover); }
+      .ring-popover { --tw-ring-color: var(--gzus-popover); }
+      .bg-popover-foreground { background-color: var(--gzus-popover-foreground); }
+      .text-popover-foreground { color: var(--gzus-popover-foreground); }
+      .border-popover-foreground { border-color: var(--gzus-popover-foreground); }
+      .ring-popover-foreground { --tw-ring-color: var(--gzus-popover-foreground); }
+      .bg-primary { background-color: var(--gzus-primary); }
+      .text-primary { color: var(--gzus-primary); }
+      .border-primary { border-color: var(--gzus-primary); }
+      .ring-primary { --tw-ring-color: var(--gzus-primary); }
+      .bg-primary-foreground { background-color: var(--gzus-primary-foreground); }
+      .text-primary-foreground { color: var(--gzus-primary-foreground); }
+      .border-primary-foreground { border-color: var(--gzus-primary-foreground); }
+      .ring-primary-foreground { --tw-ring-color: var(--gzus-primary-foreground); }
+      .bg-muted { background-color: var(--gzus-muted); }
+      .text-muted { color: var(--gzus-muted); }
+      .border-muted { border-color: var(--gzus-muted); }
+      .ring-muted { --tw-ring-color: var(--gzus-muted); }
+      .bg-muted-foreground { background-color: var(--gzus-muted-foreground); }
+      .text-muted-foreground { color: var(--gzus-muted-foreground); }
+      .border-muted-foreground { border-color: var(--gzus-muted-foreground); }
+      .ring-muted-foreground { --tw-ring-color: var(--gzus-muted-foreground); }
+      .bg-border { background-color: var(--gzus-border); }
+      .text-border { color: var(--gzus-border); }
+      .border-border { border-color: var(--gzus-border); }
+      .ring-border { --tw-ring-color: var(--gzus-border); }
+      .bg-input { background-color: var(--gzus-input); }
+      .text-input { color: var(--gzus-input); }
+      .border-input { border-color: var(--gzus-input); }
+      .ring-input { --tw-ring-color: var(--gzus-input); }
+      .bg-ring { background-color: var(--gzus-ring); }
+      .text-ring { color: var(--gzus-ring); }
+      .border-ring { border-color: var(--gzus-ring); }
+      .ring-ring { --tw-ring-color: var(--gzus-ring); }
+    </style>
+    <style>
+      .no-scrollbar::-webkit-scrollbar { display: none; }
+      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      [data-icon] {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        -webkit-mask-size: contain;
+        mask-size: contain;
+        -webkit-mask-repeat: no-repeat;
+        mask-repeat: no-repeat;
+        -webkit-mask-position: center;
+        mask-position: center;
+        background-color: currentColor;
+      }
+    </style>
+</head>
+<body>
+  <main class="min-h-screen bg-background text-foreground antialiased">
+    <div class="mx-auto max-w-md px-4 py-8 md:max-w-xl">
+      <!-- Hero -->
+      <section id="section-hero" class="mb-10">
+        <p class="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">OneGZUS / 软帮手</p>
+        <h1 class="mb-3 text-3xl font-bold tracking-tight text-foreground">软帮手灵动岛设计</h1>
+        <p class="text-base leading-relaxed text-muted-foreground">按活动类型组织的 Flutter 应用内岛屿、iOS 原生 Dynamic Island 与锁屏 Live Activity 完整视觉规格。</p>
+      </section>
+
+      <!-- iOS Compact / Minimal -->
+      <section id="section-ios-compact" class="mb-12">
+        <div class="mb-4">
+          <h2 class="text-lg font-bold text-foreground">iOS 灵动岛 · 缩起态</h2>
+          <p class="text-sm text-muted-foreground">遵循 HIG：紧凑式由灵动岛两侧独立元素组成；极简式为多活动并存的小圆点</p>
+        </div>
+        <div class="rounded-[32px] bg-foreground p-5 shadow-xl">
+          <!-- Status bar with island -->
+          <div class="mb-4 flex items-center justify-between px-2 text-[10px] font-medium text-background/60">
+            <span>9:41</span>
+            <div class="flex items-center gap-1">
+              <i data-lucide="signal" class="h-3 w-3"></i>
+              <i data-lucide="wifi" class="h-3 w-3"></i>
+              <i data-lucide="battery-full" class="h-3 w-3"></i>
+            </div>
+          </div>
+
+          <!-- Compact presentations: one Live Activity, two elements on both sides of the Dynamic Island -->
+          <div class="mb-6 space-y-5">
+            <!-- Course -->
+            <div class="relative flex items-center justify-center">
+              <div class="absolute left-0 top-1/2 z-10 flex -translate-y-1/2 items-center gap-1.5 rounded-full border px-2.5 py-1 backdrop-blur-xl" style="background-color: color-mix(in srgb, var(--gzus-foreground) 55%, transparent); border-color: color-mix(in srgb, var(--gzus-background) 12%, transparent);">
+                <i data-lucide="clock" class="h-3 w-3" style="color: var(--gzus-primary);"></i>
+                <span class="text-[10px] font-bold text-background">45:32</span>
+              </div>
+              <div class="flex h-[34px] w-[110px] items-center justify-center rounded-full bg-black"></div>
+              <div class="absolute right-0 top-1/2 z-10 flex -translate-y-1/2 items-center gap-1.5 rounded-full border px-2.5 py-1 backdrop-blur-xl" style="background-color: color-mix(in srgb, var(--gzus-foreground) 55%, transparent); border-color: color-mix(in srgb, var(--gzus-background) 12%, transparent);">
+                <span class="text-[10px] font-bold text-background">剩余</span>
+              </div>
+              <span class="absolute -bottom-5 left-0 text-[10px] text-background/50">课程</span>
+            </div>
+            <!-- Exam -->
+            <div class="relative flex items-center justify-center">
+              <div class="absolute left-0 top-1/2 z-10 flex -translate-y-1/2 items-center gap-1.5 rounded-full border px-2.5 py-1 backdrop-blur-xl" style="background-color: color-mix(in srgb, var(--gzus-foreground) 55%, transparent); border-color: color-mix(in srgb, var(--gzus-background) 12%, transparent);">
+                <i data-lucide="file-text" class="h-3 w-3" style="color: var(--gzus-state-warning);"></i>
+                <span class="text-[10px] font-bold text-background">3 天</span>
+              </div>
+              <div class="flex h-[34px] w-[110px] items-center justify-center rounded-full bg-black"></div>
+              <div class="absolute right-0 top-1/2 z-10 flex -translate-y-1/2 items-center gap-1.5 rounded-full border px-2.5 py-1 backdrop-blur-xl" style="background-color: color-mix(in srgb, var(--gzus-foreground) 55%, transparent); border-color: color-mix(in srgb, var(--gzus-background) 12%, transparent);">
+                <span class="font-mono text-[10px] font-bold tabular-nums text-background">72:14</span>
+              </div>
+              <span class="absolute -bottom-5 left-0 text-[10px] text-background/50">考试</span>
+            </div>
+            <!-- Ecard -->
+            <div class="relative flex items-center justify-center">
+              <div class="absolute left-0 top-1/2 z-10 flex -translate-y-1/2 items-center gap-1.5 rounded-full border px-2.5 py-1 backdrop-blur-xl" style="background-color: color-mix(in srgb, var(--gzus-foreground) 55%, transparent); border-color: color-mix(in srgb, var(--gzus-background) 12%, transparent);">
+                <i data-lucide="droplet" class="h-3 w-3" style="color: var(--gzus-state-info);"></i>
+                <span class="text-[10px] font-bold text-background"><span style="color: var(--gzus-state-success);">电费低</span></span>
+              </div>
+              <div class="flex h-[34px] w-[110px] items-center justify-center rounded-full bg-black"></div>
+              <div class="absolute right-0 top-1/2 z-10 flex -translate-y-1/2 items-center gap-1.5 rounded-full border px-2.5 py-1 backdrop-blur-xl" style="background-color: color-mix(in srgb, var(--gzus-foreground) 55%, transparent); border-color: color-mix(in srgb, var(--gzus-background) 12%, transparent);">
+                <span class="font-mono text-[10px] font-bold tabular-nums text-background" style="color: var(--gzus-state-success);">42.6 度</span>
+              </div>
+              <span class="absolute -bottom-5 left-0 text-[10px] text-background/50">水电</span>
+            </div>
+            <!-- Grade -->
+            <div class="relative flex items-center justify-center">
+              <div class="absolute left-0 top-1/2 z-10 flex -translate-y-1/2 items-center gap-1.5 rounded-full border px-2.5 py-1 backdrop-blur-xl" style="background-color: color-mix(in srgb, var(--gzus-foreground) 55%, transparent); border-color: color-mix(in srgb, var(--gzus-background) 12%, transparent);">
+                <i data-lucide="graduation-cap" class="h-3 w-3" style="color: var(--gzus-state-success);"></i>
+                <span class="text-[10px] font-bold text-background"><span style="color: var(--gzus-primary);">92</span></span>
+              </div>
+              <div class="flex h-[34px] w-[110px] items-center justify-center rounded-full bg-black"></div>
+              <div class="absolute right-0 top-1/2 z-10 flex -translate-y-1/2 items-center gap-1.5 rounded-full border px-2.5 py-1 backdrop-blur-xl" style="background-color: color-mix(in srgb, var(--gzus-foreground) 55%, transparent); border-color: color-mix(in srgb, var(--gzus-background) 12%, transparent);">
+                <span class="text-[10px] font-bold text-background">新成绩</span>
+              </div>
+              <span class="absolute -bottom-5 left-0 text-[10px] text-background/50">成绩</span>
+            </div>
+            <!-- Attendance -->
+            <div class="relative flex items-center justify-center">
+              <div class="absolute left-0 top-1/2 z-10 flex -translate-y-1/2 items-center gap-1.5 rounded-full border px-2.5 py-1 backdrop-blur-xl" style="background-color: color-mix(in srgb, var(--gzus-foreground) 55%, transparent); border-color: color-mix(in srgb, var(--gzus-background) 12%, transparent);">
+                <i data-lucide="badge-check" class="h-3 w-3" style="color: var(--gzus-state-warning);"></i>
+                <span class="text-[10px] font-bold text-background">1 条</span>
+              </div>
+              <div class="flex h-[34px] w-[110px] items-center justify-center rounded-full bg-black"></div>
+              <div class="absolute right-0 top-1/2 z-10 flex -translate-y-1/2 items-center gap-1.5 rounded-full border px-2.5 py-1 backdrop-blur-xl" style="background-color: color-mix(in srgb, var(--gzus-foreground) 55%, transparent); border-color: color-mix(in srgb, var(--gzus-background) 12%, transparent);">
+                <span class="text-[10px] font-bold text-background">缺勤</span>
+              </div>
+              <span class="absolute -bottom-5 left-0 text-[10px] text-background/50">考勤</span>
+            </div>
+            <!-- Business -->
+            <div class="relative flex items-center justify-center">
+              <div class="absolute left-0 top-1/2 z-10 flex -translate-y-1/2 items-center gap-1.5 rounded-full border px-2.5 py-1 backdrop-blur-xl" style="background-color: color-mix(in srgb, var(--gzus-foreground) 55%, transparent); border-color: color-mix(in srgb, var(--gzus-background) 12%, transparent);">
+                <i data-lucide="building-2" class="h-3 w-3" style="color: var(--gzus-primary);"></i>
+                <span class="text-[10px] font-bold text-background">选课</span>
+              </div>
+              <div class="flex h-[34px] w-[110px] items-center justify-center rounded-full bg-black"></div>
+              <div class="absolute right-0 top-1/2 z-10 flex -translate-y-1/2 items-center gap-1.5 rounded-full border px-2.5 py-1 backdrop-blur-xl" style="background-color: color-mix(in srgb, var(--gzus-foreground) 55%, transparent); border-color: color-mix(in srgb, var(--gzus-background) 12%, transparent);">
+                <span class="font-mono text-[10px] font-bold tabular-nums text-background">2 天</span>
+              </div>
+              <span class="absolute -bottom-5 left-0 text-[10px] text-background/50">业务</span>
+            </div>
+          </div>
+
+          <div class="mx-auto my-5 h-px w-3/4 bg-background/10"></div>
+
+          <!-- Minimal presentations: two activities, one attached and one detached -->
+          <div class="relative flex items-center justify-center py-2">
+            <div class="flex h-[34px] w-[110px] items-center justify-center rounded-full bg-black"></div>
+            <!-- Attached minimal -->
+            <div class="absolute left-1/2 top-1/2 z-10 flex -translate-y-1/2 translate-x-[58px] items-center justify-center rounded-full border backdrop-blur-xl" style="background-color: color-mix(in srgb, var(--gzus-primary) 18%, transparent); border-color: color-mix(in srgb, var(--gzus-background) 12%, transparent); width: 28px; height: 28px;">
+              <i data-lucide="clock" class="h-3 w-3" style="color: var(--gzus-primary);"></i>
+            </div>
+            <!-- Detached minimal -->
+            <div class="absolute right-[18%] top-1/2 z-10 flex -translate-y-1/2 items-center gap-1 rounded-full border px-2 py-1 backdrop-blur-xl" style="background-color: color-mix(in srgb, var(--gzus-state-warning) 18%, transparent); border-color: color-mix(in srgb, var(--gzus-background) 12%, transparent);">
+              <i data-lucide="file-text" class="h-3 w-3" style="color: var(--gzus-state-warning);"></i>
+              <span class="text-[10px] font-bold text-background">3 天</span>
+            </div>
+          </div>
+          <p class="mb-4 mt-6 text-center text-xs text-background/50">极简式：课程（相连圆点）+ 考试（分离椭圆）</p>
+
+          <div class="mx-auto h-1 w-28 rounded-full bg-background/20"></div>
+        </div>
+      </section>
+
+      <!-- Course -->
+      <section id="section-course" class="mb-12">
+        <div class="mb-4 flex flex-wrap items-center gap-3">
+          <span class="inline-block h-4 w-4 rounded-full" style="background-color: var(--gzus-primary);"></span>
+          <h2 class="text-lg font-bold text-foreground">课程提醒</h2>
+          <span class="text-xs text-muted-foreground">course_reminder · 上课/下课通知</span>
+        </div>
+        <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <!-- Compact -->
+          <div class="rounded-[32px] bg-foreground p-3 shadow-xl">
+            <div class="mb-2 flex items-center justify-between px-2 text-[10px] font-medium text-background/60">
+              <span>9:41</span>
+              <div class="flex items-center gap-1">
+                <i data-lucide="signal" class="h-3 w-3"></i>
+                <i data-lucide="wifi" class="h-3 w-3"></i>
+                <i data-lucide="battery-full" class="h-3 w-3"></i>
+              </div>
+            </div>
+            <div class="flex min-h-[120px] items-center justify-center py-4">
+              <div class="flex w-[208px] items-center gap-2 rounded-full border px-3 py-2 backdrop-blur-xl" style="background-color: color-mix(in srgb, var(--gzus-foreground) 40%, transparent); border-color: color-mix(in srgb, var(--gzus-background) 10%, transparent);">
+                <div class="flex h-[30px] w-[30px] items-center justify-center rounded-full" style="background-color: color-mix(in srgb, var(--gzus-primary) 14%, transparent);">
+                  <i data-lucide="clock" class="h-4 w-4" style="color: var(--gzus-primary);"></i>
+                </div>
+                <span class="flex-1 truncate text-sm font-black text-background">上课提醒 · 还有 15 分钟</span>
+              </div>
+            </div>
+            <div class="mx-auto mt-2 h-1 w-28 rounded-full bg-background/20"></div>
+            <p class="mt-3 text-center text-xs text-muted-foreground">Flutter Compact · 上课提醒</p>
+          </div>
+
+          <!-- Expanded -->
+          <div class="rounded-[32px] bg-foreground p-3 shadow-xl">
+            <div class="mb-2 flex items-center justify-between px-2 text-[10px] font-medium text-background/60">
+              <span>9:41</span>
+              <div class="flex items-center gap-1">
+                <i data-lucide="signal" class="h-3 w-3"></i>
+                <i data-lucide="wifi" class="h-3 w-3"></i>
+                <i data-lucide="battery-full" class="h-3 w-3"></i>
+              </div>
+            </div>
+            <div class="flex min-h-[120px] items-center justify-center py-2">
+              <div class="w-full max-w-[280px] rounded-[26px] border p-3 backdrop-blur-xl" style="background-color: color-mix(in srgb, var(--gzus-foreground) 40%, transparent); border-color: color-mix(in srgb, var(--gzus-background) 10%, transparent);">
+                <div class="mb-2 flex items-start gap-2.5">
+                  <div class="flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-full" style="background-color: color-mix(in srgb, var(--gzus-primary) 14%, transparent);">
+                    <i data-lucide="clock" class="h-5 w-5" style="color: var(--gzus-primary);"></i>
+                  </div>
+                  <div class="min-w-0 flex-1">
+                    <div class="flex items-center justify-between gap-2">
+                      <div class="min-w-0">
+                        <p class="truncate text-[15px] font-bold text-background">下课提醒</p>
+                        <p class="truncate text-xs font-semibold text-background/70">数据结构 · 11:50 已结束</p>
+                      </div>
+                      <button class="flex h-7 w-7 items-center justify-center rounded-full text-background/60 hover:bg-background/10">
+                        <i data-lucide="x" class="h-4 w-4"></i>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <p class="mb-2 line-clamp-2 text-sm leading-snug text-background/80">下节课 14:00 · 操作系统 · 教学楼 B205</p>
+                <div class="mb-3 h-[5px] w-full overflow-hidden rounded-full" style="background-color: color-mix(in srgb, var(--gzus-primary) 12%, transparent);">
+                  <div class="h-full rounded-full" style="width: 100%; background-color: var(--gzus-primary);"></div>
+                </div>
+                <button class="w-full rounded-lg py-2 text-sm font-semibold text-primary-foreground" style="background-color: var(--gzus-primary);">查看课表</button>
+              </div>
+            </div>
+            <div class="mx-auto mt-2 h-1 w-28 rounded-full bg-background/20"></div>
+            <p class="mt-3 text-center text-xs text-muted-foreground">Flutter Expanded · 下课提醒</p>
+          </div>
+
+          <!-- iOS Dynamic Island -->
+          <div class="rounded-[32px] bg-foreground p-3 shadow-xl">
+            <div class="mb-2 flex items-center justify-between px-2 text-[10px] font-medium text-background/60">
+              <span>9:41</span>
+              <div class="flex items-center gap-1">
+                <i data-lucide="signal" class="h-3 w-3"></i>
+                <i data-lucide="wifi" class="h-3 w-3"></i>
+                <i data-lucide="battery-full" class="h-3 w-3"></i>
+              </div>
+            </div>
+            <div class="flex min-h-[140px] flex-col items-center justify-center gap-4 py-2">
+              <div class="w-full max-w-[280px] overflow-hidden rounded-[34px] border p-4 backdrop-blur-xl" style="background-color: color-mix(in srgb, var(--gzus-foreground) 40%, transparent); border-color: color-mix(in srgb, var(--gzus-background) 10%, transparent);">
+                <div class="mb-3 flex items-center justify-between gap-3">
+                  <span class="text-xs font-bold text-background/90">剩余</span>
+                  <div class="flex h-7 w-7 items-center justify-center rounded-full" style="background-color: color-mix(in srgb, var(--gzus-primary) 14%, transparent);">
+                    <i data-lucide="clock" class="h-3.5 w-3.5" style="color: var(--gzus-primary);"></i>
+                  </div>
+                  <span class="font-mono text-xs font-bold tabular-nums text-background/90">45:32</span>
+                </div>
+                <div class="mb-1">
+                  <p class="truncate text-[15px] font-bold text-background">数据结构</p>
+                  <p class="line-clamp-2 text-xs leading-relaxed text-background/80">10:10-11:50 · 教学楼 A301 · 张老师</p>
+                </div>
+                <div class="mt-2 h-1.5 w-full overflow-hidden rounded-full" style="background-color: color-mix(in srgb, var(--gzus-primary) 12%, transparent);">
+                  <div class="h-full rounded-full" style="width: 24%; background-color: var(--gzus-primary);"></div>
+                </div>
+              </div>
+            </div>
+            <div class="mx-auto mt-2 h-1 w-28 rounded-full bg-background/20"></div>
+            <p class="mt-3 text-center text-xs text-muted-foreground">iOS Dynamic Island</p>
+          </div>
+
+          <!-- Lock Screen -->
+          <div class="rounded-[32px] bg-foreground p-3 shadow-xl">
+            <div class="mb-2 flex items-center justify-center gap-1 text-[10px] font-medium text-background/60">
+              <span>9:41</span>
+              <span>·</span>
+              <span>6月20日 周四</span>
+            </div>
+            <div class="flex min-h-[140px] items-center justify-center py-2">
+              <div class="w-full max-w-[280px] rounded-2xl border p-4 backdrop-blur-xl" style="background-color: color-mix(in srgb, var(--gzus-foreground) 40%, transparent); border-color: color-mix(in srgb, var(--gzus-background) 10%, transparent);">
+                <div class="flex items-center gap-3">
+                  <div class="flex shrink-0 flex-col items-center justify-center">
+                    <i data-lucide="clock" class="h-7 w-7" style="color: var(--gzus-primary);"></i>
+                  </div>
+                  <div class="min-w-0 flex-1">
+                    <p class="truncate text-[15px] font-bold text-background">数据结构</p>
+                    <p class="line-clamp-2 text-sm leading-snug text-background/80">10:10-11:50 · 教学楼 A301 · 张老师</p>
+                    <div class="mt-2 h-1.5 w-full overflow-hidden rounded-full" style="background-color: color-mix(in srgb, var(--gzus-primary) 12%, transparent);">
+                      <div class="h-full rounded-full" style="width: 24%; background-color: var(--gzus-primary);"></div>
+                    </div>
+                  </div>
+                  <div class="shrink-0 text-right">
+                    <span class="block font-mono text-lg font-bold tabular-nums text-background">45:32</span>
+                    <span class="text-[10px] text-background/60">剩余</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="mx-auto mt-2 h-1 w-28 rounded-full bg-background/20"></div>
+            <p class="mt-3 text-center text-xs text-muted-foreground">iOS Lock Screen</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Exam -->
+      <section id="section-exam" class="mb-12">
+        <div class="mb-4 flex flex-wrap items-center gap-3">
+          <span class="inline-block h-4 w-4 rounded-full" style="background-color: var(--gzus-state-warning);"></span>
+          <h2 class="text-lg font-bold text-foreground">考试提醒</h2>
+          <span class="text-xs text-muted-foreground">exam_reminder</span>
+        </div>
+        <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <!-- Compact -->
+          <div class="rounded-[32px] bg-foreground p-3 shadow-xl">
+            <div class="mb-2 flex items-center justify-between px-2 text-[10px] font-medium text-background/60">
+              <span>9:41</span>
+              <div class="flex items-center gap-1">
+                <i data-lucide="signal" class="h-3 w-3"></i>
+                <i data-lucide="wifi" class="h-3 w-3"></i>
+                <i data-lucide="battery-full" class="h-3 w-3"></i>
+              </div>
+            </div>
+            <div class="flex min-h-[120px] items-center justify-center py-4">
+              <div class="flex w-[208px] items-center gap-2 rounded-full border px-3 py-2 backdrop-blur-xl" style="background-color: color-mix(in srgb, var(--gzus-foreground) 40%, transparent); border-color: color-mix(in srgb, var(--gzus-background) 10%, transparent);">
+                <div class="flex h-[30px] w-[30px] items-center justify-center rounded-full" style="background-color: color-mix(in srgb, var(--gzus-state-warning) 14%, transparent);">
+                  <i data-lucide="file-text" class="h-4 w-4" style="color: var(--gzus-state-warning);"></i>
+                </div>
+                <span class="flex-1 truncate text-sm font-black text-background">数据结构考试 · 3 天</span>
+              </div>
+            </div>
+            <div class="mx-auto mt-2 h-1 w-28 rounded-full bg-background/20"></div>
+            <p class="mt-3 text-center text-xs text-muted-foreground">Flutter Compact</p>
+          </div>
+
+          <!-- Expanded -->
+          <div class="rounded-[32px] bg-foreground p-3 shadow-xl">
+            <div class="mb-2 flex items-center justify-between px-2 text-[10px] font-medium text-background/60">
+              <span>9:41</span>
+              <div class="flex items-center gap-1">
+                <i data-lucide="signal" class="h-3 w-3"></i>
+                <i data-lucide="wifi" class="h-3 w-3"></i>
+                <i data-lucide="battery-full" class="h-3 w-3"></i>
+              </div>
+            </div>
+            <div class="flex min-h-[120px] items-center justify-center py-2">
+              <div class="w-full max-w-[280px] rounded-[26px] border p-3 backdrop-blur-xl" style="background-color: color-mix(in srgb, var(--gzus-foreground) 40%, transparent); border-color: color-mix(in srgb, var(--gzus-background) 10%, transparent);">
+                <div class="mb-2 flex items-start gap-2.5">
+                  <div class="flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-full" style="background-color: color-mix(in srgb, var(--gzus-state-warning) 14%, transparent);">
+                    <i data-lucide="file-text" class="h-5 w-5" style="color: var(--gzus-state-warning);"></i>
+                  </div>
+                  <div class="min-w-0 flex-1">
+                    <div class="flex items-center justify-between gap-2">
+                      <div class="min-w-0">
+                        <p class="truncate text-[15px] font-bold text-background">数据结构考试</p>
+                        <p class="truncate text-xs font-semibold text-background/70">3 天后开始</p>
+                      </div>
+                      <button class="flex h-7 w-7 items-center justify-center rounded-full text-background/60 hover:bg-background/10">
+                        <i data-lucide="x" class="h-4 w-4"></i>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <p class="mb-2 line-clamp-2 text-sm leading-snug text-background/80">6月20日 09:00-11:00 · 教学楼 A301</p>
+                <div class="mb-3 h-[5px] w-full overflow-hidden rounded-full" style="background-color: color-mix(in srgb, var(--gzus-state-warning) 12%, transparent);">
+                  <div class="h-full rounded-full" style="width: 62%; background-color: var(--gzus-state-warning);"></div>
+                </div>
+                <button class="w-full rounded-lg py-2 text-sm font-semibold text-primary-foreground" style="background-color: var(--gzus-state-warning);">查看考试</button>
+              </div>
+            </div>
+            <div class="mx-auto mt-2 h-1 w-28 rounded-full bg-background/20"></div>
+            <p class="mt-3 text-center text-xs text-muted-foreground">Flutter Expanded</p>
+          </div>
+
+          <!-- iOS Dynamic Island -->
+          <div class="rounded-[32px] bg-foreground p-3 shadow-xl">
+            <div class="mb-2 flex items-center justify-between px-2 text-[10px] font-medium text-background/60">
+              <span>9:41</span>
+              <div class="flex items-center gap-1">
+                <i data-lucide="signal" class="h-3 w-3"></i>
+                <i data-lucide="wifi" class="h-3 w-3"></i>
+                <i data-lucide="battery-full" class="h-3 w-3"></i>
+              </div>
+            </div>
+            <div class="flex min-h-[140px] flex-col items-center justify-center gap-4 py-2">
+              <div class="w-full max-w-[280px] overflow-hidden rounded-[34px] border p-4 backdrop-blur-xl" style="background-color: color-mix(in srgb, var(--gzus-foreground) 40%, transparent); border-color: color-mix(in srgb, var(--gzus-background) 10%, transparent);">
+                <div class="mb-3 flex items-center justify-between gap-3">
+                  <span class="text-xs font-bold text-background/90">3 天</span>
+                  <div class="flex h-7 w-7 items-center justify-center rounded-full" style="background-color: color-mix(in srgb, var(--gzus-state-warning) 14%, transparent);">
+                    <i data-lucide="file-text" class="h-3.5 w-3.5" style="color: var(--gzus-state-warning);"></i>
+                  </div>
+                  <span class="font-mono text-xs font-bold tabular-nums text-background/90">72:14:33</span>
+                </div>
+                <div class="mb-1">
+                  <p class="truncate text-[15px] font-bold text-background">数据结构考试</p>
+                  <p class="line-clamp-2 text-xs leading-relaxed text-background/80">6月20日 09:00-11:00 · 教学楼 A301</p>
+                </div>
+                <div class="mt-2 h-1.5 w-full overflow-hidden rounded-full" style="background-color: color-mix(in srgb, var(--gzus-state-warning) 12%, transparent);">
+                  <div class="h-full rounded-full" style="width: 62%; background-color: var(--gzus-state-warning);"></div>
+                </div>
+              </div>
+            </div>
+            <div class="mx-auto mt-2 h-1 w-28 rounded-full bg-background/20"></div>
+            <p class="mt-3 text-center text-xs text-muted-foreground">iOS Dynamic Island</p>
+          </div>
+
+          <!-- Lock Screen -->
+          <div class="rounded-[32px] bg-foreground p-3 shadow-xl">
+            <div class="mb-2 flex items-center justify-center gap-1 text-[10px] font-medium text-background/60">
+              <span>9:41</span>
+              <span>·</span>
+              <span>6月20日 周四</span>
+            </div>
+            <div class="flex min-h-[140px] items-center justify-center py-2">
+              <div class="w-full max-w-[280px] rounded-2xl border p-4 backdrop-blur-xl" style="background-color: color-mix(in srgb, var(--gzus-foreground) 40%, transparent); border-color: color-mix(in srgb, var(--gzus-background) 10%, transparent);">
+                <div class="flex items-center gap-3">
+                  <div class="flex shrink-0 flex-col items-center justify-center">
+                    <i data-lucide="file-text" class="h-7 w-7" style="color: var(--gzus-state-warning);"></i>
+                  </div>
+                  <div class="min-w-0 flex-1">
+                    <p class="truncate text-[15px] font-bold text-background">数据结构考试</p>
+                    <p class="line-clamp-2 text-sm leading-snug text-background/80">6月20日 09:00-11:00 · 教学楼 A301</p>
+                    <div class="mt-2 h-1.5 w-full overflow-hidden rounded-full" style="background-color: color-mix(in srgb, var(--gzus-state-warning) 12%, transparent);">
+                      <div class="h-full rounded-full" style="width: 62%; background-color: var(--gzus-state-warning);"></div>
+                    </div>
+                  </div>
+                  <div class="shrink-0 text-right">
+                    <span class="block font-mono text-lg font-bold tabular-nums text-background">72:14</span>
+                    <span class="text-[10px] text-background/60">剩余</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="mx-auto mt-2 h-1 w-28 rounded-full bg-background/20"></div>
+            <p class="mt-3 text-center text-xs text-muted-foreground">iOS Lock Screen</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Ecard -->
+      <section id="section-ecard" class="mb-12">
+        <div class="mb-4 flex flex-wrap items-center gap-3">
+          <span class="inline-block h-4 w-4 rounded-full" style="background-color: var(--gzus-state-info);"></span>
+          <h2 class="text-lg font-bold text-foreground">水电提醒</h2>
+          <span class="text-xs text-muted-foreground">ecard_reminder</span>
+        </div>
+        <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <!-- Compact -->
+          <div class="rounded-[32px] bg-foreground p-3 shadow-xl">
+            <div class="mb-2 flex items-center justify-between px-2 text-[10px] font-medium text-background/60">
+              <span>9:41</span>
+              <div class="flex items-center gap-1">
+                <i data-lucide="signal" class="h-3 w-3"></i>
+                <i data-lucide="wifi" class="h-3 w-3"></i>
+                <i data-lucide="battery-full" class="h-3 w-3"></i>
+              </div>
+            </div>
+            <div class="flex min-h-[120px] items-center justify-center py-4">
+              <div class="flex w-[208px] items-center gap-2 rounded-full border px-3 py-2 backdrop-blur-xl" style="background-color: color-mix(in srgb, var(--gzus-foreground) 40%, transparent); border-color: color-mix(in srgb, var(--gzus-background) 10%, transparent);">
+                <div class="flex h-[30px] w-[30px] items-center justify-center rounded-full" style="background-color: color-mix(in srgb, var(--gzus-state-info) 14%, transparent);">
+                  <i data-lucide="droplet" class="h-4 w-4" style="color: var(--gzus-state-info);"></i>
+                </div>
+                <span class="flex-1 truncate text-sm font-black text-background">水电余额 · <span style="color: var(--gzus-state-success);">电费偏低</span></span>
+              </div>
+            </div>
+            <div class="mx-auto mt-2 h-1 w-28 rounded-full bg-background/20"></div>
+            <p class="mt-3 text-center text-xs text-muted-foreground">Flutter Compact</p>
+          </div>
+
+          <!-- Expanded -->
+          <div class="rounded-[32px] bg-foreground p-3 shadow-xl">
+            <div class="mb-2 flex items-center justify-between px-2 text-[10px] font-medium text-background/60">
+              <span>9:41</span>
+              <div class="flex items-center gap-1">
+                <i data-lucide="signal" class="h-3 w-3"></i>
+                <i data-lucide="wifi" class="h-3 w-3"></i>
+                <i data-lucide="battery-full" class="h-3 w-3"></i>
+              </div>
+            </div>
+            <div class="flex min-h-[120px] items-center justify-center py-2">
+              <div class="w-full max-w-[280px] rounded-[26px] border p-3 backdrop-blur-xl" style="background-color: color-mix(in srgb, var(--gzus-foreground) 40%, transparent); border-color: color-mix(in srgb, var(--gzus-background) 10%, transparent);">
+                <div class="mb-2 flex items-start gap-2.5">
+                  <div class="flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-full" style="background-color: color-mix(in srgb, var(--gzus-state-info) 14%, transparent);">
+                    <i data-lucide="droplet" class="h-5 w-5" style="color: var(--gzus-state-info);"></i>
+                  </div>
+                  <div class="min-w-0 flex-1">
+                    <div class="flex items-center justify-between gap-2">
+                      <div class="min-w-0">
+                        <p class="truncate text-[15px] font-bold text-background">水电余额</p>
+                        <p class="truncate text-xs font-semibold text-background/70"><span style="color: var(--gzus-state-info);">冷水</span> · <span style="color: var(--gzus-state-warning);">热水</span> · <span style="color: var(--gzus-state-success);">电费</span></p>
+                      </div>
+                      <button class="flex h-7 w-7 items-center justify-center rounded-full text-background/60 hover:bg-background/10">
+                        <i data-lucide="x" class="h-4 w-4"></i>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <div class="mb-3 grid grid-cols-3 gap-2">
+                  <div class="rounded-xl p-2 text-center" style="background-color: color-mix(in srgb, var(--gzus-state-info) 14%, transparent);">
+                    <i data-lucide="droplet" class="mx-auto mb-1 h-4 w-4" style="color: var(--gzus-state-info);"></i>
+                    <p class="text-[10px] text-background/70">冷水</p>
+                    <p class="text-sm font-bold" style="color: var(--gzus-state-info);">18.2<span class="text-[10px]">吨</span></p>
+                  </div>
+                  <div class="rounded-xl p-2 text-center" style="background-color: color-mix(in srgb, var(--gzus-state-warning) 14%, transparent);">
+                    <i data-lucide="flame" class="mx-auto mb-1 h-4 w-4" style="color: var(--gzus-state-warning);"></i>
+                    <p class="text-[10px] text-background/70">热水</p>
+                    <p class="text-sm font-bold" style="color: var(--gzus-state-warning);">26.0<span class="text-[10px]">元</span></p>
+                  </div>
+                  <div class="rounded-xl p-2 text-center" style="background-color: color-mix(in srgb, var(--gzus-state-success) 14%, transparent);">
+                    <i data-lucide="zap" class="mx-auto mb-1 h-4 w-4" style="color: var(--gzus-state-success);"></i>
+                    <p class="text-[10px] text-background/70">电费</p>
+                    <p class="text-sm font-bold" style="color: var(--gzus-state-success);">42.6<span class="text-[10px]">度</span></p>
+                  </div>
+                </div>
+                <button class="w-full rounded-lg py-2 text-sm font-semibold text-primary-foreground" style="background-color: var(--gzus-state-info);">查看水电</button>
+              </div>
+            </div>
+            <div class="mx-auto mt-2 h-1 w-28 rounded-full bg-background/20"></div>
+            <p class="mt-3 text-center text-xs text-muted-foreground">Flutter Expanded</p>
+          </div>
+
+          <!-- iOS Dynamic Island -->
+          <div class="rounded-[32px] bg-foreground p-3 shadow-xl">
+            <div class="mb-2 flex items-center justify-between px-2 text-[10px] font-medium text-background/60">
+              <span>9:41</span>
+              <div class="flex items-center gap-1">
+                <i data-lucide="signal" class="h-3 w-3"></i>
+                <i data-lucide="wifi" class="h-3 w-3"></i>
+                <i data-lucide="battery-full" class="h-3 w-3"></i>
+              </div>
+            </div>
+            <div class="flex min-h-[140px] flex-col items-center justify-center gap-4 py-2">
+              <div class="w-full max-w-[280px] overflow-hidden rounded-[34px] border p-4 backdrop-blur-xl" style="background-color: color-mix(in srgb, var(--gzus-foreground) 40%, transparent); border-color: color-mix(in srgb, var(--gzus-background) 10%, transparent);">
+                <div class="mb-3 flex items-center justify-between gap-3">
+                  <span class="text-xs font-bold text-background/90">电费</span>
+                  <div class="flex h-7 w-7 items-center justify-center rounded-full" style="background-color: color-mix(in srgb, var(--gzus-state-info) 14%, transparent);">
+                    <i data-lucide="droplet" class="h-3.5 w-3.5" style="color: var(--gzus-state-info);"></i>
+                  </div>
+                  <span class="font-mono text-xs font-bold tabular-nums text-background/90" style="color: var(--gzus-state-success);">42.6 度</span>
+                </div>
+                <div class="mb-1">
+                  <p class="truncate text-[15px] font-bold text-background">水电余额</p>
+                  <div class="mt-2 grid grid-cols-3 gap-2">
+                    <div class="rounded-lg p-1.5 text-center" style="background-color: color-mix(in srgb, var(--gzus-state-info) 14%, transparent);">
+                      <i data-lucide="droplet" class="mx-auto mb-0.5 h-3 w-3" style="color: var(--gzus-state-info);"></i>
+                      <p class="text-[9px] text-background/70">冷水</p>
+                      <p class="text-[11px] font-bold" style="color: var(--gzus-state-info);">18.2</p>
+                    </div>
+                    <div class="rounded-lg p-1.5 text-center" style="background-color: color-mix(in srgb, var(--gzus-state-warning) 14%, transparent);">
+                      <i data-lucide="flame" class="mx-auto mb-0.5 h-3 w-3" style="color: var(--gzus-state-warning);"></i>
+                      <p class="text-[9px] text-background/70">热水</p>
+                      <p class="text-[11px] font-bold" style="color: var(--gzus-state-warning);">26.0</p>
+                    </div>
+                    <div class="rounded-lg p-1.5 text-center" style="background-color: color-mix(in srgb, var(--gzus-state-success) 14%, transparent);">
+                      <i data-lucide="zap" class="mx-auto mb-0.5 h-3 w-3" style="color: var(--gzus-state-success);"></i>
+                      <p class="text-[9px] text-background/70">电费</p>
+                      <p class="text-[11px] font-bold" style="color: var(--gzus-state-success);">42.6</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="mx-auto mt-2 h-1 w-28 rounded-full bg-background/20"></div>
+            <p class="mt-3 text-center text-xs text-muted-foreground">iOS Dynamic Island</p>
+          </div>
+
+          <!-- Lock Screen -->
+          <div class="rounded-[32px] bg-foreground p-3 shadow-xl">
+            <div class="mb-2 flex items-center justify-center gap-1 text-[10px] font-medium text-background/60">
+              <span>9:41</span>
+              <span>·</span>
+              <span>6月20日 周四</span>
+            </div>
+            <div class="flex min-h-[140px] items-center justify-center py-2">
+              <div class="w-full max-w-[280px] rounded-2xl border p-4 backdrop-blur-xl" style="background-color: color-mix(in srgb, var(--gzus-foreground) 40%, transparent); border-color: color-mix(in srgb, var(--gzus-background) 10%, transparent);">
+                <div class="flex items-center gap-3">
+                  <div class="flex shrink-0 flex-col items-center justify-center">
+                    <i data-lucide="droplet" class="h-7 w-7" style="color: var(--gzus-state-info);"></i>
+                  </div>
+                  <div class="min-w-0 flex-1">
+                    <p class="truncate text-[15px] font-bold text-background">水电余额</p>
+                    <div class="mt-2 grid grid-cols-3 gap-2">
+                      <div class="rounded-lg p-1.5 text-center" style="background-color: color-mix(in srgb, var(--gzus-state-info) 14%, transparent);">
+                        <i data-lucide="droplet" class="mx-auto mb-0.5 h-3 w-3" style="color: var(--gzus-state-info);"></i>
+                        <p class="text-[9px] text-background/70">冷水</p>
+                        <p class="text-[11px] font-bold" style="color: var(--gzus-state-info);">18.2 吨</p>
+                      </div>
+                      <div class="rounded-lg p-1.5 text-center" style="background-color: color-mix(in srgb, var(--gzus-state-warning) 14%, transparent);">
+                        <i data-lucide="flame" class="mx-auto mb-0.5 h-3 w-3" style="color: var(--gzus-state-warning);"></i>
+                        <p class="text-[9px] text-background/70">热水</p>
+                        <p class="text-[11px] font-bold" style="color: var(--gzus-state-warning);">26.0 元</p>
+                      </div>
+                      <div class="rounded-lg p-1.5 text-center" style="background-color: color-mix(in srgb, var(--gzus-state-success) 14%, transparent);">
+                        <i data-lucide="zap" class="mx-auto mb-0.5 h-3 w-3" style="color: var(--gzus-state-success);"></i>
+                        <p class="text-[9px] text-background/70">电费</p>
+                        <p class="text-[11px] font-bold" style="color: var(--gzus-state-success);">42.6 度</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="mx-auto mt-2 h-1 w-28 rounded-full bg-background/20"></div>
+            <p class="mt-3 text-center text-xs text-muted-foreground">iOS Lock Screen</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Grade -->
+      <section id="section-grade" class="mb-12">
+        <div class="mb-4 flex flex-wrap items-center gap-3">
+          <span class="inline-block h-4 w-4 rounded-full" style="background-color: var(--gzus-state-success);"></span>
+          <h2 class="text-lg font-bold text-foreground">成绩更新</h2>
+          <span class="text-xs text-muted-foreground">grade_update</span>
+        </div>
+        <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <!-- Compact -->
+          <div class="rounded-[32px] bg-foreground p-3 shadow-xl">
+            <div class="mb-2 flex items-center justify-between px-2 text-[10px] font-medium text-background/60">
+              <span>9:41</span>
+              <div class="flex items-center gap-1">
+                <i data-lucide="signal" class="h-3 w-3"></i>
+                <i data-lucide="wifi" class="h-3 w-3"></i>
+                <i data-lucide="battery-full" class="h-3 w-3"></i>
+              </div>
+            </div>
+            <div class="flex min-h-[120px] items-center justify-center py-4">
+              <div class="flex w-[208px] items-center gap-2 rounded-full border px-3 py-2 backdrop-blur-xl" style="background-color: color-mix(in srgb, var(--gzus-foreground) 40%, transparent); border-color: color-mix(in srgb, var(--gzus-background) 10%, transparent);">
+                <div class="flex h-[30px] w-[30px] items-center justify-center rounded-full" style="background-color: color-mix(in srgb, var(--gzus-state-success) 14%, transparent);">
+                  <i data-lucide="graduation-cap" class="h-4 w-4" style="color: var(--gzus-state-success);"></i>
+                </div>
+                <span class="flex-1 truncate text-sm font-black text-background"><span style="color: var(--gzus-primary);">数据结构 92</span> · <span style="color: var(--gzus-state-info);">操作系统 88</span> · <span style="color: var(--gzus-state-warning);">计网 90</span></span>
+              </div>
+            </div>
+            <div class="mx-auto mt-2 h-1 w-28 rounded-full bg-background/20"></div>
+            <p class="mt-3 text-center text-xs text-muted-foreground">Flutter Compact</p>
+          </div>
+
+          <!-- Expanded -->
+          <div class="rounded-[32px] bg-foreground p-3 shadow-xl">
+            <div class="mb-2 flex items-center justify-between px-2 text-[10px] font-medium text-background/60">
+              <span>9:41</span>
+              <div class="flex items-center gap-1">
+                <i data-lucide="signal" class="h-3 w-3"></i>
+                <i data-lucide="wifi" class="h-3 w-3"></i>
+                <i data-lucide="battery-full" class="h-3 w-3"></i>
+              </div>
+            </div>
+            <div class="flex min-h-[120px] items-center justify-center py-2">
+              <div class="w-full max-w-[280px] rounded-[26px] border p-3 backdrop-blur-xl" style="background-color: color-mix(in srgb, var(--gzus-foreground) 40%, transparent); border-color: color-mix(in srgb, var(--gzus-background) 10%, transparent);">
+                <div class="mb-2 flex items-start gap-2.5">
+                  <div class="flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-full" style="background-color: color-mix(in srgb, var(--gzus-state-success) 14%, transparent);">
+                    <i data-lucide="graduation-cap" class="h-5 w-5" style="color: var(--gzus-state-success);"></i>
+                  </div>
+                  <div class="min-w-0 flex-1">
+                    <div class="flex items-center justify-between gap-2">
+                      <div class="min-w-0">
+                        <p class="truncate text-[15px] font-bold text-background">成绩已更新</p>
+                        <p class="truncate text-xs font-semibold text-background/70"><span style="color: var(--gzus-primary);">数据结构</span> · <span style="color: var(--gzus-state-info);">操作系统</span> · <span style="color: var(--gzus-state-warning);">计网</span></p>
+                      </div>
+                      <button class="flex h-7 w-7 items-center justify-center rounded-full text-background/60 hover:bg-background/10">
+                        <i data-lucide="x" class="h-4 w-4"></i>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <div class="mb-2 space-y-1.5">
+                  <div class="flex items-center justify-between text-xs">
+                    <span class="text-background/70">数据结构</span>
+                    <span class="font-bold" style="color: var(--gzus-primary);">92</span>
+                  </div>
+                  <div class="flex items-center justify-between text-xs">
+                    <span class="text-background/70">操作系统</span>
+                    <span class="font-bold" style="color: var(--gzus-state-info);">88</span>
+                  </div>
+                  <div class="flex items-center justify-between text-xs">
+                    <span class="text-background/70">计网</span>
+                    <span class="font-bold" style="color: var(--gzus-state-warning);">90</span>
+                  </div>
+                </div>
+                <div class="mb-3 h-[5px] w-full overflow-hidden rounded-full" style="background-color: color-mix(in srgb, var(--gzus-state-success) 12%, transparent);">
+                  <div class="h-full rounded-full" style="width: 78%; background-color: var(--gzus-state-success);"></div>
+                </div>
+                <button class="w-full rounded-lg py-2 text-sm font-semibold text-primary-foreground" style="background-color: var(--gzus-state-success);">查看成绩</button>
+              </div>
+            </div>
+            <div class="mx-auto mt-2 h-1 w-28 rounded-full bg-background/20"></div>
+            <p class="mt-3 text-center text-xs text-muted-foreground">Flutter Expanded</p>
+          </div>
+
+          <!-- iOS Dynamic Island -->
+          <div class="rounded-[32px] bg-foreground p-3 shadow-xl">
+            <div class="mb-2 flex items-center justify-between px-2 text-[10px] font-medium text-background/60">
+              <span>9:41</span>
+              <div class="flex items-center gap-1">
+                <i data-lucide="signal" class="h-3 w-3"></i>
+                <i data-lucide="wifi" class="h-3 w-3"></i>
+                <i data-lucide="battery-full" class="h-3 w-3"></i>
+              </div>
+            </div>
+            <div class="flex min-h-[140px] flex-col items-center justify-center gap-4 py-2">
+              <div class="w-full max-w-[280px] overflow-hidden rounded-[34px] border p-4 backdrop-blur-xl" style="background-color: color-mix(in srgb, var(--gzus-foreground) 40%, transparent); border-color: color-mix(in srgb, var(--gzus-background) 10%, transparent);">
+                <div class="mb-3 flex items-center justify-between gap-3">
+                  <span class="text-xs font-bold text-background/90">最高</span>
+                  <div class="flex h-7 w-7 items-center justify-center rounded-full" style="background-color: color-mix(in srgb, var(--gzus-state-success) 14%, transparent);">
+                    <i data-lucide="graduation-cap" class="h-3.5 w-3.5" style="color: var(--gzus-state-success);"></i>
+                  </div>
+                  <span class="font-mono text-xs font-bold tabular-nums text-background/90" style="color: var(--gzus-primary);">92</span>
+                </div>
+                <div class="mb-1">
+                  <p class="truncate text-[15px] font-bold text-background">成绩已更新</p>
+                  <div class="mt-1 space-y-1">
+                    <div class="flex items-center justify-between text-xs">
+                      <span class="text-background/70">数据结构</span>
+                      <span class="font-bold" style="color: var(--gzus-primary);">92</span>
+                    </div>
+                    <div class="flex items-center justify-between text-xs">
+                      <span class="text-background/70">操作系统</span>
+                      <span class="font-bold" style="color: var(--gzus-state-info);">88</span>
+                    </div>
+                    <div class="flex items-center justify-between text-xs">
+                      <span class="text-background/70">计网</span>
+                      <span class="font-bold" style="color: var(--gzus-state-warning);">90</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="mt-2 h-1.5 w-full overflow-hidden rounded-full" style="background-color: color-mix(in srgb, var(--gzus-state-success) 12%, transparent);">
+                  <div class="h-full rounded-full" style="width: 78%; background-color: var(--gzus-state-success);"></div>
+                </div>
+              </div>
+            </div>
+            <div class="mx-auto mt-2 h-1 w-28 rounded-full bg-background/20"></div>
+            <p class="mt-3 text-center text-xs text-muted-foreground">iOS Dynamic Island</p>
+          </div>
+
+          <!-- Lock Screen -->
+          <div class="rounded-[32px] bg-foreground p-3 shadow-xl">
+            <div class="mb-2 flex items-center justify-center gap-1 text-[10px] font-medium text-background/60">
+              <span>9:41</span>
+              <span>·</span>
+              <span>6月20日 周四</span>
+            </div>
+            <div class="flex min-h-[140px] items-center justify-center py-2">
+              <div class="w-full max-w-[280px] rounded-2xl border p-4 backdrop-blur-xl" style="background-color: color-mix(in srgb, var(--gzus-foreground) 40%, transparent); border-color: color-mix(in srgb, var(--gzus-background) 10%, transparent);">
+                <div class="flex items-center gap-3">
+                  <div class="flex shrink-0 flex-col items-center justify-center">
+                    <i data-lucide="graduation-cap" class="h-7 w-7" style="color: var(--gzus-state-success);"></i>
+                  </div>
+                  <div class="min-w-0 flex-1">
+                    <p class="truncate text-[15px] font-bold text-background">成绩已更新</p>
+                    <div class="mt-1 space-y-1">
+                      <div class="flex items-center justify-between text-xs">
+                        <span class="text-background/70">数据结构</span>
+                        <span class="font-bold" style="color: var(--gzus-primary);">92</span>
+                      </div>
+                      <div class="flex items-center justify-between text-xs">
+                        <span class="text-background/70">操作系统</span>
+                        <span class="font-bold" style="color: var(--gzus-state-info);">88</span>
+                      </div>
+                      <div class="flex items-center justify-between text-xs">
+                        <span class="text-background/70">计网</span>
+                        <span class="font-bold" style="color: var(--gzus-state-warning);">90</span>
+                      </div>
+                    </div>
+                    <div class="mt-2 h-1.5 w-full overflow-hidden rounded-full" style="background-color: color-mix(in srgb, var(--gzus-state-success) 12%, transparent);">
+                      <div class="h-full rounded-full" style="width: 78%; background-color: var(--gzus-state-success);"></div>
+                    </div>
+                  </div>
+                  <div class="shrink-0 text-right">
+                    <span class="block font-mono text-lg font-bold tabular-nums" style="color: var(--gzus-primary);">92</span>
+                    <span class="text-[10px] text-background/60">最高分</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="mx-auto mt-2 h-1 w-28 rounded-full bg-background/20"></div>
+            <p class="mt-3 text-center text-xs text-muted-foreground">iOS Lock Screen</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Attendance -->
+      <section id="section-attendance" class="mb-12">
+        <div class="mb-4 flex flex-wrap items-center gap-3">
+          <span class="inline-block h-4 w-4 rounded-full" style="background-color: var(--gzus-state-warning);"></span>
+          <h2 class="text-lg font-bold text-foreground">考勤更新</h2>
+          <span class="text-xs text-muted-foreground">attendance_update</span>
+        </div>
+        <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <!-- Compact -->
+          <div class="rounded-[32px] bg-foreground p-3 shadow-xl">
+            <div class="mb-2 flex items-center justify-between px-2 text-[10px] font-medium text-background/60">
+              <span>9:41</span>
+              <div class="flex items-center gap-1">
+                <i data-lucide="signal" class="h-3 w-3"></i>
+                <i data-lucide="wifi" class="h-3 w-3"></i>
+                <i data-lucide="battery-full" class="h-3 w-3"></i>
+              </div>
+            </div>
+            <div class="flex min-h-[120px] items-center justify-center py-4">
+              <div class="flex w-[208px] items-center gap-2 rounded-full border px-3 py-2 backdrop-blur-xl" style="background-color: color-mix(in srgb, var(--gzus-foreground) 40%, transparent); border-color: color-mix(in srgb, var(--gzus-background) 10%, transparent);">
+                <div class="flex h-[30px] w-[30px] items-center justify-center rounded-full" style="background-color: color-mix(in srgb, var(--gzus-state-warning) 14%, transparent);">
+                  <i data-lucide="badge-check" class="h-4 w-4" style="color: var(--gzus-state-warning);"></i>
+                </div>
+                <span class="flex-1 truncate text-sm font-black text-background">考勤异常 · 1 条</span>
+              </div>
+            </div>
+            <div class="mx-auto mt-2 h-1 w-28 rounded-full bg-background/20"></div>
+            <p class="mt-3 text-center text-xs text-muted-foreground">Flutter Compact</p>
+          </div>
+
+          <!-- Expanded -->
+          <div class="rounded-[32px] bg-foreground p-3 shadow-xl">
+            <div class="mb-2 flex items-center justify-between px-2 text-[10px] font-medium text-background/60">
+              <span>9:41</span>
+              <div class="flex items-center gap-1">
+                <i data-lucide="signal" class="h-3 w-3"></i>
+                <i data-lucide="wifi" class="h-3 w-3"></i>
+                <i data-lucide="battery-full" class="h-3 w-3"></i>
+              </div>
+            </div>
+            <div class="flex min-h-[120px] items-center justify-center py-2">
+              <div class="w-full max-w-[280px] rounded-[26px] border p-3 backdrop-blur-xl" style="background-color: color-mix(in srgb, var(--gzus-foreground) 40%, transparent); border-color: color-mix(in srgb, var(--gzus-background) 10%, transparent);">
+                <div class="mb-2 flex items-start gap-2.5">
+                  <div class="flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-full" style="background-color: color-mix(in srgb, var(--gzus-state-warning) 14%, transparent);">
+                    <i data-lucide="badge-check" class="h-5 w-5" style="color: var(--gzus-state-warning);"></i>
+                  </div>
+                  <div class="min-w-0 flex-1">
+                    <div class="flex items-center justify-between gap-2">
+                      <div class="min-w-0">
+                        <p class="truncate text-[15px] font-bold text-background">考勤提醒</p>
+                        <p class="truncate text-xs font-semibold text-background/70">1 条异常待处理</p>
+                      </div>
+                      <button class="flex h-7 w-7 items-center justify-center rounded-full text-background/60 hover:bg-background/10">
+                        <i data-lucide="x" class="h-4 w-4"></i>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <p class="mb-2 line-clamp-2 text-sm leading-snug text-background/80">本周《数据结构》缺勤 1 次，请尽快处理</p>
+                <div class="mb-3 h-[5px] w-full overflow-hidden rounded-full" style="background-color: color-mix(in srgb, var(--gzus-state-warning) 12%, transparent);">
+                  <div class="h-full rounded-full" style="width: 30%; background-color: var(--gzus-state-warning);"></div>
+                </div>
+                <button class="w-full rounded-lg py-2 text-sm font-semibold text-primary-foreground" style="background-color: var(--gzus-state-warning);">查看考勤</button>
+              </div>
+            </div>
+            <div class="mx-auto mt-2 h-1 w-28 rounded-full bg-background/20"></div>
+            <p class="mt-3 text-center text-xs text-muted-foreground">Flutter Expanded</p>
+          </div>
+
+          <!-- iOS Dynamic Island -->
+          <div class="rounded-[32px] bg-foreground p-3 shadow-xl">
+            <div class="mb-2 flex items-center justify-between px-2 text-[10px] font-medium text-background/60">
+              <span>9:41</span>
+              <div class="flex items-center gap-1">
+                <i data-lucide="signal" class="h-3 w-3"></i>
+                <i data-lucide="wifi" class="h-3 w-3"></i>
+                <i data-lucide="battery-full" class="h-3 w-3"></i>
+              </div>
+            </div>
+            <div class="flex min-h-[140px] flex-col items-center justify-center gap-4 py-2">
+              <div class="w-full max-w-[280px] overflow-hidden rounded-[34px] border p-4 backdrop-blur-xl" style="background-color: color-mix(in srgb, var(--gzus-foreground) 40%, transparent); border-color: color-mix(in srgb, var(--gzus-background) 10%, transparent);">
+                <div class="mb-3 flex items-center justify-between gap-3">
+                  <span class="text-xs font-bold text-background/90">1 条</span>
+                  <div class="flex h-7 w-7 items-center justify-center rounded-full" style="background-color: color-mix(in srgb, var(--gzus-state-warning) 14%, transparent);">
+                    <i data-lucide="badge-check" class="h-3.5 w-3.5" style="color: var(--gzus-state-warning);"></i>
+                  </div>
+                  <span class="font-mono text-xs font-bold tabular-nums text-background/90">1</span>
+                </div>
+                <div class="mb-1">
+                  <p class="truncate text-[15px] font-bold text-background">考勤提醒</p>
+                  <p class="line-clamp-2 text-xs leading-relaxed text-background/80">本周《数据结构》缺勤 1 次，请尽快处理</p>
+                </div>
+                <div class="mt-2 h-1.5 w-full overflow-hidden rounded-full" style="background-color: color-mix(in srgb, var(--gzus-state-warning) 12%, transparent);">
+                  <div class="h-full rounded-full" style="width: 30%; background-color: var(--gzus-state-warning);"></div>
+                </div>
+              </div>
+            </div>
+            <div class="mx-auto mt-2 h-1 w-28 rounded-full bg-background/20"></div>
+            <p class="mt-3 text-center text-xs text-muted-foreground">iOS Dynamic Island</p>
+          </div>
+
+          <!-- Lock Screen -->
+          <div class="rounded-[32px] bg-foreground p-3 shadow-xl">
+            <div class="mb-2 flex items-center justify-center gap-1 text-[10px] font-medium text-background/60">
+              <span>9:41</span>
+              <span>·</span>
+              <span>6月20日 周四</span>
+            </div>
+            <div class="flex min-h-[140px] items-center justify-center py-2">
+              <div class="w-full max-w-[280px] rounded-2xl border p-4 backdrop-blur-xl" style="background-color: color-mix(in srgb, var(--gzus-foreground) 40%, transparent); border-color: color-mix(in srgb, var(--gzus-background) 10%, transparent);">
+                <div class="flex items-center gap-3">
+                  <div class="flex shrink-0 flex-col items-center justify-center">
+                    <i data-lucide="badge-check" class="h-7 w-7" style="color: var(--gzus-state-warning);"></i>
+                  </div>
+                  <div class="min-w-0 flex-1">
+                    <p class="truncate text-[15px] font-bold text-background">考勤提醒</p>
+                    <p class="line-clamp-2 text-sm leading-snug text-background/80">本周《数据结构》缺勤 1 次，请尽快处理</p>
+                    <div class="mt-2 h-1.5 w-full overflow-hidden rounded-full" style="background-color: color-mix(in srgb, var(--gzus-state-warning) 12%, transparent);">
+                      <div class="h-full rounded-full" style="width: 30%; background-color: var(--gzus-state-warning);"></div>
+                    </div>
+                  </div>
+                  <div class="shrink-0 text-right">
+                    <span class="block font-mono text-lg font-bold tabular-nums text-background">1</span>
+                    <span class="text-[10px] text-background/60">条异常</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="mx-auto mt-2 h-1 w-28 rounded-full bg-background/20"></div>
+            <p class="mt-3 text-center text-xs text-muted-foreground">iOS Lock Screen</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Business -->
+      <section id="section-business" class="mb-12">
+        <div class="mb-4 flex flex-wrap items-center gap-3">
+          <span class="inline-block h-4 w-4 rounded-full" style="background-color: var(--gzus-primary);"></span>
+          <h2 class="text-lg font-bold text-foreground">业务通知</h2>
+          <span class="text-xs text-muted-foreground">business_notice</span>
+        </div>
+        <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <!-- Compact -->
+          <div class="rounded-[32px] bg-foreground p-3 shadow-xl">
+            <div class="mb-2 flex items-center justify-between px-2 text-[10px] font-medium text-background/60">
+              <span>9:41</span>
+              <div class="flex items-center gap-1">
+                <i data-lucide="signal" class="h-3 w-3"></i>
+                <i data-lucide="wifi" class="h-3 w-3"></i>
+                <i data-lucide="battery-full" class="h-3 w-3"></i>
+              </div>
+            </div>
+            <div class="flex min-h-[120px] items-center justify-center py-4">
+              <div class="flex w-[208px] items-center gap-2 rounded-full border px-3 py-2 backdrop-blur-xl" style="background-color: color-mix(in srgb, var(--gzus-foreground) 40%, transparent); border-color: color-mix(in srgb, var(--gzus-background) 10%, transparent);">
+                <div class="flex h-[30px] w-[30px] items-center justify-center rounded-full" style="background-color: color-mix(in srgb, var(--gzus-primary) 14%, transparent);">
+                  <i data-lucide="building-2" class="h-4 w-4" style="color: var(--gzus-primary);"></i>
+                </div>
+                <span class="flex-1 truncate text-sm font-black text-background">选课通知 · 进行中</span>
+              </div>
+            </div>
+            <div class="mx-auto mt-2 h-1 w-28 rounded-full bg-background/20"></div>
+            <p class="mt-3 text-center text-xs text-muted-foreground">Flutter Compact</p>
+          </div>
+
+          <!-- Expanded -->
+          <div class="rounded-[32px] bg-foreground p-3 shadow-xl">
+            <div class="mb-2 flex items-center justify-between px-2 text-[10px] font-medium text-background/60">
+              <span>9:41</span>
+              <div class="flex items-center gap-1">
+                <i data-lucide="signal" class="h-3 w-3"></i>
+                <i data-lucide="wifi" class="h-3 w-3"></i>
+                <i data-lucide="battery-full" class="h-3 w-3"></i>
+              </div>
+            </div>
+            <div class="flex min-h-[120px] items-center justify-center py-2">
+              <div class="w-full max-w-[280px] rounded-[26px] border p-3 backdrop-blur-xl" style="background-color: color-mix(in srgb, var(--gzus-foreground) 40%, transparent); border-color: color-mix(in srgb, var(--gzus-background) 10%, transparent);">
+                <div class="mb-2 flex items-start gap-2.5">
+                  <div class="flex h-[38px] w-[38px] shrink-0 items-center justify-center rounded-full" style="background-color: color-mix(in srgb, var(--gzus-primary) 14%, transparent);">
+                    <i data-lucide="building-2" class="h-5 w-5" style="color: var(--gzus-primary);"></i>
+                  </div>
+                  <div class="min-w-0 flex-1">
+                    <div class="flex items-center justify-between gap-2">
+                      <div class="min-w-0">
+                        <p class="truncate text-[15px] font-bold text-background">选课即将截止</p>
+                        <p class="truncate text-xs font-semibold text-background/70">进行中</p>
+                      </div>
+                      <button class="flex h-7 w-7 items-center justify-center rounded-full text-background/60 hover:bg-background/10">
+                        <i data-lucide="x" class="h-4 w-4"></i>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <p class="mb-2 line-clamp-2 text-sm leading-snug text-background/80">2025 秋季学期第一轮选课将于 9 月 8 日 23:00 截止</p>
+                <div class="mb-3 h-[5px] w-full overflow-hidden rounded-full" style="background-color: color-mix(in srgb, var(--gzus-primary) 12%, transparent);">
+                  <div class="h-full rounded-full" style="width: 55%; background-color: var(--gzus-primary);"></div>
+                </div>
+                <button class="w-full rounded-lg py-2 text-sm font-semibold text-primary-foreground" style="background-color: var(--gzus-primary);">去办理</button>
+              </div>
+            </div>
+            <div class="mx-auto mt-2 h-1 w-28 rounded-full bg-background/20"></div>
+            <p class="mt-3 text-center text-xs text-muted-foreground">Flutter Expanded</p>
+          </div>
+
+          <!-- iOS Dynamic Island -->
+          <div class="rounded-[32px] bg-foreground p-3 shadow-xl">
+            <div class="mb-2 flex items-center justify-between px-2 text-[10px] font-medium text-background/60">
+              <span>9:41</span>
+              <div class="flex items-center gap-1">
+                <i data-lucide="signal" class="h-3 w-3"></i>
+                <i data-lucide="wifi" class="h-3 w-3"></i>
+                <i data-lucide="battery-full" class="h-3 w-3"></i>
+              </div>
+            </div>
+            <div class="flex min-h-[140px] flex-col items-center justify-center gap-4 py-2">
+              <div class="w-full max-w-[280px] overflow-hidden rounded-[34px] border p-4 backdrop-blur-xl" style="background-color: color-mix(in srgb, var(--gzus-foreground) 40%, transparent); border-color: color-mix(in srgb, var(--gzus-background) 10%, transparent);">
+                <div class="mb-3 flex items-center justify-between gap-3">
+                  <span class="text-xs font-bold text-background/90">进行中</span>
+                  <div class="flex h-7 w-7 items-center justify-center rounded-full" style="background-color: color-mix(in srgb, var(--gzus-primary) 14%, transparent);">
+                    <i data-lucide="building-2" class="h-3.5 w-3.5" style="color: var(--gzus-primary);"></i>
+                  </div>
+                  <span class="font-mono text-xs font-bold tabular-nums text-background/90">2 天</span>
+                </div>
+                <div class="mb-1">
+                  <p class="truncate text-[15px] font-bold text-background">选课即将截止</p>
+                  <p class="line-clamp-2 text-xs leading-relaxed text-background/80">2025 秋季学期第一轮选课将于 9 月 8 日 23:00 截止</p>
+                </div>
+                <div class="mt-2 h-1.5 w-full overflow-hidden rounded-full" style="background-color: color-mix(in srgb, var(--gzus-primary) 12%, transparent);">
+                  <div class="h-full rounded-full" style="width: 55%; background-color: var(--gzus-primary);"></div>
+                </div>
+              </div>
+            </div>
+            <div class="mx-auto mt-2 h-1 w-28 rounded-full bg-background/20"></div>
+            <p class="mt-3 text-center text-xs text-muted-foreground">iOS Dynamic Island</p>
+          </div>
+
+          <!-- Lock Screen -->
+          <div class="rounded-[32px] bg-foreground p-3 shadow-xl">
+            <div class="mb-2 flex items-center justify-center gap-1 text-[10px] font-medium text-background/60">
+              <span>9:41</span>
+              <span>·</span>
+              <span>6月20日 周四</span>
+            </div>
+            <div class="flex min-h-[140px] items-center justify-center py-2">
+              <div class="w-full max-w-[280px] rounded-2xl border p-4 backdrop-blur-xl" style="background-color: color-mix(in srgb, var(--gzus-foreground) 40%, transparent); border-color: color-mix(in srgb, var(--gzus-background) 10%, transparent);">
+                <div class="flex items-center gap-3">
+                  <div class="flex shrink-0 flex-col items-center justify-center">
+                    <i data-lucide="building-2" class="h-7 w-7" style="color: var(--gzus-primary);"></i>
+                  </div>
+                  <div class="min-w-0 flex-1">
+                    <p class="truncate text-[15px] font-bold text-background">选课即将截止</p>
+                    <p class="line-clamp-2 text-sm leading-snug text-background/80">2025 秋季学期第一轮选课将于 9 月 8 日 23:00 截止</p>
+                    <div class="mt-2 h-1.5 w-full overflow-hidden rounded-full" style="background-color: color-mix(in srgb, var(--gzus-primary) 12%, transparent);">
+                      <div class="h-full rounded-full" style="width: 55%; background-color: var(--gzus-primary);"></div>
+                    </div>
+                  </div>
+                  <div class="shrink-0 text-right">
+                    <span class="block font-mono text-lg font-bold tabular-nums text-background">2</span>
+                    <span class="text-[10px] text-background/60">天</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="mx-auto mt-2 h-1 w-28 rounded-full bg-background/20"></div>
+            <p class="mt-3 text-center text-xs text-muted-foreground">iOS Lock Screen</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Design Specs / Rules -->
+      <section id="section-specs" class="mb-12">
+        <div class="mb-4">
+          <h2 class="text-lg font-bold text-foreground">设计规范补充</h2>
+          <p class="text-sm text-muted-foreground">多事件、隐私、生命周期与跨平台适配规则</p>
+        </div>
+
+        <!-- 1. 多事件优先级与队列 -->
+        <div class="mb-4 rounded-2xl border border-border bg-card p-4">
+          <h3 class="mb-3 text-sm font-bold text-card-foreground">1. 多事件优先级与队列</h3>
+          <p class="mb-2 text-xs text-muted-foreground">当多个事件同时满足触发条件时，按以下优先级展示；同优先级按触发时间排队。</p>
+          <div class="space-y-2 text-sm">
+            <div class="flex items-center justify-between rounded-lg bg-muted p-2">
+              <span class="text-card-foreground">P1 · 进行中课程 / 考试</span>
+              <span class="text-xs text-muted-foreground">立即替换当前，倒计时实时更新</span>
+            </div>
+            <div class="flex items-center justify-between rounded-lg bg-muted p-2">
+              <span class="text-card-foreground">P2 · 上课/下课提醒（前后 15 分钟）</span>
+              <span class="text-xs text-muted-foreground">P1 结束后接入，15 分钟后自动结束</span>
+            </div>
+            <div class="flex items-center justify-between rounded-lg bg-muted p-2">
+              <span class="text-card-foreground">P3 · 考试 / 业务截止提醒</span>
+              <span class="text-xs text-muted-foreground">截止前 24h 内展示，截止后结束</span>
+            </div>
+            <div class="flex items-center justify-between rounded-lg bg-muted p-2">
+              <span class="text-card-foreground">P4 · 成绩 / 考勤 / 业务新通知</span>
+              <span class="text-xs text-muted-foreground">展示 4h 或用户查看后结束</span>
+            </div>
+            <div class="flex items-center justify-between rounded-lg bg-muted p-2">
+              <span class="text-card-foreground">P5 · 水电余额</span>
+              <span class="text-xs text-muted-foreground">仅在低于阈值或每日 8:00 刷新时展示</span>
+            </div>
+          </div>
+          <div class="mt-3 grid grid-cols-1 gap-3 text-xs text-muted-foreground md:grid-cols-2">
+            <div class="rounded-lg border border-border p-2">
+              <span class="font-bold text-card-foreground">iOS：</span>高优先级进入灵动岛，低优先级进入 Minimal 队列；最多同时 2 个 Live Activity。
+            </div>
+            <div class="rounded-lg border border-border p-2">
+              <span class="font-bold text-card-foreground">Flutter：</span>应用内只展示 1 个，其余按 FIFO 排队；最多保留 5 条待展示记录。
+            </div>
+          </div>
+        </div>
+
+        <!-- 2. 进度条计算 -->
+        <div class="mb-4 rounded-2xl border border-border bg-card p-4">
+          <h3 class="mb-3 text-sm font-bold text-card-foreground">2. 进度条计算定义</h3>
+          <table class="w-full text-left text-sm">
+            <thead>
+              <tr class="text-xs text-muted-foreground">
+                <th class="pb-2 font-medium">事件类型</th>
+                <th class="pb-2 font-medium">进度含义</th>
+                <th class="pb-2 font-medium">计算方式</th>
+              </tr>
+            </thead>
+            <tbody class="text-card-foreground">
+              <tr class="border-t border-border">
+                <td class="py-2">课程</td>
+                <td>本节课已进行比例</td>
+                <td class="text-xs text-muted-foreground">已过时间 ÷ 课程总时长</td>
+              </tr>
+              <tr class="border-t border-border">
+                <td class="py-2">考试倒计时</td>
+                <td>距离考试开始剩余比例</td>
+                <td class="text-xs text-muted-foreground">(触发时剩余 - 当前剩余) ÷ 触发时剩余</td>
+              </tr>
+              <tr class="border-t border-border">
+                <td class="py-2">水电</td>
+                <td class="text-muted-foreground line-through">已移除进度条</td>
+                <td class="text-xs text-muted-foreground">三个独立矩形展示，不显示进度</td>
+              </tr>
+              <tr class="border-t border-border">
+                <td class="py-2">成绩 / 考勤 / 业务</td>
+                <td>已处理 / 总条数</td>
+                <td class="text-xs text-muted-foreground">已读或已处理条数 ÷ 总条数</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- 3. 倒计时格式 -->
+        <div class="mb-4 rounded-2xl border border-border bg-card p-4">
+          <h3 class="mb-3 text-sm font-bold text-card-foreground">3. 倒计时格式规范</h3>
+          <div class="grid grid-cols-2 gap-3 text-sm">
+            <div class="rounded-lg border border-border p-3">
+              <p class="mb-1 text-xs text-muted-foreground">≥ 24 小时</p>
+              <p class="font-bold text-card-foreground">3 天、2 天 14 时</p>
+            </div>
+            <div class="rounded-lg border border-border p-3">
+              <p class="mb-1 text-xs text-muted-foreground">1–24 小时</p>
+              <p class="font-bold text-card-foreground">14:32、05:18</p>
+            </div>
+            <div class="rounded-lg border border-border p-3">
+              <p class="mb-1 text-xs text-muted-foreground">&lt; 1 小时</p>
+              <p class="font-bold text-card-foreground">45:32、09:05</p>
+            </div>
+            <div class="rounded-lg border border-border p-3">
+              <p class="mb-1 text-xs text-muted-foreground">≤ 1 分钟</p>
+              <p class="font-bold text-card-foreground">即将开始</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- 4. 隐私模式 -->
+        <div class="mb-4 rounded-2xl border border-border bg-card p-4">
+          <h3 class="mb-3 text-sm font-bold text-card-foreground">4. 锁屏隐私模式</h3>
+          <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <div class="rounded-xl bg-foreground p-3">
+              <p class="mb-2 text-xs text-background/60">正常展示</p>
+              <div class="rounded-xl border border-background/10 p-3 backdrop-blur-xl" style="background-color: color-mix(in srgb, var(--gzus-foreground) 40%, transparent);">
+                <div class="flex items-center gap-3">
+                  <i data-lucide="graduation-cap" class="h-6 w-6" style="color: var(--gzus-state-success);"></i>
+                  <div class="min-w-0 flex-1">
+                    <p class="text-sm font-bold text-background">成绩已更新</p>
+                    <p class="text-xs text-background/70">数据结构 92 · 操作系统 88 · 计网 90</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="rounded-xl bg-foreground p-3">
+              <p class="mb-2 text-xs text-background/60">隐私模式</p>
+              <div class="rounded-xl border border-background/10 p-3 backdrop-blur-xl" style="background-color: color-mix(in srgb, var(--gzus-foreground) 40%, transparent);">
+                <div class="flex items-center gap-3">
+                  <i data-lucide="graduation-cap" class="h-6 w-6" style="color: var(--gzus-state-success);"></i>
+                  <div class="min-w-0 flex-1">
+                    <p class="text-sm font-bold text-background">成绩已更新</p>
+                    <p class="text-xs text-background/70">3 门新成绩 · 点击查看详情</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <p class="mt-3 text-xs text-muted-foreground">用户可在「设置 → 隐私 → 锁屏显示」开启；开启后锁屏仅显示事件类型与数量，隐藏具体分数、缺勤科目、水电余额等敏感信息。</p>
+        </div>
+
+        <!-- 5. 生命周期 -->
+        <div class="mb-4 rounded-2xl border border-border bg-card p-4">
+          <h3 class="mb-3 text-sm font-bold text-card-foreground">5. 事件生命周期</h3>
+          <div class="relative space-y-4 pl-4 before:absolute before:left-1.5 before:top-2 before:h-[calc(100%-16px)] before:w-px before:bg-border">
+            <div class="relative">
+              <span class="absolute -left-4 top-1.5 h-2 w-2 rounded-full bg-primary"></span>
+              <p class="text-sm font-bold text-card-foreground">触发</p>
+              <p class="text-xs text-muted-foreground">后端检测到事件或前端轮询发现数据变化</p>
+            </div>
+            <div class="relative">
+              <span class="absolute -left-4 top-1.5 h-2 w-2 rounded-full bg-primary"></span>
+              <p class="text-sm font-bold text-card-foreground">展示</p>
+              <p class="text-xs text-muted-foreground">进入灵动岛/应用内悬浮卡片/锁屏，按优先级排队</p>
+            </div>
+            <div class="relative">
+              <span class="absolute -left-4 top-1.5 h-2 w-2 rounded-full bg-primary"></span>
+              <p class="text-sm font-bold text-card-foreground">更新</p>
+              <p class="text-xs text-muted-foreground">倒计时每秒刷新；内容变化时推送 content-state 更新</p>
+            </div>
+            <div class="relative">
+              <span class="absolute -left-4 top-1.5 h-2 w-2 rounded-full bg-primary"></span>
+              <p class="text-sm font-bold text-card-foreground">结束</p>
+              <p class="text-xs text-muted-foreground">事件到期、用户查看、手动关闭或超时后移除</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- 6. Android / 非灵动岛 -->
+        <div class="mb-4 rounded-2xl border border-border bg-card p-4">
+          <h3 class="mb-3 text-sm font-bold text-card-foreground">6. Android / 非灵动岛设备适配</h3>
+          <div class="space-y-3">
+            <div class="flex items-center gap-3 rounded-lg bg-muted p-3">
+              <i data-lucide="smartphone" class="h-5 w-5 text-primary"></i>
+              <div>
+                <p class="text-sm font-bold text-card-foreground">应用内悬浮胶囊</p>
+                <p class="text-xs text-muted-foreground">与 Flutter 方案一致，顶部悬浮 Compact/Expanded</p>
+              </div>
+            </div>
+            <div class="flex items-center gap-3 rounded-lg bg-muted p-3">
+              <i data-lucide="bell" class="h-5 w-5 text-primary"></i>
+              <div>
+                <p class="text-sm font-bold text-card-foreground">通知栏卡片</p>
+                <p class="text-xs text-muted-foreground">进度条、倒计时、展开后显示完整内容</p>
+              </div>
+            </div>
+            <div class="flex items-center gap-3 rounded-lg bg-muted p-3">
+              <i data-lucide="square" class="h-5 w-5 text-primary"></i>
+              <div>
+                <p class="text-sm font-bold text-card-foreground">桌面小部件（可选）</p>
+                <p class="text-xs text-muted-foreground">固定显示下一节课/最近考试/水电余额</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 7. 离线资源 -->
+        <div class="mb-4 rounded-2xl border border-border bg-card p-4">
+          <h3 class="mb-3 text-sm font-bold text-card-foreground">7. 离线资源说明</h3>
+          <p class="text-sm text-muted-foreground">当前设计稿使用 Tailwind CDN 与 Lucide CDN 方便预览。正式工程落地时需要：</p>
+          <ul class="mt-2 space-y-1 text-sm text-card-foreground">
+            <li>• 将 Tailwind 配置写入项目构建流程（或改用项目内已有的样式系统）</li>
+            <li>• 把 Lucide 图标替换为 Flutter 内建图标或本地 SVG/字体资源</li>
+            <li>• 颜色令牌与 <code>gzus_design.dart</code> 保持一致</li>
+          </ul>
+        </div>
+
+        <!-- 8. 按钮交互 -->
+        <div class="rounded-2xl border border-border bg-card p-4">
+          <h3 class="mb-3 text-sm font-bold text-card-foreground">8. 按钮交互状态</h3>
+          <div class="flex flex-wrap gap-3">
+            <button class="rounded-lg px-4 py-2 text-sm font-semibold text-primary-foreground opacity-100" style="background-color: var(--gzus-primary);">默认</button>
+            <button class="rounded-lg px-4 py-2 text-sm font-semibold text-primary-foreground opacity-80" style="background-color: var(--gzus-primary);">悬停 / Hover</button>
+            <button class="rounded-lg px-4 py-2 text-sm font-semibold text-primary-foreground opacity-60" style="background-color: var(--gzus-primary);">按下 / Press</button>
+            <button class="rounded-lg px-4 py-2 text-sm font-semibold text-primary-foreground opacity-40" style="background-color: var(--gzus-primary);">禁用 / Disabled</button>
+          </div>
+          <p class="mt-3 text-xs text-muted-foreground">点击后执行对应导航或操作，并在 200ms 内结束当前灵动岛（除需要持续展示的场景外）。</p>
+        </div>
+      </section>
+
+      <!-- Tokens -->
+      <section id="section-tokens" class="mb-10">
+        <div class="mb-4">
+          <h2 class="text-lg font-bold text-foreground">设计令牌</h2>
+          <p class="text-sm text-muted-foreground">事件类型、颜色与图标映射规则</p>
+        </div>
+        <div class="space-y-4">
+          <div class="rounded-2xl border border-border bg-card p-4">
+            <h3 class="mb-3 text-sm font-bold text-card-foreground">事件颜色</h3>
+            <div class="space-y-2 text-sm">
+              <div class="flex items-center justify-between">
+                <span class="text-card-foreground">课程提醒 / 业务通知</span>
+                <div class="flex items-center gap-2">
+                  <span class="text-xs text-muted-foreground">primary</span>
+                  <span class="inline-block h-4 w-4 rounded-full" style="background-color: var(--gzus-primary);"></span>
+                </div>
+              </div>
+              <div class="flex items-center justify-between">
+                <span class="text-card-foreground">考试提醒 / 考勤更新</span>
+                <div class="flex items-center gap-2">
+                  <span class="text-xs text-muted-foreground">warning</span>
+                  <span class="inline-block h-4 w-4 rounded-full" style="background-color: var(--gzus-state-warning);"></span>
+                </div>
+              </div>
+              <div class="flex items-center justify-between">
+                <span class="text-card-foreground">水电提醒</span>
+                <div class="flex items-center gap-2">
+                  <span class="text-xs text-muted-foreground">info</span>
+                  <span class="inline-block h-4 w-4 rounded-full" style="background-color: var(--gzus-state-info);"></span>
+                </div>
+              </div>
+              <div class="flex items-center justify-between">
+                <span class="text-card-foreground">成绩更新</span>
+                <div class="flex items-center gap-2">
+                  <span class="text-xs text-muted-foreground">success</span>
+                  <span class="inline-block h-4 w-4 rounded-full" style="background-color: var(--gzus-state-success);"></span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="rounded-2xl border border-border bg-card p-4">
+            <h3 class="mb-3 text-sm font-bold text-card-foreground">图标映射</h3>
+            <div class="grid grid-cols-2 gap-3 text-sm">
+              <div class="flex items-center gap-2 rounded-lg bg-muted p-2">
+                <i data-lucide="clock" class="h-4 w-4 text-primary"></i>
+                <span class="text-card-foreground">课程提醒</span>
+              </div>
+              <div class="flex items-center gap-2 rounded-lg bg-muted p-2">
+                <i data-lucide="file-text" class="h-4 w-4" style="color: var(--gzus-state-warning);"></i>
+                <span class="text-card-foreground">考试提醒</span>
+              </div>
+              <div class="flex items-center gap-2 rounded-lg bg-muted p-2">
+                <i data-lucide="droplet" class="h-4 w-4" style="color: var(--gzus-state-info);"></i>
+                <span class="text-card-foreground">水电提醒</span>
+              </div>
+              <div class="flex items-center gap-2 rounded-lg bg-muted p-2">
+                <i data-lucide="graduation-cap" class="h-4 w-4" style="color: var(--gzus-state-success);"></i>
+                <span class="text-card-foreground">成绩更新</span>
+              </div>
+              <div class="flex items-center gap-2 rounded-lg bg-muted p-2">
+                <i data-lucide="badge-check" class="h-4 w-4" style="color: var(--gzus-state-warning);"></i>
+                <span class="text-card-foreground">考勤更新</span>
+              </div>
+              <div class="flex items-center gap-2 rounded-lg bg-muted p-2">
+                <i data-lucide="building-2" class="h-4 w-4 text-primary"></i>
+                <span class="text-card-foreground">业务通知</span>
+              </div>
+            </div>
+          </div>
+          <div class="rounded-2xl border border-border bg-card p-4">
+            <h3 class="mb-3 text-sm font-bold text-card-foreground">形态参数</h3>
+            <ul class="space-y-1.5 text-sm text-muted-foreground">
+              <li>Compact：宽 208 px，高 46 px，胶囊圆角 999 px</li>
+              <li>Expanded：最大宽 420 px，圆角 26 px，内边距 12 px</li>
+              <li>iOS Dynamic Island：leading 短文本 / center 标题 / trailing 计时 / bottom 图标+正文+进度</li>
+              <li>iOS Lock Screen：水平卡片，leading 图标 + title/body/progress + trailing 倒计时</li>
+              <li>边框：背景色 alpha 0.10</li>
+              <li>玻璃表面：前景色 alpha 0.40 + backdrop-blur-xl</li>
+              <li>进度条：高 5 px，背景为事件色 12% alpha</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+    </div>
+    <script>lucide.createIcons();</script>
+  </main>
+</body>
+</html>

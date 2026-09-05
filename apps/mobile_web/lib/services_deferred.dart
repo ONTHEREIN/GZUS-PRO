@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import 'api_client.dart';
+import 'leave_attachment_models.dart';
 import 'web_push_service.dart' deferred as web_push_service;
 import 'local_notification_service.dart' deferred as local_notification_service;
 import 'push_service.dart' deferred as push_service;
@@ -309,6 +310,7 @@ class LoginRequiredServices {
     dynamic context,
     String url, {
     String? fillScript,
+    required List<PickedAttachment> attachments,
     required ApiClient api,
   }) async {
     try {
@@ -317,6 +319,7 @@ class LoginRequiredServices {
         context,
         url,
         fillScript: fillScript,
+        attachments: attachments,
         api: api,
       );
     } catch (_) {

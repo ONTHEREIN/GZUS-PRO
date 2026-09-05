@@ -2,11 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import mimetypes
-import re
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
-from datetime import date
-from html import unescape
 from threading import Lock
 from typing import Any
 from urllib.parse import quote
@@ -326,95 +323,12 @@ class EhallClient:
                 break
         return items
 
-    def fill_leave_application(
-        self,
-        *,
-        start_date: date,
-        end_date: date,
-        leave_days: int,
-        reason: str,
-        courses: list[dict],
-        attachments: list[tuple[str, bytes]],
-    ) -> dict:
-        """Best-effort server-side fill hook for the official Linkey BPM form.
-
-        The real BPM form is JavaScript-heavy, so this method only performs the
-        stable session/form discovery here. Test and deployment adapters can
-        override this method to drive the official form with a browser runtime.
-        """
-        form_url = (
+    def leave_application_url(self) -> str:
+        """返回请假表单入口，不在服务端创建独立草稿。"""
+        return (
             f"{self.base_url.rstrip('/')}/bpm/r"
             f"?wf_num={LEAVE_WORKFLOW_NUMBER}&wf_processid={LEAVE_WORKFLOW_PROCESS_ID}#"
         )
-        with httpx.Client(
-            base_url=self.base_url,
-            cookies=self._cookies,
-            timeout=self.timeout_seconds,
-            follow_redirects=True,
-            headers=self._auth_headers(),
-        ) as client:
-            response = client.get(
-                "bpm/r",
-                params={
-                    "wf_num": LEAVE_WORKFLOW_NUMBER,
-                    "wf_processid": LEAVE_WORKFLOW_PROCESS_ID,
-                },
-            )
-        if _looks_like_login(response):
-            raise EhallAuthenticationError("办事大厅会话已失效，请重新登录")
-        response.raise_for_status()
-        if "学生课程请假申请" not in response.text:
-            return {
-                "status": "needs_manual",
-                "message": "已生成请假数据；请打开请假表单后复制填表脚本执行",
-                "formUrl": form_url,
-                "unmatchedTeachers": _teacher_names(courses),
-            }
-        uploaded_count = self._upload_leave_attachments_from_form(
-            response.text,
-            attachments=attachments,
-        )
-        attachment_total = len(attachments)
-        attachment_uploaded = uploaded_count == attachment_total
-        return {
-            "status": "filled" if attachment_uploaded else "needs_manual",
-            "message": f"已上传 {uploaded_count} 张附件；请在办事大厅表单页执行填表脚本并检查提交"
-            if attachment_uploaded
-            else (
-                f"已上传 {uploaded_count}/{attachment_total} 张附件；"
-                "请在办事大厅表单页执行填表脚本，再手动上传剩余附件"
-            ),
-            "formUrl": str(response.url),
-            "unmatchedTeachers": _teacher_names(courses),
-            "attachmentUploaded": attachment_uploaded,
-            "attachmentUploadedCount": uploaded_count,
-            "attachmentTotal": attachment_total,
-        }
-
-    def _upload_leave_attachments_from_form(
-        self,
-        form_html: str,
-        *,
-        attachments: list[tuple[str, bytes]],
-    ) -> int:
-        doc_unid = _input_value(form_html, "WF_DocUnid")
-        if not doc_unid:
-            return 0
-        process_id = _input_value(form_html, "WF_Processid") or LEAVE_WORKFLOW_PROCESS_ID
-        node_name = _input_value(form_html, "WF_CurrentNodeName") or "申请人"
-        local_store = "1" if _input_value(form_html, "localStore") else "0"
-        uploaded_count = 0
-        for attachment_name, attachment_content in attachments:
-            if self.upload_leave_attachment(
-                doc_unid=doc_unid,
-                process_id=process_id,
-                node_name=node_name,
-                local_store=local_store,
-                attachment_name=attachment_name,
-                attachment_content=attachment_content,
-            ):
-                uploaded_count += 1
-        return uploaded_count
 
     def upload_leave_attachment(
         self,
@@ -422,10 +336,11 @@ class EhallClient:
         doc_unid: str,
         process_id: str,
         node_name: str,
-        local_store: str = "0",
+        local_store: str,
         attachment_name: str,
         attachment_content: bytes,
     ) -> bool:
+        """将附件写入当前办事大厅表单实例。"""
         if not doc_unid or not attachment_content:
             return False
         content_type = mimetypes.guess_type(attachment_name)[0] or "application/octet-stream"
@@ -898,25 +813,6 @@ def _cookie_dict(cookies: str | dict[str, str]) -> dict[str, str]:
         if key.strip() and value.strip():
             pairs[key.strip()] = value.strip()
     return pairs
-
-
-def _input_value(html: str, field_id: str) -> str | None:
-    pattern = re.compile(r"<input\b(?=[^>]*\bid=['\"]?" + re.escape(field_id) + r"['\"]?)[^>]*>", re.I)
-    match = pattern.search(html)
-    if match is None:
-        pattern = re.compile(
-            r"<input\b(?=[^>]*\bname=['\"]?" + re.escape(field_id) + r"['\"]?)[^>]*>",
-            re.I,
-        )
-        match = pattern.search(html)
-    if match is None:
-        return None
-    value_match = re.search(r"\bvalue=(['\"])(.*?)\1", match.group(0), re.I | re.S)
-    if value_match is None:
-        value_match = re.search(r"\bvalue=([^\s>]+)", match.group(0), re.I)
-    if value_match is None:
-        return ""
-    return unescape(value_match.group(2 if value_match.lastindex == 2 else 1)).strip()
 
 
 def _looks_like_upload_error(response: httpx.Response) -> bool:

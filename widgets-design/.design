@@ -1,0 +1,32 @@
+{
+  "data": [
+    {
+      "id": "page-index",
+      "title": "桌面与锁屏小组件设计",
+      "type": "page",
+      "version": 2,
+      "createdAt": 1725441600000,
+      "canvasData": {
+        "x": 0,
+        "y": 0,
+        "group": 0,
+        "layoutSnapshot": {
+          "version": 1,
+          "contentHeight": 5590,
+          "viewportWidth": 375,
+          "sourceHash": "fnv1a-f2ab3374",
+          "measuredAt": 1788530279772
+        }
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/index.html",
+        "interactions": []
+      }
+    }
+  ],
+  "config": {
+    "autoLayout": true,
+    "deviceType": "mobile",
+    "projectName": "软帮手桌面与锁屏小组件设计"
+  }
+}

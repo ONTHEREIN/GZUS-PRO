@@ -176,7 +176,10 @@ class HomeWeekCalendarPreview extends StatelessWidget {
     return LayoutBuilder(
       builder: (context, constraints) {
         final timeWidth = compact ? 27.0 : 32.0;
-        final dayWidth = (constraints.maxWidth - timeWidth) / 7;
+        final calendarWidth = constraints.maxWidth < (compact ? 560 : 720)
+            ? (compact ? 560.0 : 720.0)
+            : constraints.maxWidth;
+        final dayWidth = (calendarWidth - timeWidth) / 7;
         final headerHeight = compact ? 29.0 : 40.0;
         final availableRowHeight =
             (constraints.maxHeight - headerHeight) / maxSection;
@@ -185,92 +188,100 @@ class HomeWeekCalendarPreview extends StatelessWidget {
           compact ? 22.0 : 29.0,
         );
         final bodyHeight = rowHeight * maxSection;
-        return Column(
-          key: const ValueKey('home-week-calendar-preview'),
-          children: [
-            SizedBox(
-              height: headerHeight,
-              child: Row(
-                children: [
-                  SizedBox(width: timeWidth),
-                  for (var index = 0; index < days.length; index++)
-                    SizedBox(
-                      width: dayWidth,
-                      child: _HomeDayHeader(
-                        day: days[index],
-                        compact: compact,
-                        isToday: _sameDay(days[index], DateTime.now()),
-                      ),
-                    ),
-                ],
-              ),
-            ),
-            SizedBox(
-              height: bodyHeight,
-              child: Stack(
-                children: [
-                  for (var day = 0; day < 7; day++)
-                    Positioned(
-                      left: timeWidth + dayWidth * day,
-                      top: 0,
-                      width: dayWidth,
-                      height: bodyHeight,
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: _sameDay(days[day], DateTime.now())
-                              ? colorScheme.primaryContainer
-                                  .withValues(alpha: 0.24)
-                              : colorScheme.surfaceContainerLow,
-                          border: Border(
-                            left: BorderSide(
-                              color: colorScheme.outlineVariant
-                                  .withValues(alpha: 0.45),
+        return SingleChildScrollView(
+          key: const ValueKey('home-week-calendar-scroll'),
+          scrollDirection: Axis.horizontal,
+          physics: const BouncingScrollPhysics(),
+          child: SizedBox(
+            width: calendarWidth,
+            child: Column(
+              key: const ValueKey('home-week-calendar-preview'),
+              children: [
+                SizedBox(
+                  height: headerHeight,
+                  child: Row(
+                    children: [
+                      SizedBox(width: timeWidth),
+                      for (var index = 0; index < days.length; index++)
+                        SizedBox(
+                          width: dayWidth,
+                          child: _HomeDayHeader(
+                            day: days[index],
+                            compact: compact,
+                            isToday: _sameDay(days[index], DateTime.now()),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                SizedBox(
+                  height: bodyHeight,
+                  child: Stack(
+                    children: [
+                      for (var day = 0; day < 7; day++)
+                        Positioned(
+                          left: timeWidth + dayWidth * day,
+                          top: 0,
+                          width: dayWidth,
+                          height: bodyHeight,
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: _sameDay(days[day], DateTime.now())
+                                  ? colorScheme.primaryContainer
+                                      .withValues(alpha: 0.24)
+                                  : colorScheme.surfaceContainerLow,
+                              border: Border(
+                                left: BorderSide(
+                                  color: colorScheme.outlineVariant
+                                      .withValues(alpha: 0.45),
+                                ),
+                              ),
                             ),
                           ),
                         ),
-                      ),
-                    ),
-                  for (var row = 0; row <= maxSection; row++)
-                    Positioned(
-                      left: 0,
-                      right: 0,
-                      top: row * rowHeight,
-                      child: Container(
-                        height: 1,
-                        color:
-                            colorScheme.outlineVariant.withValues(alpha: 0.5),
-                      ),
-                    ),
-                  for (var row = 0; row < maxSection; row++)
-                    Positioned(
-                      left: 0,
-                      top: row * rowHeight,
-                      width: timeWidth,
-                      height: rowHeight,
-                      child: Center(
-                        child: Text(
-                          '${row + 1}',
-                          style: TextStyle(
-                            fontSize: compact ? 9 : 10,
-                            color: colorScheme.onSurfaceVariant,
-                            fontWeight: FontWeight.w700,
+                      for (var row = 0; row <= maxSection; row++)
+                        Positioned(
+                          left: 0,
+                          right: 0,
+                          top: row * rowHeight,
+                          child: Container(
+                            height: 1,
+                            color: colorScheme.outlineVariant
+                                .withValues(alpha: 0.5),
                           ),
                         ),
-                      ),
-                    ),
-                  for (final course in visibleCourses)
-                    _HomeCourseBlock(
-                      course: course,
-                      timeWidth: timeWidth,
-                      dayWidth: dayWidth,
-                      rowHeight: rowHeight,
-                      compact: compact,
-                      maxSection: maxSection,
-                    ),
-                ],
-              ),
+                      for (var row = 0; row < maxSection; row++)
+                        Positioned(
+                          left: 0,
+                          top: row * rowHeight,
+                          width: timeWidth,
+                          height: rowHeight,
+                          child: Center(
+                            child: Text(
+                              '${row + 1}',
+                              style: TextStyle(
+                                fontSize: compact ? 9 : 10,
+                                color: colorScheme.onSurfaceVariant,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                        ),
+                      for (final course in visibleCourses)
+                        _HomeCourseBlock(
+                          course: course,
+                          timeWidth: timeWidth,
+                          dayWidth: dayWidth,
+                          rowHeight: rowHeight,
+                          compact: compact,
+                          maxSection: maxSection,
+                        ),
+                    ],
+                  ),
+                ),
+              ],
             ),
-          ],
+          ),
         );
       },
     );

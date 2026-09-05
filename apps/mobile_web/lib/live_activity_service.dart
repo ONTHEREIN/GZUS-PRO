@@ -6,7 +6,6 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'api_client.dart';
-import 'widgets/liquid_glass.dart';
 
 const _iosPushEnvironment = String.fromEnvironment(
   'IOS_PUSH_ENVIRONMENT',
@@ -198,7 +197,7 @@ class LiveActivityService {
       'body': event.body,
       'shortText': event.shortText ?? event.title,
       'startEpochMillis': event.startTime?.millisecondsSinceEpoch ?? 0,
-      'endEpochMillis': end?.millisecondsSinceEpoch ?? 0,
+      'endEpochMillis': end.millisecondsSinceEpoch,
       'progress': event.progress,
       'ongoing': event.ongoing,
       'targetTab': event.targetTab ?? 'home',
@@ -238,6 +237,7 @@ class LiveActivityEvent {
       title: value('title')?.toString() ?? '软帮手',
       body: value('body')?.toString() ?? '',
       style: style,
+      startTime: _dateTimeFromEpochMillis(value('startTime')),
       endTime: _dateTimeFromEpochMillis(value('endTime')),
       shortText: value('shortCriticalText')?.toString() ??
           value('shortText')?.toString(),
@@ -287,9 +287,15 @@ class LiveActivityEvent {
   final String? url;
   final bool ongoing;
   final double? progress;
+  final DateTime createdAt = DateTime.now();
 
-  DateTime? get effectiveEndTime =>
-      endTime ?? DateTime.now().add(const Duration(minutes: 30));
+  DateTime get effectiveEndTime {
+    if (endTime != null) return endTime!;
+    if (type == 'course_reminder') {
+      return createdAt.add(const Duration(minutes: 15));
+    }
+    return createdAt.add(const Duration(hours: 4));
+  }
 
   String get deepLink {
     return Uri(
@@ -299,13 +305,38 @@ class LiveActivityEvent {
     ).toString();
   }
 
+  /// Whether this event carries a meaningful countdown window.
+  /// Exams use the progress transport style but still need a live countdown;
+  /// utility reminders remain metric-only despite their short expiry time.
+  bool get isCountdown {
+    if (type == 'ecard_reminder' || endTime == null) return false;
+    if (style == 'timer') return true;
+    final start = startTime;
+    return start != null && endTime!.isAfter(start);
+  }
+
   bool get isTimer => style == 'timer' && endTime != null;
   bool get isMetric => style == 'metric';
   bool get hasAction =>
       (targetTab != null && targetTab!.isNotEmpty) ||
       (url != null && url!.isNotEmpty);
 
-  bool isExpired(DateTime now) => endTime != null && !endTime!.isAfter(now);
+  int get priority {
+    if ((type == 'course_reminder' || type == 'exam_reminder') && ongoing) {
+      return 1;
+    }
+    if (type == 'course_reminder') return 2;
+    if (type == 'exam_reminder' || type == 'business_reminder') return 3;
+    if (type == 'grade_update' ||
+        type == 'attendance_update' ||
+        type == 'business_update' ||
+        type == 'new_notice') {
+      return 4;
+    }
+    return 5;
+  }
+
+  bool isExpired(DateTime now) => !effectiveEndTime.isAfter(now);
 
   static String? targetTabForType(String? type) {
     switch (type) {
@@ -321,6 +352,9 @@ class LiveActivityEvent {
         return 'notices';
       case 'attendance_update':
         return 'attendance';
+      case 'business_reminder':
+      case 'business_update':
+        return 'business';
       default:
         return null;
     }
@@ -396,12 +430,42 @@ class LiveActivityController {
   LiveActivityOpenHandler? onOpen;
   Timer? _collapseTimer;
   Timer? _dismissTimer;
+  final List<LiveActivityEvent> _queue = <LiveActivityEvent>[];
+
+  @visibleForTesting
+  List<LiveActivityEvent> get queuedEvents => List.unmodifiable(_queue);
 
   void show(LiveActivityEvent event) {
     if (event.isExpired(DateTime.now())) {
       dismiss(event.id);
       return;
     }
+    final current = state.value.event;
+    if (current != null && current.id != event.id) {
+      if (event.priority >= current.priority) {
+        _enqueue(event);
+        return;
+      }
+      _enqueue(current);
+    }
+    _present(event);
+  }
+
+  void _enqueue(LiveActivityEvent event) {
+    _queue.removeWhere((queued) => queued.id == event.id);
+    _queue.add(event);
+    if (_queue.length > 5) {
+      var removableIndex = 0;
+      for (var index = 1; index < _queue.length; index++) {
+        if (_queue[index].priority >= _queue[removableIndex].priority) {
+          removableIndex = index;
+        }
+      }
+      _queue.removeAt(removableIndex);
+    }
+  }
+
+  void _present(LiveActivityEvent event) {
     _collapseTimer?.cancel();
     _dismissTimer?.cancel();
     state.value = LiveActivityViewState(event: event, expanded: true);
@@ -410,13 +474,10 @@ class LiveActivityController {
         state.value = state.value.copyWith(expanded: false);
       }
     });
-    final endTime = event.endTime;
-    if (endTime != null) {
-      final delay = endTime.difference(DateTime.now());
-      _dismissTimer = Timer(delay.isNegative ? Duration.zero : delay, () {
-        dismiss(event.id);
-      });
-    }
+    final delay = event.effectiveEndTime.difference(DateTime.now());
+    _dismissTimer = Timer(delay.isNegative ? Duration.zero : delay, () {
+      dismiss(event.id);
+    });
   }
 
   void dismiss(String? id) {
@@ -424,6 +485,21 @@ class LiveActivityController {
     _collapseTimer?.cancel();
     _dismissTimer?.cancel();
     state.value = const LiveActivityViewState();
+    _presentNext();
+  }
+
+  void _presentNext() {
+    final now = DateTime.now();
+    _queue.removeWhere((event) => event.isExpired(now));
+    if (_queue.isEmpty) return;
+    var nextIndex = 0;
+    for (var index = 1; index < _queue.length; index++) {
+      if (_queue[index].priority < _queue[nextIndex].priority) {
+        nextIndex = index;
+      }
+    }
+    final next = _queue.removeAt(nextIndex);
+    _present(next);
   }
 
   void toggleExpanded() {
@@ -435,14 +511,20 @@ class LiveActivityController {
     final event = state.value.event;
     if (event == null) return;
     onOpen?.call(event);
+    if (!event.ongoing) dismiss(event.id);
+  }
+
+  void dismissAll() {
+    _collapseTimer?.cancel();
+    _dismissTimer?.cancel();
+    _queue.clear();
+    state.value = const LiveActivityViewState();
   }
 
   @visibleForTesting
   void resetForTest() {
-    _collapseTimer?.cancel();
-    _dismissTimer?.cancel();
+    dismissAll();
     onOpen = null;
-    state.value = const LiveActivityViewState();
   }
 }
 
@@ -474,7 +556,8 @@ class _LiveActivityIslandState extends State<LiveActivityIsland> {
   }
 
   void _syncTicker() {
-    final needsTicker = widget.controller.state.value.event?.isTimer ?? false;
+    final needsTicker =
+        widget.controller.state.value.event?.isCountdown ?? false;
     if (!needsTicker) {
       _ticker?.cancel();
       _ticker = null;
@@ -520,8 +603,7 @@ class _LiveActivityIslandState extends State<LiveActivityIsland> {
                           : GestureDetector(
                               onTap: widget.controller.toggleExpanded,
                               onVerticalDragEnd: (details) {
-                                if (!event.ongoing &&
-                                    (details.primaryVelocity ?? 0) < -180) {
+                                if ((details.primaryVelocity ?? 0) < -180) {
                                   widget.controller.dismiss(event.id);
                                 }
                               },
@@ -530,9 +612,8 @@ class _LiveActivityIslandState extends State<LiveActivityIsland> {
                                 expanded: state.expanded,
                                 now: _now,
                                 onOpen: widget.controller.openCurrent,
-                                onDismiss: event.ongoing
-                                    ? null
-                                    : () => widget.controller.dismiss(event.id),
+                                onDismiss: () =>
+                                    widget.controller.dismiss(event.id),
                               ),
                             ),
                     ),
@@ -566,60 +647,89 @@ class _IslandSurface extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final color = _eventColor(theme.colorScheme);
+    final isDark = theme.brightness == Brightness.dark;
+    final surfaceColor = isDark
+        ? const Color(0xFF0B0D10)
+        : const Color(0xFFF5F7FA).withValues(alpha: 0.96);
+    final foregroundColor =
+        isDark ? const Color(0xFFF5F7FA) : const Color(0xFF17191D);
+    final mutedColor =
+        isDark ? const Color(0xFFA4ABB8) : const Color(0xFF6B7280);
     final duration = MediaQuery.disableAnimationsOf(context)
         ? Duration.zero
         : const Duration(milliseconds: 280);
     return Material(
-      color: Colors.transparent,
+      color: surfaceColor,
       elevation: 14,
       borderRadius: BorderRadius.circular(expanded ? 26 : 999),
-      child: LiquidGlassSurface(
-        padding: EdgeInsets.all(expanded ? 12 : 8),
-        borderRadius: BorderRadius.circular(expanded ? 26 : 999),
-        material: LiquidGlassMaterial.regular,
-        semanticsLabel: '即时提醒',
+      child: Semantics(
+        label: '即时提醒',
+        button: true,
         child: AnimatedContainer(
           duration: duration,
           curve: Curves.easeOutCubic,
+          padding: EdgeInsets.all(expanded ? 12 : 8),
           decoration: BoxDecoration(
+            color: surfaceColor,
             borderRadius: BorderRadius.circular(expanded ? 26 : 999),
             border: Border.all(
-              color: color.withValues(
-                alpha: theme.brightness == Brightness.dark ? 0.32 : 0.18,
-              ),
+              color: foregroundColor.withValues(alpha: 0.10),
             ),
           ),
-          child: expanded
-              ? _expandedContent(context, color)
-              : _compactContent(context, color),
+          child: DefaultTextStyle.merge(
+            style: TextStyle(color: foregroundColor),
+            child: IconTheme.merge(
+              data: IconThemeData(color: foregroundColor),
+              child: expanded
+                  ? _expandedContent(
+                      context,
+                      color,
+                      foregroundColor,
+                      mutedColor,
+                    )
+                  : _compactContent(context, color, foregroundColor),
+            ),
+          ),
         ),
       ),
     );
   }
 
-  Widget _compactContent(BuildContext context, Color color) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        _IslandIcon(type: event.type, color: color, size: 30),
-        const SizedBox(width: 8),
-        Flexible(
-          child: Text(
-            event.shortText?.isNotEmpty == true
-                ? event.shortText!
-                : _compactText(),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                  fontWeight: FontWeight.w900,
-                ),
+  Widget _compactContent(
+    BuildContext context,
+    Color color,
+    Color foregroundColor,
+  ) {
+    return SizedBox(
+      height: 30,
+      child: Row(
+        children: [
+          _IslandIcon(type: event.type, color: color, size: 30),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Text(
+              event.shortText?.isNotEmpty == true
+                  ? event.shortText!
+                  : _compactText(),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                    fontWeight: FontWeight.w900,
+                    color: foregroundColor,
+                  ),
+            ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 
-  Widget _expandedContent(BuildContext context, Color color) {
+  Widget _expandedContent(
+    BuildContext context,
+    Color color,
+    Color foregroundColor,
+    Color mutedColor,
+  ) {
     final theme = Theme.of(context);
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -639,13 +749,16 @@ class _IslandSurface extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                     style: theme.textTheme.titleMedium?.copyWith(
                       fontWeight: FontWeight.w900,
+                      color: foregroundColor,
                     ),
                   ),
                   Text(
                     _subtitle(),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.bodySmall,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: mutedColor,
+                    ),
                   ),
                 ],
               ),
@@ -656,34 +769,48 @@ class _IslandSurface extends StatelessWidget {
                 tooltip: '关闭',
                 visualDensity: VisualDensity.compact,
                 onPressed: onDismiss,
-                icon: const Icon(Icons.close, size: 18),
+                icon: Icon(Icons.close, size: 18, color: mutedColor),
               ),
           ],
         ),
-        if (event.body.isNotEmpty) ...[
+        if (event.body.isNotEmpty && event.type != 'ecard_reminder') ...[
           const SizedBox(height: 10),
           Text(
             event.body,
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
-            style: theme.textTheme.bodyMedium,
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: foregroundColor.withValues(alpha: 0.82),
+            ),
           ),
         ],
-        const SizedBox(height: 10),
-        _ProgressLine(event: event, now: now, color: color),
+        if (event.type == 'ecard_reminder') ...[
+          const SizedBox(height: 10),
+          _UtilityMetrics(
+            body: event.body,
+            color: color,
+            foregroundColor: foregroundColor,
+          ),
+        ] else if (_shouldShowProgress()) ...[
+          const SizedBox(height: 10),
+          _ProgressLine(event: event, now: now, color: color),
+        ],
         if (event.hasAction) ...[
           const SizedBox(height: 10),
-          Align(
-            alignment: Alignment.centerRight,
-            child: FilledButton.icon(
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton(
               key: const ValueKey('live-activity-action'),
               onPressed: onOpen,
-              icon: const Icon(Icons.arrow_forward, size: 18),
-              label: Text(_actionLabel()),
               style: FilledButton.styleFrom(
-                minimumSize: const Size(0, 38),
+                minimumSize: const Size.fromHeight(38),
                 backgroundColor: color,
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
               ),
+              child: Text(_actionLabel()),
             ),
           ),
         ],
@@ -691,21 +818,33 @@ class _IslandSurface extends StatelessWidget {
     );
   }
 
+  bool _shouldShowProgress() {
+    final progress = event.progress;
+    if (progress == null || progress >= 1) return false;
+    return event.style == 'progress' || event.isCountdown;
+  }
+
   Color _eventColor(ColorScheme scheme) {
     switch (event.type) {
       case 'ecard_reminder':
-        return scheme.secondary;
+        return const Color(0xFF0EA5E9);
       case 'exam_reminder':
-        return scheme.tertiary;
+      case 'attendance_update':
+        return const Color(0xFFEA580C);
+      case 'grade_update':
+        return const Color(0xFF059669);
       case 'course_reminder':
-        return scheme.primary;
+      case 'business_reminder':
+      case 'business_update':
+        return const Color(0xFF2563EB);
       default:
         return scheme.primary;
     }
   }
 
   String _subtitle() {
-    if (event.isTimer && event.endTime != null) {
+    if (event.type == 'ecard_reminder') return '冷水 · 热水 · 电费';
+    if (event.isCountdown && event.endTime != null) {
       return '剩余 ${_durationText(event.endTime!.difference(now))}';
     }
     if (event.shortText?.isNotEmpty == true) return event.shortText!;
@@ -713,7 +852,7 @@ class _IslandSurface extends StatelessWidget {
   }
 
   String _compactText() {
-    if (event.isTimer && event.endTime != null) {
+    if (event.isCountdown && event.endTime != null) {
       return _durationText(event.endTime!.difference(now));
     }
     return event.title;
@@ -729,6 +868,12 @@ class _IslandSurface extends StatelessWidget {
         return '查看水电';
       case 'notices':
         return event.url?.isNotEmpty == true ? '打开通知' : '查看通知';
+      case 'grades':
+        return '查看成绩';
+      case 'attendance':
+        return '查看考勤';
+      case 'business':
+        return '去办理';
       default:
         return event.url?.isNotEmpty == true ? '打开详情' : '查看';
     }
@@ -767,9 +912,65 @@ class _IslandIcon extends StatelessWidget {
         return Icons.assignment;
       case 'ecard_reminder':
         return Icons.water_drop;
+      case 'grade_update':
+        return Icons.school;
+      case 'attendance_update':
+        return Icons.verified;
+      case 'business_reminder':
+      case 'business_update':
+        return Icons.apartment;
       default:
         return Icons.notifications_active;
     }
+  }
+}
+
+class _UtilityMetrics extends StatelessWidget {
+  const _UtilityMetrics({
+    required this.body,
+    required this.color,
+    required this.foregroundColor,
+  });
+
+  final String body;
+  final Color color;
+  final Color foregroundColor;
+
+  @override
+  Widget build(BuildContext context) {
+    final values = body
+        .split(RegExp(r'[\u00b7|]'))
+        .map((value) => value.trim())
+        .where((value) => value.isNotEmpty)
+        .take(3)
+        .toList(growable: false);
+    final items = values.isEmpty ? <String>['查看当前余额'] : values;
+    return Row(
+      children: items
+          .map((value) => Expanded(
+                child: Container(
+                  margin: EdgeInsets.only(right: value == items.last ? 0 : 6),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: foregroundColor.withValues(alpha: 0.06),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    value,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: color,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ))
+          .toList(growable: false),
+    );
   }
 }
 
@@ -803,8 +1004,11 @@ class _ProgressLine extends StatelessWidget {
     if (endTime == null) return event.isMetric ? 1 : null;
     final remaining = endTime.difference(now).inMilliseconds;
     if (remaining <= 0) return 1;
-    const windowMs = 60 * 60 * 1000;
-    return (1 - (remaining / windowMs)).clamp(0.0, 1.0);
+    final startTime = event.startTime;
+    if (startTime == null || !endTime.isAfter(startTime)) return null;
+    final total = endTime.difference(startTime).inMilliseconds;
+    final elapsed = now.difference(startTime).inMilliseconds;
+    return (elapsed / total).clamp(0.0, 1.0);
   }
 }
 
@@ -813,6 +1017,12 @@ String _durationText(Duration duration) {
   final hours = safe.inHours;
   final minutes = safe.inMinutes.remainder(60);
   final seconds = safe.inSeconds.remainder(60);
+  if (safe <= const Duration(minutes: 1)) return '即将开始';
+  if (safe >= const Duration(days: 1)) {
+    final days = safe.inDays;
+    final remainingHours = safe.inHours.remainder(24);
+    return remainingHours == 0 ? '$days 天' : '$days 天 $remainingHours 时';
+  }
   if (hours > 0) {
     return '$hours:${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
   }

@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Preflight</title>
+    <style id="theme-vars">
+:root {
+  --gzus-background: #FAFAF8;
+  --gzus-foreground: #17191D;
+  --gzus-card: #FFFFFF;
+  --gzus-card-foreground: #17191D;
+  --gzus-popover: #FFFFFF;
+  --gzus-popover-foreground: #17191D;
+  --gzus-primary: #2563EB;
+  --gzus-primary-foreground: #FFFFFF;
+  --gzus-muted: #F4F6FA;
+  --gzus-muted-foreground: #6B7280;
+  --gzus-border: #E5E7EB;
+  --gzus-input: #E5E7EB;
+  --gzus-ring: #2563EB;
+
+  --gzus-radius-sm: 12px;
+  --gzus-radius-md: 16px;
+  --gzus-radius-lg: 16px;
+  --gzus-radius-xl: 16px;
+
+  --gzus-state-success: #059669;
+  --gzus-state-warning: #EA580C;
+  --gzus-state-error: #DC2626;
+  --gzus-state-info: #0EA5E9;
+}
+
+.dark {
+  --gzus-background: #0B0D10;
+  --gzus-foreground: #F5F7FA;
+  --gzus-card: #15171C;
+  --gzus-card-foreground: #F5F7FA;
+  --gzus-popover: #15171C;
+  --gzus-popover-foreground: #F5F7FA;
+  --gzus-primary: #2563EB;
+  --gzus-primary-foreground: #FFFFFF;
+  --gzus-muted: #1E2128;
+  --gzus-muted-foreground: #A4ABB8;
+  --gzus-border: #2A2F3A;
+  --gzus-input: #2A2F3A;
+  --gzus-ring: #2563EB;
+}
+
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.1/dist/index.global.js"></script>
+    <script src="https://unpkg.com/lucide@1.8.0/dist/umd/lucide.min.js"></script>
+    <style type="text/tailwindcss">
+  @theme inline {
+    --color-background: var(--gzus-background);
+    --color-foreground: var(--gzus-foreground);
+    --color-card: var(--gzus-card);
+    --color-card-foreground: var(--gzus-card-foreground);
+    --color-popover: var(--gzus-popover);
+    --color-popover-foreground: var(--gzus-popover-foreground);
+    --color-primary: var(--gzus-primary);
+    --color-primary-foreground: var(--gzus-primary-foreground);
+    --color-muted: var(--gzus-muted);
+    --color-muted-foreground: var(--gzus-muted-foreground);
+    --color-border: var(--gzus-border);
+    --color-input: var(--gzus-input);
+    --color-ring: var(--gzus-ring);
+    --radius-sm: var(--gzus-radius-sm);
+    --radius-md: var(--gzus-radius-md);
+    --radius-lg: var(--gzus-radius-lg);
+    --radius-xl: var(--gzus-radius-xl);
+  }
+  @layer base {
+    body { background: var(--gzus-background); color: var(--gzus-foreground); }
+    td, th { @apply break-words; word-break: break-all; word-break: auto-phrase; }
+    th { @apply whitespace-nowrap; }
+  }
+    </style>
+    <style id="semantic-token-fallback">
+      .bg-background { background-color: var(--gzus-background); }
+      .text-background { color: var(--gzus-background); }
+      .border-background { border-color: var(--gzus-background); }
+      .ring-background { --tw-ring-color: var(--gzus-background); }
+      .bg-foreground { background-color: var(--gzus-foreground); }
+      .text-foreground { color: var(--gzus-foreground); }
+      .border-foreground { border-color: var(--gzus-foreground); }
+      .ring-foreground { --tw-ring-color: var(--gzus-foreground); }
+      .bg-card { background-color: var(--gzus-card); }
+      .text-card { color: var(--gzus-card); }
+      .border-card { border-color: var(--gzus-card); }
+      .ring-card { --tw-ring-color: var(--gzus-card); }
+      .bg-card-foreground { background-color: var(--gzus-card-foreground); }
+      .text-card-foreground { color: var(--gzus-card-foreground); }
+      .border-card-foreground { border-color: var(--gzus-card-foreground); }
+      .ring-card-foreground { --tw-ring-color: var(--gzus-card-foreground); }
+      .bg-popover { background-color: var(--gzus-popover); }
+      .text-popover { color: var(--gzus-popover); }
+      .border-popover { border-color: var(--gzus-popover); }
+      .ring-popover { --tw-ring-color: var(--gzus-popover); }
+      .bg-popover-foreground { background-color: var(--gzus-popover-foreground); }
+      .text-popover-foreground { color: var(--gzus-popover-foreground); }
+      .border-popover-foreground { border-color: var(--gzus-popover-foreground); }
+      .ring-popover-foreground { --tw-ring-color: var(--gzus-popover-foreground); }
+      .bg-primary { background-color: var(--gzus-primary); }
+      .text-primary { color: var(--gzus-primary); }
+      .border-primary { border-color: var(--gzus-primary); }
+      .ring-primary { --tw-ring-color: var(--gzus-primary); }
+      .bg-primary-foreground { background-color: var(--gzus-primary-foreground); }
+      .text-primary-foreground { color: var(--gzus-primary-foreground); }
+      .border-primary-foreground { border-color: var(--gzus-primary-foreground); }
+      .ring-primary-foreground { --tw-ring-color: var(--gzus-primary-foreground); }
+      .bg-muted { background-color: var(--gzus-muted); }
+      .text-muted { color: var(--gzus-muted); }
+      .border-muted { border-color: var(--gzus-muted); }
+      .ring-muted { --tw-ring-color: var(--gzus-muted); }
+      .bg-muted-foreground { background-color: var(--gzus-muted-foreground); }
+      .text-muted-foreground { color: var(--gzus-muted-foreground); }
+      .border-muted-foreground { border-color: var(--gzus-muted-foreground); }
+      .ring-muted-foreground { --tw-ring-color: var(--gzus-muted-foreground); }
+      .bg-border { background-color: var(--gzus-border); }
+      .text-border { color: var(--gzus-border); }
+      .border-border { border-color: var(--gzus-border); }
+      .ring-border { --tw-ring-color: var(--gzus-border); }
+      .bg-input { background-color: var(--gzus-input); }
+      .text-input { color: var(--gzus-input); }
+      .border-input { border-color: var(--gzus-input); }
+      .ring-input { --tw-ring-color: var(--gzus-input); }
+      .bg-ring { background-color: var(--gzus-ring); }
+      .text-ring { color: var(--gzus-ring); }
+      .border-ring { border-color: var(--gzus-ring); }
+      .ring-ring { --tw-ring-color: var(--gzus-ring); }
+    </style>
+    <style>
+      .no-scrollbar::-webkit-scrollbar { display: none; }
+      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      [data-icon] {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        -webkit-mask-size: contain;
+        mask-size: contain;
+        -webkit-mask-repeat: no-repeat;
+        mask-repeat: no-repeat;
+        -webkit-mask-position: center;
+        mask-position: center;
+        background-color: currentColor;
+      }
+    </style>
+</head>
+<body class="min-h-screen font-sans antialiased">
+    <main>
+    </main>
+    <script>lucide.createIcons();</script>
+</body>
+</html>

@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.graphics.Color
 import android.os.Build
 import android.os.Bundle
 import androidx.core.app.NotificationCompat
@@ -79,6 +80,13 @@ class LiveUpdateNotificationHelper(private val context: Context) {
             return false
         }
         val canPromote = canPostPromotedNotifications()
+        val eventType = typeFromExtras(extrasJson)
+        val accentColor = eventColor(eventType)
+        val safeProgressMax = progressMax.coerceAtLeast(0)
+        val safeProgressCurrent = progressCurrent.coerceIn(0, safeProgressMax)
+        val showProgress = style == "progress" &&
+            safeProgressMax > 0 &&
+            safeProgressCurrent < safeProgressMax
 
         val intent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -97,12 +105,14 @@ class LiveUpdateNotificationHelper(private val context: Context) {
             .setContentTitle(title)
             .setContentText(body)
             .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setColor(accentColor)
             .setContentIntent(pendingIntent)
             .setOngoing(ongoing)
             .setAutoCancel(!ongoing)
             .setCategory(NotificationCompat.CATEGORY_EVENT)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setShowWhen(true)
+            .setOnlyAlertOnce(true)
 
         // Apply style-specific settings
         when (style) {
@@ -131,8 +141,8 @@ class LiveUpdateNotificationHelper(private val context: Context) {
                     NotificationCompat.BigTextStyle()
                         .bigText(body)
                 )
-                if (progressMax > 0) {
-                    builder.setProgress(progressMax, progressCurrent, false)
+                if (showProgress) {
+                    builder.setProgress(safeProgressMax, safeProgressCurrent, false)
                 }
             }
             else -> {
@@ -149,11 +159,11 @@ class LiveUpdateNotificationHelper(private val context: Context) {
             notification = notification,
             title = title,
             body = body,
-            type = typeFromExtras(extrasJson),
+            type = eventType,
             style = style,
             shortText = shortCriticalText,
-            progressMax = progressMax,
-            progressCurrent = progressCurrent,
+            progressMax = if (showProgress) safeProgressMax else 0,
+            progressCurrent = if (showProgress) safeProgressCurrent else 0,
             endTimeMillis = endTimeMillis,
         )
 
@@ -169,11 +179,13 @@ class LiveUpdateNotificationHelper(private val context: Context) {
                     .setContentTitle(title)
                     .setContentText(body)
                     .setSmallIcon(android.R.drawable.ic_dialog_info)
+                    .setColor(accentColor)
                     .setContentIntent(pendingIntent)
                     .setOngoing(ongoing)
                     .setAutoCancel(!ongoing)
                     .setCategory(Notification.CATEGORY_EVENT)
                     .setShowWhen(true)
+                    .setOnlyAlertOnce(true)
 
                 // Apply style-specific settings on native builder
                 when (style) {
@@ -182,8 +194,8 @@ class LiveUpdateNotificationHelper(private val context: Context) {
                     }
                     "progress" -> {
                         nativeBuilder.setStyle(Notification.BigTextStyle().bigText(body))
-                        if (progressMax > 0) {
-                            nativeBuilder.setProgress(progressMax, progressCurrent, false)
+                        if (showProgress) {
+                            nativeBuilder.setProgress(safeProgressMax, safeProgressCurrent, false)
                         }
                     }
                     else -> {
@@ -215,11 +227,11 @@ class LiveUpdateNotificationHelper(private val context: Context) {
                     notification = nativeBuilder.build(),
                     title = title,
                     body = body,
-                    type = typeFromExtras(extrasJson),
+                    type = eventType,
                     style = style,
                     shortText = shortCriticalText,
-                    progressMax = progressMax,
-                    progressCurrent = progressCurrent,
+                    progressMax = if (showProgress) safeProgressMax else 0,
+                    progressCurrent = if (showProgress) safeProgressCurrent else 0,
                     endTimeMillis = endTimeMillis,
                 )
                 try {
@@ -255,6 +267,15 @@ class LiveUpdateNotificationHelper(private val context: Context) {
             JSONObject(extrasJson).optString("type", "")
         } catch (_: Exception) {
             ""
+        }
+    }
+
+    private fun eventColor(type: String): Int {
+        return when (type) {
+            "exam_reminder", "attendance_update" -> Color.rgb(234, 88, 12)
+            "ecard_reminder" -> Color.rgb(14, 165, 233)
+            "grade_update" -> Color.rgb(5, 150, 105)
+            else -> Color.rgb(37, 99, 235)
         }
     }
 }

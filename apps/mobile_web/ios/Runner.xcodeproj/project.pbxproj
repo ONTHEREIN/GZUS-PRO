@@ -20,6 +20,8 @@
 		A10000000000000000000003 /* GzusLiveActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000016 /* GzusLiveActivityAttributes.swift */; };
 		A10000000000000000000004 /* GzusLiveActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000016 /* GzusLiveActivityAttributes.swift */; };
 		A10000000000000000000005 /* LiveActivityManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000017 /* LiveActivityManager.swift */; };
+		A10000000000000000000006 /* WidgetSnapshotStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000018 /* WidgetSnapshotStore.swift */; };
+		A10000000000000000000007 /* WidgetSnapshotStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000018 /* WidgetSnapshotStore.swift */; };
 		A10000000000000000000002 /* OneGzusWidgets.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = A10000000000000000000014 /* OneGzusWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		A10000000000000000000051 /* ShiplyManager.m in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000052 /* ShiplyManager.m */; };
 		C6E7DD39A1489757D4230CB5 /* Pods_Runner.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A1FF598204FF81067D62F3C8 /* Pods_Runner.framework */; };
@@ -92,6 +94,7 @@
 		A10000000000000000000015 /* Runner.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Runner.entitlements; sourceTree = "<group>"; };
 		A10000000000000000000016 /* GzusLiveActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GzusLiveActivityAttributes.swift; sourceTree = "<group>"; };
 		A10000000000000000000017 /* LiveActivityManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveActivityManager.swift; sourceTree = "<group>"; };
+		A10000000000000000000018 /* WidgetSnapshotStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetSnapshotStore.swift; sourceTree = SOURCE_ROOT; };
 		A10000000000000000000052 /* ShiplyManager.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.m; path = ShiplyManager.m; sourceTree = "<group>"; };
 		A10000000000000000000053 /* ShiplyManager.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = ShiplyManager.h; sourceTree = "<group>"; };
 		A1FF598204FF81067D62F3C8 /* Pods_Runner.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_Runner.framework; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -163,6 +166,7 @@
 				9740EEB11CF90186004384FC /* Flutter */,
 				97C146F01CF9000F007C117D /* Runner */,
 				A10000000000000000000061 /* OneGzusWidgets */,
+				A10000000000000000000018 /* WidgetSnapshotStore.swift */,
 				97C146EF1CF9000F007C117D /* Products */,
 				331C8082294A63A400263BE5 /* RunnerTests */,
 				6F409423F1CD0D065C06A8E3 /* Pods */,
@@ -437,6 +441,7 @@
 				7884E8682EC3CC0700C636F2 /* SceneDelegate.swift in Sources */,
 				A10000000000000000000051 /* ShiplyManager.m in Sources */,
 				A10000000000000000000005 /* LiveActivityManager.swift in Sources */,
+				A10000000000000000000006 /* WidgetSnapshotStore.swift in Sources */,
 				A10000000000000000000003 /* GzusLiveActivityAttributes.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -446,6 +451,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A10000000000000000000001 /* OneGzusWidgets.swift in Sources */,
+				A10000000000000000000007 /* WidgetSnapshotStore.swift in Sources */,
 				A10000000000000000000004 /* GzusLiveActivityAttributes.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

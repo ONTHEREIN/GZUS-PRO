@@ -14,7 +14,11 @@ class TodayScheduleFactory(private val context: Context, private val intent: Int
         val time: String,
         val name: String,
         val info: String,
-        val isOngoing: Boolean
+        val isOngoing: Boolean,
+        val itemKey: String,
+        val week: Int,
+        val weekday: Int,
+        val startSection: Int,
     )
 
     override fun onCreate() {}
@@ -36,7 +40,11 @@ class TodayScheduleFactory(private val context: Context, private val intent: Int
                     time = obj.optString("time", ""),
                     name = obj.optString("name", ""),
                     info = obj.optString("info", ""),
-                    isOngoing = obj.optBoolean("ongoing", false)
+                    isOngoing = obj.optBoolean("ongoing", false),
+                    itemKey = obj.optString("itemKey", ""),
+                    week = obj.optInt("week", 0),
+                    weekday = obj.optInt("weekday", 0),
+                    startSection = obj.optInt("startSection", 0),
                 ))
             }
         } catch (_: Exception) {}
@@ -58,6 +66,10 @@ class TodayScheduleFactory(private val context: Context, private val intent: Int
         if (item.isOngoing) {
             views.setInt(R.id.item_name, "setTextColor", 0xFFB3261E.toInt())
         }
+        views.setOnClickFillInIntent(
+            R.id.today_item_root,
+            HomeWidgetProvider.itemIntent(item.itemKey, item.week.takeIf { it > 0 }, item.weekday, item.startSection),
+        )
         return views
     }
 

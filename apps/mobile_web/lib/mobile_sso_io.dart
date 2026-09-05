@@ -7,6 +7,8 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 import 'api_client.dart';
+import 'leave_attachment_models.dart';
+import 'leave_attachment_upload.dart';
 import 'mobile_sso_cookies.dart';
 
 const _desktopBrowserUserAgent =
@@ -17,6 +19,7 @@ Future<bool> openAuthenticatedEhallUrl(
   BuildContext context,
   String url, {
   String? fillScript,
+  required List<PickedAttachment> attachments,
   required ApiClient api,
 }) async {
   final uri = Uri.tryParse(url);
@@ -27,6 +30,7 @@ Future<bool> openAuthenticatedEhallUrl(
       builder: (_) => _EhallWebViewPage(
         initialUrl: url,
         fillScript: fillScript,
+        attachments: attachments,
         api: api,
       ),
     ),
@@ -42,11 +46,13 @@ class _EhallWebViewPage extends StatefulWidget {
   const _EhallWebViewPage({
     required this.initialUrl,
     required this.api,
+    required this.attachments,
     this.fillScript,
   });
 
   final String initialUrl;
   final String? fillScript;
+  final List<PickedAttachment> attachments;
   final ApiClient api;
 
   @override
@@ -58,8 +64,10 @@ class _EhallWebViewPageState extends State<_EhallWebViewPage> {
   final cookieManager = WebViewCookieManager();
   bool loading = true;
   bool scriptInjected = false;
-  bool scriptApplied = false;
+  bool attachmentsUploaded = false;
+  bool attachmentsUploading = false;
   String? loadError;
+  LeaveFormAttachmentMetadata? leaveFormMetadata;
   String? _pendingUserLoginToken;
   Uri? _pendingTargetUrl;
 
@@ -97,7 +105,12 @@ class _EhallWebViewPageState extends State<_EhallWebViewPage> {
   Future<void> _showFallbackIfStillBlank() async {
     if (widget.fillScript == null || widget.fillScript!.isEmpty) return;
     await Future<void>.delayed(const Duration(seconds: 18));
-    if (!mounted || scriptApplied || loadError != null) return;
+    if (!mounted ||
+        attachmentsUploaded ||
+        attachmentsUploading ||
+        loadError != null) {
+      return;
+    }
     setState(() {
       loadError = '手机 WebView 无法渲染办事大厅，请复制脚本后在电脑或浏览器执行';
       loading = false;
@@ -122,17 +135,144 @@ class _EhallWebViewPageState extends State<_EhallWebViewPage> {
       return;
     }
     try {
+      await _installLeaveSubmissionGate();
       await controller.runJavaScript(script);
-      scriptApplied = true;
+      await _uploadLeaveAttachments();
       if (mounted) setState(() => loadError = null);
-    } catch (_) {
+    } catch (exc) {
       if (!mounted) return;
       setState(() {
-        loadError = '自动填表脚本执行失败，请复制脚本手动执行';
+        loadError = _leaveAutomationErrorMessage(exc);
       });
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('自动填表脚本执行失败，请复制脚本手动执行')),
+        SnackBar(content: Text(loadError!)),
       );
+    }
+  }
+
+  Future<void> _installLeaveSubmissionGate() {
+    return controller.runJavaScript('''
+(() => {
+  if (window.__gzusLeaveSubmissionGate) return;
+  window.__gzusLeaveSubmissionLocked = true;
+  const block = (event) => {
+    if (window.__gzusLeaveSubmissionLocked) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }
+  };
+  document.addEventListener('submit', block, true);
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') block(event);
+  }, true);
+  const overlay = document.createElement('div');
+  overlay.id = 'gzus-leave-submission-gate';
+  overlay.setAttribute('role', 'alert');
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483647;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,.78);color:#1f2937;font:16px sans-serif;text-align:center;padding:24px;';
+  overlay.innerHTML = '<div style="max-width:280px;padding:18px;border-radius:12px;background:#fff;box-shadow:0 8px 28px rgba(0,0,0,.2)">正在填写请假单并上传附件，请勿提交…</div>';
+  document.body.appendChild(overlay);
+  window.__gzusLeaveSubmissionGate = {
+    unlock: () => {
+      window.__gzusLeaveSubmissionLocked = false;
+      overlay.remove();
+    }
+  };
+})();
+''');
+  }
+
+  Future<void> _uploadLeaveAttachments() async {
+    final attachments = widget.attachments;
+    if (attachments.isEmpty) {
+      await _unlockLeaveSubmissionGate();
+      attachmentsUploaded = true;
+      return;
+    }
+    if (mounted) setState(() => attachmentsUploading = true);
+    try {
+      final metadata = leaveFormMetadata ?? await _waitForLeaveFormMetadata();
+      leaveFormMetadata = metadata;
+      await uploadLeaveAttachments(
+        attachments,
+        metadata,
+        (formMetadata, attachment) => widget.api.uploadLeaveAttachment(
+          docUnid: formMetadata.docUnid,
+          processId: formMetadata.processId,
+          nodeName: formMetadata.nodeName,
+          localStore: formMetadata.localStore,
+          attachmentName: attachment.name,
+          attachmentBytes: attachment.bytes,
+        ),
+      );
+      await _unlockLeaveSubmissionGate();
+      attachmentsUploaded = true;
+    } finally {
+      if (mounted) setState(() => attachmentsUploading = false);
+    }
+  }
+
+  Future<LeaveFormAttachmentMetadata> _readLeaveFormMetadata() async {
+    final result = await controller.runJavaScriptReturningResult('''
+(() => {
+  const valueOf = (names) => {
+    for (const name of names) {
+      const element = document.getElementById(name)
+        || document.querySelector(`[name="\${name}" i]`)
+        || document.querySelector(`[id="\${name}" i]`);
+      const value = element?.value ?? element?.getAttribute?.('value') ?? '';
+      if (String(value).trim()) return String(value).trim();
+    }
+    return '';
+  };
+  return JSON.stringify({
+    docUnid: valueOf(['WF_DocUnid']),
+    processId: valueOf(['WF_Processid', 'WF_ProcessId']),
+    nodeName: valueOf(['WF_CurrentNodeName']),
+    localStore: valueOf(['localStore', 'LocalStore'])
+  });
+})()
+''');
+    return parseLeaveFormAttachmentMetadata(result);
+  }
+
+  Future<LeaveFormAttachmentMetadata> _waitForLeaveFormMetadata() async {
+    return waitForLeaveFormAttachmentMetadata(
+      maximumAttempts: 40,
+      retryInterval: const Duration(milliseconds: 500),
+      readMetadata: _readLeaveFormMetadata,
+      wait: _waitForMetadataRetry,
+    );
+  }
+
+  Future<void> _waitForMetadataRetry(Duration duration) {
+    return Future<void>.delayed(duration);
+  }
+
+  Future<void> _unlockLeaveSubmissionGate() {
+    return controller.runJavaScript(
+      'window.__gzusLeaveSubmissionGate?.unlock();',
+    );
+  }
+
+  String _leaveAutomationErrorMessage(Object error) {
+    if (error is StateError || error is FormatException) {
+      return error.toString();
+    }
+    if (error is ApiException) return '附件上传失败：${error.message}';
+    return '自动填写或附件上传失败，请重试';
+  }
+
+  Future<void> _retryLeaveAttachmentUpload() async {
+    if (attachmentsUploading || attachmentsUploaded) return;
+    try {
+      await _uploadLeaveAttachments();
+      if (mounted) {
+        setState(() => loadError = null);
+      }
+    } catch (exc) {
+      if (mounted) {
+        setState(() => loadError = _leaveAutomationErrorMessage(exc));
+      }
     }
   }
 
@@ -254,6 +394,7 @@ class _EhallWebViewPageState extends State<_EhallWebViewPage> {
   }
 
   Future<void> _openInExternalBrowser() async {
+    if (widget.attachments.isNotEmpty && !attachmentsUploaded) return;
     final currentUrl = await controller.currentUrl();
     final uri = Uri.tryParse(currentUrl ?? widget.initialUrl);
     if (uri == null) return;
@@ -290,7 +431,9 @@ class _EhallWebViewPageState extends State<_EhallWebViewPage> {
             ),
           IconButton(
             tooltip: '浏览器打开',
-            onPressed: _openInExternalBrowser,
+            onPressed: widget.attachments.isNotEmpty && !attachmentsUploaded
+                ? null
+                : _openInExternalBrowser,
             icon: const Icon(Icons.open_in_new),
           ),
         ],
@@ -305,6 +448,13 @@ class _EhallWebViewPageState extends State<_EhallWebViewPage> {
                 color: Theme.of(context).colorScheme.error,
               ),
               actions: [
+                if (widget.attachments.isNotEmpty && !attachmentsUploaded)
+                  TextButton(
+                    onPressed: attachmentsUploading
+                        ? null
+                        : _retryLeaveAttachmentUpload,
+                    child: const Text('重试上传'),
+                  ),
                 TextButton(
                   onPressed:
                       widget.fillScript == null || widget.fillScript!.isEmpty
@@ -312,10 +462,11 @@ class _EhallWebViewPageState extends State<_EhallWebViewPage> {
                           : _copyFillScript,
                   child: const Text('复制脚本'),
                 ),
-                TextButton(
-                  onPressed: _openInExternalBrowser,
-                  child: const Text('浏览器打开'),
-                ),
+                if (widget.attachments.isEmpty || attachmentsUploaded)
+                  TextButton(
+                    onPressed: _openInExternalBrowser,
+                    child: const Text('浏览器打开'),
+                  ),
               ],
             ),
           Expanded(child: WebViewWidget(controller: controller)),

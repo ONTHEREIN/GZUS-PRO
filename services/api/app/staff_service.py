@@ -47,6 +47,9 @@ def sync_staff_from_ehall_cookie(cookie_header: str) -> int:
 
 def ensure_staff_loaded(cookie_header: str | None = None) -> int:
     init_db()
+    if _staff_count() >= 100:
+        return 0
+
     imported = 0
     if cookie_header:
         try:
@@ -56,12 +59,13 @@ def ensure_staff_loaded(cookie_header: str | None = None) -> int:
     if imported:
         return imported
 
+    return import_staff_from_json_fallback()
+
+
+def _staff_count() -> int:
     factory = get_sync_session_factory()
     with factory() as session:
-        existing = session.scalar(select(func.count()).select_from(StaffMember)) or 0
-    if existing >= 100:
-        return 0
-    return import_staff_from_json_fallback()
+        return session.scalar(select(func.count()).select_from(StaffMember)) or 0
 
 
 def import_staff_from_json_fallback() -> int:

@@ -19,6 +19,7 @@ import 'package:gzus_pro_mobile_web/widgets/async_panel.dart';
 import 'package:gzus_pro_mobile_web/ws_service.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:image_picker_platform_interface/image_picker_platform_interface.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
@@ -512,6 +513,7 @@ void main() {
     final controller = LiveActivityController.instance;
     controller.resetForTest();
     addTearDown(controller.resetForTest);
+    addTearDown(controller.resetForTest);
 
     controller.show(LiveActivityEvent(
       id: 'same',
@@ -536,6 +538,7 @@ void main() {
 
     expect(controller.state.value.event?.id, 'same');
     expect(controller.state.value.expanded, isFalse);
+    controller.resetForTest();
   });
 
   testWidgets('live activity timer dismisses at end time', (tester) async {
@@ -1160,6 +1163,8 @@ void main() {
 
     expect(find.text('软帮手'), findsNWidgets(2));
     expect(find.text('账号密码登录'), findsOneWidget);
+    expect(tester.getSize(find.byKey(const ValueKey('login-background-stack'))),
+        const Size(390, 844));
     expect(tester.takeException(), isNull);
   });
 
@@ -1346,9 +1351,9 @@ void main() {
     expect(find.text('高等数学 23:00'), findsNothing);
 
     await tester.tap(find.byKey(const ValueKey('live-activity-island')));
-    await tester.pumpAndSettle();
+    await tester.pump(const Duration(milliseconds: 400));
     await tester.tap(find.byKey(const ValueKey('live-activity-action')));
-    await tester.pumpAndSettle();
+    await tester.pump(const Duration(milliseconds: 400));
 
     expect(find.byType(ExamsPage), findsOneWidget);
     controller.resetForTest();
@@ -1633,7 +1638,11 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('auto leave page previews matched courses', (tester) async {
+  testWidgets('auto leave page keeps materials and invalidates stale preview',
+      (tester) async {
+    final previousPicker = ImagePickerPlatform.instance;
+    ImagePickerPlatform.instance = _TestImagePickerPlatform();
+    addTearDown(() => ImagePickerPlatform.instance = previousPicker);
     await _pumpDashboard(tester, const Size(390, 844));
 
     await tester.tap(find.text('更多').last);
@@ -1642,13 +1651,33 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('自动请假'), findsWidgets);
+    expect(find.text('填写请假材料'), findsOneWidget);
+    expect(find.text('下一步：匹配课程'), findsOneWidget);
 
     await tester.enterText(find.widgetWithText(TextField, '请假理由'), '事假');
-    await tester.tap(find.text('匹配课程'));
+    await tester.tap(find.text('选择证明图片'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('证明.png'), findsOneWidget);
+    await tester.tap(find.text('下一步：匹配课程'));
     await tester.pumpAndSettle();
 
+    expect(find.text('影响 1 门课'), findsOneWidget);
     expect(find.text('移动应用开发'), findsOneWidget);
-    expect(find.text('张老师'), findsOneWidget);
+    await tester.tap(find.text('确认并生成请假单'));
+    await tester.pumpAndSettle();
+    expect(find.text('请假单已准备好'), findsOneWidget);
+    expect(find.text('将上传 1 张附件到当前单据'), findsOneWidget);
+    await tester.tap(find.text('返回核对课程'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('上一步'));
+    await tester.pumpAndSettle();
+    expect(find.text('填写请假材料'), findsOneWidget);
+    expect(find.text('事假'), findsOneWidget);
+
+    await tester.enterText(find.widgetWithText(TextField, '请假理由'), '病假');
+    await tester.pump();
+    expect(find.text('影响 1 门课'), findsNothing);
+    expect(find.text('下一步：匹配课程'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -2157,6 +2186,21 @@ ApiClient _mockApi({
             ],
           };
           break;
+        case '/ehall/leave/fill':
+          body = {
+            'status': 'filled',
+            'message': '请打开请假单，页面加载后将自动填写并上传附件',
+            'unmatchedTeachers': [],
+            'matchedTeachers': [],
+            'teacherCandidates': [],
+            'formUrl': 'https://ehall.example.test/leave',
+            'fillScript': 'window.gzusLeaveTest = true;',
+            'attachmentUploaded': false,
+            'attachmentUploadedCount': 0,
+            'attachmentTotal': 1,
+            'items': [],
+          };
+          break;
         default:
           body = {};
       }
@@ -2170,6 +2214,22 @@ ApiClient _mockApi({
   api.useSession('test-session');
   api.setStudentId('2024000000');
   return api;
+}
+
+class _TestImagePickerPlatform extends ImagePickerPlatform {
+  @override
+  Future<List<XFile>?> getMultiImage({
+    double? maxWidth,
+    double? maxHeight,
+    int? imageQuality,
+  }) async {
+    return [
+      XFile.fromData(
+        Uint8List.fromList([1, 2, 3]),
+        path: '证明.png',
+      ),
+    ];
+  }
 }
 
 class _FakeEcardDirectClient extends EcardDirectClient {

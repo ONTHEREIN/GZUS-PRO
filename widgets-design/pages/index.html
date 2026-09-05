@@ -1,0 +1,996 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>桌面与锁屏小组件设计</title>
+    <style id="theme-vars">
+:root {
+  --gzus-background: #FAFAF8;
+  --gzus-foreground: #17191D;
+  --gzus-card: #FFFFFF;
+  --gzus-card-foreground: #17191D;
+  --gzus-popover: #FFFFFF;
+  --gzus-popover-foreground: #17191D;
+  --gzus-primary: #2563EB;
+  --gzus-primary-foreground: #FFFFFF;
+  --gzus-muted: #F4F6FA;
+  --gzus-muted-foreground: #6B7280;
+  --gzus-border: #E5E7EB;
+  --gzus-input: #E5E7EB;
+  --gzus-ring: #2563EB;
+
+  --gzus-radius-sm: 12px;
+  --gzus-radius-md: 16px;
+  --gzus-radius-lg: 16px;
+  --gzus-radius-xl: 16px;
+
+  --gzus-state-success: #059669;
+  --gzus-state-warning: #EA580C;
+  --gzus-state-error: #DC2626;
+  --gzus-state-info: #0EA5E9;
+}
+
+.dark {
+  --gzus-background: #0B0D10;
+  --gzus-foreground: #F5F7FA;
+  --gzus-card: #15171C;
+  --gzus-card-foreground: #F5F7FA;
+  --gzus-popover: #15171C;
+  --gzus-popover-foreground: #F5F7FA;
+  --gzus-primary: #2563EB;
+  --gzus-primary-foreground: #FFFFFF;
+  --gzus-muted: #1E2128;
+  --gzus-muted-foreground: #A4ABB8;
+  --gzus-border: #2A2F3A;
+  --gzus-input: #2A2F3A;
+  --gzus-ring: #2563EB;
+}
+
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.1/dist/index.global.js"></script>
+    <script src="https://unpkg.com/lucide@1.8.0/dist/umd/lucide.min.js"></script>
+    <style type="text/tailwindcss">
+  @theme inline {
+    --color-background: var(--gzus-background);
+    --color-foreground: var(--gzus-foreground);
+    --color-card: var(--gzus-card);
+    --color-card-foreground: var(--gzus-card-foreground);
+    --color-popover: var(--gzus-popover);
+    --color-popover-foreground: var(--gzus-popover-foreground);
+    --color-primary: var(--gzus-primary);
+    --color-primary-foreground: var(--gzus-primary-foreground);
+    --color-muted: var(--gzus-muted);
+    --color-muted-foreground: var(--gzus-muted-foreground);
+    --color-border: var(--gzus-border);
+    --color-input: var(--gzus-input);
+    --color-ring: var(--gzus-ring);
+    --radius-sm: var(--gzus-radius-sm);
+    --radius-md: var(--gzus-radius-md);
+    --radius-lg: var(--gzus-radius-lg);
+    --radius-xl: var(--gzus-radius-xl);
+  }
+  @layer base {
+    body { background: var(--gzus-background); color: var(--gzus-foreground); }
+    td, th { @apply break-words; word-break: break-all; word-break: auto-phrase; }
+    th { @apply whitespace-nowrap; }
+  }
+    </style>
+    <style id="semantic-token-fallback">
+      .bg-background { background-color: var(--gzus-background); }
+      .text-background { color: var(--gzus-background); }
+      .border-background { border-color: var(--gzus-background); }
+      .ring-background { --tw-ring-color: var(--gzus-background); }
+      .bg-foreground { background-color: var(--gzus-foreground); }
+      .text-foreground { color: var(--gzus-foreground); }
+      .border-foreground { border-color: var(--gzus-foreground); }
+      .ring-foreground { --tw-ring-color: var(--gzus-foreground); }
+      .bg-card { background-color: var(--gzus-card); }
+      .text-card { color: var(--gzus-card); }
+      .border-card { border-color: var(--gzus-card); }
+      .ring-card { --tw-ring-color: var(--gzus-card); }
+      .bg-card-foreground { background-color: var(--gzus-card-foreground); }
+      .text-card-foreground { color: var(--gzus-card-foreground); }
+      .border-card-foreground { border-color: var(--gzus-card-foreground); }
+      .ring-card-foreground { --tw-ring-color: var(--gzus-card-foreground); }
+      .bg-popover { background-color: var(--gzus-popover); }
+      .text-popover { color: var(--gzus-popover); }
+      .border-popover { border-color: var(--gzus-popover); }
+      .ring-popover { --tw-ring-color: var(--gzus-popover); }
+      .bg-popover-foreground { background-color: var(--gzus-popover-foreground); }
+      .text-popover-foreground { color: var(--gzus-popover-foreground); }
+      .border-popover-foreground { border-color: var(--gzus-popover-foreground); }
+      .ring-popover-foreground { --tw-ring-color: var(--gzus-popover-foreground); }
+      .bg-primary { background-color: var(--gzus-primary); }
+      .text-primary { color: var(--gzus-primary); }
+      .border-primary { border-color: var(--gzus-primary); }
+      .ring-primary { --tw-ring-color: var(--gzus-primary); }
+      .bg-primary-foreground { background-color: var(--gzus-primary-foreground); }
+      .text-primary-foreground { color: var(--gzus-primary-foreground); }
+      .border-primary-foreground { border-color: var(--gzus-primary-foreground); }
+      .ring-primary-foreground { --tw-ring-color: var(--gzus-primary-foreground); }
+      .bg-muted { background-color: var(--gzus-muted); }
+      .text-muted { color: var(--gzus-muted); }
+      .border-muted { border-color: var(--gzus-muted); }
+      .ring-muted { --tw-ring-color: var(--gzus-muted); }
+      .bg-muted-foreground { background-color: var(--gzus-muted-foreground); }
+      .text-muted-foreground { color: var(--gzus-muted-foreground); }
+      .border-muted-foreground { border-color: var(--gzus-muted-foreground); }
+      .ring-muted-foreground { --tw-ring-color: var(--gzus-muted-foreground); }
+      .bg-border { background-color: var(--gzus-border); }
+      .text-border { color: var(--gzus-border); }
+      .border-border { border-color: var(--gzus-border); }
+      .ring-border { --tw-ring-color: var(--gzus-border); }
+      .bg-input { background-color: var(--gzus-input); }
+      .text-input { color: var(--gzus-input); }
+      .border-input { border-color: var(--gzus-input); }
+      .ring-input { --tw-ring-color: var(--gzus-input); }
+      .bg-ring { background-color: var(--gzus-ring); }
+      .text-ring { color: var(--gzus-ring); }
+      .border-ring { border-color: var(--gzus-ring); }
+      .ring-ring { --tw-ring-color: var(--gzus-ring); }
+    </style>
+    <style>
+      .no-scrollbar::-webkit-scrollbar { display: none; }
+      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      [data-icon] {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        -webkit-mask-size: contain;
+        mask-size: contain;
+        -webkit-mask-repeat: no-repeat;
+        mask-repeat: no-repeat;
+        -webkit-mask-position: center;
+        mask-position: center;
+        background-color: currentColor;
+      }
+    </style>
+</head>
+<body class="min-h-screen font-sans antialiased">
+    <main>
+      <div class="showcase-frame">
+
+        <!-- ====== Section 1: Hero ====== -->
+        <section id="section-hero" style="padding:48px 20px 32px;text-align:center;">
+          <h1 style="font-size:24px;font-weight:700;color:var(--gzus-foreground);letter-spacing:-0.02em;line-height:1.3;text-wrap:balance;">桌面与锁屏小组件</h1>
+          <p style="font-size:13px;color:var(--gzus-muted-foreground);margin-top:8px;line-height:1.5;">OneGZUS 软帮手 · 遵循 Apple HIG 小组件设计规范</p>
+          <div style="display:flex;align-items:center;justify-content:center;gap:8px;margin-top:18px;flex-wrap:wrap;">
+            <span class="meta-pill">
+              <i data-lucide="layout-grid" width="12" height="12" style="color:var(--gzus-primary);"></i>
+              <span style="font-size:11px;font-weight:500;color:var(--gzus-foreground);">7 种桌面小组件</span>
+            </span>
+            <span class="meta-pill">
+              <i data-lucide="lock" width="12" height="12" style="color:var(--gzus-state-info);"></i>
+              <span style="font-size:11px;font-weight:500;color:var(--gzus-foreground);">3 种锁屏 Accessory</span>
+            </span>
+            <span class="meta-pill">
+              <i data-lucide="activity" width="12" height="12" style="color:var(--gzus-state-warning);"></i>
+              <span style="font-size:11px;font-weight:500;color:var(--gzus-foreground);">Live Activity</span>
+            </span>
+          </div>
+        </section>
+
+        <!-- ====== Section 2: 渲染模式 ====== -->
+        <section id="section-rendering-modes" class="section-block home-screen-bg">
+          <div style="margin-bottom:16px;">
+            <h2 class="section-heading">渲染模式</h2>
+            <p class="section-caption">Apple HIG · 小组件根据显示环境自动切换渲染模式</p>
+            <p class="hig-note">同一小组件在不同显示环境下呈现不同外观</p>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:14px;">
+
+            <!-- 全彩 Full Color -->
+            <div class="mode-demo-card" id="mode-full-color">
+              <div class="mode-demo-label">
+                <span class="mode-demo-title">全彩</span>
+                <span class="mode-demo-badge">主屏幕</span>
+              </div>
+              <div class="mode-widget">
+                <div class="widget-header">
+                  <i data-lucide="clock" style="color:var(--gzus-primary);"></i>
+                  <span class="widget-header-label">下一节课</span>
+                </div>
+                <div style="font-size:18px;font-weight:700;color:var(--gzus-foreground);">数据结构</div>
+                <div style="font-size:12px;color:var(--gzus-muted-foreground);margin-top:4px;">10:10-11:50</div>
+                <div style="display:flex;align-items:center;gap:16px;margin-top:8px;">
+                  <div style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--gzus-muted-foreground);">
+                    <i data-lucide="map-pin" style="width:12px;height:12px;"></i><span>教学楼 A301</span>
+                  </div>
+                  <div style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--gzus-muted-foreground);">
+                    <i data-lucide="user" style="width:12px;height:12px;"></i><span>张老师</span>
+                  </div>
+                </div>
+              </div>
+              <p class="mode-demo-desc">主屏幕和"今天"视图 · 完整色彩呈现</p>
+            </div>
+
+            <!-- 色调 Tinted -->
+            <div class="mode-demo-card" id="mode-tinted">
+              <div class="mode-demo-label">
+                <span class="mode-demo-title">色调</span>
+                <span class="mode-demo-badge">主屏幕</span>
+              </div>
+              <div class="mode-tinted">
+                <div class="mode-widget">
+                  <div class="widget-header">
+                    <i data-lucide="clock" style="color:var(--gzus-primary);"></i>
+                    <span class="widget-header-label">下一节课</span>
+                  </div>
+                  <div style="font-size:18px;font-weight:700;color:var(--gzus-foreground);">数据结构</div>
+                  <div style="font-size:12px;color:var(--gzus-muted-foreground);margin-top:4px;">10:10-11:50</div>
+                  <div style="display:flex;align-items:center;gap:16px;margin-top:8px;">
+                    <div style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--gzus-muted-foreground);">
+                      <i data-lucide="map-pin" style="width:12px;height:12px;"></i><span>教学楼 A301</span>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--gzus-muted-foreground);">
+                      <i data-lucide="user" style="width:12px;height:12px;"></i><span>张老师</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <p class="mode-demo-desc">用户可选取色调 · 系统降低饱和度并应用用户色调</p>
+            </div>
+
+            <!-- 虚化 Vibrant -->
+            <div class="mode-demo-card" id="mode-vibrant">
+              <div class="mode-demo-label">
+                <span class="mode-demo-title">虚化</span>
+                <span class="mode-demo-badge">锁屏</span>
+              </div>
+              <div class="mode-vibrant-wrapper">
+                <div class="mode-vibrant">
+                  <div class="mode-widget">
+                    <div class="widget-header">
+                      <i data-lucide="clock" style="color:var(--gzus-primary);"></i>
+                      <span class="widget-header-label">下一节课</span>
+                    </div>
+                    <div style="font-size:18px;font-weight:700;color:var(--gzus-foreground);">数据结构</div>
+                    <div style="font-size:12px;color:var(--gzus-muted-foreground);margin-top:4px;">10:10-11:50</div>
+                    <div style="display:flex;align-items:center;gap:16px;margin-top:8px;">
+                      <div style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--gzus-muted-foreground);">
+                        <i data-lucide="map-pin" style="width:12px;height:12px;"></i><span>教学楼 A301</span>
+                      </div>
+                      <div style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--gzus-muted-foreground);">
+                        <i data-lucide="user" style="width:12px;height:12px;"></i><span>张老师</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <p class="mode-demo-desc">锁屏界面 · 降低饱和度并应用虚化效果</p>
+            </div>
+
+          </div>
+        </section>
+
+        <!-- ====== Section 3: 桌面小组件 · Small ====== -->
+        <section id="section-home-small" class="section-block home-screen-bg">
+          <div style="margin-bottom:16px;">
+            <h2 class="section-heading">桌面小组件 · Small</h2>
+            <p class="section-caption">systemSmall · 2×2 网格 · 聚焦单一信息</p>
+            <p class="hig-note">小尺寸小组件通常将其有限的空间用于显示单一信息</p>
+          </div>
+          <div class="widget-grid-2">
+
+            <!-- Widget 1: 下一节课 Small -->
+            <div>
+              <div class="widget-card widget-sm" id="widget-next-class-small">
+                <div class="widget-header">
+                  <i data-lucide="clock" style="color:var(--gzus-primary);"></i>
+                  <span class="widget-header-label">下一节课</span>
+                </div>
+                <div style="font-size:16px;font-weight:600;color:var(--gzus-foreground);">数据结构</div>
+                <div style="font-size:11px;color:var(--gzus-muted-foreground);margin-top:2px;">10:10-11:50</div>
+                <hr class="widget-divider">
+                <div class="widget-row"><i data-lucide="clock" style="width:11px;height:11px;"></i><span>10:10-11:50</span></div>
+                <div class="widget-row"><i data-lucide="map-pin" style="width:11px;height:11px;"></i><span>教学楼 A301</span></div>
+                <div class="widget-row"><i data-lucide="user" style="width:11px;height:11px;"></i><span>张老师</span></div>
+              </div>
+              <div class="widget-label">下一节课 · Small</div>
+            </div>
+
+            <!-- Widget 2: 考试倒计时 Small -->
+            <div>
+              <div class="widget-card widget-sm" id="widget-exam-small">
+                <div class="widget-header">
+                  <i data-lucide="timer" style="color:var(--gzus-state-error);"></i>
+                  <span class="widget-header-label">考试</span>
+                </div>
+                <div style="font-size:14px;font-weight:600;color:var(--gzus-foreground);">数据结构</div>
+                <div style="display:flex;align-items:baseline;gap:2px;margin-top:6px;">
+                  <span style="font-size:32px;font-weight:800;line-height:1;color:var(--gzus-state-error);">3</span>
+                  <span style="font-size:13px;color:var(--gzus-state-error);font-weight:600;">天</span>
+                </div>
+                <div style="font-size:10px;color:var(--gzus-muted-foreground);margin-top:8px;">6月20日 · 09:00-11:00</div>
+                <div style="font-size:10px;color:var(--gzus-muted-foreground);">教学楼 A301</div>
+              </div>
+              <div class="widget-label">考试倒计时 · Small</div>
+            </div>
+
+            <!-- Widget 3: 本学期成绩 Small -->
+            <div>
+              <div class="widget-card widget-sm" id="widget-grades-small">
+                <div class="widget-header" style="justify-content:space-between;">
+                  <div style="display:flex;align-items:center;gap:6px;">
+                    <i data-lucide="graduation-cap" style="color:var(--gzus-primary);"></i>
+                    <span class="widget-header-label">成绩</span>
+                  </div>
+                  <span class="widget-badge">8 门</span>
+                </div>
+                <div style="text-align:center;padding:4px 0;">
+                  <div style="font-size:36px;font-weight:800;line-height:1;color:var(--gzus-primary);">3.72</div>
+                  <div style="font-size:11px;color:var(--gzus-muted-foreground);margin-top:6px;">平均绩点</div>
+                </div>
+              </div>
+              <div class="widget-label">本学期成绩 · Small</div>
+            </div>
+
+            <!-- Widget 4: 水电余额 Small -->
+            <div>
+              <div class="widget-card widget-sm" id="widget-utilities-small">
+                <div class="widget-header" style="justify-content:space-between;">
+                  <div style="display:flex;align-items:center;gap:6px;">
+                    <i data-lucide="droplets" style="color:var(--gzus-state-info);"></i>
+                    <span class="widget-header-label">水电</span>
+                  </div>
+                  <span class="widget-badge">实时</span>
+                </div>
+                <div style="display:flex;flex-direction:column;gap:6px;margin-top:4px;">
+                  <div style="display:flex;align-items:center;justify-content:space-between;font-size:11px;">
+                    <div style="display:flex;align-items:center;gap:5px;">
+                      <i data-lucide="droplets" style="width:12px;height:12px;color:var(--gzus-state-info);"></i>
+                      <span style="color:var(--gzus-muted-foreground);">冷水</span>
+                    </div>
+                    <span style="font-weight:600;color:var(--gzus-foreground);">18.2吨</span>
+                  </div>
+                  <div style="display:flex;align-items:center;justify-content:space-between;font-size:11px;">
+                    <div style="display:flex;align-items:center;gap:5px;">
+                      <i data-lucide="flame" style="width:12px;height:12px;color:var(--gzus-state-error);"></i>
+                      <span style="color:var(--gzus-muted-foreground);">热水</span>
+                    </div>
+                    <span style="font-weight:600;color:var(--gzus-foreground);">26.0元</span>
+                  </div>
+                  <div style="display:flex;align-items:center;justify-content:space-between;font-size:11px;">
+                    <div style="display:flex;align-items:center;gap:5px;">
+                      <i data-lucide="zap" style="width:12px;height:12px;color:var(--gzus-state-warning);"></i>
+                      <span style="color:var(--gzus-muted-foreground);">电费</span>
+                    </div>
+                    <span style="font-weight:600;color:var(--gzus-foreground);">42.6度</span>
+                  </div>
+                </div>
+              </div>
+              <div class="widget-label">水电余额 · Small</div>
+            </div>
+
+            <!-- Widget 5: 业务进度 Small -->
+            <div>
+              <div class="widget-card widget-sm" id="widget-progress-small">
+                <div class="widget-header">
+                  <i data-lucide="file-text" style="color:var(--gzus-primary);"></i>
+                  <span class="widget-header-label">业务</span>
+                </div>
+                <div style="font-size:15px;font-weight:600;color:var(--gzus-foreground);">请假申请</div>
+                <div style="font-size:11px;color:var(--gzus-muted-foreground);margin-top:2px;">审批中</div>
+              </div>
+              <div class="widget-label">业务进度 · Small</div>
+            </div>
+
+          </div>
+        </section>
+
+        <!-- ====== Section 4: 桌面小组件 · Medium ====== -->
+        <section id="section-home-medium" class="section-block home-screen-bg">
+          <div style="margin-bottom:16px;">
+            <h2 class="section-heading">桌面小组件 · Medium</h2>
+            <p class="section-caption">systemMedium · 4×2 网格 · 更多信息层次</p>
+            <p class="hig-note">较大尺寸小组件可支持更多信息层次和操作</p>
+          </div>
+          <div class="widget-stack">
+
+            <!-- Widget 1: 下一节课 Medium -->
+            <div>
+              <div class="widget-card widget-md" id="widget-next-class-medium">
+                <div class="widget-header" style="justify-content:space-between;">
+                  <div style="display:flex;align-items:center;gap:6px;">
+                    <i data-lucide="clock" style="color:var(--gzus-primary);"></i>
+                    <span class="widget-header-label">下一节课</span>
+                  </div>
+                  <span class="widget-badge">10:10-11:50</span>
+                </div>
+                <div style="font-size:20px;font-weight:700;color:var(--gzus-foreground);">数据结构</div>
+                <div style="display:flex;align-items:center;gap:16px;margin-top:8px;">
+                  <div style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--gzus-muted-foreground);">
+                    <i data-lucide="map-pin" style="width:12px;height:12px;"></i><span>教学楼 A301</span>
+                  </div>
+                  <div style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--gzus-muted-foreground);">
+                    <i data-lucide="user" style="width:12px;height:12px;"></i><span>张老师</span>
+                  </div>
+                </div>
+              </div>
+              <div class="widget-label">下一节课 · Medium</div>
+            </div>
+
+            <!-- Widget 2: 今日时间线 Medium -->
+            <div>
+              <div class="widget-card widget-md" id="widget-today-medium">
+                <div class="widget-header" style="justify-content:space-between;">
+                  <div style="display:flex;align-items:center;gap:6px;">
+                    <i data-lucide="list" style="color:var(--gzus-primary);"></i>
+                    <span class="widget-header-label">今日时间线</span>
+                  </div>
+                  <span class="widget-badge">3 节</span>
+                </div>
+                <div style="display:flex;flex-direction:column;gap:10px;">
+                  <div style="display:flex;align-items:center;gap:8px;">
+                    <span style="font-size:12px;font-weight:600;color:var(--gzus-muted-foreground);min-width:36px;">08:30</span>
+                    <span class="status-dot" style="background:var(--gzus-state-info);"></span>
+                    <div style="flex:1;min-width:0;">
+                      <div style="font-size:13px;font-weight:600;color:var(--gzus-foreground);">数据结构</div>
+                      <div style="font-size:10px;color:var(--gzus-muted-foreground);">教学楼 A301 · 张老师</div>
+                    </div>
+                  </div>
+                  <div style="display:flex;align-items:center;gap:8px;">
+                    <span style="font-size:12px;font-weight:600;color:var(--gzus-muted-foreground);min-width:36px;">10:10</span>
+                    <span class="status-dot" style="background:var(--gzus-state-error);"></span>
+                    <div style="flex:1;min-width:0;">
+                      <div style="font-size:13px;font-weight:600;color:var(--gzus-foreground);">软件工程</div>
+                      <div style="font-size:10px;color:var(--gzus-muted-foreground);">教学楼 B204 · 李老师</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="widget-label">今日时间线 · Medium</div>
+            </div>
+
+            <!-- Widget 3: 考试倒计时 Medium -->
+            <div>
+              <div class="widget-card widget-md" id="widget-exam-medium">
+                <div class="widget-header" style="justify-content:space-between;">
+                  <div style="display:flex;align-items:center;gap:6px;">
+                    <i data-lucide="timer" style="color:var(--gzus-state-error);"></i>
+                    <span class="widget-header-label">考试倒计时</span>
+                  </div>
+                  <span class="widget-badge">2</span>
+                </div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:4px;">
+                  <div class="exam-col">
+                    <div style="display:flex;align-items:baseline;gap:2px;">
+                      <span style="font-size:24px;font-weight:800;color:var(--gzus-state-error);line-height:1;">3</span>
+                      <span style="font-size:11px;color:var(--gzus-muted-foreground);">天</span>
+                    </div>
+                    <div style="font-size:12px;font-weight:600;color:var(--gzus-foreground);margin-top:4px;">数据结构</div>
+                    <div style="font-size:10px;color:var(--gzus-muted-foreground);margin-top:2px;">6月20日</div>
+                    <div style="font-size:10px;color:var(--gzus-muted-foreground);">09:00-11:00</div>
+                    <div style="font-size:10px;color:var(--gzus-muted-foreground);">教学楼 A301</div>
+                  </div>
+                  <div class="exam-col">
+                    <div style="display:flex;align-items:baseline;gap:2px;">
+                      <span style="font-size:24px;font-weight:800;color:var(--gzus-primary);line-height:1;">6</span>
+                      <span style="font-size:11px;color:var(--gzus-muted-foreground);">天</span>
+                    </div>
+                    <div style="font-size:12px;font-weight:600;color:var(--gzus-foreground);margin-top:4px;">软件工程</div>
+                    <div style="font-size:10px;color:var(--gzus-muted-foreground);margin-top:2px;">6月23日</div>
+                    <div style="font-size:10px;color:var(--gzus-muted-foreground);">14:30-16:30</div>
+                    <div style="font-size:10px;color:var(--gzus-muted-foreground);">教学楼 B204</div>
+                  </div>
+                </div>
+              </div>
+              <div class="widget-label">考试倒计时 · Medium</div>
+            </div>
+
+            <!-- Widget 4: 本学期成绩 Medium -->
+            <div>
+              <div class="widget-card widget-md" id="widget-grades-medium">
+                <div class="widget-header" style="justify-content:space-between;">
+                  <div style="display:flex;align-items:center;gap:6px;">
+                    <i data-lucide="graduation-cap" style="color:var(--gzus-primary);"></i>
+                    <span class="widget-header-label">本学期成绩</span>
+                  </div>
+                  <span class="widget-badge">8 门</span>
+                </div>
+                <div style="display:flex;align-items:center;margin-top:4px;">
+                  <div style="flex:1;text-align:center;">
+                    <div style="font-size:28px;font-weight:800;color:var(--gzus-primary);line-height:1;">3.72</div>
+                    <div style="font-size:11px;color:var(--gzus-muted-foreground);margin-top:4px;">平均绩点</div>
+                  </div>
+                  <div class="grade-divider" style="height:36px;"></div>
+                  <div style="flex:1;text-align:center;">
+                    <div style="font-size:28px;font-weight:800;color:var(--gzus-foreground);line-height:1;">86.5</div>
+                    <div style="font-size:11px;color:var(--gzus-muted-foreground);margin-top:4px;">平均分</div>
+                  </div>
+                </div>
+              </div>
+              <div class="widget-label">本学期成绩 · Medium</div>
+            </div>
+
+            <!-- Widget 5: 水电余额 Medium -->
+            <div>
+              <div class="widget-card widget-md" id="widget-utilities-medium">
+                <div class="widget-header" style="justify-content:space-between;">
+                  <div style="display:flex;align-items:center;gap:6px;">
+                    <i data-lucide="droplets" style="color:var(--gzus-state-info);"></i>
+                    <span class="widget-header-label">水电余额</span>
+                  </div>
+                  <span class="widget-badge">实时</span>
+                </div>
+                <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:4px;">
+                  <div style="text-align:center;">
+                    <i data-lucide="droplets" style="width:18px;height:18px;color:var(--gzus-state-info);"></i>
+                    <div style="font-size:10px;color:var(--gzus-muted-foreground);margin-top:4px;">冷水</div>
+                    <div style="font-size:14px;font-weight:700;color:var(--gzus-foreground);margin-top:2px;">18.2</div>
+                    <div style="font-size:9px;color:var(--gzus-muted-foreground);">吨</div>
+                  </div>
+                  <div style="text-align:center;">
+                    <i data-lucide="flame" style="width:18px;height:18px;color:var(--gzus-state-error);"></i>
+                    <div style="font-size:10px;color:var(--gzus-muted-foreground);margin-top:4px;">热水</div>
+                    <div style="font-size:14px;font-weight:700;color:var(--gzus-foreground);margin-top:2px;">26.0</div>
+                    <div style="font-size:9px;color:var(--gzus-muted-foreground);">元</div>
+                  </div>
+                  <div style="text-align:center;">
+                    <i data-lucide="zap" style="width:18px;height:18px;color:var(--gzus-state-warning);"></i>
+                    <div style="font-size:10px;color:var(--gzus-muted-foreground);margin-top:4px;">电费</div>
+                    <div style="font-size:14px;font-weight:700;color:var(--gzus-foreground);margin-top:2px;">42.6</div>
+                    <div style="font-size:9px;color:var(--gzus-muted-foreground);">度</div>
+                  </div>
+                </div>
+                <div style="font-size:10px;color:var(--gzus-muted-foreground);margin-top:10px;text-align:center;">南区 3 栋 301 · 更新于今天 08:00</div>
+              </div>
+              <div class="widget-label">水电余额 · Medium</div>
+            </div>
+
+            <!-- Widget 6: 业务进度 Medium -->
+            <div>
+              <div class="widget-card widget-md" id="widget-progress-medium">
+                <div class="widget-header" style="justify-content:space-between;">
+                  <div style="display:flex;align-items:center;gap:6px;">
+                    <i data-lucide="file-text" style="color:var(--gzus-primary);"></i>
+                    <span class="widget-header-label">业务进度</span>
+                  </div>
+                  <span class="widget-badge">待办 · 审批中</span>
+                </div>
+                <div style="display:flex;flex-direction:column;gap:10px;margin-top:4px;">
+                  <div>
+                    <div style="display:flex;align-items:center;justify-content:space-between;">
+                      <div>
+                        <span style="font-size:12px;font-weight:600;color:var(--gzus-foreground);">请假申请</span>
+                        <span style="font-size:10px;color:var(--gzus-muted-foreground);margin-left:6px;">审批中 · 辅导员审批</span>
+                      </div>
+                      <span style="font-size:13px;font-weight:700;color:var(--gzus-primary);">60%</span>
+                    </div>
+                    <div class="progress-track" style="background:var(--gzus-muted);margin-top:6px;">
+                      <div class="progress-fill" style="width:60%;background:var(--gzus-primary);"></div>
+                    </div>
+                  </div>
+                  <div>
+                    <div style="display:flex;align-items:center;justify-content:space-between;">
+                      <div>
+                        <span style="font-size:12px;font-weight:600;color:var(--gzus-foreground);">奖学金申请</span>
+                        <span style="font-size:10px;color:var(--gzus-muted-foreground);margin-left:6px;">待提交 · 材料准备</span>
+                      </div>
+                      <span style="font-size:13px;font-weight:700;color:var(--gzus-primary);">20%</span>
+                    </div>
+                    <div class="progress-track" style="background:var(--gzus-muted);margin-top:6px;">
+                      <div class="progress-fill" style="width:20%;background:var(--gzus-primary);"></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="widget-label">业务进度 · Medium</div>
+            </div>
+
+          </div>
+        </section>
+
+        <!-- ====== Section 5: 桌面小组件 · Large ====== -->
+        <section id="section-home-large" class="section-block home-screen-bg">
+          <div style="margin-bottom:16px;">
+            <h2 class="section-heading">桌面小组件 · Large</h2>
+            <p class="section-caption">systemLarge · 4×4 网格 · 完整信息展示</p>
+            <p class="hig-note">避免单为填充更大区域而扩展较小尺寸小组件的内容</p>
+          </div>
+          <div class="widget-stack">
+
+            <!-- Widget 1: 今日时间线 Large -->
+            <div>
+              <div class="widget-card widget-lg" id="widget-today-large">
+                <div class="widget-header" style="justify-content:space-between;">
+                  <div style="display:flex;align-items:center;gap:6px;">
+                    <i data-lucide="list" style="color:var(--gzus-primary);"></i>
+                    <span class="widget-header-label">今日时间线</span>
+                  </div>
+                  <span class="widget-badge">3 节</span>
+                </div>
+                <div style="display:flex;flex-direction:column;gap:12px;">
+                  <div style="display:flex;align-items:center;gap:8px;">
+                    <span style="font-size:12px;font-weight:600;color:var(--gzus-muted-foreground);min-width:36px;">08:30</span>
+                    <span class="status-dot" style="background:var(--gzus-state-info);"></span>
+                    <div style="flex:1;min-width:0;">
+                      <div style="font-size:14px;font-weight:600;color:var(--gzus-foreground);">数据结构</div>
+                      <div style="font-size:10px;color:var(--gzus-muted-foreground);">教学楼 A301 · 张老师</div>
+                    </div>
+                  </div>
+                  <div style="display:flex;align-items:center;gap:8px;">
+                    <span style="font-size:12px;font-weight:600;color:var(--gzus-muted-foreground);min-width:36px;">10:10</span>
+                    <span class="status-dot" style="background:var(--gzus-state-error);"></span>
+                    <div style="flex:1;min-width:0;">
+                      <div style="font-size:14px;font-weight:600;color:var(--gzus-foreground);">软件工程</div>
+                      <div style="font-size:10px;color:var(--gzus-muted-foreground);">教学楼 B204 · 李老师</div>
+                    </div>
+                  </div>
+                  <div style="display:flex;align-items:center;gap:8px;">
+                    <span style="font-size:12px;font-weight:600;color:var(--gzus-muted-foreground);min-width:36px;">14:30</span>
+                    <span class="status-dot" style="background:var(--gzus-state-info);"></span>
+                    <div style="flex:1;min-width:0;">
+                      <div style="font-size:14px;font-weight:600;color:var(--gzus-foreground);">数据库原理</div>
+                      <div style="font-size:10px;color:var(--gzus-muted-foreground);">教学楼 C105 · 王老师</div>
+                    </div>
+                  </div>
+                </div>
+                <hr class="widget-divider">
+                <div style="font-size:11px;color:var(--gzus-muted-foreground);text-align:center;">第 6 周 · 3 节课</div>
+              </div>
+              <div class="widget-label">今日时间线 · Large</div>
+            </div>
+
+            <!-- Widget 2: 考试倒计时 Large -->
+            <div>
+              <div class="widget-card widget-lg" id="widget-exam-large">
+                <div class="widget-header" style="justify-content:space-between;">
+                  <div style="display:flex;align-items:center;gap:6px;">
+                    <i data-lucide="timer" style="color:var(--gzus-state-error);"></i>
+                    <span class="widget-header-label">考试倒计时</span>
+                  </div>
+                  <span class="widget-badge">2</span>
+                </div>
+                <div style="display:flex;flex-direction:column;gap:12px;margin-top:4px;">
+                  <div style="display:flex;align-items:center;gap:12px;">
+                    <div style="display:flex;align-items:baseline;gap:2px;min-width:48px;">
+                      <span style="font-size:28px;font-weight:800;color:var(--gzus-state-error);line-height:1;">3</span>
+                      <span style="font-size:12px;color:var(--gzus-muted-foreground);">天</span>
+                    </div>
+                    <div style="flex:1;min-width:0;">
+                      <div style="font-size:14px;font-weight:600;color:var(--gzus-foreground);">数据结构</div>
+                      <div style="font-size:10px;color:var(--gzus-muted-foreground);margin-top:2px;">6月20日 09:00-11:00 · 教学楼 A301</div>
+                    </div>
+                  </div>
+                  <div style="display:flex;align-items:center;gap:12px;">
+                    <div style="display:flex;align-items:baseline;gap:2px;min-width:48px;">
+                      <span style="font-size:28px;font-weight:800;color:var(--gzus-primary);line-height:1;">6</span>
+                      <span style="font-size:12px;color:var(--gzus-muted-foreground);">天</span>
+                    </div>
+                    <div style="flex:1;min-width:0;">
+                      <div style="font-size:14px;font-weight:600;color:var(--gzus-foreground);">软件工程</div>
+                      <div style="font-size:10px;color:var(--gzus-muted-foreground);margin-top:2px;">6月23日 14:30-16:30 · 教学楼 B204</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="widget-label">考试倒计时 · Large</div>
+            </div>
+
+            <!-- Widget 3: 本学期成绩 Large -->
+            <div>
+              <div class="widget-card widget-lg" id="widget-grades-large">
+                <div class="widget-header" style="justify-content:space-between;">
+                  <div style="display:flex;align-items:center;gap:6px;">
+                    <i data-lucide="graduation-cap" style="color:var(--gzus-primary);"></i>
+                    <span class="widget-header-label">本学期成绩</span>
+                  </div>
+                  <span class="widget-badge">8 门</span>
+                </div>
+                <div style="display:flex;align-items:center;margin-top:4px;">
+                  <div style="flex:1;text-align:center;">
+                    <div style="font-size:30px;font-weight:800;color:var(--gzus-primary);line-height:1;">3.72</div>
+                    <div style="font-size:11px;color:var(--gzus-muted-foreground);margin-top:4px;">平均绩点</div>
+                  </div>
+                  <div class="grade-divider" style="height:40px;"></div>
+                  <div style="flex:1;text-align:center;">
+                    <div style="font-size:30px;font-weight:800;color:var(--gzus-foreground);line-height:1;">86.5</div>
+                    <div style="font-size:11px;color:var(--gzus-muted-foreground);margin-top:4px;">平均分</div>
+                  </div>
+                </div>
+                <hr class="widget-divider">
+                <div style="display:flex;flex-direction:column;gap:10px;">
+                  <div style="display:flex;align-items:center;justify-content:space-between;">
+                    <div>
+                      <span style="font-size:13px;font-weight:600;color:var(--gzus-foreground);">数据结构</span>
+                      <span style="font-size:10px;color:var(--gzus-muted-foreground);margin-left:4px;">3 学分</span>
+                    </div>
+                    <div style="display:flex;align-items:baseline;gap:6px;">
+                      <span style="font-size:18px;font-weight:700;color:var(--gzus-foreground);">94</span>
+                      <span style="font-size:11px;color:var(--gzus-muted-foreground);">4.0</span>
+                    </div>
+                  </div>
+                  <div style="display:flex;align-items:center;justify-content:space-between;">
+                    <div>
+                      <span style="font-size:13px;font-weight:600;color:var(--gzus-foreground);">软件工程</span>
+                      <span style="font-size:10px;color:var(--gzus-muted-foreground);margin-left:4px;">2 学分</span>
+                    </div>
+                    <div style="display:flex;align-items:baseline;gap:6px;">
+                      <span style="font-size:18px;font-weight:700;color:var(--gzus-foreground);">90</span>
+                      <span style="font-size:11px;color:var(--gzus-muted-foreground);">4.0</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="widget-label">本学期成绩 · Large</div>
+            </div>
+
+            <!-- Widget 4: 业务进度 Large -->
+            <div>
+              <div class="widget-card widget-lg" id="widget-progress-large">
+                <div class="widget-header" style="justify-content:space-between;">
+                  <div style="display:flex;align-items:center;gap:6px;">
+                    <i data-lucide="file-text" style="color:var(--gzus-primary);"></i>
+                    <span class="widget-header-label">业务进度</span>
+                  </div>
+                  <span class="widget-badge">待办 · 审批中</span>
+                </div>
+                <div style="display:flex;flex-direction:column;gap:12px;margin-top:4px;">
+                  <div>
+                    <div style="display:flex;align-items:center;justify-content:space-between;">
+                      <div>
+                        <span style="font-size:13px;font-weight:600;color:var(--gzus-foreground);">请假申请</span>
+                        <span style="font-size:10px;color:var(--gzus-muted-foreground);margin-left:6px;">审批中 · 辅导员审批</span>
+                      </div>
+                      <span style="font-size:14px;font-weight:700;color:var(--gzus-primary);">60%</span>
+                    </div>
+                    <div class="progress-track" style="background:var(--gzus-muted);margin-top:6px;">
+                      <div class="progress-fill" style="width:60%;background:var(--gzus-primary);"></div>
+                    </div>
+                  </div>
+                  <div>
+                    <div style="display:flex;align-items:center;justify-content:space-between;">
+                      <div>
+                        <span style="font-size:13px;font-weight:600;color:var(--gzus-foreground);">奖学金申请</span>
+                        <span style="font-size:10px;color:var(--gzus-muted-foreground);margin-left:6px;">待提交 · 材料准备</span>
+                      </div>
+                      <span style="font-size:14px;font-weight:700;color:var(--gzus-primary);">20%</span>
+                    </div>
+                    <div class="progress-track" style="background:var(--gzus-muted);margin-top:6px;">
+                      <div class="progress-fill" style="width:20%;background:var(--gzus-primary);"></div>
+                    </div>
+                  </div>
+                  <div>
+                    <div style="display:flex;align-items:center;justify-content:space-between;">
+                      <div>
+                        <span style="font-size:13px;font-weight:600;color:var(--gzus-foreground);">证明开具</span>
+                        <span style="font-size:10px;color:var(--gzus-state-success);margin-left:6px;">已办 · 完成</span>
+                      </div>
+                      <span style="font-size:14px;font-weight:700;color:var(--gzus-state-success);">100%</span>
+                    </div>
+                    <div class="progress-track" style="background:var(--gzus-muted);margin-top:6px;">
+                      <div class="progress-fill" style="width:100%;background:var(--gzus-state-success);"></div>
+                    </div>
+                  </div>
+                </div>
+                <hr class="widget-divider">
+                <div style="font-size:11px;color:var(--gzus-muted-foreground);text-align:center;">点击查看办事大厅</div>
+              </div>
+              <div class="widget-label">业务进度 · Large</div>
+            </div>
+
+          </div>
+        </section>
+
+        <!-- ====== Section 6: 锁屏 Accessory ====== -->
+        <section id="section-lock-screen" class="lock-section">
+          <div style="margin-bottom:20px;">
+            <h2 class="section-heading">锁屏 Accessory</h2>
+            <p class="section-caption">Accessory 系列 · 虚化渲染模式 · iOS 锁屏界面</p>
+            <p class="hig-note">锁屏小组件使用虚化渲染模式，降低饱和度</p>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:28px;align-items:center;">
+
+            <!-- accessoryInline -->
+            <div style="width:100%;">
+              <div id="widget-lock-inline" style="display:flex;align-items:center;justify-content:center;padding:10px 16px;border-radius:12px;background:rgba(255,255,255,0.05);">
+                <span style="font-size:13px;color:#F5F7FA;font-weight:500;letter-spacing:0.01em;">10:10 · 数据结构 · 教学楼 A301</span>
+              </div>
+              <div class="lock-label">accessoryInline</div>
+            </div>
+
+            <!-- accessoryCircular -->
+            <div>
+              <div id="widget-lock-circular" style="width:64px;height:64px;border-radius:50%;border:1.5px solid rgba(255,255,255,0.25);display:flex;flex-direction:column;align-items:center;justify-content:center;">
+                <span style="font-size:11px;font-weight:700;color:#F5F7FA;line-height:1;">10:10</span>
+                <span style="font-size:7px;color:#A4ABB8;margin-top:2px;">数据结构</span>
+              </div>
+              <div class="lock-label">accessoryCircular</div>
+            </div>
+
+            <!-- accessoryRectangular -->
+            <div style="width:100%;">
+              <div id="widget-lock-rectangular" style="border-radius:14px;background:rgba(255,255,255,0.07);padding:12px 16px;border:1px solid rgba(255,255,255,0.08);">
+                <div style="font-size:9px;color:#A4ABB8;font-weight:600;letter-spacing:0.05em;">下一节课</div>
+                <div style="font-size:11px;color:#A4ABB8;margin-top:3px;">10:10-11:50</div>
+                <div style="font-size:15px;font-weight:700;color:#F5F7FA;margin-top:3px;">数据结构</div>
+                <div style="font-size:10px;color:#A4ABB8;margin-top:2px;">教学楼 A301</div>
+              </div>
+              <div class="lock-label">accessoryRectangular</div>
+            </div>
+
+          </div>
+        </section>
+
+        <!-- ====== Section 7: Live Activity ====== -->
+        <section id="section-live-activity" class="lock-section">
+          <div style="margin-bottom:20px;">
+            <h2 class="section-heading">Live Activity</h2>
+            <p class="section-caption">实时活动 · 锁屏横幅 · iOS 16.1+</p>
+          </div>
+          <div>
+            <div id="widget-live-activity-lock" style="display:flex;align-items:center;gap:12px;padding:14px;border-radius:20px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.08);">
+              <div style="flex-shrink:0;width:40px;height:40px;border-radius:12px;background:rgba(37,99,235,0.18);display:flex;align-items:center;justify-content:center;">
+                <i data-lucide="calendar" style="width:20px;height:20px;color:#3B82F6;"></i>
+              </div>
+              <div style="flex:1;min-width:0;">
+                <div style="font-size:14px;font-weight:700;color:#F5F7FA;">课程提醒</div>
+                <div style="font-size:11px;color:#A4ABB8;margin-top:2px;">数据结构 · 教学楼 A301</div>
+                <div class="progress-track" style="background:rgba(255,255,255,0.12);margin-top:6px;">
+                  <div class="progress-fill" style="width:50%;background:#3B82F6;"></div>
+                </div>
+              </div>
+              <div style="flex-shrink:0;font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:18px;font-weight:700;color:#F5F7FA;letter-spacing:-0.02em;">23:45</div>
+            </div>
+            <div class="lock-label">Live Activity · 锁屏横幅</div>
+          </div>
+        </section>
+
+        <!-- ====== Section 8: HIG 设计原则 ====== -->
+        <section id="section-hig-principles" class="section-block">
+          <div style="margin-bottom:16px;">
+            <h2 class="section-heading">HIG 设计原则</h2>
+            <p class="section-caption">Apple Human Interface Guidelines · 小组件设计最佳实践</p>
+          </div>
+          <ul class="hig-list">
+            <li class="hig-item">
+              <div class="hig-icon-wrap">
+                <i data-lucide="clock" style="color:var(--gzus-primary);"></i>
+              </div>
+              <div>
+                <div class="hig-item-title">简单理念</div>
+                <div class="hig-item-desc">选择与 App 主要用途相关的简单理念，将即时内容和相关功能包括在内</div>
+              </div>
+            </li>
+            <li class="hig-item">
+              <div class="hig-icon-wrap">
+                <i data-lucide="eye" style="color:var(--gzus-state-info);"></i>
+              </div>
+              <div>
+                <div class="hig-item-title">一目了然</div>
+                <div class="hig-item-desc">让用户快速访问所需内容，提供有意义的信息和实用操作</div>
+              </div>
+            </li>
+            <li class="hig-item">
+              <div class="hig-icon-wrap">
+                <i data-lucide="refresh-cw" style="color:var(--gzus-state-success);"></i>
+              </div>
+              <div>
+                <div class="hig-item-title">动态信息</div>
+                <div class="hig-item-desc">优先提供一天中不断变化的动态信息，避免内容从不变化</div>
+              </div>
+            </li>
+            <li class="hig-item">
+              <div class="hig-icon-wrap">
+                <i data-lucide="layout-grid" style="color:var(--gzus-primary);"></i>
+              </div>
+              <div>
+                <div class="hig-item-title">多尺寸价值</div>
+                <div class="hig-item-desc">每种尺寸提供独特价值，避免单为填充更大区域而扩展内容</div>
+              </div>
+            </li>
+            <li class="hig-item">
+              <div class="hig-icon-wrap">
+                <i data-lucide="scale" style="color:var(--gzus-state-warning);"></i>
+              </div>
+              <div>
+                <div class="hig-item-title">信息密度平衡</div>
+                <div class="hig-item-desc">布局稀疏使小组件显得多余，过于紧密则不够简单明了</div>
+              </div>
+            </li>
+            <li class="hig-item">
+              <div class="hig-icon-wrap">
+                <i data-lucide="palette" style="color:var(--gzus-state-error);"></i>
+              </div>
+              <div>
+                <div class="hig-item-title">谨慎使用品牌元素</div>
+                <div class="hig-item-desc">融入品牌颜色和风格化图形增加辨识度，但不应盖过有用信息</div>
+              </div>
+            </li>
+            <li class="hig-item">
+              <div class="hig-icon-wrap">
+                <i data-lucide="mouse-pointer-click" style="color:var(--gzus-primary);"></i>
+              </div>
+              <div>
+                <div class="hig-item-title">整洁交互</div>
+                <div class="hig-item-desc">提供简单相关功能，将复杂功能留给 App，保持整洁明了</div>
+              </div>
+            </li>
+            <li class="hig-item">
+              <div class="hig-icon-wrap">
+                <i data-lucide="link" style="color:var(--gzus-state-info);"></i>
+              </div>
+              <div>
+                <div class="hig-item-title">深度链接</div>
+                <div class="hig-item-desc">确保小组件交互在正确的位置打开 App 的对应详情</div>
+              </div>
+            </li>
+          </ul>
+          <div style="text-align:center;padding:24px 0 8px;">
+            <span style="font-size:10px;color:var(--gzus-muted-foreground);">OneGZUS 软帮手 · 遵循 Apple HIG 小组件设计规范</span>
+          </div>
+        </section>
+
+      </div>
+    </main>
+    <script>lucide.createIcons();</script>
+
+    <style id="critical-layout">
+      html, body { overflow-x: hidden; }
+      .showcase-frame { max-width: 420px; margin: 0 auto; min-height: 100vh; background: var(--gzus-background); }
+      .section-block { padding: 24px 16px; }
+      .home-screen-bg { background: linear-gradient(160deg, #E8EDF5 0%, #F0F2F6 50%, #FAFAF8 100%); }
+      .section-heading { font-size: 20px; font-weight: 700; color: var(--gzus-foreground); letter-spacing: -0.01em; text-wrap: balance; }
+      .section-caption { font-size: 12px; color: var(--gzus-muted-foreground); margin-top: 4px; }
+      .hig-note { font-size: 11px; color: var(--gzus-muted-foreground); margin-top: 6px; line-height: 1.5; font-style: italic; }
+
+      /* Widget card base + size variants */
+      .widget-card { background: var(--gzus-card); border: 1px solid var(--gzus-border); overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.04), 0 0 1px rgba(0,0,0,0.02); }
+      .widget-sm { border-radius: 16px; padding: 16px; }
+      .widget-md { border-radius: 20px; padding: 20px; }
+      .widget-lg { border-radius: 24px; padding: 24px; }
+
+      .widget-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+      .widget-stack { display: flex; flex-direction: column; gap: 14px; }
+      .widget-label { font-size: 10px; color: var(--gzus-muted-foreground); text-align: center; margin-top: 8px; font-weight: 500; }
+      .widget-header { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; }
+      .widget-header-label { font-size: 11px; color: var(--gzus-muted-foreground); font-weight: 600; }
+      .widget-badge { display: inline-flex; align-items: center; font-size: 9px; font-weight: 600; padding: 2px 6px; border-radius: 6px; background: var(--gzus-muted); color: var(--gzus-muted-foreground); }
+      .widget-divider { height: 1px; background: var(--gzus-border); margin: 10px 0; border: none; }
+      .status-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; display: inline-block; }
+      .widget-row { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--gzus-muted-foreground); margin-top: 4px; }
+      .widget-card svg { width: 14px; height: 14px; flex-shrink: 0; }
+
+      /* Lock screen section */
+      .lock-section { background: #0B0D10; color: #F5F7FA; padding: 32px 16px; }
+      .lock-section .section-heading { color: #F5F7FA; }
+      .lock-section .section-caption { color: #A4ABB8; }
+      .lock-section .hig-note { color: #A4ABB8; }
+      .lock-widget { background: rgba(255,255,255,0.07); border-radius: 18px; border: 1px solid rgba(255,255,255,0.1); padding: 14px; }
+      .lock-section svg { width: 14px; height: 14px; flex-shrink: 0; }
+      .lock-label { font-size: 10px; color: #A4ABB8; text-align: center; margin-top: 8px; font-weight: 500; }
+
+      /* Rendering mode demos */
+      .mode-demo-card { background: var(--gzus-card); border: 1px solid var(--gzus-border); border-radius: 20px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.04), 0 0 1px rgba(0,0,0,0.02); }
+      .mode-demo-label { display: flex; align-items: center; gap: 6px; margin-bottom: 12px; }
+      .mode-demo-title { font-size: 13px; font-weight: 700; color: var(--gzus-foreground); }
+      .mode-demo-badge { font-size: 9px; font-weight: 600; padding: 2px 6px; border-radius: 6px; background: var(--gzus-muted); color: var(--gzus-muted-foreground); }
+      .mode-demo-desc { font-size: 11px; color: var(--gzus-muted-foreground); margin-top: 10px; line-height: 1.5; }
+      .mode-widget { background: var(--gzus-card); border: 1px solid var(--gzus-border); border-radius: 20px; padding: 16px; }
+      .mode-tinted { filter: saturate(0.3) brightness(1.05); position: relative; }
+      .mode-tinted::after { content: ''; position: absolute; inset: 0; border-radius: 20px; background: rgba(37,99,235,0.08); pointer-events: none; }
+      .mode-vibrant-wrapper { background: #0B0D10; border-radius: 20px; padding: 2px; }
+      .mode-vibrant { filter: grayscale(1) brightness(1.1); }
+
+      /* Meta pills */
+      .meta-pill { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 999px; background: var(--gzus-muted); }
+
+      /* HIG principles list */
+      .hig-list { list-style: none; padding: 0; margin: 0; }
+      .hig-item { display: flex; align-items: flex-start; gap: 10px; padding: 14px 0; border-bottom: 1px solid var(--gzus-border); }
+      .hig-item:last-child { border-bottom: none; }
+      .hig-icon-wrap { width: 32px; height: 32px; border-radius: 8px; background: var(--gzus-muted); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+      .hig-icon-wrap svg { width: 16px; height: 16px; }
+      .hig-item-title { font-size: 13px; font-weight: 700; color: var(--gzus-foreground); }
+      .hig-item-desc { font-size: 11px; color: var(--gzus-muted-foreground); margin-top: 4px; line-height: 1.5; }
+
+      [data-lucide] { display: inline-flex; vertical-align: middle; }
+      .progress-track { height: 4px; border-radius: 2px; overflow: hidden; }
+      .progress-fill { height: 100%; border-radius: 2px; }
+      .exam-col { background: var(--gzus-muted); border-radius: 10px; padding: 10px; }
+      .grade-divider { width: 1px; background: var(--gzus-border); align-self: stretch; }
+    </style>
+</body>
+</html>

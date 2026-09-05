@@ -10,7 +10,6 @@ from app.leave_service import (
     build_leave_fill_script,
     build_leave_handler_script,
     build_leave_preview,
-    leave_days,
 )
 from app.jwxt.normalizers import normalize_schedule_course
 from app.routes.deps import require_session
@@ -392,31 +391,22 @@ def leave_fill(
         if not unmatched_teachers and matched_teachers:
             handler_script = build_leave_handler_script(matched_teachers)
         attachments = _decode_leave_attachments(payload.attachments)
-        result = ehall_client.fill_leave_application(
-            start_date=payload.start_date,
-            end_date=payload.end_date,
-            leave_days=leave_days(payload.start_date, payload.end_date),
-            reason=payload.reason,
-            courses=preview["items"],
-            attachments=attachments,
-        )
-        uploaded_count = int(result.get("attachmentUploadedCount", 0))
-        attachment_total = int(result.get("attachmentTotal", len(attachments)))
+        form_url = ehall_client.leave_application_url()
         return {
-            "status": "needs_manual" if unmatched_teachers else result.get("status", "needs_manual"),
+            "status": "needs_manual" if unmatched_teachers else "filled",
             "message": "请选择任课教师经办人"
             if unmatched_teachers
-            else result.get("message", "已生成请假单并上传附件，打开后将自动办理并停在提交前"),
+            else "请打开请假单，页面加载后将自动填写并上传附件",
             "items": preview["items"],
             "unmatchedTeachers": unmatched_teachers,
             "matchedTeachers": matched_teachers,
             "teacherCandidates": teacher_candidates,
-            "formUrl": result.get("formUrl"),
-            "fillScript": result.get("fillScript") or fill_script,
-            "handlerScript": result.get("handlerScript") or handler_script,
-            "attachmentUploaded": bool(result.get("attachmentUploaded")),
-            "attachmentUploadedCount": uploaded_count,
-            "attachmentTotal": attachment_total,
+            "formUrl": form_url,
+            "fillScript": fill_script,
+            "handlerScript": handler_script,
+            "attachmentUploaded": False,
+            "attachmentUploadedCount": 0,
+            "attachmentTotal": len(attachments),
         }
     except EhallAuthenticationError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
@@ -456,7 +446,7 @@ def leave_attachment(
     if ehall_client is None:
         return {"status": "no_ehall_session", "uploaded": False}
     try:
-        content = base64.b64decode(payload.attachment_content_base64)
+        content = base64.b64decode(payload.attachment_content_base64, validate=True)
         uploaded = ehall_client.upload_leave_attachment(
             doc_unid=payload.doc_unid,
             process_id=payload.process_id,

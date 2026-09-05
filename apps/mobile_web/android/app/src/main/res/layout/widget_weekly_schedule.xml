@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="12dp"
+    android:background="@drawable/widget_home_background">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+        <ImageView
+            android:id="@+id/widget_icon"
+            android:layout_width="20dp"
+            android:layout_height="20dp"
+            android:layout_marginEnd="6dp"
+            android:src="@drawable/widget_icon_today"
+            android:importantForAccessibility="no" />
+        <TextView
+            android:id="@+id/widget_header_title"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:maxLines="1"
+            android:ellipsize="end"
+            android:textColor="@color/widget_on_surface"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/weekly_calendar_grid"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:layout_marginTop="8dp"
+        android:orientation="horizontal">
+        <LinearLayout android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:orientation="vertical">
+            <TextView android:id="@+id/weekly_day_1" style="@style/WidgetCalendarDayHeader" />
+            <TextView android:id="@+id/weekly_course_1_1" style="@style/WidgetCalendarCourse" />
+            <TextView android:id="@+id/weekly_course_1_2" style="@style/WidgetCalendarCourse" />
+            <TextView android:id="@+id/weekly_course_1_3" style="@style/WidgetCalendarCourse" />
+            <TextView android:id="@+id/weekly_course_1_4" style="@style/WidgetCalendarCourse" />
+            <TextView android:id="@+id/weekly_course_1_5" style="@style/WidgetCalendarCourse" />
+            <TextView android:id="@+id/weekly_course_1_6" style="@style/WidgetCalendarCourse" />
+            <TextView android:id="@+id/weekly_course_1_7" style="@style/WidgetCalendarCourse" />
+            <TextView android:id="@+id/weekly_course_1_8" style="@style/WidgetCalendarCourse" />
+        </LinearLayout>
+        <LinearLayout android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:orientation="vertical">
+            <TextView android:id="@+id/weekly_day_2" style="@style/WidgetCalendarDayHeader" />
+            <TextView android:id="@+id/weekly_course_2_1" style="@style/WidgetCalendarCourse" />
+            <TextView android:id="@+id/weekly_course_2_2" style="@style/WidgetCalendarCourse" />
+            <TextView android:id="@+id/weekly_course_2_3" style="@style/WidgetCalendarCourse" />
+            <TextView android:id="@+id/weekly_course_2_4" style="@style/WidgetCalendarCourse" />
+            <TextView android:id="@+id/weekly_course_2_5" style="@style/WidgetCalendarCourse" />
+            <TextView android:id="@+id/weekly_course_2_6" style="@style/WidgetCalendarCourse" />
+            <TextView android:id="@+id/weekly_course_2_7" style="@style/WidgetCalendarCourse" />
+            <TextView android:id="@+id/weekly_course_2_8" style="@style/WidgetCalendarCourse" />
+        </LinearLayout>
+        <LinearLayout android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:orientation="vertical">
+            <TextView android:id="@+id/weekly_day_3" style="@style/WidgetCalendarDayHeader" />
+            <TextView android:id="@+id/weekly_course_3_1" style="@style/WidgetCalendarCourse" />
+            <TextView android:id="@+id/weekly_course_3_2" style="@style/WidgetCalendarCourse" />
+            <TextView android:id="@+id/weekly_course_3_3" style="@style/WidgetCalendarCourse" />
+            <TextView android:id="@+id/weekly_course_3_4" style="@style/WidgetCalendarCourse" />
+            <TextView android:id="@+id/weekly_course_3_5" style="@style/WidgetCalendarCourse" />
+            <TextView android:id="@+id/weekly_course_3_6" style="@style/WidgetCalendarCourse" />
+            <TextView android:id="@+id/weekly_course_3_7" style="@style/WidgetCalendarCourse" />
+            <TextView android:id="@+id/weekly_course_3_8" style="@style/WidgetCalendarCourse" />
+        </LinearLayout>
+        <LinearLayout android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:orientation="vertical">
+            <TextView android:id="@+id/weekly_day_4" style="@style/WidgetCalendarDayHeader" />
+            <TextView android:id="@+id/weekly_course_4_1" style="@style/WidgetCalendarCourse" />
+            <TextView android:id="@+id/weekly_course_4_2" style="@style/WidgetCalendarCourse" />
+            <TextView android:id="@+id/weekly_course_4_3" style="@style/WidgetCalendarCourse" />
+            <TextView android:id="@+id/weekly_course_4_4" style="@style/WidgetCalendarCourse" />
+            <TextView android:id="@+id/weekly_course_4_5" style="@style/WidgetCalendarCourse" />
+            <TextView android:id="@+id/weekly_course_4_6" style="@style/WidgetCalendarCourse" />
+            <TextView android:id="@+id/weekly_course_4_7" style="@style/WidgetCalendarCourse" />
+            <TextView android:id="@+id/weekly_course_4_8" style="@style/WidgetCalendarCourse" />
+        </LinearLayout>
+        <LinearLayout android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:orientation="vertical">
+            <TextView android:id="@+id/weekly_day_5" style="@style/WidgetCalendarDayHeader" />
+            <TextView android:id="@+id/weekly_course_5_1" style="@style/WidgetCalendarCourse" />
+            <TextView android:id="@+id/weekly_course_5_2" style="@style/WidgetCalendarCourse" />
+            <TextView android:id="@+id/weekly_course_5_3" style="@style/WidgetCalendarCourse" />
+            <TextView android:id="@+id/weekly_course_5_4" style="@style/WidgetCalendarCourse" />
+            <TextView android:id="@+id/weekly_course_5_5" style="@style/WidgetCalendarCourse" />
+            <TextView android:id="@+id/weekly_course_5_6" style="@style/WidgetCalendarCourse" />
+            <TextView android:id="@+id/weekly_course_5_7" style="@style/WidgetCalendarCourse" />
+            <TextView android:id="@+id/weekly_course_5_8" style="@style/WidgetCalendarCourse" />
+        </LinearLayout>
+        <LinearLayout android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:orientation="vertical">
+            <TextView android:id="@+id/weekly_day_6" style="@style/WidgetCalendarDayHeader" />
+            <TextView android:id="@+id/weekly_course_6_1" style="@style/WidgetCalendarCourse" />
+            <TextView android:id="@+id/weekly_course_6_2" style="@style/WidgetCalendarCourse" />
+            <TextView android:id="@+id/weekly_course_6_3" style="@style/WidgetCalendarCourse" />
+            <TextView android:id="@+id/weekly_course_6_4" style="@style/WidgetCalendarCourse" />
+            <TextView android:id="@+id/weekly_course_6_5" style="@style/WidgetCalendarCourse" />
+            <TextView android:id="@+id/weekly_course_6_6" style="@style/WidgetCalendarCourse" />
+            <TextView android:id="@+id/weekly_course_6_7" style="@style/WidgetCalendarCourse" />
+            <TextView android:id="@+id/weekly_course_6_8" style="@style/WidgetCalendarCourse" />
+        </LinearLayout>
+        <LinearLayout android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:orientation="vertical">
+            <TextView android:id="@+id/weekly_day_7" style="@style/WidgetCalendarDayHeader" />
+            <TextView android:id="@+id/weekly_course_7_1" style="@style/WidgetCalendarCourse" />
+            <TextView android:id="@+id/weekly_course_7_2" style="@style/WidgetCalendarCourse" />
+            <TextView android:id="@+id/weekly_course_7_3" style="@style/WidgetCalendarCourse" />
+            <TextView android:id="@+id/weekly_course_7_4" style="@style/WidgetCalendarCourse" />
+            <TextView android:id="@+id/weekly_course_7_5" style="@style/WidgetCalendarCourse" />
+            <TextView android:id="@+id/weekly_course_7_6" style="@style/WidgetCalendarCourse" />
+            <TextView android:id="@+id/weekly_course_7_7" style="@style/WidgetCalendarCourse" />
+            <TextView android:id="@+id/weekly_course_7_8" style="@style/WidgetCalendarCourse" />
+        </LinearLayout>
+    </LinearLayout>
+</LinearLayout>

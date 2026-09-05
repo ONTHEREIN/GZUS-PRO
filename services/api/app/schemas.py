@@ -411,9 +411,9 @@ class LeaveFillRequest(LeavePreviewRequest):
 
 class LeaveAttachmentUploadRequest(BaseModel):
     doc_unid: str = Field(alias="docUnid", min_length=1)
-    process_id: str = Field(default="", alias="processId")
-    node_name: str = Field(default="申请人", alias="nodeName")
-    local_store: str = Field(default="0", alias="localStore")
+    process_id: str = Field(alias="processId", min_length=1)
+    node_name: str = Field(alias="nodeName", min_length=1)
+    local_store: str = Field(alias="localStore", min_length=1)
     attachment_name: str = Field(alias="attachmentName", min_length=1)
     attachment_content_base64: str = Field(alias="attachmentContentBase64", min_length=1)
 
