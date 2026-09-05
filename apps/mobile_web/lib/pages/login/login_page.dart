@@ -314,7 +314,7 @@ class _LoginPageState extends State<LoginPage>
                                                     rememberPassword =
                                                         value ?? true),
                                           ),
-                                          const Text('记住学号并自动登录'),
+                                          const Text('记住密码并自动登录'),
                                         ],
                                       ),
                                     ),
@@ -852,7 +852,7 @@ class _LoginPageState extends State<LoginPage>
                         : (value) =>
                             setState(() => rememberPassword = value ?? true),
                   ),
-                  const Expanded(child: Text('记住学号并自动登录')),
+                  const Expanded(child: Text('记住密码并自动登录')),
                 ],
               ),
             ),
@@ -1148,7 +1148,7 @@ class _AgreementContent extends StatelessWidget {
 信息仅用于展示课表、成绩、考勤、水电费等校内教务服务，遵循最小必要原则。
 
 三、信息存储
-密码不会以明文持久化存储。用户选择“记住学号并自动登录”后，前端安全存储会保存限时加密的自动登录凭据；学校系统Cookie保存在限时服务端会话和前端系统安全存储中，并在退出登录时清除。服务端不保存可还原的账号密码。
+密码不会以明文持久化存储。用户选择“记住密码并自动登录”后，前端系统安全存储会保存仅用于本设备自动登录的加密凭据；学校系统 Cookie 保存在限时服务端会话和前端系统安全存储中，并在退出登录或凭据被撤销时清除。服务端数据库不保存账号密码。
 
 四、信息安全
 所有通信使用HTTPS/TLS加密。日志不输出密码、Cookie等敏感信息。每位用户只能访问自己的教务数据。

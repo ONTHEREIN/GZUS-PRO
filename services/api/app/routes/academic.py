@@ -178,6 +178,7 @@ def _dashboard_module(
             "durationMs": round((time.perf_counter() - started) * 1000),
         }
     except HTTPException as exc:
+        needs_relogin = exc.status_code == status.HTTP_401_UNAUTHORIZED
         cached, cached_at = fallback_cache
         if cached is not None:
             return {
@@ -185,6 +186,7 @@ def _dashboard_module(
                 "data": cached,
                 "source": "cache",
                 "cachedAt": cached_at.isoformat() if cached_at else None,
+                "needsRelogin": needs_relogin,
                 "durationMs": round((time.perf_counter() - started) * 1000),
             }
         return {
@@ -192,6 +194,7 @@ def _dashboard_module(
             "data": empty,
             "source": "api",
             "error": str(exc.detail),
+            "needsRelogin": needs_relogin,
             "durationMs": round((time.perf_counter() - started) * 1000),
         }
 
@@ -597,6 +600,9 @@ async def dashboard(
         "status": "ok",
         "generatedAt": datetime.now(UTC).isoformat(),
         "traceId": trace_id,
+        "needsRelogin": any(
+            module.get("needsRelogin") is True for module in modules.values()
+        ),
         "modules": modules,
     }
 

@@ -99,6 +99,11 @@ class ExpiredClient(FakeClient):
         raise AuthenticationError("登录状态已失效，请重新登录")
 
 
+class GradeSessionExpiredClient(FakeClient):
+    def get_grades(self, year, term):
+        raise AuthenticationError("登录状态已失效，请重新登录")
+
+
 class SlowDashboardClient(FakeClient):
     def get_info(self):
         time.sleep(0.2)
@@ -273,6 +278,24 @@ def test_dashboard_can_load_only_requested_modules():
 
     assert response.status_code == 200
     assert set(response.json()["modules"]) == {"me", "schedule", "grades"}
+
+
+def test_dashboard_marks_module_authentication_failure_for_relogin():
+    app = create_app()
+    session = app.state.sessions.create(GradeSessionExpiredClient(), "测试学生")
+    client = TestClient(app)
+
+    response = client.get(
+        "/dashboard?year=2025&term=2&modules=schedule,grades",
+        headers={"X-Session-Id": session.id},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["needsRelogin"] is True
+    assert payload["modules"]["schedule"]["status"] == "ok"
+    assert payload["modules"]["grades"]["status"] == "error"
+    assert payload["modules"]["grades"]["needsRelogin"] is True
 
 
 def test_widget_snapshot_is_authenticated_compact_and_etagged():

@@ -1404,17 +1404,48 @@ class ApiClient {
   }) async {
     final moduleQuery = modules.isEmpty ? '' : '&modules=${modules.join(',')}';
     final cacheSuffix = modules.isEmpty ? 'all' : modules.join('_');
-    final result = await _cacheFirstObject<DashboardSnapshot>(
-      cacheKey: 'dashboard_${year}_${term}_${week}_$cacheSuffix',
-      fetch: () => _plainObject(_getDashboardObject(
-        '/dashboard?year=$year&term=$term&week=$week$moduleQuery${forceRefresh ? '&refresh=true' : ''}',
-      )),
-      fromJson: (json) => DashboardSnapshot.fromJson(json),
-      forceRefresh: forceRefresh,
-      memoryTtl: const Duration(minutes: 2),
-    );
+    final cacheKey = 'dashboard_${year}_${term}_${week}_$cacheSuffix';
+    Future<DataResult<DashboardSnapshot>> loadSnapshot(bool refresh) {
+      return _cacheFirstObject<DashboardSnapshot>(
+        cacheKey: cacheKey,
+        fetch: () => _plainObject(_getDashboardObject(
+          '/dashboard?year=$year&term=$term&week=$week$moduleQuery${refresh ? '&refresh=true' : ''}',
+        )),
+        fromJson: (json) => DashboardSnapshot.fromJson(json),
+        forceRefresh: refresh,
+        memoryTtl: const Duration(minutes: 2),
+      );
+    }
+
+    var result = await loadSnapshot(forceRefresh);
+    if (result.data.needsRelogin) {
+      await _recoverDashboardSession();
+      result = await loadSnapshot(true);
+      if (result.data.needsRelogin) {
+        await _handleReloginFailure(
+          ApiException('学校登录会话恢复后仍不可用，请重新登录', statusCode: 401),
+        );
+      }
+    }
     await _seedModuleCachesFromDashboard(result.data, year, term);
     return result;
+  }
+
+  Future<void> _recoverDashboardSession() async {
+    try {
+      await relogin();
+      _consecutiveReloginFailures = 0;
+    } on ApiException catch (error) {
+      await _handleReloginFailure(error);
+    }
+  }
+
+  Future<void> _handleReloginFailure(ApiException error) async {
+    if (error.statusCode == 401) {
+      await enterScheduleOnlyMode();
+      onReloginFailed?.call();
+    }
+    throw error;
   }
 
   /// 将 dashboard 各模块数据写入与独立端点相同的缓存 key，

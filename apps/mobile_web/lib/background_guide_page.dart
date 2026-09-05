@@ -304,7 +304,9 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
     } catch (error) {
       if (!mounted) return;
       final message =
-          error is StateError ? '请重新登录并勾选“记住账号”，再开启后台持续通知。' : error.toString();
+          error is StateError
+              ? '请重新登录并勾选“记住密码并自动登录”，再开启后台持续通知。'
+              : error.toString();
       setState(() => _cloudNotificationError = message);
       if (error is StateError) {
         final messenger = ScaffoldMessenger.maybeOf(context);
@@ -313,7 +315,9 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
         if (!shown && mounted && messenger != null) {
           await prefs.setBool('background.credentialGuideShown', true);
           messenger.showSnackBar(
-            const SnackBar(content: Text('后台通知需要保存凭据，请重新登录并勾选“记住账号”。')),
+            const SnackBar(
+              content: Text('后台通知需要保存凭据，请重新登录并勾选“记住密码并自动登录”。'),
+            ),
           );
         }
       }

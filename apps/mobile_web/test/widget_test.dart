@@ -624,7 +624,7 @@ void main() {
     expect(detail.remark, '已登记');
   });
 
-  test('leave combined script stops before final submit', () {
+  test('leave combined script defers handler selection until processing opens', () {
     final response = LeaveFillResponse.fromJson({
       'status': 'filled',
       'message': 'ok',
@@ -636,14 +636,13 @@ void main() {
 
     final script = response.combinedScript!;
 
-    expect(script, contains('fileframe_file1'));
-    expect(script, contains('refreshAttachmentList'));
-    expect(script, isNot(contains('pickfiles')));
-    expect(script, contains('prepareSubmit'));
-    expect(script, contains('findFinalSubmitButton'));
-    expect(script, contains('已停在最终提交前'));
-    expect(script, contains("text !== '提交'"));
-    expect(script, contains('window.alert ='));
+    expect(script, contains('请在“附件上传”区选择文件'));
+    expect(script, contains('手动点击“办理”'));
+    expect(script, contains('MutationObserver'));
+    expect(script, contains('经办人已自动选择'));
+    expect(script, isNot(contains('clickHandleButton')));
+    expect(script, isNot(contains('prepareSubmit')));
+    expect(script, isNot(contains('附件已上传')));
     expect(script, contains('window.__filled = true;'));
     expect(script, contains('window.__handler = true;'));
   });
@@ -736,6 +735,60 @@ void main() {
     expect(result.source.isOffline, isTrue);
     expect(result.source.needsRelogin, isTrue);
     expect(result.source.displayText, '登录状态已失效，请重新登录');
+  });
+
+  test('dashboard silently restores an expired school session once', () async {
+    SharedPreferences.setMockInitialValues({
+      'auth.credentialToken': 'device-credential',
+      'auth.account': '2024000000',
+      'auth.rememberPassword': true,
+    });
+    var dashboardCalls = 0;
+    var reloginCalls = 0;
+    final api = ApiClient(
+      baseUrl: 'https://api.example.test',
+      httpClient: MockClient((request) async {
+        if (request.url.path == '/dashboard') {
+          dashboardCalls++;
+          return http.Response(
+            jsonEncode({
+              'status': 'ok',
+              'generatedAt': DateTime.now().toIso8601String(),
+              'needsRelogin': dashboardCalls == 1,
+              'modules': {
+                'grades': {
+                  'status': dashboardCalls == 1 ? 'error' : 'empty',
+                  'data': <Object>[],
+                  if (dashboardCalls == 1) 'needsRelogin': true,
+                },
+              },
+            }),
+            200,
+          );
+        }
+        if (request.url.path == '/auth/relogin') {
+          reloginCalls++;
+          return http.Response(
+            jsonEncode({
+              'status': 'ok',
+              'sessionId': 'renewed-session',
+              'studentId': '2024000000',
+              'credentialToken': 'renewed-credential',
+            }),
+            200,
+          );
+        }
+        return http.Response('not found', 404);
+      }),
+    );
+    api.useSession('expired-session');
+
+    final result = await api.dashboard(year: 2026, term: 1, week: 1);
+
+    expect(result.data.needsRelogin, isFalse);
+    expect(dashboardCalls, 2);
+    expect(reloginCalls, 1);
+    expect(api.sessionId, 'renewed-session');
   });
 
   test('api requests do not wait for warmup', () async {

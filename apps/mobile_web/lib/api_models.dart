@@ -92,6 +92,7 @@ class DashboardSnapshot {
     required this.status,
     required this.generatedAt,
     required this.modules,
+    required this.needsRelogin,
     this.traceId,
   });
 
@@ -111,6 +112,7 @@ class DashboardSnapshot {
       generatedAt:
           json['generatedAt'] as String? ?? DateTime.now().toIso8601String(),
       modules: modules,
+      needsRelogin: json['needsRelogin'] as bool? ?? false,
       traceId: json['traceId'] as String?,
     );
   }
@@ -119,6 +121,7 @@ class DashboardSnapshot {
   final String generatedAt;
   final String? traceId;
   final Map<String, DashboardModule> modules;
+  final bool needsRelogin;
 
   DashboardModule module(String key) =>
       modules[key] ?? const DashboardModule(status: 'empty');
@@ -1003,8 +1006,7 @@ class LeaveFillResponse {
       return null;
     }
     return '''
-(async () => {
-  const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+(() => {
   function notice(message) {
     let box = document.getElementById('gzus-leave-automation-status');
     if (!box) {
@@ -1015,104 +1017,24 @@ class LeaveFillResponse {
     }
     box.textContent = message;
   }
-  function installDialogBypass() {
-    if (window.__gzusLeaveDialogBypassInstalled) return;
-    window.__gzusLeaveDialogBypassInstalled = true;
-    window.__gzusLeaveAlerts = [];
-    window.__gzusLeaveNativeAlert = window.alert;
-    window.__gzusLeaveNativeConfirm = window.confirm;
-    window.alert = (message) => {
-      window.__gzusLeaveAlerts.push(String(message ?? ''));
-      console.warn('[GZUS leave alert]', message);
-    };
-    window.confirm = (message) => {
-      window.__gzusLeaveAlerts.push(String(message ?? ''));
-      console.warn('[GZUS leave confirm]', message);
-      return true;
-    };
-  }
-  function visible(el) {
-    if (!el) return false;
-    const style = getComputedStyle(el);
-    if (style.display === 'none' || style.visibility === 'hidden') return false;
-    const rect = el.getBoundingClientRect();
-    return rect.width > 0 && rect.height > 0;
-  }
-  function refreshAttachmentList() {
-    try {
-      if (typeof LoadAttachments === 'function') LoadAttachments('file1');
-    } catch (_) {}
-    const frame = document.getElementById('fileframe_file1') || document.querySelector('iframe[id^="fileframe"]');
-    if (frame?.src) {
-      const base = frame.src.replace(/([?&])reload=1(&|\$)/, '\$1').replace(/[?&]\$/, '');
-      frame.src = base + (base.includes('?') ? '&' : '?') + 'reload=1&_=' + Date.now();
-    }
-  }
-  function clickHandleButton() {
-    const button = document.querySelector('a.submitbtn[onclick*="prepareSubmit"], a.submitbtn');
-    if (!button) return false;
-    button.click();
-    return true;
-  }
-  function handlerReady() {
-    return Boolean(
-      document.getElementById('WF_T10004') ||
-      [...document.querySelectorAll('td,div,span,label')]
-        .some((el) => visible(el) && /任课教师审批|辅导员审批/.test(el.innerText || ''))
-    );
-  }
-  function cleanEasyUiMasks() {
-    document.querySelectorAll('.window-mask').forEach((mask) => {
-      mask.style.display = 'none';
-      mask.style.pointerEvents = 'none';
-    });
-    document.querySelectorAll('.panel.window').forEach((panel) => {
-      const title = panel.querySelector('.panel-title,.window-header')?.innerText || '';
-      if (title && !title.includes('处理文档')) {
-        panel.style.display = 'none';
-      }
-    });
-  }
-  function findFinalSubmitButton() {
-    cleanEasyUiMasks();
-    const candidates = [
-      ...document.querySelectorAll('a,button,input[type="button"],input[type="submit"]')
-    ].filter((el) => {
-      const text = (el.innerText || el.value || '').trim();
-      if (text !== '提交') return false;
-      if (!visible(el)) return false;
-      const href = el.getAttribute('href') || '';
-      return !href.includes('javascript:history');
-    });
-    return candidates[0] || null;
-  }
-
-  installDialogBypass();
   notice('正在填写请假表单...');
   ${fill ?? ''}
-  refreshAttachmentList();
-  await delay(1000);
-  notice('附件已上传，正在点击办理...');
-  if (!clickHandleButton()) {
-    notice('未找到办理按钮，请手动点击办理。');
-    return;
-  }
-  for (let i = 0; i < 60 && !handlerReady(); i += 1) {
-    await delay(500);
-  }
-  notice('正在选择任课教师经办人...');
-  ${handler ?? ''}
-  await delay(800);
-  cleanEasyUiMasks();
-  const finalSubmit = findFinalSubmitButton();
-  if (finalSubmit) {
-    try { finalSubmit.scrollIntoView({ block: 'center' }); } catch (_) {}
-    finalSubmit.style.outline = '3px solid #ff4d4f';
-    finalSubmit.style.outlineOffset = '2px';
-    notice('已停在最终提交前。请检查后手动点击“提交”。');
-    return;
-  }
-  notice('已选择经办人。未定位到最终提交按钮，请检查处理文档窗口。');
+  ${handler == null || handler.isEmpty ? '' : '''
+  let handlerApplied = false;
+  const applyHandler = () => {
+    if (handlerApplied || !document.getElementById('WF_NextNodeSelect_T10004')) {
+      return;
+    }
+    handlerApplied = true;
+    observer.disconnect();
+    $handler
+    notice('经办人已自动选择。请确认附件出现后，再手动点击“提交”。');
+  };
+  const observer = new MutationObserver(applyHandler);
+  observer.observe(document.documentElement, { childList: true, subtree: true });
+  applyHandler();
+  '''}
+  notice('表单已填好。请在“附件上传”区选择文件，确认附件出现后手动点击“办理”；处理窗口打开后将自动选择经办人。');
 })();
 ''';
   }
