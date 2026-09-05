@@ -22,7 +22,8 @@ LeaveFormAttachmentMetadata parseLeaveFormAttachmentMetadata(
   final processId = decoded['processId']?.toString().trim() ?? '';
   final nodeName = decoded['nodeName']?.toString().trim() ?? '';
   // 学校的新建请假单未输出 localStore；附件组件以 "0" 表示当前表单存储。
-  final localStore = decoded['localStore']?.toString().trim() ?? '0';
+  final parsedLocalStore = decoded['localStore']?.toString().trim() ?? '';
+  final localStore = parsedLocalStore.isEmpty ? '0' : parsedLocalStore;
   if (docUnid.isEmpty || processId.isEmpty || nodeName.isEmpty) {
     throw StateError('未读取到当前请假单的附件上传信息');
   }

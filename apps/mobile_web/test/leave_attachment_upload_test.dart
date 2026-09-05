@@ -33,6 +33,14 @@ void main() {
     expect(parsed, metadata);
   });
 
+  test('学校新建请假单返回空 localStore 时使用当前表单存储', () {
+    final parsed = parseLeaveFormAttachmentMetadata(
+      '{"docUnid":"doc-1","processId":"process-1","nodeName":"申请人","localStore":""}',
+    );
+
+    expect(parsed, metadata);
+  });
+
   test('缺少当前表单附件字段时失败', () {
     expect(
       () => parseLeaveFormAttachmentMetadata('{"docUnid":"doc-1"}'),
