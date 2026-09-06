@@ -1,4 +1,9 @@
-const CACHE_NAME = 'gzus-pwa-cache-v6';
+const CACHE_VERSION = new URL(self.location.href).searchParams.get('v');
+if (!CACHE_VERSION) {
+  throw new Error('Missing Flutter service worker version');
+}
+const CACHE_NAME = `gzus-pwa-cache-${CACHE_VERSION}`;
+const STAGING_CACHE_NAME = `${CACHE_NAME}-staging`;
 const API_CACHE_NAME = 'gzus-api-cache-v2';
 const API_CACHE_MAX_AGE_MS = 5 * 60 * 1000;
 const STATIC_ASSETS = [
@@ -6,6 +11,7 @@ const STATIC_ASSETS = [
   './index.html',
   './flutter_bootstrap.js',
   './main.dart.js',
+  './gzus_pwa_sw.js',
   './canvaskit/canvaskit.js',
   './canvaskit/canvaskit.wasm',
   './canvaskit/chromium/canvaskit.js',
@@ -31,47 +37,142 @@ const NETWORK_FIRST_API_PATHS = [
   '/api/notices',
 ];
 const APP_SHELL_URL = './index.html';
+const PRECACHE_READY_URL = './__gzus_pwa_precache_ready__';
+let precacheInFlight = null;
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      return Promise.all(
-        STATIC_ASSETS.map((asset) => cache.add(asset).catch(() => undefined))
-      );
-    })
-  );
-  self.skipWaiting();
+  // 安装阶段只下载 Worker 本身，避免与 Flutter 首屏争抢带宽。
+  // 首帧后由页面发送 GZUS_PRECACHE_SHELL，再完整准备离线资源。
+  event.waitUntil(Promise.resolve());
 });
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then((cacheNames) => {
-      return Promise.all(
-        cacheNames.map((name) => {
-          // Delete ALL old caches (including Flutter's) to force fresh load
-          if (name !== CACHE_NAME && name !== API_CACHE_NAME) {
+    caches.open(CACHE_NAME).then(async (cache) => {
+      // 资源未完整预缓存时保留旧版本，避免失败更新破坏离线启动。
+      if (await cache.match(PRECACHE_READY_URL)) {
+        const cacheNames = await caches.keys();
+        await Promise.all(cacheNames.map((name) => {
+          if (name.startsWith('gzus-pwa-cache-') &&
+              name !== CACHE_NAME &&
+              name !== STAGING_CACHE_NAME) {
             return caches.delete(name);
           }
           return undefined;
-        })
-      );
-    }).then(() => {
-      return Promise.all([
-        self.registration.navigationPreload?.disable?.().catch(() => undefined),
-        clients.claim(),
-      ]);
-    })
-  );
-  // Notify only already-controlled clients. First-time installs should not
-  // reload the page while Flutter is still producing its first frame.
-  event.waitUntil(
-    clients.matchAll({ type: 'window' }).then((clientList) => {
-      clientList.forEach((client) => {
-        client.postMessage({ type: 'GZUS_SW_UPDATED' });
-      });
+        }));
+      }
+      return clients.claim();
     })
   );
 });
+
+self.addEventListener('message', (event) => {
+  const type = event.data?.type;
+  if (type === 'GZUS_PRECACHE_SHELL') {
+    const notifyUpdate = event.data?.notifyUpdate === true;
+    event.waitUntil(
+      precacheAppShell()
+        .then(() => {
+          if (notifyUpdate) {
+            return notifyClients({ type: 'GZUS_SW_UPDATE_READY' });
+          }
+          return undefined;
+        })
+        .catch((error) => {
+          console.error('PWA shell precache failed:', error);
+        })
+    );
+    return;
+  }
+
+  if (type === 'GZUS_ACTIVATE_UPDATE') {
+    self.skipWaiting();
+    return;
+  }
+
+  if (type === 'GZUS_CLEAR_CACHE') {
+    event.waitUntil(
+      caches.keys().then((cacheNames) => {
+        return Promise.all(cacheNames.map((name) => caches.delete(name)));
+      })
+    );
+  }
+});
+
+async function precacheAppShell() {
+  if (precacheInFlight) return precacheInFlight;
+  precacheInFlight = precacheAppShellOnce();
+  try {
+    return await precacheInFlight;
+  } finally {
+    precacheInFlight = null;
+  }
+}
+
+async function precacheAppShellOnce() {
+  const target = await caches.open(CACHE_NAME);
+  if (await target.match(PRECACHE_READY_URL)) return;
+
+  await caches.delete(STAGING_CACHE_NAME);
+  const staging = await caches.open(STAGING_CACHE_NAME);
+  try {
+    await Promise.all(STATIC_ASSETS.map(async (asset) => {
+      const request = new Request(new URL(asset, self.location).toString(), {
+        cache: 'reload',
+      });
+      const response = await fetch(request);
+      if (!response.ok) {
+        throw new Error(`PWA asset ${asset} returned HTTP ${response.status}`);
+      }
+      await staging.put(request, response);
+    }));
+
+    await staging.put(PRECACHE_READY_URL, new Response('ready'));
+    const stagedRequests = await staging.keys();
+    for (const request of stagedRequests) {
+      const response = await staging.match(request);
+      if (!response) {
+        throw new Error(`PWA staging asset missing: ${request.url}`);
+      }
+      await target.put(request, response);
+    }
+    await caches.delete(STAGING_CACHE_NAME);
+  } catch (error) {
+    await caches.delete(STAGING_CACHE_NAME);
+    // 新版本缓存未完成时绝不能破坏同版本已有的可用离线壳。
+    if (!(await target.match(PRECACHE_READY_URL))) {
+      await caches.delete(CACHE_NAME);
+    }
+    throw error;
+  }
+}
+
+async function notifyClients(message) {
+  const clientList = await clients.matchAll({
+    type: 'window',
+    includeUncontrolled: true,
+  });
+  clientList.forEach((client) => client.postMessage(message));
+}
+
+async function readyStaticCache() {
+  const current = await caches.open(CACHE_NAME);
+  if (await current.match(PRECACHE_READY_URL)) {
+    return { cache: current, isCurrent: true };
+  }
+
+  const cacheNames = await caches.keys();
+  for (const name of cacheNames) {
+    if (!name.startsWith('gzus-pwa-cache-') || name.endsWith('-staging')) {
+      continue;
+    }
+    const previous = await caches.open(name);
+    if (await previous.match(PRECACHE_READY_URL)) {
+      return { cache: previous, isCurrent: false };
+    }
+  }
+  return { cache: current, isCurrent: false };
+}
 
 self.addEventListener('fetch', (event) => {
   const request = event.request;
@@ -180,20 +281,22 @@ async function shortHash(value) {
 }
 
 async function handleNavigationRequest(request) {
-  const cache = await caches.open(CACHE_NAME);
+  const cacheInfo = await readyStaticCache();
 
   // Network-first for navigation: always try network first to get latest HTML.
   // This prevents stale HTML from serving old main.dart.js references.
   try {
     const networkResponse = await fetch(request, { cache: 'no-store' });
-    if (networkResponse && networkResponse.ok) {
-      await putStaticResponse(cache, APP_SHELL_URL, networkResponse);
+    if (networkResponse && networkResponse.ok && cacheInfo.isCurrent) {
+      await putStaticResponse(cacheInfo.cache, APP_SHELL_URL, networkResponse);
       return networkResponse;
     }
+    if (networkResponse && networkResponse.ok) return networkResponse;
   } catch (_) {}
 
   // Fallback to cache if network fails
-  const cached = await cache.match(APP_SHELL_URL) || await cache.match(request);
+  const cached = await cacheInfo.cache.match(APP_SHELL_URL) ||
+      await cacheInfo.cache.match(request);
   if (cached) {
     return cached;
   }
@@ -202,7 +305,8 @@ async function handleNavigationRequest(request) {
 }
 
 async function handleStaticRequest(request) {
-  const cache = await caches.open(CACHE_NAME);
+  const cacheInfo = await readyStaticCache();
+  const cache = cacheInfo.cache;
   const url = new URL(request.url);
 
   // canvaskit 目录下的资源（WASM/JS）体积大且随 Flutter 版本发布，
@@ -213,13 +317,15 @@ async function handleStaticRequest(request) {
   if (isCanvaskitAsset) {
     const cached = await cache.match(request);
     if (cached) {
-      revalidateStaticRequest(request, cache, request);
+      if (cacheInfo.isCurrent) revalidateStaticRequest(request, cache, request);
       return cached;
     }
     // 首次加载：回退到网络
     try {
       const networkResponse = await fetch(request, { cache: 'no-store' });
-      await putStaticResponse(cache, request, networkResponse);
+      if (cacheInfo.isCurrent) {
+        await putStaticResponse(cache, request, networkResponse);
+      }
       return networkResponse;
     } catch (_) {
       return Response.error();
@@ -236,7 +342,9 @@ async function handleStaticRequest(request) {
     try {
       const networkResponse = await fetch(request, { cache: 'no-store' });
       if (networkResponse && networkResponse.ok) {
-        await putStaticResponse(cache, request, networkResponse);
+        if (cacheInfo.isCurrent) {
+          await putStaticResponse(cache, request, networkResponse);
+        }
         return networkResponse;
       }
     } catch (_) {}
@@ -245,13 +353,15 @@ async function handleStaticRequest(request) {
   // Cache-first for other assets (icons, fonts, etc.)
   const cached = await cache.match(request);
   if (cached) {
-    revalidateStaticRequest(request, cache, request);
+    if (cacheInfo.isCurrent) revalidateStaticRequest(request, cache, request);
     return cached;
   }
 
   try {
     const networkResponse = await fetch(request, { cache: 'no-store' });
-    await putStaticResponse(cache, request, networkResponse);
+    if (cacheInfo.isCurrent) {
+      await putStaticResponse(cache, request, networkResponse);
+    }
     return networkResponse;
   } catch (_) {
     return Response.error();
@@ -307,14 +417,4 @@ self.addEventListener('notificationclick', (event) => {
       clients.openWindow(`./?pushOpen=${encodedExtras}`);
     })
   );
-});
-
-self.addEventListener('message', (event) => {
-  if (event.data && event.data.type === 'GZUS_CLEAR_CACHE') {
-    event.waitUntil(
-      caches.keys().then((cacheNames) => {
-        return Promise.all(cacheNames.map((name) => caches.delete(name)));
-      })
-    );
-  }
 });

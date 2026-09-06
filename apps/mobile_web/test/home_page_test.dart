@@ -427,13 +427,14 @@ Future<void> _pumpHome(WidgetTester tester, ApiClient api, Size size) async {
   final now = DateTime.now();
   final firstWeekStart = DateTime(now.year, now.month, now.day)
       .subtract(Duration(days: now.weekday - DateTime.monday));
+  final currentWeek = now.weekday == DateTime.sunday ? 2 : 1;
   await tester.pumpWidget(
     MaterialApp(
       home: HomePage(
         api: api,
         year: now.year,
         term: 1,
-        currentWeek: 1,
+        currentWeek: currentWeek,
         firstWeekStart: firstWeekStart,
         onNavigate: (_) {},
         studentName: '测试学生',
@@ -473,6 +474,9 @@ ApiClient _homeApi({
 
 Map<String, Object?> _dashboardBody() {
   final now = DateTime.now();
+  final nextWeekday =
+      now.weekday == DateTime.sunday ? DateTime.monday : now.weekday + 1;
+  final scheduleWeek = now.weekday == DateTime.sunday ? '2' : '1';
   return {
     'status': 'ok',
     'generatedAt': now.toIso8601String(),
@@ -495,10 +499,10 @@ Map<String, Object?> _dashboardBody() {
             'name': '移动应用开发',
             'teacher': '张老师',
             'classroom': 'A101',
-            'weekday': now.weekday,
+            'weekday': nextWeekday,
             'startSection': 1,
             'endSection': 2,
-            'weeks': '1',
+            'weeks': scheduleWeek,
           },
         ],
       },

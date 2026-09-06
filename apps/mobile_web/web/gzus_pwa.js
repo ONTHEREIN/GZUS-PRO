@@ -1,25 +1,42 @@
-// Auto-reload when Service Worker updates to avoid stale cached code
+const GZUS_PWA_UPDATE_EVENT = 'gzus-pwa-update-ready';
+
+function notifyPwaUpdateReady() {
+  document.documentElement?.setAttribute('data-gzus-pwa-update-ready', '1');
+  window.dispatchEvent(new Event(GZUS_PWA_UPDATE_EVENT));
+}
+
 if ('serviceWorker' in navigator) {
-  const hadServiceWorkerController = Boolean(navigator.serviceWorker.controller);
-  let reloadedForServiceWorkerUpdate = false;
-
-  const reloadForServiceWorkerUpdate = () => {
-    if (!hadServiceWorkerController || reloadedForServiceWorkerUpdate) return;
-    reloadedForServiceWorkerUpdate = true;
-    window.location.reload();
-  };
-
   navigator.serviceWorker.addEventListener('message', (event) => {
-    if (event.data && event.data.type === 'GZUS_SW_UPDATED') {
-      console.log('Service Worker updated, reloading page...');
-      reloadForServiceWorkerUpdate();
+    if (event.data?.type === 'GZUS_SW_UPDATE_READY') {
+      notifyPwaUpdateReady();
+    } else if (event.data?.type === 'GZUS_SW_UPDATE_FAILED') {
+      console.warn('PWA update precache failed; keeping the current version');
     }
   });
-  // Also listen for controller change (new SW taking over)
-  navigator.serviceWorker.addEventListener('controllerchange', reloadForServiceWorkerUpdate);
 }
 
 initStartupLoading();
+
+window.addEventListener('flutter-first-frame', requestOfflineShellCache, { once: true });
+
+async function requestOfflineShellCache() {
+  if (!('serviceWorker' in navigator)) return;
+  try {
+    const registration = await navigator.serviceWorker.getRegistration();
+    if (!registration) return;
+    const worker = registration.installing || registration.waiting || registration.active;
+    if (!worker) {
+      window.setTimeout(requestOfflineShellCache, 500);
+      return;
+    }
+    worker.postMessage({
+      type: 'GZUS_PRECACHE_SHELL',
+      notifyUpdate: Boolean(registration.active && worker !== registration.active),
+    });
+  } catch (error) {
+    console.error('Unable to start PWA shell precache:', error);
+  }
+}
 
 window.gzusWebPushInit = function() {
   console.log('GZUS Web Push initialized');
@@ -182,38 +199,18 @@ function initStartupLoading() {
   let firstFrameArrived = false;
   let slowTimer = null;
   let fallbackTimer = null;
-  let recoveryTimer = null;
   let flutterViewTimer = null;
 
   const setText = (nextTitle, nextHint) => {
     if (title) title.textContent = nextTitle;
     if (hint) hint.textContent = nextHint;
   };
-  const getRecoveredFlag = () => {
-    try {
-      return window.sessionStorage?.getItem('gzus_startup_recovered') === '1';
-    } catch (_) {
-      return false;
-    }
-  };
-  const setRecoveredFlag = () => {
-    try {
-      window.sessionStorage?.setItem('gzus_startup_recovered', '1');
-    } catch (_) {}
-  };
-  const clearRecoveredFlag = () => {
-    try {
-      window.sessionStorage?.removeItem('gzus_startup_recovered');
-    } catch (_) {}
-  };
   const finishLoading = () => {
     if (firstFrameArrived) return;
     firstFrameArrived = true;
     window.clearTimeout(slowTimer);
     window.clearTimeout(fallbackTimer);
-    window.clearTimeout(recoveryTimer);
     window.clearInterval(flutterViewTimer);
-    clearRecoveredFlag();
     container.classList.add('fade-out');
     window.setTimeout(() => container.remove(), 300);
   };
@@ -234,21 +231,6 @@ function initStartupLoading() {
     container.classList.add('needs-help');
     setText(`${appName}加载时间过长`, '请先刷新；如果仍无响应，清缓存并刷新');
   }, 25000);
-
-  recoveryTimer = window.setTimeout(async () => {
-    if (firstFrameArrived) return;
-    if (getRecoveredFlag()) return;
-    try {
-      setRecoveredFlag();
-      container.classList.add('needs-help');
-      setText('正在修复加载状态...', '将清理旧缓存并自动刷新一次');
-      await clearStartupCache();
-      window.location.replace(cacheBustedUrl());
-    } catch (_) {
-      container.classList.add('needs-help');
-      setText(`${appName}加载时间过长`, '请点击清缓存并刷新');
-    }
-  }, 30000);
 
   if (refresh) {
     refresh.addEventListener('click', () => {

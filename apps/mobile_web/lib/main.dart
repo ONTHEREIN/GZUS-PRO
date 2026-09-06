@@ -115,6 +115,7 @@ class OneGzusApp extends StatefulWidget {
 class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
   late final ApiClient api;
   final _navigatorKey = GlobalKey<NavigatorState>();
+  final _scaffoldMessengerKey = GlobalKey<ScaffoldMessengerState>();
   ThemeMode themeMode = ThemeMode.system;
   Color seedColor = GzusColors.blue;
   bool _systemDark = false;
@@ -137,6 +138,9 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
   /// 管理后台身份（best-effort 由 /admin/me 确认；登录响应 isAdmin 仅作快速初值）
   bool _isAdmin = false;
   bool _isOwner = false;
+  bool _pwaBridgeLoaded = false;
+  bool _pwaUpdatePromptPending = false;
+  bool _pwaUpdatePromptShown = false;
 
   @override
   void initState() {
@@ -163,15 +167,74 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
     _loadSeedColorPreference();
     api.startWarmup();
     _bootstrapLoginState();
+    if (kIsWeb) {
+      unawaited(_initializePwaUpdateBridge());
+    }
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    if (_pwaBridgeLoaded) {
+      web_pwa_cache.clearPwaUpdateReadyCallback();
+    }
     if (widget.apiOverride == null) {
       api.dispose();
     }
     super.dispose();
+  }
+
+  Future<void> _initializePwaUpdateBridge() async {
+    try {
+      await web_pwa_cache.loadLibrary();
+      if (!mounted) return;
+      _pwaBridgeLoaded = true;
+      web_pwa_cache.setPwaUpdateReadyCallback(_showPwaUpdatePrompt);
+    } catch (error) {
+      debugPrint('初始化网页更新提示失败: error=$error');
+    }
+  }
+
+  void _showPwaUpdatePrompt() {
+    if (!mounted || _pwaUpdatePromptShown || _pwaUpdatePromptPending) return;
+    _pwaUpdatePromptPending = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        _pwaUpdatePromptPending = false;
+        return;
+      }
+      final messenger = _scaffoldMessengerKey.currentState;
+      if (messenger == null) {
+        _pwaUpdatePromptPending = false;
+        _showPwaUpdatePrompt();
+        return;
+      }
+      _pwaUpdatePromptPending = false;
+      _pwaUpdatePromptShown = true;
+      messenger
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: const Text('新版本已准备好'),
+            duration: const Duration(days: 1),
+            action: SnackBarAction(
+              label: '立即更新',
+              onPressed: () => unawaited(_activatePwaUpdate()),
+            ),
+          ),
+        );
+    });
+  }
+
+  Future<void> _activatePwaUpdate() async {
+    try {
+      await web_pwa_cache.activatePwaUpdate();
+    } catch (error) {
+      if (!mounted) return;
+      _scaffoldMessengerKey.currentState?.showSnackBar(
+        SnackBar(content: Text('更新失败，请稍后重试：$error')),
+      );
+    }
   }
 
   bool _hasBeenResumed = false;
@@ -315,6 +378,7 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     return MaterialApp(
       navigatorKey: _navigatorKey,
+      scaffoldMessengerKey: _scaffoldMessengerKey,
       title: '软帮手',
       debugShowCheckedModeBanner: false,
       themeMode: themeMode,
