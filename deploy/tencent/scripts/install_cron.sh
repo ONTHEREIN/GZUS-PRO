@@ -4,7 +4,6 @@
 #
 # 把原本由 GitHub Actions 调用的 /internal/cron/* 改为服务器本地 crontab：
 #   - wechat-sync    每 6 小时（20 分）同步公众号文章
-#   - ecard-reminder 每天 8:00 水电费提醒兜底
 #
 # 用法：bash /opt/onegzus/deploy/scripts/install_cron.sh
 # 可选：CRON_USER=onegzus（默认部署用户）
@@ -39,8 +38,6 @@ cat >> /tmp/onegzus-cron.tmp <<EOF
 # === OneGZUS cron ===
 # 公众号文章同步（每 6 小时）
 20 */6 * * * curl -fsS -m 120 -H "X-Internal-Key: $API_KEY" http://127.0.0.1:8000/internal/cron/wechat-sync >> $LOG_FILE 2>&1
-# 水电费提醒兜底（每天 8:00）
-0 8 * * * curl -fsS -m 120 -H "X-Internal-Key: $API_KEY" http://127.0.0.1:8000/internal/cron/ecard-reminder >> $LOG_FILE 2>&1
 # === OneGZUS cron end ===
 EOF
 crontab -u "$CRON_USER" /tmp/onegzus-cron.tmp
@@ -52,4 +49,5 @@ crontab -u "$CRON_USER" -l | sed -n '/OneGZUS cron/,/OneGZUS cron end/p'
 echo ""
 echo "手动触发验证："
 echo "  curl -s -H \"X-Internal-Key: \$API_KEY\" http://127.0.0.1:8000/internal/cron/wechat-sync"
+echo "  curl -s -H \"X-Internal-Key: \$API_KEY\" \"http://127.0.0.1:8000/internal/cron/ecard-reminder?reminder_time=08:00\""
 echo "  日志：tail -f $LOG_FILE"

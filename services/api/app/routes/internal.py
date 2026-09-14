@@ -68,27 +68,39 @@ def wechat_sync_cron(x_internal_key: str | None = Header(None)) -> dict[str, obj
 
 
 @router.get("/cron/ecard-reminder")
-def ecard_reminder_cron(x_internal_key: str | None = Header(None)) -> dict[str, object]:
-    """由服务器 crontab 发送缓存余额的低余额提醒。"""
+def ecard_reminder_cron(
+    reminder_time: str,
+    x_internal_key: str | None = Header(None),
+) -> dict[str, object]:
+    """按传入的精确时刻显式触发水电提醒；常规调度由 API 常驻任务负责。"""
     _verify_internal_key(x_internal_key)
+    try:
+        if len(reminder_time) != 5 or reminder_time[2] != ":":
+            raise ValueError
+        datetime.strptime(reminder_time, "%H:%M")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="reminder_time 必须是 HH:MM 格式") from exc
+
     def run() -> dict[str, object]:
         if not get_settings().ecard_openid:
             return {"ok": True, "reason": "ecard not configured", "processed": 0}
         from app.database import EcardBinding, get_sync_session_factory
-        from app.cloud_notifications import deliver_notification
+        from app.cloud_notifications import _delivery_recorded, deliver_notification
         from app.jobs import (
             ecard_reminder_event_key,
+            ecard_reminder_time_enabled,
             mark_ecard_reminder_sent,
             prepare_ecard_reminders,
         )
 
         processed = 0
         notified = 0
-        reminder_time = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%H:%M")
         with get_sync_session_factory()() as db:
             bindings = db.query(EcardBinding).filter(EcardBinding.reminder_enabled.is_(True)).all()
             today_key = datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
             for binding in bindings:
+                if not ecard_reminder_time_enabled(binding, reminder_time):
+                    continue
                 if not binding.last_summary_json:
                     continue
                 try:
@@ -116,6 +128,8 @@ def ecard_reminder_cron(x_internal_key: str | None = Header(None)) -> dict[str, 
                     event_key = ecard_reminder_event_key(
                         binding.student_id, today_key, reminder_time, item_key
                     )
+                    if _delivery_recorded(binding.student_id, event_key):
+                        continue
                     if deliver_notification(
                         binding.student_id,
                         event_key,

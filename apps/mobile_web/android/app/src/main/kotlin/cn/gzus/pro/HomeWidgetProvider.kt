@@ -8,12 +8,16 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.util.Log
 import android.view.View
 import android.widget.RemoteViews
 import org.json.JSONArray
 import java.util.Calendar
 
 open class HomeWidgetProvider : AppWidgetProvider() {
+    private val providerTag: String
+        get() = javaClass.simpleName
+
     open val kind: String = "next"
 
     override fun onUpdate(
@@ -24,8 +28,8 @@ open class HomeWidgetProvider : AppWidgetProvider() {
         appWidgetIds.forEach {
             try {
                 updateWidget(context, appWidgetManager, it, kind)
-            } catch (e: Exception) {
-                e.printStackTrace()
+            } catch (error: Exception) {
+                Log.e("GzusWidget", "更新桌面组件失败 provider=$providerTag widgetId=$it kind=$kind", error)
             }
         }
     }
@@ -90,8 +94,8 @@ open class HomeWidgetProvider : AppWidgetProvider() {
                         updateGenericWidget(context, manager, widgetId, data, kind)
                     }
                 }
-            } catch (e: Exception) {
-                e.printStackTrace()
+            } catch (error: Exception) {
+                Log.e("GzusWidget", "更新桌面组件失败 widgetId=$widgetId kind=$kind", error)
             }
         }
 

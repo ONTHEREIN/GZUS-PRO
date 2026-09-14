@@ -802,6 +802,9 @@ import WidgetKit
   private func widgetKinds(forValueKey key: String) -> Set<String> {
     if key.hasPrefix("next") { return [nextClassHomeScreenWidgetKind, nextClassLockScreenWidgetKind] }
     if key.hasPrefix("today") { return [todayCoursesWidgetKind] }
+    if key == "weeklyCoursesJson" {
+      return [weeklyScheduleWidgetKind, nextClassHomeScreenWidgetKind, nextClassLockScreenWidgetKind]
+    }
     if key.hasPrefix("weekly") { return [weeklyScheduleWidgetKind] }
     if key.hasPrefix("utility") { return [utilitiesWidgetKind] }
     if key.hasPrefix("progress") { return [progressWidgetKind] }

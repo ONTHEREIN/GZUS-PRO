@@ -10,7 +10,7 @@ import '../gzus_design.dart';
 const _nativeLiquidTabBarViewType = 'cn.gzus.pro/native-liquid-tab-bar';
 const _liquidGlassChannelName = 'cn.gzus.pro/liquid-glass';
 
-enum LiquidGlassMaterial { regular, clear }
+enum LiquidGlassMaterial { regular, clear, dock }
 
 class LiquidGlassCapabilities {
   const LiquidGlassCapabilities({
@@ -288,12 +288,18 @@ class _FlutterGlassBackdrop extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final dark = Theme.of(context).brightness == Brightness.dark;
-    final clear = material == LiquidGlassMaterial.clear;
+    final isDock = material == LiquidGlassMaterial.dock;
+    final fillAlpha = switch (material) {
+      LiquidGlassMaterial.clear => dark ? 0.28 : 0.36,
+      LiquidGlassMaterial.regular => dark ? 0.46 : 0.52,
+      LiquidGlassMaterial.dock => 0.0,
+    };
+    // 底部 dock 使用实底，避免页面内容穿透后影响导航可读性。
+    final solid = opaque || isDock;
     final surface = gzusSurface(context);
-    final fillAlpha = clear ? (dark ? 0.28 : 0.36) : (dark ? 0.46 : 0.52);
     final decoration = BoxDecoration(
-      color: opaque ? surface : null,
-      gradient: opaque
+      color: solid ? (isDock ? gzusSurfaceSoft(context) : surface) : null,
+      gradient: solid
           ? null
           : LinearGradient(
               begin: Alignment.topLeft,
@@ -309,7 +315,7 @@ class _FlutterGlassBackdrop extends StatelessWidget {
             ),
       borderRadius: borderRadius,
       border: Border.all(
-        color: opaque
+        color: solid
             ? gzusBorder(context)
             : Colors.white.withValues(alpha: dark ? 0.14 : 0.62),
       ),

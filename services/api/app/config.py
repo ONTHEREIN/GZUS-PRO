@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     ehall_staff_sync_url: str = ""
     ehall_staff_json_path: str = ""
     cas_login_url: str = "https://cas.gzus.edu.cn/lyuapServer/login"
+    cas_password_change_url: str = "https://cas.gzus.edu.cn/aqzx/#/password/passwordModify"
     ehall_service_url: str = "http://ehall.gzus.edu.cn/shiro-cas"
     jwxt_sso_service_url: str = "https://jwxt.gzus.edu.cn/sso/lyiotlogin"
     public_api_base_url: str = "http://127.0.0.1:8000"

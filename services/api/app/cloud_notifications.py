@@ -16,8 +16,9 @@ from app.database import (
     record_maintenance_job_result,
 )
 from app.notice_utils import notice_key, valid_notice_items
-from app.push import send_push_to_student
+from app.push import PushDeliveryResult, send_push_to_student
 from app.sessions import decrypt_credentials
+from app.live_activity_data import grade_live_fields
 
 logger = logging.getLogger(__name__)
 _SHANGHAI = ZoneInfo("Asia/Shanghai")
@@ -37,9 +38,14 @@ def _grade_snapshot(items: list[dict]) -> dict[str, str]:
         term = str(item.get("term") or "").strip()
         if not course_name:
             continue
+        passed = item.get("gradePassed")
+        if passed is None:
+            passed = item.get("passed")
         snapshot[f"{term}|{course_name}"] = "|".join([
             str(item.get("score") or "").strip(),
             str(item.get("gradePoint") or item.get("grade_point") or "").strip(),
+            str(item.get("gradeStatus") or item.get("grade_status") or item.get("status") or "").strip(),
+            str(passed if passed is not None else "").strip(),
         ])
     return snapshot
 
@@ -126,6 +132,7 @@ def _transient_live_fields(notification_type: str, target_tab: str) -> dict[str,
         "ongoing": False,
         "shortCriticalText": "新动态",
         "progress": 1,
+        "priority": {"exam_reminder": 3, "course_reminder": 2}.get(notification_type, 4),
         "endTime": int((datetime.now(timezone.utc) + timedelta(minutes=30)).timestamp() * 1000),
     }
 
@@ -152,14 +159,30 @@ def _delivery_retryable(student_id: str, event_key: str) -> bool:
         return row is not None and row.delivery_status != "delivered"
 
 
-def _remove_unsuccessful_delivery(student_id: str, event_key: str) -> None:
+def _record_failed_delivery(
+    student_id: str,
+    event_key: str,
+    notification_type: str,
+    failure_reason: str,
+) -> None:
     with get_sync_session_factory()() as db:
         row = db.query(NotificationDelivery).filter_by(
             student_id=student_id, event_key=event_key
         ).first()
-        if row is not None and row.delivery_status != "delivered":
-            db.delete(row)
-            db.commit()
+        if row is None:
+            row = NotificationDelivery(
+                student_id=student_id,
+                event_key=event_key,
+                notification_type=notification_type,
+                retry_count=0,
+            )
+            db.add(row)
+        row.delivery_status = "failed"
+        row.retry_count = (row.retry_count or 0) + 1
+        row.last_failure_reason = failure_reason[:500]
+        row.last_attempt_at = datetime.now(timezone.utc)
+        row.succeeded_at = None
+        db.commit()
 
 
 def _record_successful_delivery(
@@ -185,7 +208,6 @@ def _record_successful_delivery(
         else:
             row.retry_count = (row.retry_count or 0) + 1
         row.delivery_status = "delivered"
-        row.last_failure_reason = None
         row.last_attempt_at = datetime.now(timezone.utc)
         row.succeeded_at = datetime.now(timezone.utc)
         db.commit()
@@ -253,9 +275,18 @@ def _deliver(student_id: str, event_key: str, notification_type: str, title: str
         return False
     failure_reason: str | None = None
     try:
-        delivered = send_push_to_student(student_id, title, body, extras)
+        result = send_push_to_student(student_id, title, body, extras)
+        if isinstance(result, PushDeliveryResult):
+            delivered = result.regular_delivered
+            live_delivered = result.live_activity_delivered
+        elif isinstance(result, int):
+            delivered = result
+            live_delivered = 0
+        else:
+            raise TypeError("推送通道必须返回 PushDeliveryResult")
     except Exception as exc:
         delivered = 0
+        live_delivered = 0
         failure_reason = f"{type(exc).__name__}: {str(exc)[:300]}"
         logger.warning(
             "notification_delivery_failed",
@@ -267,14 +298,22 @@ def _deliver(student_id: str, event_key: str, notification_type: str, title: str
             exc_info=True,
         )
     if delivered <= 0:
-        _remove_unsuccessful_delivery(student_id, event_key)
+        if live_delivered > 0 and failure_reason is None:
+            failure_reason = "仅灵动岛投递成功，普通通知未被设备接受"
+        _record_failed_delivery(
+            student_id,
+            event_key,
+            notification_type,
+            failure_reason or "没有设备接受普通推送",
+        )
         logger.warning(
-            "notification_delivery_not_recorded",
+            "notification_delivery_failed",
             extra={
                 "student_id": student_id,
                 "event_key": event_key,
                 "notification_type": notification_type,
-                "failure_reason": failure_reason or "没有设备接受推送",
+                "failure_reason": failure_reason or "没有设备接受普通推送",
+                "live_activity_delivered": live_delivered,
             },
         )
         return False
@@ -297,18 +336,41 @@ def deliver_notification(
 
 def _poll_profile(profile: BackgroundNotificationProfile) -> int:
     client, ehall_client = _authenticated_client(profile.encrypted_credentials)
-    notices = valid_notice_items(list(client.get_notices()))
+    poll_errors: list[str] = []
+    notices_ok = True
+    try:
+        notices = valid_notice_items(list(client.get_notices()))
+    except Exception as exc:
+        notices = []
+        notices_ok = False
+        poll_errors.append(f"notices: {type(exc).__name__}: {str(exc)[:200]}")
     if ehall_client is not None:
         try:
             notices.extend(ehall_client.get_notice_items())
-        except Exception:
+        except Exception as exc:
+            poll_errors.append(f"ehall_notices: {type(exc).__name__}: {str(exc)[:200]}")
             logger.warning("background_ehall_notices_failed", extra={"student_id": profile.student_id}, exc_info=True)
-    grades = list(client.get_grades(None, None))
-    exams = list(client.get_exams(None, None))
+    grades_ok = True
+    try:
+        grades = list(client.get_grades(None, None))
+    except Exception as exc:
+        grades = []
+        grades_ok = False
+        poll_errors.append(f"grades: {type(exc).__name__}: {str(exc)[:200]}")
+    exams_ok = True
+    try:
+        exams = list(client.get_exams(None, None))
+    except Exception as exc:
+        exams = []
+        exams_ok = False
+        poll_errors.append(f"exams: {type(exc).__name__}: {str(exc)[:200]}")
     attendance: list[dict] | None
+    attendance_ok = True
     try:
         attendance = list(client.get_attendance(None, None))
-    except Exception:
+    except Exception as exc:
+        attendance_ok = False
+        poll_errors.append(f"attendance: {type(exc).__name__}: {str(exc)[:200]}")
         logger.warning(
             "background_attendance_poll_failed",
             extra={"student_id": profile.student_id},
@@ -317,7 +379,10 @@ def _poll_profile(profile: BackgroundNotificationProfile) -> int:
         attendance = None
     notice_keys = {notice_key(item) for item in notices}
     grade_values = _grade_snapshot(grades)
-    exam_keys = {f"{item.get('courseName', '')}|{item.get('time', '')}|{item.get('location', '')}" for item in exams}
+    exam_keys = {
+        f"{item.get('courseName', '')}|{item.get('time', '')}|{item.get('location', '')}|{item.get('seat', '')}"
+        for item in exams
+    }
     previous_notices = _json_set(profile.notice_keys_json)
     previous_grades = _json_object(profile.grade_snapshot_json)
     previous_exams = _json_set(profile.exam_keys_json)
@@ -325,8 +390,8 @@ def _poll_profile(profile: BackgroundNotificationProfile) -> int:
     delivered_exam_reminders = _json_set(profile.exam_reminder_keys_json)
     current_time = datetime.now(_SHANGHAI)
     delivered = 0
-    saved_notice_keys = set(notice_keys)
-    if profile.notices_enabled and previous_notices:
+    saved_notice_keys = set(notice_keys) if notices_ok else set(previous_notices)
+    if profile.notices_enabled and notices_ok and previous_notices:
         for item in notices:
             key = notice_key(item)
             event_key = f"notice:{key}"
@@ -338,16 +403,21 @@ def _poll_profile(profile: BackgroundNotificationProfile) -> int:
                     delivered += 1
                 elif not _delivery_recorded(profile.student_id, event_key):
                     saved_notice_keys.discard(key)
-    saved_grade_values = dict(grade_values)
-    if profile.grades_enabled and previous_grades:
+    saved_grade_values = dict(grade_values) if grades_ok else dict(previous_grades)
+    if profile.grades_enabled and grades_ok and previous_grades:
         for item in grades:
             key = f"{item.get('term') or ''}|{item.get('courseName') or item.get('course_name') or ''}"
             event_key = f"grade:{key}:{grade_values.get(key)}"
             if key and (previous_grades.get(key) != grade_values.get(key) or _delivery_retryable(profile.student_id, event_key)):
                 title = "成绩更新"
-                body = f"{item.get('courseName') or '课程'}：{item.get('score') or '已发布'}"
+                live_grade = grade_live_fields(item)
+                course_name = str(item.get("courseName") or "课程")
+                score = str(live_grade.get("score") or "").strip()
+                status = str(live_grade["gradeStatus"])
+                body = f"{course_name}：{score} · {status}" if score else f"{course_name}：{status}"
                 extras = _transient_live_fields("grade_update", "grades")
                 extras["id"] = f"grade_update:{profile.student_id}:{key}:{grade_values.get(key)}"
+                extras.update(live_grade)
                 if _deliver(profile.student_id, event_key, "grade_update", title, body, extras):
                     delivered += 1
                 elif not _delivery_recorded(profile.student_id, event_key):
@@ -355,26 +425,39 @@ def _poll_profile(profile: BackgroundNotificationProfile) -> int:
                         saved_grade_values[key] = previous_grades[key]
                     else:
                         saved_grade_values.pop(key, None)
-    saved_exam_keys = set(exam_keys)
-    if profile.exams_enabled and previous_exams:
+    saved_exam_keys = set(exam_keys) if exams_ok else set(previous_exams)
+    if profile.exams_enabled and exams_ok and previous_exams:
         for item in exams:
-            key = f"{item.get('courseName', '')}|{item.get('time', '')}|{item.get('location', '')}"
+            key = f"{item.get('courseName', '')}|{item.get('time', '')}|{item.get('location', '')}|{item.get('seat', '')}"
             event_key = f"exam:{key}"
             if key not in previous_exams or _delivery_retryable(profile.student_id, event_key):
-                body = f"{item.get('courseName') or '考试'} {item.get('time') or ''}".strip()
+                course_name = str(item.get("courseName") or "考试")
+                location = str(item.get("location") or "")
+                seat = str(item.get("seat") or "")
+                body_parts = [f"{course_name} {item.get('time') or ''}".strip()]
+                if location:
+                    body_parts.append(f"地点：{location}")
+                if seat:
+                    body_parts.append(f"座位：{seat}")
                 extras = {
                     "id": f"exam_reminder:{profile.student_id}:{key}",
                     "type": "exam_reminder",
                     "targetTab": "exams",
                     "shortCriticalText": "考试",
+                    "courseName": course_name,
+                    "location": location or None,
+                    "seat": seat or None,
+                    "priority": 3,
                 }
-                if _deliver(profile.student_id, event_key, "exam_reminder", "考试提醒", body, extras):
+                if _deliver(profile.student_id, event_key, "exam_reminder", "考试提醒", "，".join(body_parts), extras):
                     delivered += 1
                 elif not _delivery_recorded(profile.student_id, event_key):
                     saved_exam_keys.discard(key)
     attendance_snapshot = _attendance_snapshot(attendance or [])
-    saved_attendance_snapshot = dict(attendance_snapshot)
-    if profile.attendance_enabled and previous_attendance and attendance is not None:
+    saved_attendance_snapshot = (
+        dict(attendance_snapshot) if attendance_ok else dict(previous_attendance)
+    )
+    if profile.attendance_enabled and attendance_ok and previous_attendance:
         for key, body in _attendance_abnormal_changes(attendance, previous_attendance):
             event_key = f"attendance:{key}:{attendance_snapshot.get(key, '')}"
             extras = _transient_live_fields("attendance_update", "attendance")
@@ -387,12 +470,20 @@ def _poll_profile(profile: BackgroundNotificationProfile) -> int:
                     saved_attendance_snapshot[key] = previous_attendance[key]
                 else:
                     saved_attendance_snapshot.pop(key, None)
-    for item in exams:
-        key = f"{item.get('courseName', '')}|{item.get('time', '')}|{item.get('location', '')}"
+    for item in exams if exams_ok else []:
+        key = f"{item.get('courseName', '')}|{item.get('time', '')}|{item.get('location', '')}|{item.get('seat', '')}"
         start = _exam_start(str(item.get("time") or ""))
         if start is None or start <= current_time:
             continue
-        body = f"{item.get('courseName') or '考试'} {item.get('time') or ''}".strip()
+        course_name = str(item.get("courseName") or "考试")
+        location = str(item.get("location") or "")
+        seat = str(item.get("seat") or "")
+        body_parts = [f"{course_name} {item.get('time') or ''}".strip()]
+        if location:
+            body_parts.append(f"地点：{location}")
+        if seat:
+            body_parts.append(f"座位：{seat}")
+        body = "，".join(body_parts)
         for milestone, delta in (("24h", timedelta(hours=24)), ("2h", timedelta(hours=2))):
             reminder_key = f"{milestone}:{key}"
             target = start - delta
@@ -406,6 +497,10 @@ def _poll_profile(profile: BackgroundNotificationProfile) -> int:
                         "startTime": int(current_time.timestamp() * 1000),
                         "endTime": int(start.timestamp() * 1000),
                         "ongoing": True,
+                        "courseName": course_name,
+                        "location": location or None,
+                        "seat": seat or None,
+                        "priority": 1,
                     })
                 else:
                     extras = {
@@ -413,6 +508,10 @@ def _poll_profile(profile: BackgroundNotificationProfile) -> int:
                         "targetTab": "exams",
                         "shortCriticalText": "考试",
                         "milestone": milestone,
+                        "courseName": course_name,
+                        "location": location or None,
+                        "seat": seat or None,
+                        "priority": 3,
                     }
                 if _deliver(profile.student_id, f"exam-time:{reminder_key}", "exam_reminder", "考试提醒", body, extras):
                     delivered += 1
@@ -420,9 +519,22 @@ def _poll_profile(profile: BackgroundNotificationProfile) -> int:
     profile.notice_keys_json = json.dumps(sorted(saved_notice_keys), ensure_ascii=False)
     profile.grade_snapshot_json = json.dumps(saved_grade_values, ensure_ascii=False, sort_keys=True)
     profile.exam_keys_json = json.dumps(sorted(saved_exam_keys), ensure_ascii=False)
-    if attendance is not None:
+    if attendance_ok:
         profile.attendance_snapshot_json = json.dumps(saved_attendance_snapshot, ensure_ascii=False, sort_keys=True)
     profile.exam_reminder_keys_json = json.dumps(sorted(delivered_exam_reminders), ensure_ascii=False)
+    if poll_errors:
+        profile.last_error = "; ".join(poll_errors)[:500]
+    else:
+        profile.last_error = None
+    profile.last_checked_at = datetime.now(timezone.utc)
+    profile.attendance_last_checked_at = datetime.now(timezone.utc)
+    if attendance is None:
+        profile.attendance_last_error = next(
+            (item.removeprefix("attendance: ") for item in poll_errors if item.startswith("attendance: ")),
+            "考勤接口获取失败",
+        )
+    else:
+        profile.attendance_last_error = None
     return delivered
 
 
@@ -442,10 +554,12 @@ def run_background_notification_poll_once() -> dict[str, int]:
             processed += 1
             try:
                 delivered += _poll_profile(profile)
-                profile.last_error = None
-                profile.last_checked_at = datetime.now(timezone.utc)
             except Exception as exc:
                 profile.last_error = f"{type(exc).__name__}: {str(exc)[:300]}"
+                checked_at = datetime.now(timezone.utc)
+                profile.last_checked_at = checked_at
+                profile.attendance_last_checked_at = checked_at
+                profile.attendance_last_error = profile.last_error
                 poll_error = profile.last_error
                 logger.warning("background_notification_poll_failed", extra={"student_id": profile.student_id}, exc_info=True)
         db.commit()
@@ -484,16 +598,22 @@ def _course_reminder_candidates(profile: BackgroundNotificationProfile, now: dat
             course_name = str(course["name"])
             room = str(course.get("classroom") or "")
             body = f"{minutes} 分钟{suffix}：{course_name}{' · ' + room if room else ''}"
-            event_key = f"course:{kind}:{course_name}:{target.isoformat()}"
+            event_key = (
+                f"course:{kind}:{course_name}:{current.date().isoformat()}"
+                f":{target.hour:02d}:{target.minute:02d}"
+            )
             class_start = current.replace(hour=start_hour, minute=start_minute, second=0, microsecond=0)
             class_end = current.replace(hour=end_hour, minute=end_minute, second=0, microsecond=0)
             result.append((event_key, title, body, {
                 "id": event_key,
+                "eventKey": event_key,
                 "type": "course_reminder",
                 "targetTab": "schedule",
                 "courseName": course_name,
-                "classroom": room,
-                "liveUpdate": True,
+                "location": room,
+                "priority": 2,
+                # iPhone 本地通知已覆盖已同步的课程事件，云端课程后备只发普通通知，避免重复灵动岛活动。
+                "liveUpdate": False,
                 "ongoing": True,
                 "shortCriticalText": "课程",
                 "startTime": int(class_start.timestamp() * 1000),

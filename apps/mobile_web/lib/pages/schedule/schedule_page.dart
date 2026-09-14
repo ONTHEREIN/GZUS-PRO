@@ -2,7 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart'
+    show defaultTargetPlatform, kIsWeb, TargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -16,6 +17,7 @@ import '../../schedule_utils.dart';
 import '../../background_service.dart' deferred as background_service;
 import '../../ics_download.dart' deferred as ics_download;
 import '../../reminder_service.dart' deferred as reminder_service;
+import '../../push_service.dart' deferred as push_service;
 import '../../responsive/breakpoints.dart';
 import '../../widgets/async_panel.dart';
 import '../../widgets/empty_state.dart';
@@ -44,6 +46,10 @@ class _ScheduleOnboardingPageState extends State<ScheduleOnboardingPage> {
   late int _term;
   late DateTime _selected;
   bool _loading = false;
+  bool _courseRemindersEnabled = false;
+  int _courseStartReminderMinutes = 10;
+  int _courseEndReminderMinutes = 5;
+  bool _reminderSettingsLoading = true;
 
   @override
   void initState() {
@@ -52,6 +58,21 @@ class _ScheduleOnboardingPageState extends State<ScheduleOnboardingPage> {
     _year = period.$1;
     _term = period.$2;
     _selected = defaultFirstWeekStart(_year, _term);
+    unawaited(_loadCourseReminderSettings());
+  }
+
+  Future<void> _loadCourseReminderSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    setState(() {
+      _courseRemindersEnabled =
+          prefs.getBool('schedule.courseRemindersEnabled') ?? false;
+      _courseStartReminderMinutes =
+          prefs.getInt('schedule.courseStartReminderMinutes') ?? 10;
+      _courseEndReminderMinutes =
+          prefs.getInt('schedule.courseEndReminderMinutes') ?? 5;
+      _reminderSettingsLoading = false;
+    });
   }
 
   List<int> get _academicYears {
@@ -112,6 +133,18 @@ class _ScheduleOnboardingPageState extends State<ScheduleOnboardingPage> {
         'schedule.$_year.$_term.week',
         weekFromDate(_selected, DateTime.now(), clampToTerm: true),
       );
+      await prefs.setBool(
+        'schedule.courseRemindersEnabled',
+        _courseRemindersEnabled,
+      );
+      await prefs.setInt(
+        'schedule.courseStartReminderMinutes',
+        _courseStartReminderMinutes,
+      );
+      await prefs.setInt(
+        'schedule.courseEndReminderMinutes',
+        _courseEndReminderMinutes,
+      );
       await prefs.setBool('schedule_onboarding_completed', true);
       // 云端持久化（按学号绑定）：换设备/清缓存后自动恢复，不再重复引导
       try {
@@ -143,7 +176,7 @@ class _ScheduleOnboardingPageState extends State<ScheduleOnboardingPage> {
         automaticallyImplyLeading: false,
         actions: [
           TextButton(
-            onPressed: _loading ? null : _complete,
+            onPressed: _loading || _reminderSettingsLoading ? null : _complete,
             child: const Text('使用默认'),
           ),
         ],
@@ -430,9 +463,26 @@ class _ScheduleOnboardingPageState extends State<ScheduleOnboardingPage> {
                     ),
                   ),
                   const SizedBox(height: GzusSpacing.xl),
+                  _CourseReminderOnboardingCard(
+                    enabled: _courseRemindersEnabled,
+                    beforeStartMinutes: _courseStartReminderMinutes,
+                    beforeEndMinutes: _courseEndReminderMinutes,
+                    loading: _loading || _reminderSettingsLoading,
+                    onEnabledChanged: (value) {
+                      setState(() => _courseRemindersEnabled = value);
+                    },
+                    onBeforeStartChanged: (value) {
+                      setState(() => _courseStartReminderMinutes = value);
+                    },
+                    onBeforeEndChanged: (value) {
+                      setState(() => _courseEndReminderMinutes = value);
+                    },
+                  ),
+                  const SizedBox(height: GzusSpacing.xl),
                   // 操作按钮
                   FilledButton.icon(
-                    onPressed: _loading ? null : _complete,
+                    onPressed:
+                        _loading || _reminderSettingsLoading ? null : _complete,
                     icon: _loading
                         ? const SizedBox(
                             width: 18,
@@ -455,7 +505,9 @@ class _ScheduleOnboardingPageState extends State<ScheduleOnboardingPage> {
                   const SizedBox(height: 10),
                   Center(
                     child: TextButton(
-                      onPressed: _loading ? null : _complete,
+                      onPressed: _loading || _reminderSettingsLoading
+                          ? null
+                          : _complete,
                       child: Text(
                         '暂不设置，使用默认日期',
                         style: TextStyle(
@@ -485,6 +537,96 @@ class _ScheduleOnboardingPageState extends State<ScheduleOnboardingPage> {
       DateTime.sunday: '周日',
     };
     return names[weekday] ?? '未知';
+  }
+}
+
+class _CourseReminderOnboardingCard extends StatelessWidget {
+  const _CourseReminderOnboardingCard({
+    required this.enabled,
+    required this.beforeStartMinutes,
+    required this.beforeEndMinutes,
+    required this.loading,
+    required this.onEnabledChanged,
+    required this.onBeforeStartChanged,
+    required this.onBeforeEndChanged,
+  });
+
+  final bool enabled;
+  final int beforeStartMinutes;
+  final int beforeEndMinutes;
+  final bool loading;
+  final ValueChanged<bool> onEnabledChanged;
+  final ValueChanged<int> onBeforeStartChanged;
+  final ValueChanged<int> onBeforeEndChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    const options = [5, 10, 15, 30, 60];
+    final colorScheme = Theme.of(context).colorScheme;
+    return Material(
+      color: colorScheme.surfaceContainerLow,
+      borderRadius: BorderRadius.circular(24),
+      child: Padding(
+        padding: const EdgeInsets.all(GzusSpacing.l),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              secondary: const Icon(Icons.notifications_active_outlined),
+              title: const Text('上下课提醒'),
+              subtitle: const Text('按课表在上课和下课前提醒你'),
+              value: enabled,
+              onChanged: loading ? null : onEnabledChanged,
+            ),
+            if (enabled) ...[
+              const SizedBox(height: GzusSpacing.s),
+              DropdownButtonFormField<int>(
+                initialValue: beforeStartMinutes,
+                decoration: const InputDecoration(
+                  labelText: '上课前提醒',
+                  border: OutlineInputBorder(),
+                ),
+                items: options
+                    .map(
+                      (value) => DropdownMenuItem<int>(
+                        value: value,
+                        child: Text('$value 分钟'),
+                      ),
+                    )
+                    .toList(growable: false),
+                onChanged: loading
+                    ? null
+                    : (value) {
+                        if (value != null) onBeforeStartChanged(value);
+                      },
+              ),
+              const SizedBox(height: GzusSpacing.m),
+              DropdownButtonFormField<int>(
+                initialValue: beforeEndMinutes,
+                decoration: const InputDecoration(
+                  labelText: '下课前提醒',
+                  border: OutlineInputBorder(),
+                ),
+                items: options
+                    .map(
+                      (value) => DropdownMenuItem<int>(
+                        value: value,
+                        child: Text('$value 分钟'),
+                      ),
+                    )
+                    .toList(growable: false),
+                onChanged: loading
+                    ? null
+                    : (value) {
+                        if (value != null) onBeforeEndChanged(value);
+                      },
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
   }
 }
 
@@ -630,6 +772,16 @@ class _SchedulePageState extends State<SchedulePage> {
   Future<void> _applyCourseReminders(List<ScheduleCourse> courses) async {
     if (!_reminderSettingsLoaded) return;
     try {
+      await reminder_service.loadLibrary();
+      await reminder_service.ReminderService.configureCourseReminders(
+        courses: courses,
+        firstWeekStart: widget.firstWeekStart,
+        settings: reminder_service.CourseReminderSettings(
+          enabled: courseRemindersEnabled,
+          beforeStartMinutes: courseStartReminderMinutes,
+          beforeEndMinutes: courseEndReminderMinutes,
+        ),
+      );
       final cloudStatus = await widget.api.fetchBackgroundNotificationStatus();
       if (cloudStatus?.enabled == true) {
         await widget.api.syncCloudCourseReminders(
@@ -639,30 +791,30 @@ class _SchedulePageState extends State<SchedulePage> {
           firstWeekStart: widget.firstWeekStart,
           courses: _courseReminderPayload(courses),
         );
-        // 服务器配置确认成功后再关闭本地调度，避免网络失败造成提醒空窗。
-        await reminder_service.loadLibrary();
-        reminder_service.ReminderService.cancelCourseReminders();
-        await background_service.loadLibrary();
-        await background_service.BackgroundService.cancelCourseReminders();
+        if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
+          await push_service.loadLibrary();
+          await push_service.PushService.syncIosCourseSchedule(
+            api: widget.api,
+            eventKeys: reminder_service.ReminderService.localCourseEventKeys,
+            validUntil:
+                reminder_service.ReminderService.localCourseValidUntil ??
+                    DateTime.now(),
+          );
+        } else {
+          await background_service.loadLibrary();
+          await background_service.BackgroundService.cancelCourseReminders();
+        }
         if (mounted) setState(() => _reminderSyncError = null);
         return;
       }
-      await reminder_service.loadLibrary();
-      reminder_service.ReminderService.configureCourseReminders(
-        courses: courses,
-        firstWeekStart: widget.firstWeekStart,
-        settings: reminder_service.CourseReminderSettings(
-          enabled: courseRemindersEnabled,
-          beforeStartMinutes: courseStartReminderMinutes,
-          beforeEndMinutes: courseEndReminderMinutes,
-        ),
-      );
-      await _syncCourseRemindersToNative(
-        courses,
-        courseStartReminderMinutes,
-        courseEndReminderMinutes,
-        widget.firstWeekStart,
-      );
+      if (kIsWeb || defaultTargetPlatform != TargetPlatform.iOS) {
+        await _syncCourseRemindersToNative(
+          courses,
+          courseStartReminderMinutes,
+          courseEndReminderMinutes,
+          widget.firstWeekStart,
+        );
+      }
     } catch (e) {
       if (mounted) setState(() => _reminderSyncError = e.toString());
       debugPrint('课程提醒配置失败: $e');

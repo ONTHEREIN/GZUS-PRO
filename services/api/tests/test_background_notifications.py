@@ -11,6 +11,7 @@ from app.database import (
     get_sync_session_factory,
 )
 from app.main import app
+from app.push import PushDeliveryResult
 from app.sessions import SessionStore, credential_fingerprint, encrypt_device_credentials
 
 
@@ -37,6 +38,21 @@ class _NotificationPollClient:
 
     def get_attendance(self, _start: object, _end: object) -> list[dict[str, str]]:
         return []
+
+
+class _AttendancePollClient(_NotificationPollClient):
+    def get_grades(self, _start: object, _end: object) -> list[dict[str, str]]:
+        raise RuntimeError("成绩接口暂时不可用")
+
+    def get_attendance(self, _start: object, _end: object) -> list[dict[str, str]]:
+        return [{
+            "courseId": "c1",
+            "courseName": "高等数学",
+            "late": 1,
+            "leaveEarly": 0,
+            "absent": 0,
+            "leave": 0,
+        }]
 
 
 def test_failed_cloud_notification_is_retried_and_only_success_is_recorded(monkeypatch):
@@ -69,7 +85,9 @@ def test_failed_cloud_notification_is_retried_and_only_success_is_recorded(monke
     with get_sync_session_factory()() as db:
         profile = db.query(BackgroundNotificationProfile).one()
         assert json.loads(profile.notice_keys_json) == ["教务|旧通知|https://example.test/old"]
-        assert db.query(NotificationDelivery).count() == 0
+        delivery = db.query(NotificationDelivery).one()
+        assert delivery.delivery_status == "failed"
+        assert delivery.retry_count == 1
 
     assert run_background_notification_poll_once() == {"processed": 1, "delivered": 1}
     with get_sync_session_factory()() as db:
@@ -80,7 +98,69 @@ def test_failed_cloud_notification_is_retried_and_only_success_is_recorded(monke
         }
         delivery = db.query(NotificationDelivery).one()
         assert delivery.delivery_status == "delivered"
+        assert delivery.retry_count == 2
+        assert delivery.last_failure_reason is not None
     assert attempts == ["https://example.test/new", "https://example.test/new"]
+
+
+def test_live_activity_only_does_not_mark_notification_delivered(monkeypatch):
+    monkeypatch.setattr(
+        cloud_notifications,
+        "_authenticated_client",
+        lambda _credentials: (_NotificationPollClient(), None),
+    )
+    results = iter([
+        PushDeliveryResult(regular_delivered=0, live_activity_delivered=1),
+        PushDeliveryResult(regular_delivered=1, live_activity_delivered=0),
+    ])
+    monkeypatch.setattr(cloud_notifications, "send_push_to_student", lambda *_args: next(results))
+
+    with get_sync_session_factory()() as db:
+        db.add(
+            BackgroundNotificationProfile(
+                student_id="20260001",
+                credential_fingerprint="test-fingerprint",
+                encrypted_credentials="test-credentials",
+                notice_keys_json=json.dumps(["教务|旧通知|https://example.test/old"]),
+            )
+        )
+        db.commit()
+
+    assert run_background_notification_poll_once() == {"processed": 1, "delivered": 0}
+    with get_sync_session_factory()() as db:
+        delivery = db.query(NotificationDelivery).one()
+        assert delivery.delivery_status == "failed"
+        assert delivery.last_failure_reason is not None
+
+    assert run_background_notification_poll_once() == {"processed": 1, "delivered": 1}
+    with get_sync_session_factory()() as db:
+        assert db.query(NotificationDelivery).one().delivery_status == "delivered"
+
+
+def test_attendance_poll_updates_even_when_grade_poll_fails(monkeypatch):
+    monkeypatch.setattr(
+        cloud_notifications,
+        "_authenticated_client",
+        lambda _credentials: (_AttendancePollClient(), None),
+    )
+    with get_sync_session_factory()() as db:
+        db.add(
+            BackgroundNotificationProfile(
+                student_id="20260001",
+                credential_fingerprint="test-fingerprint",
+                encrypted_credentials="test-credentials",
+            )
+        )
+        db.commit()
+
+    assert run_background_notification_poll_once() == {"processed": 1, "delivered": 0}
+    with get_sync_session_factory()() as db:
+        profile = db.query(BackgroundNotificationProfile).one()
+        assert profile.attendance_last_checked_at is not None
+        assert profile.attendance_last_error is None
+        assert "grades: RuntimeError" in (profile.last_error or "")
+        snapshot = json.loads(profile.attendance_snapshot_json or "{}")
+        assert json.loads(snapshot["c1"])["late"] == 1
 
 
 def _client() -> tuple[TestClient, str]:

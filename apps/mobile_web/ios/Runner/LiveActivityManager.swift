@@ -111,7 +111,8 @@ final class LiveActivityManager {
             activityId: payload.activityId,
             activityType: payload.activityType,
             targetTab: payload.targetTab,
-            deepLink: payload.deepLink
+            deepLink: payload.deepLink,
+            priority: payload.priority
         )
         if let existing = activeActivity(id: payload.activityId) {
             Task {
@@ -124,25 +125,46 @@ final class LiveActivityManager {
             }
             return
         }
-        do {
-            let activity: Activity<GzusLiveActivityAttributes>
-            if #available(iOS 16.2, *) {
-                activity = try Activity.request(
-                    attributes: attributes,
-                    content: ActivityContent(state: payload.contentState, staleDate: payload.staleDate),
-                    pushType: .token
-                )
-            } else {
-                activity = try Activity.request(
-                    attributes: attributes,
-                    contentState: payload.contentState,
-                    pushType: .token
-                )
+        let competing = Activity<GzusLiveActivityAttributes>.activities.filter {
+            $0.attributes.activityId != payload.activityId
+        }
+        if let current = competing.min(by: {
+            ($0.attributes.priority ?? 5) < ($1.attributes.priority ?? 5)
+        }), payload.priority > (current.attributes.priority ?? 5) {
+            result(["ignored": true, "activityId": current.id])
+            return
+        }
+        Task { [weak self] in
+            guard let self else { return }
+            for current in competing {
+                if #available(iOS 16.2, *) {
+                    await current.end(nil, dismissalPolicy: .immediate)
+                } else {
+                    await current.end(using: current.contentState, dismissalPolicy: .immediate)
+                }
             }
-            observePushToken(for: activity)
-            result(["activityId": activity.id])
-        } catch let caughtError {
-            result(error(code: "START_FAILED", message: "启动灵动岛失败: \(caughtError.localizedDescription)"))
+            do {
+                let activity: Activity<GzusLiveActivityAttributes>
+                if #available(iOS 16.2, *) {
+                    activity = try Activity.request(
+                        attributes: attributes,
+                        content: ActivityContent(state: payload.contentState, staleDate: payload.staleDate),
+                        pushType: .token
+                    )
+                } else {
+                    activity = try Activity.request(
+                        attributes: attributes,
+                        contentState: payload.contentState,
+                        pushType: .token
+                    )
+                }
+                self.observePushToken(for: activity)
+                await MainActor.run { result(["activityId": activity.id]) }
+            } catch let caughtError {
+                await MainActor.run {
+                    result(self.error(code: "START_FAILED", message: "启动灵动岛失败: \(caughtError.localizedDescription)"))
+                }
+            }
         }
     }
 
@@ -347,6 +369,11 @@ final class LiveActivityManager {
         let shortText = values["shortText"] as? String ?? "软帮手"
         let progress = double(values["progress"])
         let ongoing = values["ongoing"] as? Bool ?? true
+        let metrics = (values["utilityMetrics"] as? [[String: Any]] ?? []).compactMap { value -> LiveActivityMetric? in
+            guard let label = value["label"] as? String,
+                  let metricValue = value["value"] as? String else { return nil }
+            return LiveActivityMetric(label: label, value: metricValue, isAlert: value["isAlert"] as? Bool ?? false)
+        }
         let staleDate = end > 0 ? Date(timeIntervalSince1970: TimeInterval(end) / 1000) : nil
         return ActivityPayload(
             activityId: activityId,
@@ -360,8 +387,18 @@ final class LiveActivityManager {
                 startEpochMillis: start,
                 endEpochMillis: end,
                 progress: progress,
-                ongoing: ongoing
+                ongoing: ongoing,
+                courseName: values["courseName"] as? String,
+                location: values["location"] as? String,
+                seat: values["seat"] as? String,
+                score: values["score"] as? String,
+                gradeStatus: values["gradeStatus"] as? String,
+                gradePassed: values["gradePassed"] as? Bool,
+                utilityMetrics: metrics,
+                utilityPrimaryLabel: values["utilityPrimaryLabel"] as? String,
+                utilityPrimaryValue: values["utilityPrimaryValue"] as? String
             ),
+            priority: (values["priority"] as? NSNumber)?.intValue ?? 5,
             staleDate: staleDate,
             dismissalDate: Date(timeIntervalSinceNow: 30 * 60),
             dismissImmediately: values["dismissImmediately"] as? Bool ?? false
@@ -400,6 +437,7 @@ private struct ActivityPayload {
     let targetTab: String
     let deepLink: String
     let contentState: GzusLiveActivityAttributes.ContentState
+    let priority: Int
     let staleDate: Date?
     let dismissalDate: Date
     let dismissImmediately: Bool

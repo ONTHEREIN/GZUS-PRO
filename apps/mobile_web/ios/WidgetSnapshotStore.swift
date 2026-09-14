@@ -1,5 +1,166 @@
 import Foundation
 
+struct WidgetCourseTimelineItem: Codable, Equatable {
+  let itemKey: String
+  let week: Int?
+  let weekday: Int
+  let startSection: Int
+  let endSection: Int
+  let time: String
+  let name: String
+  let classroom: String
+  let teacher: String
+  let ongoing: Bool
+}
+
+struct WidgetNextClassState: Equatable {
+  let title: String
+  let time: String
+  let location: String
+  let teacher: String
+  let status: String
+  let start: Date?
+  let end: Date?
+
+  static let none = WidgetNextClassState(
+    title: "暂无下一节课",
+    time: "",
+    location: "",
+    teacher: "",
+    status: "none",
+    start: nil,
+    end: nil
+  )
+}
+
+enum WidgetNextClassTimeline {
+  private struct DatedCourse {
+    let source: WidgetCourseTimelineItem
+    let start: Date
+    let end: Date
+    let time: String
+  }
+
+  private static let sectionTimes: [(String, String)] = [
+    ("09:00", "09:40"), ("09:40", "10:20"), ("10:40", "11:20"), ("11:20", "12:00"),
+    ("12:30", "13:10"), ("13:10", "13:50"), ("14:00", "14:40"), ("14:40", "15:20"),
+    ("15:30", "16:10"), ("16:10", "16:50"), ("17:00", "17:40"), ("17:40", "18:20"),
+    ("19:00", "19:40"), ("19:40", "20:20"), ("20:30", "21:10"), ("21:10", "21:50"),
+  ]
+
+  static func state(
+    at now: Date,
+    courses: [WidgetCourseTimelineItem],
+    calendar: Calendar
+  ) -> WidgetNextClassState {
+    let datedCourses = datedCourses(courses, relativeTo: now, calendar: calendar)
+    if let current = datedCourses.first(where: { $0.start <= now && now < $0.end }) {
+      return makeState(current, status: "ongoing")
+    }
+    guard let upcoming = datedCourses.first(where: { $0.start >= now }) else {
+      return .none
+    }
+    return makeState(upcoming, status: "upcoming")
+  }
+
+  static func transitionDates(
+    after now: Date,
+    courses: [WidgetCourseTimelineItem],
+    calendar: Calendar
+  ) -> [Date] {
+    let nextDay = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now)) ?? now
+    let values = datedCourses(courses, relativeTo: now, calendar: calendar)
+      .flatMap { [$0.start, $0.end] }
+      .filter { $0 > now && $0 < nextDay }
+      .sorted()
+    return values.reduce(into: [Date]()) { result, value in
+      if result.last != value {
+        result.append(value)
+      }
+    }
+  }
+
+  private static func makeState(_ course: DatedCourse, status: String) -> WidgetNextClassState {
+    WidgetNextClassState(
+      title: course.source.name,
+      time: course.time,
+      location: course.source.classroom,
+      teacher: course.source.teacher,
+      status: status,
+      start: course.start,
+      end: course.end
+    )
+  }
+
+  private static func datedCourses(
+    _ courses: [WidgetCourseTimelineItem],
+    relativeTo now: Date,
+    calendar: Calendar
+  ) -> [DatedCourse] {
+    let weekday = calendar.component(.weekday, from: now)
+    let mondayOffset = weekday == 1 ? -6 : 2 - weekday
+    let monday = calendar.date(
+      byAdding: .day,
+      value: mondayOffset,
+      to: calendar.startOfDay(for: now)
+    ) ?? calendar.startOfDay(for: now)
+    return courses.compactMap { course in
+      guard (1...7).contains(course.weekday),
+            (1...16).contains(course.startSection),
+            course.endSection >= course.startSection,
+            course.endSection <= sectionTimes.count else {
+        return nil
+      }
+      let startText = timeText(course.time, index: 0) ?? sectionTimes[course.startSection - 1].0
+      let endText = timeText(course.time, index: 1) ?? sectionTimes[course.endSection - 1].1
+      guard let start = date(startText, dayOffset: course.weekday - 1, from: monday, calendar: calendar),
+            let end = date(endText, dayOffset: course.weekday - 1, from: monday, calendar: calendar),
+            end > start else {
+        return nil
+      }
+      return DatedCourse(source: course, start: start, end: end, time: "\(startText)-\(endText)")
+    }.sorted {
+      if $0.start != $1.start { return $0.start < $1.start }
+      return $0.end < $1.end
+    }
+  }
+
+  private static func timeText(_ value: String, index: Int) -> String? {
+    let parts = value.split { character in
+      character == "-" || character == "–" || character == "—" || character == "至"
+    }
+    guard parts.count > index else { return nil }
+    let text = String(parts[index]).trimmingCharacters(in: .whitespacesAndNewlines)
+    return parseMinutes(text) == nil ? nil : text
+  }
+
+  private static func parseMinutes(_ value: String) -> Int? {
+    let parts = value.split(separator: ":").compactMap { Int($0) }
+    guard parts.count == 2, (0...23).contains(parts[0]), (0...59).contains(parts[1]) else {
+      return nil
+    }
+    return parts[0] * 60 + parts[1]
+  }
+
+  private static func date(
+    _ value: String,
+    dayOffset: Int,
+    from monday: Date,
+    calendar: Calendar
+  ) -> Date? {
+    guard let minutes = parseMinutes(value),
+          let day = calendar.date(byAdding: .day, value: dayOffset, to: monday) else {
+      return nil
+    }
+    return calendar.date(
+      bySettingHour: minutes / 60,
+      minute: minutes % 60,
+      second: 0,
+      of: day
+    )
+  }
+}
+
 enum WidgetSnapshotStore {
   private static let appGroupIdentifier = "group.cn.gzus.pro.6772c5tf6c"
   private static let configurationKey = "widget_refresh_configuration"
@@ -57,6 +218,15 @@ enum WidgetSnapshotStore {
     guard let defaults = UserDefaults(suiteName: appGroupIdentifier),
           let data = defaults.data(forKey: configurationKey) else { return nil }
     return try? JSONDecoder().decode(Configuration.self, from: data)
+  }
+
+  static func nextClassCourses() -> [WidgetCourseTimelineItem] {
+    guard let defaults = UserDefaults(suiteName: appGroupIdentifier),
+          let raw = defaults.string(forKey: "weeklyCoursesJson"),
+          let data = raw.data(using: .utf8) else {
+      return []
+    }
+    return (try? JSONDecoder().decode([WidgetCourseTimelineItem].self, from: data)) ?? []
   }
 
   static func clearConfiguration() {

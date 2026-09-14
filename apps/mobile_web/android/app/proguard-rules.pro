@@ -17,6 +17,9 @@
 -keep public class cn.gzus.pro.BusinessProgressService {*;}
 -keep public class cn.gzus.pro.BusinessProgressFactory {*;}
 
+# WorkManager 通过反射实例化生成的数据库实现类，release 混淆后仍需保留构造函数。
+-keep class androidx.work.impl.WorkDatabase_Impl { *; }
+
 # Keep all RemoteViewsService and RemoteViewsFactory implementations
 -keep public class * extends android.widget.RemoteViewsService {*;}
 -keep public class * implements android.widget.RemoteViewsService$RemoteViewsFactory {*;}

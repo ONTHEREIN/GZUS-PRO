@@ -158,12 +158,28 @@ def normalize_exam_item(value: Any) -> dict:
 
 def normalize_grade_item(value: Any) -> dict:
     data = as_dict(value)
+    official_status = pick(
+        data,
+        "gradeStatus",
+        "grade_status",
+        "status",
+        "resultStatus",
+        "result_status",
+        "passStatus",
+        "pass_status",
+        "isPass",
+        "is_pass",
+        "passed",
+        "sfjg",
+    )
     return {
         "courseName": str(pick(data, "courseName", "course_name", "name", "kcmc") or ""),
         "score": str(pick(data, "score", "exam_score", "exam_result", "cj") or ""),
         "credit": str(pick(data, "credit", "xf") or ""),
         "gradePoint": str(pick(data, "gradePoint", "jd", "gpa", "grade_point") or ""),
         "term": pick(data, "term", "xq", "semester"),
+        "gradeStatus": official_status,
+        "gradePassed": official_status if isinstance(official_status, bool) else None,
     }
 
 

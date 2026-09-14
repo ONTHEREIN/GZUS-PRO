@@ -4,8 +4,30 @@ import 'dart:html';
 
 typedef OnNotificationTap = void Function(Map<String, dynamic> extras);
 
+class ScheduledLocalNotification {
+  const ScheduledLocalNotification({
+    required this.id,
+    required this.scheduledAt,
+    required this.title,
+    required this.body,
+    required this.extras,
+  });
+
+  final int id;
+  final DateTime scheduledAt;
+  final String title;
+  final String body;
+  final Map<String, dynamic> extras;
+}
+
 class LocalNotificationService {
   static Future<void> init({OnNotificationTap? onTap}) async {}
+
+  static Future<void> replaceCourseReminders(
+    List<ScheduledLocalNotification> reminders,
+  ) async {}
+
+  static Future<void> cancelCourseReminders() async {}
 
   static Future<bool> requestWebNotificationPermission() async {
     try {

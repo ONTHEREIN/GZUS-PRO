@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request, Header, status
 
@@ -10,6 +11,7 @@ from app.database import (
 )
 from app.routes.deps import require_session
 from app.schemas import (
+    IosCourseScheduleSyncRequest,
     IosLiveActivityTokenRequest,
     IosPushTokenRequest,
     WebPushConfigResponse,
@@ -129,6 +131,10 @@ def register_ios_push(
             IosPushToken.environment == payload.environment,
         ).first()
         if existing:
+            if existing.student_id != student_id:
+                # 设备令牌转移到新账号时，旧账号的本地课程覆盖不能随令牌迁移。
+                existing.course_local_event_keys_json = None
+                existing.course_local_valid_until = None
             existing.student_id = student_id
             existing.updated_at = datetime.now(timezone.utc)
         else:
@@ -157,6 +163,34 @@ def unregister_ios_push(
             IosPushToken.device_token == payload.device_token.lower(),
             IosPushToken.environment == payload.environment,
         ).delete()
+        db.commit()
+    return {"status": "ok"}
+
+
+@router.post("/ios/course-schedule")
+def sync_ios_course_schedule(
+    payload: IosCourseScheduleSyncRequest,
+    session: AppSession = Depends(require_session),
+) -> dict[str, str]:
+    """记录当前 iOS 设备已经由系统本地通知覆盖的课程事件。"""
+    student_id = student_id_of(session)
+    if not student_id:
+        return {"status": "error", "message": "Student ID not found"}
+    device_token = payload.device_token.lower()
+    with get_sync_session_factory()() as db:
+        row = db.query(IosPushToken).filter_by(
+            device_token=device_token,
+            environment=payload.environment,
+        ).first()
+        if row is None:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="请先注册 iOS 普通推送令牌")
+        if row.student_id != student_id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="设备令牌不属于当前账号")
+        row.course_local_event_keys_json = json.dumps(
+            sorted(set(payload.event_keys)), ensure_ascii=False, separators=(",", ":")
+        )
+        row.course_local_valid_until = payload.valid_until
+        row.updated_at = datetime.now(timezone.utc)
         db.commit()
     return {"status": "ok"}
 
@@ -240,13 +274,24 @@ async def test_push(
 
     student_id = student_id_of(session)
     delivered_channels = 0
+    regular_channels = 0
+    live_activity_channels = 0
     if student_id:
-        delivered_channels = send_push_to_student(student_id, title, alert, message)
+        from app.push import PushDeliveryResult
+
+        result = send_push_to_student(student_id, title, alert, message)
+        if not isinstance(result, PushDeliveryResult):
+            raise RuntimeError("推送通道返回值无效")
+        regular_channels = result.regular_delivered
+        live_activity_channels = result.live_activity_delivered
+        delivered_channels = result.total_channels
     return {
         "status": "ok",
         "sent_to": session.id[:8],
         "delivered_channels": str(delivered_channels),
-        "delivery_status": "delivered" if delivered_channels > 0 else "queued_only",
+        "regular_channels": str(regular_channels),
+        "live_activity_channels": str(live_activity_channels),
+        "delivery_status": "delivered" if regular_channels > 0 else "queued_only",
     }
 
 

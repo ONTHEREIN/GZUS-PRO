@@ -12,6 +12,8 @@ import 'background_service.dart';
 import 'services_deferred.dart';
 import 'web_push_service.dart';
 import 'schedule_utils.dart';
+import 'push_service.dart' deferred as push_service;
+import 'reminder_service.dart' deferred as reminder_service;
 
 class BackgroundGuidePage extends StatefulWidget {
   const BackgroundGuidePage({
@@ -94,7 +96,7 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
       }
       _busy = false;
     }
-    // 兼容旧用户：系统通知已授权但云端档案仍关闭时，进入设置页自动补同步。
+    // iOS 以系统通知授权作为服务器推送通知的同意；旧用户进入引导时自动补同步。
     if (mounted && _notificationGranted && !_cloudNotificationEnabled) {
       unawaited(_setCloudNotificationEnabled(true));
     }
@@ -301,12 +303,24 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
         _cloudNotificationEnabled = status.enabled;
         _cloudNotificationError = status.lastError;
       });
+      if (value && _isIos) {
+        await reminder_service.loadLibrary();
+        if (reminder_service.ReminderService.hasLocalCoursePlan) {
+          await push_service.loadLibrary();
+          await push_service.PushService.syncIosCourseSchedule(
+            api: widget.api,
+            eventKeys: reminder_service.ReminderService.localCourseEventKeys,
+            validUntil:
+                reminder_service.ReminderService.localCourseValidUntil ??
+                    DateTime.now(),
+          );
+        }
+      }
     } catch (error) {
       if (!mounted) return;
-      final message =
-          error is StateError
-              ? '请重新登录并勾选“记住密码并自动登录”，再开启后台持续通知。'
-              : error.toString();
+      final message = error is StateError
+          ? '请重新登录并勾选“记住密码并自动登录”，再开启后台持续通知。'
+          : error.toString();
       setState(() => _cloudNotificationError = message);
       if (error is StateError) {
         final messenger = ScaffoldMessenger.maybeOf(context);
@@ -639,16 +653,24 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
                 ),
               ],
               const SizedBox(height: GzusSpacing.xl),
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('后台持续通知'),
-                subtitle: Text(
-                  _cloudNotificationError ??
-                      '授权后，服务端会加密保存登录凭据，用于在您关闭 App 后检测课程、通知、成绩和考试。',
+              if (_isIos)
+                _IosServerPushStatus(
+                  notificationGranted: _notificationGranted,
+                  serverPushEnabled: _cloudNotificationEnabled,
+                  error: _cloudNotificationError,
+                  checking: _checking || _busy,
+                )
+              else
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('后台持续通知'),
+                  subtitle: Text(
+                    _cloudNotificationError ??
+                        '授权后，服务端会加密保存登录凭据，用于在您关闭 App 后检测课程、通知、成绩和考试。',
+                  ),
+                  value: _cloudNotificationEnabled,
+                  onChanged: _busy ? null : _setCloudNotificationEnabled,
                 ),
-                value: _cloudNotificationEnabled,
-                onChanged: _busy ? null : _setCloudNotificationEnabled,
-              ),
               if (_isAndroid) ...[
                 const SizedBox(height: GzusSpacing.xl),
                 SwitchListTile(
@@ -678,6 +700,52 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _IosServerPushStatus extends StatelessWidget {
+  const _IosServerPushStatus({
+    required this.notificationGranted,
+    required this.serverPushEnabled,
+    required this.error,
+    required this.checking,
+  });
+
+  final bool notificationGranted;
+  final bool serverPushEnabled;
+  final String? error;
+  final bool checking;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final detail = error ??
+        (notificationGranted
+            ? serverPushEnabled
+                ? '已随系统通知权限自动开启服务器推送。'
+                : '正在按系统通知权限开启服务器推送。'
+            : '授予系统通知权限，即视为同意接收服务器推送通知。');
+    final enabled = notificationGranted && serverPushEnabled;
+    return Card(
+      elevation: 0,
+      color: colorScheme.surfaceContainerLow,
+      child: ListTile(
+        leading: Icon(
+          enabled ? Icons.cloud_done_outlined : Icons.cloud_upload_outlined,
+          color: enabled ? colorScheme.secondary : colorScheme.primary,
+        ),
+        title: const Text('服务器推送通知'),
+        subtitle: Text(detail),
+        trailing: Icon(
+          checking
+              ? Icons.sync
+              : enabled
+                  ? Icons.check_circle
+                  : Icons.info_outline,
+          color: enabled ? colorScheme.secondary : colorScheme.onSurfaceVariant,
         ),
       ),
     );

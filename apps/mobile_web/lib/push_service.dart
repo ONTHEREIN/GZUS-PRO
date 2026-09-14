@@ -60,6 +60,13 @@ class PushService {
     );
   }
 
+  static Future<bool> checkIosPushReady() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.iOS) return true;
+    if (!await PermissionService.checkNotificationPermission()) return false;
+    final token = await _channel.invokeMethod<String>('getRemotePushToken');
+    return token != null && token.isNotEmpty;
+  }
+
   static Future<void> unregisterIosPushToken(
     ApiClient api,
     String activeSessionId,
@@ -72,6 +79,23 @@ class PushService {
       activeSessionId: activeSessionId,
       deviceToken: deviceToken,
       environment: _iosPushEnvironment,
+    );
+  }
+
+  static Future<void> syncIosCourseSchedule({
+    required ApiClient api,
+    required List<String> eventKeys,
+    required DateTime validUntil,
+  }) async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.iOS) return;
+    final deviceToken =
+        await _channel.invokeMethod<String>('getRemotePushToken');
+    if (deviceToken == null || deviceToken.isEmpty) return;
+    await api.syncIosCourseSchedule(
+      deviceToken: deviceToken,
+      environment: _iosPushEnvironment,
+      eventKeys: eventKeys,
+      validUntil: validUntil,
     );
   }
 

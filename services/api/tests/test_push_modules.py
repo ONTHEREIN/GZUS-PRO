@@ -262,6 +262,7 @@ async def test_exam_reminder_retries_after_push_failure(monkeypatch):
                 "courseName": "高等数学",
                 "time": exam_time.strftime("%Y-%m-%d %H:%M-11:00"),
                 "location": "A101",
+                "seat": "12",
             }],
         },
     )()
@@ -278,3 +279,4 @@ async def test_exam_reminder_retries_after_push_failure(monkeypatch):
 
     assert len(attempts) == 2
     assert len(app.state.ws_manager.sent) == 2
+    assert app.state.ws_manager.sent[0][1]["seat"] == "12"

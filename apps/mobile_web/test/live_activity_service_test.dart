@@ -194,4 +194,44 @@ void main() {
     controller.dismiss(grade.id);
     expect(controller.state.value.event?.id, utility.id);
   });
+
+  test('解析结构化考试、成绩与水电字段', () {
+    final event = LiveActivityEvent.fromMessage({
+      'id': 'exam:1',
+      'type': 'exam_reminder',
+      'title': '考试提醒',
+      'body': '高等数学',
+      'courseName': '高等数学',
+      'location': 'A101',
+      'seat': '12',
+      'utilityMetrics': [
+        {'label': '冷水', 'value': '2 吨', 'isAlert': true},
+      ],
+    });
+
+    expect(event.courseName, '高等数学');
+    expect(event.location, 'A101');
+    expect(event.seat, '12');
+    expect(event.utilityMetrics.single.value, '2 吨');
+    expect(event.priority, 3);
+  });
+
+  test('活动优先级保持课程和考试倒计时优先', () {
+    final course = LiveActivityEvent.courseReminder(
+      id: 1,
+      title: '即将上课',
+      body: '高等数学',
+      courseName: '高等数学',
+      countdownTarget: DateTime.now().add(const Duration(minutes: 10)),
+      shortText: '课程',
+    );
+    final grade = LiveActivityEvent.fromMessage({
+      'id': 'grade:1',
+      'type': 'grade_update',
+      'title': '成绩更新',
+      'body': '成绩已发布',
+    });
+
+    expect(course.priority, lessThan(grade.priority));
+  });
 }

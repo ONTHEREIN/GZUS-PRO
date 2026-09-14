@@ -40,6 +40,7 @@ def test_cloud_course_reminder_is_due_after_dispatch_drift():
     assert len(candidates) == 1
     assert candidates[0][1] == "即将上课"
     assert candidates[0][3]["type"] == "course_reminder"
+    assert candidates[0][3]["eventKey"] == candidates[0][0]
 
 
 def test_attendance_snapshot_only_reports_increased_abnormal_counts():

@@ -18,6 +18,7 @@ class LiveActivityService {
   static ApiClient? _api;
   static bool _enabled = true;
   static bool _initialized = false;
+  static LiveActivityEvent? _activeEvent;
 
   static Future<void> initialize({required ApiClient api}) async {
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.iOS) return;
@@ -46,6 +47,7 @@ class LiveActivityService {
     final api = _api;
     _api = null;
     _enabled = false;
+    _activeEvent = null;
     try {
       await _channel.invokeMethod<bool>('endAll');
     } on PlatformException {
@@ -72,6 +74,7 @@ class LiveActivityService {
     await prefs.setBool('live_activities_enabled', enabled);
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.iOS) return;
     if (!enabled) {
+      _activeEvent = null;
       try {
         await _channel.invokeMethod<bool>('endAll');
       } on PlatformException {
@@ -94,12 +97,19 @@ class LiveActivityService {
     if (!_enabled || kIsWeb || defaultTargetPlatform != TargetPlatform.iOS) {
       return false;
     }
+    final active = _activeEvent;
+    if (active != null && active.id != event.id) {
+      if (event.priority > active.priority) return false;
+      await _endNative(active, immediate: true);
+    }
     try {
       final result = await _channel.invokeMethod<Map<Object?, Object?>>(
         'start',
         _arguments(event),
       );
-      return result != null;
+      if (result == null || result['ignored'] == true) return false;
+      _activeEvent = event;
+      return true;
     } on MissingPluginException {
       return false;
     } on PlatformException catch (error) {
@@ -115,6 +125,7 @@ class LiveActivityService {
     try {
       final result =
           await _channel.invokeMethod<bool>('update', _arguments(event));
+      if (result == true) _activeEvent = event;
       return result == true;
     } on PlatformException {
       return false;
@@ -126,6 +137,15 @@ class LiveActivityService {
     required bool immediate,
   }) async {
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.iOS) return false;
+    final result = await _endNative(event, immediate: immediate);
+    if (result && _activeEvent?.id == event.id) _activeEvent = null;
+    return result;
+  }
+
+  static Future<bool> _endNative(
+    LiveActivityEvent event, {
+    required bool immediate,
+  }) async {
     try {
       final result = await _channel.invokeMethod<bool>('end', {
         ..._arguments(event),
@@ -202,11 +222,41 @@ class LiveActivityService {
       'ongoing': event.ongoing,
       'targetTab': event.targetTab ?? 'home',
       'deepLink': event.deepLink,
+      'priority': event.priority,
+      'courseName': event.courseName,
+      'location': event.location,
+      'seat': event.seat,
+      'score': event.score,
+      'gradeStatus': event.gradeStatus,
+      'gradePassed': event.gradePassed,
+      'utilityMetrics': event.utilityMetrics
+          .map((metric) => metric.toJson())
+          .toList(growable: false),
+      'utilityPrimaryLabel': event.utilityPrimaryLabel,
+      'utilityPrimaryValue': event.utilityPrimaryValue,
     };
   }
 }
 
 typedef LiveActivityOpenHandler = void Function(LiveActivityEvent event);
+
+class LiveActivityMetric {
+  const LiveActivityMetric({
+    required this.label,
+    required this.value,
+    required this.isAlert,
+  });
+
+  final String label;
+  final String value;
+  final bool isAlert;
+
+  Map<String, Object> toJson() => {
+        'label': label,
+        'value': value,
+        'isAlert': isAlert,
+      };
+}
 
 class LiveActivityEvent {
   LiveActivityEvent({
@@ -222,6 +272,15 @@ class LiveActivityEvent {
     this.url,
     this.ongoing = false,
     this.progress,
+    this.courseName,
+    this.location,
+    this.seat,
+    this.score,
+    this.gradeStatus,
+    this.gradePassed,
+    this.utilityMetrics = const <LiveActivityMetric>[],
+    this.utilityPrimaryLabel,
+    this.utilityPrimaryValue,
   });
 
   factory LiveActivityEvent.fromMessage(Map<String, dynamic> message) {
@@ -229,6 +288,11 @@ class LiveActivityEvent {
         ? Map<String, dynamic>.from(message['extras'] as Map)
         : <String, dynamic>{};
     Object? value(String key) => message[key] ?? extras[key];
+    final grade = value('grade') is Map
+        ? Map<String, dynamic>.from(value('grade') as Map)
+        : <String, dynamic>{};
+    Object? gradeValue(String key) => value(key) ?? grade[key];
+    final utilityMetrics = _utilityMetrics(value('utilityMetrics'));
     final type = value('type')?.toString() ?? '';
     final style = value('style')?.toString() ?? 'metric';
     return LiveActivityEvent(
@@ -251,6 +315,21 @@ class LiveActivityEvent {
         value('progressMax'),
         value('progressCurrent'),
       ),
+      courseName: value('courseName')?.toString() ??
+          value('name')?.toString() ??
+          gradeValue('courseName')?.toString(),
+      location:
+          value('location')?.toString() ?? value('examLocation')?.toString(),
+      seat: value('seat')?.toString() ?? value('examSeat')?.toString(),
+      score: gradeValue('score')?.toString(),
+      gradeStatus: gradeValue('gradeStatus')?.toString() ??
+          gradeValue('status')?.toString(),
+      gradePassed: _boolValue(
+        gradeValue('gradePassed') ?? gradeValue('passed'),
+      ),
+      utilityMetrics: utilityMetrics,
+      utilityPrimaryLabel: value('utilityPrimaryLabel')?.toString(),
+      utilityPrimaryValue: value('utilityPrimaryValue')?.toString(),
     );
   }
 
@@ -272,6 +351,7 @@ class LiveActivityEvent {
       shortText: shortText,
       targetTab: 'schedule',
       ongoing: true,
+      courseName: courseName,
     );
   }
 
@@ -287,6 +367,15 @@ class LiveActivityEvent {
   final String? url;
   final bool ongoing;
   final double? progress;
+  final String? courseName;
+  final String? location;
+  final String? seat;
+  final String? score;
+  final String? gradeStatus;
+  final bool? gradePassed;
+  final List<LiveActivityMetric> utilityMetrics;
+  final String? utilityPrimaryLabel;
+  final String? utilityPrimaryValue;
   final DateTime createdAt = DateTime.now();
 
   DateTime get effectiveEndTime {
@@ -387,6 +476,42 @@ class LiveActivityEvent {
     final currentValue = _intValue(current);
     if (maxValue == null || maxValue <= 0 || currentValue == null) return null;
     return (currentValue / maxValue).clamp(0.0, 1.0);
+  }
+
+  static bool? _boolValue(Object? value) {
+    if (value is bool) return value;
+    if (value is num && (value == 0 || value == 1)) return value == 1;
+    if (value is String) {
+      switch (value.trim().toLowerCase()) {
+        case 'true':
+        case 'yes':
+        case '1':
+        case '合格':
+        case '通过':
+          return true;
+        case 'false':
+        case 'no':
+        case '0':
+        case '不及格':
+        case '不通过':
+          return false;
+      }
+    }
+    return null;
+  }
+
+  static List<LiveActivityMetric> _utilityMetrics(Object? value) {
+    if (value is! List) return const <LiveActivityMetric>[];
+    return List<LiveActivityMetric>.unmodifiable(
+      value.whereType<Map>().map((raw) {
+        final item = Map<String, dynamic>.from(raw);
+        return LiveActivityMetric(
+          label: item['label']?.toString() ?? '',
+          value: item['value']?.toString() ?? '',
+          isAlert: _boolValue(item['isAlert']) ?? false,
+        );
+      }).where((item) => item.label.isNotEmpty && item.value.isNotEmpty),
+    );
   }
 
   static String _fallbackId(Map<String, dynamic> message) {

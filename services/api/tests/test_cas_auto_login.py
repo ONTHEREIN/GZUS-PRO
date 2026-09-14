@@ -43,3 +43,16 @@ def test_extract_ehall_session_reads_customsid_and_authorization():
 
     assert cookies == "customsid=custom-1; Authorization=token-1"
     assert token == "token-1"
+
+
+def test_need_change_password_returns_actionable_login_result():
+    result = CasAutoLogin()._handle_error_code(
+        "20240001",
+        {"code": "ISMODIFYPASS"},
+        "captcha-1",
+    )
+
+    assert result is not None
+    assert result.error == "首次登录必须先修改学校统一认证密码"
+    assert result.error_status == 428
+    assert result.error_code == "password_change_required"

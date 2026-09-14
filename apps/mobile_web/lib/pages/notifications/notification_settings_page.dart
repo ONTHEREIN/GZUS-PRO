@@ -2,11 +2,14 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../api_client.dart';
 import '../../live_activity_service.dart';
 import '../../models/background_notification_status.dart';
+import '../../push_service.dart';
+import '../../responsive/breakpoints.dart';
 import '../../test_flags.dart';
 import '../../widgets/page_panel.dart';
 
@@ -40,12 +43,24 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
   bool _loading = true;
   bool _liveActivityEnabled = true;
   String? _savingKey;
+  bool? _iosNotificationReady;
 
   @override
   void initState() {
     super.initState();
     unawaited(_load());
     unawaited(_loadLiveActivityPreference());
+    unawaited(_loadIosNotificationStatus());
+  }
+
+  Future<void> _loadIosNotificationStatus() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.iOS) return;
+    try {
+      final ready = await PushService.checkIosPushReady();
+      if (mounted) setState(() => _iosNotificationReady = ready);
+    } on PlatformException {
+      if (mounted) setState(() => _iosNotificationReady = false);
+    }
   }
 
   Future<void> _loadLiveActivityPreference() async {
@@ -141,6 +156,9 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
 
   @override
   Widget build(BuildContext context) {
+    final bottomPadding = context.gzusBreakpoint == GzusBreakpoint.compact
+        ? MediaQuery.paddingOf(context).bottom + 104
+        : 24.0;
     return PagePanel(
       title: '通知设置',
       icon: Icons.notifications_active,
@@ -151,7 +169,8 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
               onRefresh: _load,
               child: ListView(
                 physics: const AlwaysScrollableScrollPhysics(),
-                padding: const EdgeInsets.fromLTRB(4, 4, 4, 24),
+                // 移动端底部导航栏悬浮在内容之上，额外避让导航栏和系统手势区。
+                padding: EdgeInsets.fromLTRB(4, 4, 4, bottomPadding),
                 children: [
                   if (_error != null)
                     _ErrorBanner(
@@ -161,6 +180,34 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
                     enabled: _background?.enabled == true,
                     lastCheckedAt: _background?.lastCheckedAt,
                     onTap: widget.onOpenBackgroundGuide,
+                  ),
+                  if (_iosNotificationReady != null) ...[
+                    const SizedBox(height: 8),
+                    ListTile(
+                      leading: Icon(
+                        _iosNotificationReady!
+                            ? Icons.check_circle
+                            : Icons.warning,
+                      ),
+                      title: const Text('iPhone 普通通知通道'),
+                      subtitle: Text(_iosNotificationReady!
+                          ? '通知权限与 APNs 设备令牌正常'
+                          : '请在系统设置开启通知，并重新打开 App 注册 APNs'),
+                    ),
+                  ],
+                  const SizedBox(height: 14),
+                  _SettingsSection(
+                    title: '课程提醒',
+                    children: [
+                      _linkTile(
+                        title: '上下课提醒',
+                        subtitle: _background?.courseRemindersEnabled == true
+                            ? '已开启，可调整提前时间'
+                            : '在首次引导或课表中开启并设置提前时间',
+                        icon: Icons.schedule_outlined,
+                        onTap: widget.onOpenSchedule,
+                      ),
+                    ],
                   ),
                   const SizedBox(height: 14),
                   _SettingsSection(
@@ -190,7 +237,7 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
                       _preferenceTile(
                         keyName: 'attendance',
                         title: '考勤异常',
-                        subtitle: '迟到、早退、缺勤或请假变化',
+                        subtitle: _attendanceSubtitle(),
                         icon: Icons.fact_check_outlined,
                         value: _background?.attendanceEnabled ?? true,
                       ),
@@ -211,14 +258,6 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
                   _SettingsSection(
                     title: '课程与生活',
                     children: [
-                      _linkTile(
-                        title: '上下课提醒',
-                        subtitle: _background?.courseRemindersEnabled == true
-                            ? '已开启，可调整提前时间'
-                            : '在课表工具中开启并设置提前时间',
-                        icon: Icons.schedule_outlined,
-                        onTap: widget.onOpenSchedule,
-                      ),
                       if (_ecard != null)
                         SwitchListTile(
                           secondary: const Icon(Icons.water_drop_outlined),
@@ -252,6 +291,21 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
               ),
             ),
     );
+  }
+
+  String _attendanceSubtitle() {
+    final status = _background;
+    if (status == null || !status.enabled) {
+      return '开启后台持续通知后，检测迟到、早退、缺勤或请假变化';
+    }
+    if (status.attendanceLastError != null) {
+      return '最近检查失败：${status.attendanceLastError}';
+    }
+    if (status.attendanceLastCheckedAt == null) {
+      return '等待首次检查（首次检查只建立考勤基线）';
+    }
+    final checked = status.attendanceLastCheckedAt!;
+    return '最近检查 ${checked.hour.toString().padLeft(2, '0')}:${checked.minute.toString().padLeft(2, '0')} · 仅新增异常时提醒';
   }
 
   Widget _preferenceTile({

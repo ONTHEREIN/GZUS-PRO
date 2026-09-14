@@ -53,3 +53,21 @@ def test_cron_success_persists_monitoring_status(monkeypatch: pytest.MonkeyPatch
         assert row.last_succeeded_at is not None
         assert row.last_error is None
         assert row.last_duration_ms is not None
+
+
+def test_ecard_cron_requires_explicit_valid_reminder_time(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ECARD_OPENID", "")
+    client = _client(monkeypatch, "internal-test-key")
+    headers = {"X-Internal-Key": "internal-test-key"}
+
+    assert client.get("/internal/cron/ecard-reminder", headers=headers).status_code == 422
+    assert client.get(
+        "/internal/cron/ecard-reminder?reminder_time=08:60",
+        headers=headers,
+    ).status_code == 422
+    response = client.get(
+        "/internal/cron/ecard-reminder?reminder_time=08:00",
+        headers=headers,
+    )
+    assert response.status_code == 200
+    assert response.json()["reason"] == "ecard not configured"

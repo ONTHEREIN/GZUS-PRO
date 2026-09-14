@@ -10,7 +10,12 @@ from app.database import EcardBinding, get_sync_session_factory
 from app.ecard_client import EcardApiError, EcardClient, EcardConfigurationError, EcardRoomRef, safe_float
 from app.notice_utils import merge_notices, notice_key, valid_notice_items
 from app.sessions import student_id_of
-from app.cloud_notifications import deliver_notification, has_background_notification_profile
+from app.cloud_notifications import (
+    _delivery_recorded,
+    deliver_notification,
+    has_background_notification_profile,
+)
+from app.live_activity_data import grade_live_fields, utility_live_metrics
 
 __all__ = [
     "ExamReminderCache",
@@ -41,9 +46,14 @@ def _grade_key(item: dict) -> str:
 
 
 def _grade_signature(item: dict) -> str:
+    passed = item.get("gradePassed")
+    if passed is None:
+        passed = item.get("passed")
     return "|".join([
         str(item.get("score") or "").strip(),
         str(item.get("gradePoint") or item.get("grade_point") or "").strip(),
+        str(item.get("gradeStatus") or item.get("grade_status") or item.get("status") or "").strip(),
+        str(passed if passed is not None else "").strip(),
     ])
 
 
@@ -251,10 +261,6 @@ def _balance_progress(balance: float | None, threshold: float) -> int:
     return round(max(0, min(100, balance / threshold * 100)))
 
 
-#: 每个水电项每日最大提醒次数（jobs 轮询与 internal cron 共用）
-ECARD_DAILY_REMINDER_LIMIT = 2
-
-
 def prepare_ecard_reminders(
     binding,
     summary: dict,
@@ -285,9 +291,6 @@ def prepare_ecard_reminders(
 
     pending: list[tuple[str, str, str]] = []
     for item_key, title, body in messages:
-        count = reminded_times.get(item_key, 0)
-        if count >= ECARD_DAILY_REMINDER_LIMIT:
-            continue
         pending.append((item_key, title, body))
     binding.last_reminded_times = json.dumps(reminded_times)
     return pending, enabled_items
@@ -300,7 +303,7 @@ def mark_ecard_reminder_sent(binding, item_key: str, today_key: str) -> None:
         reminded_times = {}
         binding.last_reminded_date = today_key
     count = int(reminded_times.get(item_key, 0))
-    reminded_times[item_key] = min(ECARD_DAILY_REMINDER_LIMIT, count + 1)
+    reminded_times[item_key] = count + 1
     binding.last_reminded_times = json.dumps(reminded_times)
 
 
@@ -312,6 +315,14 @@ def ecard_reminder_event_key(
 ) -> str:
     """生成同一学生、日期、提醒时刻和水电项的持久化去重键。"""
     return f"ecard:{student_id}:{today_key}:{reminder_time}:{item_key}"
+
+
+def ecard_reminder_time_enabled(binding, reminder_time: str) -> bool:
+    try:
+        configured_times = json.loads(binding.reminder_times or "[]")
+    except (json.JSONDecodeError, TypeError):
+        return False
+    return reminder_time in configured_times
 
 
 def _next_reminder_at(now: datetime, reminder_times: list[str] | None = None) -> datetime:
@@ -346,7 +357,7 @@ def _next_reminder_at(now: datetime, reminder_times: list[str] | None = None) ->
     return min(candidates).astimezone(timezone.utc)
 
 
-async def run_ecard_reminder_once(app) -> None:
+async def run_ecard_reminder_once(app, reminder_time: str) -> None:
     try:
         client = EcardClient()
     except EcardConfigurationError:
@@ -354,10 +365,11 @@ async def run_ecard_reminder_once(app) -> None:
         return
 
     factory = get_sync_session_factory()
-    reminder_time = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%H:%M")
     with factory() as db:
         bindings = db.query(EcardBinding).filter(EcardBinding.reminder_enabled.is_(True)).all()
         for binding in bindings:
+            if not ecard_reminder_time_enabled(binding, reminder_time):
+                continue
             try:
                 room_ref = EcardRoomRef.from_id(binding.room_id)
                 summary = client.balance(room_ref, binding.student_id)
@@ -396,10 +408,24 @@ async def run_ecard_reminder_once(app) -> None:
                     "progress": progress_current / 100,
                     "endTime": int((datetime.now(timezone.utc) + timedelta(minutes=30)).timestamp() * 1000),
                 }
-                await _send_ecard_ws(app, binding.student_id, title, body, summary, live_payload)
+                utility_metrics, urgent_metric = utility_live_metrics(
+                    summary,
+                    binding.low_power_threshold,
+                    binding.low_cold_water_threshold,
+                    binding.low_hot_water_threshold,
+                )
+                live_payload["utilityMetrics"] = utility_metrics
+                if urgent_metric is not None:
+                    live_payload["utilityPrimaryLabel"] = urgent_metric["label"]
+                    live_payload["utilityPrimaryValue"] = urgent_metric["value"]
                 event_key = ecard_reminder_event_key(
                     binding.student_id, today_key, reminder_time, item_key
                 )
+                # 同一时刻/项目的持久化事件键同时约束 WebSocket 与推送，避免
+                # 常驻任务重入时活动页收到重复提醒。
+                if _delivery_recorded(binding.student_id, event_key):
+                    continue
+                await _send_ecard_ws(app, binding.student_id, title, body, summary, live_payload)
                 if _active_push_succeeded(
                     binding.student_id,
                     event_key,
@@ -454,7 +480,8 @@ async def run_ecard_reminder_poller(app) -> None:
         
         next_at = _next_reminder_at(now, list(all_times) if all_times else None)
         await asyncio.sleep(max(1, (next_at - now).total_seconds()))
-        await run_ecard_reminder_once(app)
+        reminder_time = next_at.astimezone(ZoneInfo("Asia/Shanghai")).strftime("%H:%M")
+        await run_ecard_reminder_once(app, reminder_time)
 
 
 def _exam_key(item: dict) -> str:
@@ -526,9 +553,12 @@ async def run_exam_reminder_once(app) -> None:
             course_name = str(exam.get("courseName") or "未知科目")
             time_str = str(exam.get("time") or "")
             location = str(exam.get("location") or "")
+            seat = str(exam.get("seat") or "")
             body_parts = [f"{course_name} {time_str}"]
             if location:
                 body_parts.append(f"地点：{location}")
+            if seat:
+                body_parts.append(f"座位：{seat}")
             body = "，".join(body_parts)
             end_time = _parse_exam_start_epoch_ms(time_str)
             if end_time is not None and end_time <= now_ms:
@@ -541,6 +571,8 @@ async def run_exam_reminder_once(app) -> None:
                 "title": "考试提醒",
                 "body": body,
                 "courseName": course_name,
+                "location": location or None,
+                "seat": seat or None,
                 "liveUpdate": live_activity,
                 "targetTab": "exams",
                 "style": "progress",
@@ -550,6 +582,7 @@ async def run_exam_reminder_once(app) -> None:
                 "progressCurrent": 0,
                 "progress": 0,
                 "startTime": now_ms,
+                "priority": 1 if live_activity else 3,
             }
             if end_time is not None:
                 message["endTime"] = end_time
@@ -558,6 +591,8 @@ async def run_exam_reminder_once(app) -> None:
                 "id": f"exam_reminder:{student_id}:{key}",
                 "type": "exam_reminder",
                 "courseName": course_name,
+                "location": location or None,
+                "seat": seat or None,
                 "liveUpdate": live_activity,
                 "targetTab": "exams",
                 "style": "progress",
@@ -567,6 +602,7 @@ async def run_exam_reminder_once(app) -> None:
                 "progressCurrent": 0,
                 "progress": 0,
                 "startTime": now_ms,
+                "priority": 1 if live_activity else 3,
             }
             if end_time is not None:
                 extras["endTime"] = end_time
@@ -630,9 +666,11 @@ async def run_grade_update_once(app) -> None:
         retry_snapshot = dict(current)
         for grade in changed[:3]:
             course_name = str(grade.get("courseName") or "课程")
-            score = str(grade.get("score") or "").strip()
+            live_grade = grade_live_fields(grade)
+            score = str(live_grade.get("score") or "").strip()
+            status = str(live_grade["gradeStatus"])
             title = "成绩更新"
-            body = f"{course_name}：{score}" if score else f"{course_name} 已发布成绩"
+            body = f"{course_name}：{score} · {status}" if score else f"{course_name}：{status}"
             payload = {
                 "id": f"grade_update:{student_id}:{_grade_key(grade)}:{_grade_signature(grade)}",
                 "type": "grade_update",
@@ -640,6 +678,7 @@ async def run_grade_update_once(app) -> None:
                 "title": title,
                 "body": body,
                 "grade": grade,
+                **live_grade,
                 "liveUpdate": True,
                 "targetTab": "grades",
                 "style": "progress",
@@ -648,6 +687,7 @@ async def run_grade_update_once(app) -> None:
                 "progressMax": 100,
                 "progressCurrent": 100,
                 "progress": 1,
+                "priority": 4,
             }
             await manager.send_to_session(session_id, payload)
             extras = {key: value for key, value in payload.items() if key not in {"title", "body"}}

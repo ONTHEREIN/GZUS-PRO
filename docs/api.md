@@ -66,6 +66,20 @@ Response:
 
 销毁应用会话和服务端学校系统 cookies。
 
+当学校统一认证返回 `ISMODIFYPASS` 时，账号密码登录接口返回 HTTP 428：
+
+```json
+{
+  "detail": {
+    "code": "password_change_required",
+    "message": "首次登录必须先修改学校统一认证密码",
+    "actionUrl": "https://cas.gzus.edu.cn/aqzx/#/password/passwordModify"
+  }
+}
+```
+
+客户端应打开 `actionUrl`，用户完成学校改密后重新登录。
+
 ## Academic
 
 - `GET /me`

@@ -159,6 +159,11 @@ def build_apns_payload(title: str, body: str, extras: dict | None) -> bytes:
     return encoded
 
 
+def _optional_text(value: object) -> str | None:
+    text = str(value).strip() if value not in (None, "") else ""
+    return text[:256] or None
+
+
 def build_live_activity_payload(
     action: Literal["start", "update", "end"],
     title: str,
@@ -180,6 +185,15 @@ def build_live_activity_payload(
         "endEpochMillis": end_epoch_millis,
         "progress": extras.get("progress"),
         "ongoing": bool(extras.get("ongoing", action != "end")),
+        "courseName": _optional_text(extras.get("courseName")),
+        "location": _optional_text(extras.get("location")),
+        "seat": _optional_text(extras.get("seat")),
+        "score": _optional_text(extras.get("score")),
+        "gradeStatus": _optional_text(extras.get("gradeStatus")),
+        "gradePassed": extras.get("gradePassed") if isinstance(extras.get("gradePassed"), bool) else None,
+        "utilityMetrics": extras.get("utilityMetrics", []),
+        "utilityPrimaryLabel": _optional_text(extras.get("utilityPrimaryLabel")),
+        "utilityPrimaryValue": _optional_text(extras.get("utilityPrimaryValue")),
     }
     aps: dict[str, object] = {
         "timestamp": int(time.time()),
@@ -194,6 +208,7 @@ def build_live_activity_payload(
             "activityType": activity_type,
             "targetTab": str(extras.get("targetTab") or "home"),
             "deepLink": str(extras.get("deepLink") or "cn.gzus.pro://activity"),
+            "priority": int(extras.get("priority") or 5),
         }
     if action == "end" and not bool(extras.get("dismissImmediately", False)):
         aps["dismissal-date"] = int(time.time()) + 30 * 60
@@ -345,6 +360,22 @@ def send_apns_to_student(student_id: str, title: str, body: str, extras: dict | 
             return 0
         delivered = 0
         for subscription in subscriptions:
+            if extras and extras.get("type") == "course_reminder":
+                event_key = str(extras.get("eventKey") or extras.get("id") or "")
+                local_valid_until = subscription.course_local_valid_until
+                if local_valid_until is not None and local_valid_until.tzinfo is None:
+                    local_valid_until = local_valid_until.replace(tzinfo=timezone.utc)
+                if local_valid_until is not None and local_valid_until > datetime.now(timezone.utc):
+                    try:
+                        local_keys = set(json.loads(subscription.course_local_event_keys_json or "[]"))
+                    except (TypeError, json.JSONDecodeError):
+                        local_keys = set()
+                    if event_key in local_keys:
+                        logger.info(
+                            "apns_course_reminder_covered_locally",
+                            extra={"student_id": student_id, "event_key": event_key},
+                        )
+                        continue
             try:
                 _send_with_retry(
                     credentials,
@@ -388,6 +419,57 @@ def send_live_activity_to_student(
         query["activity_id"] = activity_id
     factory = get_sync_session_factory()
     with factory() as db:
+        if action == "start":
+            incoming_priority = int(extras.get("priority") or 5)
+            active = db.query(IosLiveActivityToken).filter_by(
+                student_id=student_id,
+                token_type="activity",
+            ).all()
+            for current in active:
+                current_priority = _live_activity_type_priority(current.activity_type)
+                if incoming_priority > current_priority:
+                    logger.info(
+                        "live_activity_start_ignored_lower_priority",
+                        extra={
+                            "student_id": student_id,
+                            "activity_id": current.activity_id,
+                            "incoming_priority": incoming_priority,
+                            "current_priority": current_priority,
+                        },
+                    )
+                    return 0
+            for current in active:
+                if not current.activity_id:
+                    continue
+                end_extras = {
+                    "id": current.activity_id,
+                    "type": current.activity_type or "notification",
+                    "targetTab": "home",
+                    "dismissImmediately": True,
+                }
+                end_payload = build_live_activity_payload("end", "", "", end_extras)
+                try:
+                    _send_live_activity_with_retry(
+                        credentials,
+                        current.token,
+                        current.environment,
+                        end_payload,
+                    )
+                    db.delete(current)
+                    db.commit()
+                except ApnsUnregisteredError:
+                    db.delete(current)
+                    db.commit()
+                except (ApnsConfigurationError, ApnsDeliveryError) as exc:
+                    logger.error(
+                        "apns_live_activity_previous_end_failed",
+                        extra={
+                            "student_id": student_id,
+                            "activity_id": current.activity_id,
+                            "error": str(exc),
+                        },
+                    )
+                    return 0
         subscriptions = db.query(IosLiveActivityToken).filter_by(**query).all()
         delivered = 0
         for subscription in subscriptions:
@@ -417,3 +499,13 @@ def send_live_activity_to_student(
                     },
                 )
         return delivered
+
+
+def _live_activity_type_priority(activity_type: str | None) -> int:
+    if activity_type in {"course_reminder", "exam_reminder"}:
+        return 1
+    if activity_type == "business_reminder":
+        return 3
+    if activity_type in {"grade_update", "attendance_update", "business_update", "new_notice"}:
+        return 4
+    return 5

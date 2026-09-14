@@ -16,6 +16,7 @@ import 'package:gzus_pro_mobile_web/pages/login/login_page.dart';
 import 'package:gzus_pro_mobile_web/reminder_service.dart';
 import 'package:gzus_pro_mobile_web/schedule_utils.dart';
 import 'package:gzus_pro_mobile_web/widgets/async_panel.dart';
+import 'package:gzus_pro_mobile_web/widgets/liquid_glass.dart';
 import 'package:gzus_pro_mobile_web/ws_service.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -624,7 +625,8 @@ void main() {
     expect(detail.remark, '已登记');
   });
 
-  test('leave combined script defers handler selection until processing opens', () {
+  test('leave combined script defers handler selection until processing opens',
+      () {
     final response = LeaveFillResponse.fromJson({
       'status': 'filled',
       'message': 'ok',
@@ -786,6 +788,141 @@ void main() {
     final result = await api.dashboard(year: 2026, term: 1, week: 1);
 
     expect(result.data.needsRelogin, isFalse);
+    expect(dashboardCalls, 2);
+    expect(reloginCalls, 1);
+    expect(api.sessionId, 'renewed-session');
+  });
+
+  test('dashboard retries after API session expires', () async {
+    SharedPreferences.setMockInitialValues({
+      'auth.credentialToken': 'device-credential',
+      'auth.account': '2024000000',
+      'auth.rememberPassword': true,
+    });
+    var dashboardCalls = 0;
+    var reloginCalls = 0;
+    final dashboardSessionIds = <String?>[];
+    final api = ApiClient(
+      baseUrl: 'https://api.example.test',
+      httpClient: MockClient((request) async {
+        if (request.url.path == '/dashboard') {
+          dashboardCalls++;
+          dashboardSessionIds.add(request.headers['X-Session-Id']);
+          if (dashboardCalls == 1) {
+            return http.Response.bytes(
+              utf8.encode(jsonEncode({'detail': '会话已过期'})),
+              401,
+            );
+          }
+          return http.Response(
+            jsonEncode({
+              'status': 'ok',
+              'generatedAt': DateTime.now().toIso8601String(),
+              'modules': {
+                'schedule': {
+                  'status': 'ok',
+                  'data': <Object>[],
+                },
+              },
+            }),
+            200,
+          );
+        }
+        if (request.url.path == '/auth/relogin') {
+          reloginCalls++;
+          return http.Response(
+            jsonEncode({
+              'status': 'ok',
+              'sessionId': 'renewed-session',
+              'studentId': '2024000000',
+              'credentialToken': 'renewed-credential',
+            }),
+            200,
+          );
+        }
+        return http.Response('not found', 404);
+      }),
+    )..useSession('expired-session');
+
+    final result = await api.dashboard(year: 2026, term: 1, week: 1);
+
+    expect(result.data.status, 'ok');
+    expect(dashboardCalls, 2);
+    expect(reloginCalls, 1);
+    expect(dashboardSessionIds, ['expired-session', 'renewed-session']);
+    expect(api.sessionId, 'renewed-session');
+  });
+
+  test('dashboard background refresh retries after cached snapshot gets 401',
+      () async {
+    SharedPreferences.setMockInitialValues({
+      'pcache_expired-session_dashboard_2026_1_1_all': jsonEncode({
+        'status': 'ok',
+        'generatedAt': '2026-09-14T00:00:00Z',
+        'modules': {
+          'schedule': {
+            'status': 'ok',
+            'data': <Object>[],
+          },
+        },
+      }),
+      'pcache_expired-session_dashboard_2026_1_1_all_at':
+          DateTime(2026, 9, 13).toIso8601String(),
+      'auth.credentialToken': 'device-credential',
+      'auth.account': '2024000000',
+      'auth.rememberPassword': true,
+    });
+    final secondDashboardRequest = Completer<void>();
+    var dashboardCalls = 0;
+    var reloginCalls = 0;
+    final api = ApiClient(
+      baseUrl: 'https://api.example.test',
+      httpClient: MockClient((request) async {
+        if (request.url.path == '/dashboard') {
+          dashboardCalls++;
+          if (dashboardCalls == 1) {
+            return http.Response.bytes(
+              utf8.encode(jsonEncode({'detail': '会话已过期'})),
+              401,
+            );
+          }
+          if (!secondDashboardRequest.isCompleted) {
+            secondDashboardRequest.complete();
+          }
+          return http.Response(
+            jsonEncode({
+              'status': 'ok',
+              'generatedAt': DateTime.now().toIso8601String(),
+              'modules': {
+                'schedule': {
+                  'status': 'ok',
+                  'data': <Object>[],
+                },
+              },
+            }),
+            200,
+          );
+        }
+        if (request.url.path == '/auth/relogin') {
+          reloginCalls++;
+          return http.Response(
+            jsonEncode({
+              'status': 'ok',
+              'sessionId': 'renewed-session',
+              'studentId': '2024000000',
+              'credentialToken': 'renewed-credential',
+            }),
+            200,
+          );
+        }
+        return http.Response('not found', 404);
+      }),
+    )..useSession('expired-session');
+
+    final result = await api.dashboard(year: 2026, term: 1, week: 1);
+    await secondDashboardRequest.future;
+
+    expect(result.data.generatedAt, '2026-09-14T00:00:00Z');
     expect(dashboardCalls, 2);
     expect(reloginCalls, 1);
     expect(api.sessionId, 'renewed-session');
@@ -1015,6 +1152,44 @@ void main() {
     expect(prefs.getBool('auth.rememberPassword'), isTrue);
     expect(prefs.getString('auth.account'), '2024000000');
     expect(prefs.getString('auth.password'), isNull);
+  });
+
+  test('api preserves the school password-change action from login errors',
+      () async {
+    final api = ApiClient(
+      baseUrl: 'https://api.example.test',
+      httpClient: MockClient((request) async {
+        if (request.url.path == '/auth/public-key') {
+          return http.Response(jsonEncode({}), 200);
+        }
+        return http.Response.bytes(
+          utf8.encode(jsonEncode({
+            'detail': {
+              'code': 'password_change_required',
+              'message': '首次登录必须先修改学校统一认证密码',
+              'actionUrl':
+                  'https://cas.gzus.edu.cn/aqzx/#/password/passwordModify',
+            },
+          })),
+          428,
+        );
+      }),
+    );
+
+    ApiException? exception;
+    try {
+      await api.autoLogin('2024000000', 'default-password');
+    } on ApiException catch (error) {
+      exception = error;
+    }
+
+    expect(exception, isNotNull);
+    expect(exception!.statusCode, 428);
+    expect(exception.code, 'password_change_required');
+    expect(
+      exception.actionUrl,
+      'https://cas.gzus.edu.cn/aqzx/#/password/passwordModify',
+    );
   });
 
   test('api stores auto-login credential in secure storage', () async {
@@ -1316,6 +1491,20 @@ void main() {
 
     expect(find.textContaining('移动应用开发'), findsWidgets);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('mobile dock uses a high-contrast glass surface', (tester) async {
+    await _pumpDashboard(tester, const Size(390, 844));
+
+    final surface = find.ancestor(
+      of: find.byKey(const ValueKey('mobile-bottom-nav')),
+      matching: find.byType(LiquidGlassSurface),
+    );
+    expect(surface, findsOneWidget);
+    expect(
+      tester.widget<LiquidGlassSurface>(surface).material,
+      LiquidGlassMaterial.dock,
+    );
   });
 
   testWidgets('dashboard opens home by default', (tester) async {

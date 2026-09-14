@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from cryptography.hazmat.primitives import serialization
@@ -11,6 +12,28 @@ from app.database import WebPushSubscription, get_sync_session_factory
 from app.apns_service import send_apns_to_student, send_live_activity_to_student
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class PushDeliveryResult:
+    """记录普通通知和灵动岛的独立投递结果。"""
+
+    regular_delivered: int = 0
+    live_activity_delivered: int = 0
+
+    @property
+    def total_channels(self) -> int:
+        return self.regular_delivered + self.live_activity_delivered
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, int):
+            return self.total_channels == other
+        if not isinstance(other, PushDeliveryResult):
+            return NotImplemented
+        return (
+            self.regular_delivered == other.regular_delivered
+            and self.live_activity_delivered == other.live_activity_delivered
+        )
 
 
 def web_push_public_key() -> str | None:
@@ -109,11 +132,13 @@ def send_web_push_to_student(student_id: str, title: str, body: str, extras: dic
     return delivered
 
 
-def send_push_to_student(student_id: str, title: str, body: str, extras: dict | None = None) -> int:
+def send_push_to_student(
+    student_id: str, title: str, body: str, extras: dict | None = None
+) -> PushDeliveryResult:
     """向同一学生的 Web Push 与 iOS APNs 设备投递通知。"""
-    delivered = 0
+    regular_delivered = 0
     try:
-        delivered += send_web_push_to_student(student_id, title, body, extras)
+        regular_delivered += send_web_push_to_student(student_id, title, body, extras)
     except Exception:
         logger.exception("web_push_channel_unexpected", extra={"student_id": student_id})
     apns_delivered = 0
@@ -127,15 +152,22 @@ def send_push_to_student(student_id: str, title: str, body: str, extras: dict | 
     if extras and extras.get("liveUpdate") is True:
         live_event = extras.get("liveEvent") or "start"
         if live_event not in {"start", "update", "end"}:
-            raise ValueError(f"无效的 Live Activity 事件动作: {live_event}")
-        try:
-            live_delivered = send_live_activity_to_student(
-                student_id,
-                live_event,
-                title,
-                body,
-                extras,
+            logger.error(
+                "live_activity_event_invalid",
+                extra={"student_id": student_id, "live_event": str(live_event)},
             )
-        except Exception:
-            logger.exception("live_activity_channel_unexpected", extra={"student_id": student_id})
-    return delivered + apns_delivered + live_delivered
+        else:
+            try:
+                live_delivered = send_live_activity_to_student(
+                    student_id,
+                    live_event,
+                    title,
+                    body,
+                    extras,
+                )
+            except Exception:
+                logger.exception("live_activity_channel_unexpected", extra={"student_id": student_id})
+    return PushDeliveryResult(
+        regular_delivered=regular_delivered + apns_delivered,
+        live_activity_delivered=live_delivered,
+    )

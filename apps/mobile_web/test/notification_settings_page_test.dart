@@ -14,7 +14,10 @@ void main() {
     SharedPreferences.setMockInitialValues(<String, Object>{});
   });
 
-  testWidgets('通知设置页可在加载完成后正常展示滚动内容', (tester) async {
+  testWidgets('通知设置页前置课程提醒并避让底部导航区域', (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
     final api = ApiClient(
       baseUrl: 'https://api.example.test',
       httpClient: MockClient((request) async {
@@ -49,9 +52,13 @@ void main() {
     await tester.pump(const Duration(seconds: 1));
 
     expect(find.text('通知设置'), findsOneWidget);
+    expect(find.text('课程提醒'), findsOneWidget);
+    expect(find.text('上下课提醒'), findsOneWidget);
     expect(find.text('教务动态'), findsOneWidget);
     expect(find.text('课程与生活'), findsOneWidget);
     expect(find.byType(ListView), findsOneWidget);
+    final listView = tester.widget<ListView>(find.byType(ListView));
+    expect((listView.padding! as EdgeInsets).bottom, greaterThan(24));
     expect(tester.takeException(), isNull);
   });
 }

@@ -8,6 +8,7 @@ from app.config import get_settings
 from app.database import EcardBinding, EcardPowerConsumption, get_sync_session_factory
 from app.ecard_client import EcardClient, EcardConfigurationError, EcardRoomRef, calc_sign
 from app.jobs import (
+    ecard_reminder_time_enabled,
     ecard_reminder_message,
     mark_ecard_reminder_sent,
     prepare_ecard_reminders,
@@ -756,3 +757,23 @@ def test_ecard_reminder_count_changes_only_after_successful_delivery():
 
     mark_ecard_reminder_sent(binding, "power", "2026-09-03")
     assert json.loads(binding.last_reminded_times) == {"power": 1}
+
+
+def test_ecard_reminder_has_no_daily_cap_and_respects_each_time():
+    binding = EcardBinding(
+        student_id="20240001",
+        room_id="CGCOMMON1111|1|A2|932",
+        reminder_items='["power"]',
+        last_reminded_date="2026-09-03",
+        last_reminded_times='{"power": 3}',
+        reminder_times='["08:00", "20:00"]',
+        low_power_threshold=30,
+    )
+    pending, _ = prepare_ecard_reminders(
+        binding,
+        {"powerBalance": 20, "powerText": "20 度"},
+        "2026-09-03",
+    )
+    assert pending
+    assert ecard_reminder_time_enabled(binding, "08:00") is True
+    assert ecard_reminder_time_enabled(binding, "09:00") is False

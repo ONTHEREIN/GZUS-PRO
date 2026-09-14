@@ -125,6 +125,66 @@ private struct Provider: TimelineProvider {
     }
 }
 
+private struct NextClassEntry: TimelineEntry {
+    let date: Date
+    let state: WidgetNextClassState
+}
+
+private struct NextClassProvider: TimelineProvider {
+    func placeholder(in context: Context) -> NextClassEntry {
+        NextClassEntry(
+            date: Date(),
+            state: WidgetNextClassState(
+                title: "数据结构",
+                time: "10:10-11:50",
+                location: "教学楼 A301",
+                teacher: "张老师",
+                status: "upcoming",
+                start: Date().addingTimeInterval(1_800),
+                end: Date().addingTimeInterval(7_800)
+            )
+        )
+    }
+
+    func getSnapshot(in context: Context, completion: @escaping (NextClassEntry) -> Void) {
+        completion(currentEntry(at: Date()))
+    }
+
+    func getTimeline(in context: Context, completion: @escaping (Timeline<NextClassEntry>) -> Void) {
+        WidgetSnapshotStore.refreshIfNeeded {
+            let now = Date()
+            let calendar = Calendar.current
+            let courses = WidgetSnapshotStore.nextClassCourses()
+            var entries = [currentEntry(at: now, courses: courses, calendar: calendar)]
+            entries.append(contentsOf: WidgetNextClassTimeline
+                .transitionDates(after: now, courses: courses, calendar: calendar)
+                .map { date in
+                    NextClassEntry(
+                        date: date,
+                        state: WidgetNextClassTimeline.state(at: date, courses: courses, calendar: calendar)
+                    )
+                })
+            let nextDay = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now)) ?? now
+            completion(Timeline(entries: entries, policy: .after(nextDay)))
+        }
+    }
+
+    private func currentEntry(at now: Date) -> NextClassEntry {
+        currentEntry(at: now, courses: WidgetSnapshotStore.nextClassCourses(), calendar: Calendar.current)
+    }
+
+    private func currentEntry(
+        at now: Date,
+        courses: [WidgetCourseTimelineItem],
+        calendar: Calendar
+    ) -> NextClassEntry {
+        NextClassEntry(
+            date: now,
+            state: WidgetNextClassTimeline.state(at: now, courses: courses, calendar: calendar)
+        )
+    }
+}
+
 private func sample() -> Dashboard {
     Dashboard(
         nextTitle: "数据结构", nextTime: "10:10-11:50", nextLocation: "教学楼 A301", nextTeacher: "张老师", nextStatus: "upcoming", nextStart: Date().addingTimeInterval(1_800), nextEnd: Date().addingTimeInterval(7_800),
@@ -159,19 +219,17 @@ private func targetURL(_ tab: String, itemKey: String?, week: Int? = nil, weekda
     guard let url = components.url else { fatalError("无效 Widget 跳转：\(tab)") }
     return url
 }
-private func nextLocation(_ dashboard: Dashboard) -> String { dashboard.nextLocation.isEmpty ? "地点待定" : dashboard.nextLocation }
-private func nextTimeText(_ dashboard: Dashboard) -> String { dashboard.nextTime.isEmpty ? "时间待定" : dashboard.nextTime }
-private func nextHeading(_ dashboard: Dashboard, _ now: Date) -> String {
-    guard dashboard.nextStatus != "none", let start = dashboard.nextStart else { return "暂无课程" }
-    if let end = dashboard.nextEnd, now >= end { return "课程已结束" }
-    return now >= start ? "进行中" : "下一节课"
-}
-private func nextText(_ dashboard: Dashboard, _ now: Date) -> String {
-    guard dashboard.nextStatus != "none", let start = dashboard.nextStart else {
-        return dashboard.nextTitle == "今明无课" ? "今明无课" : "打开软帮手查看课表"
+private func nextLocation(_ state: WidgetNextClassState) -> String { state.location.isEmpty ? "地点待定" : state.location }
+private func nextTimeText(_ state: WidgetNextClassState) -> String { state.time.isEmpty ? "时间待定" : state.time }
+private func nextHeading(_ state: WidgetNextClassState) -> String {
+    switch state.status {
+    case "ongoing": return "进行中"
+    case "upcoming": return "下一节课"
+    default: return "暂无课程"
     }
-    if let end = dashboard.nextEnd, now >= end { return "打开软帮手刷新课程" }
-    return now >= start ? "\(dashboard.nextTitle) · 进行中" : dashboard.nextTitle
+}
+private func nextText(_ state: WidgetNextClassState) -> String {
+    state.status == "ongoing" ? "\(state.title) · 进行中" : state.title
 }
 private func countdown(_ exam: Exam) -> String {
     if exam.days == 9999 { return "日期待定" }
@@ -207,33 +265,33 @@ private struct CourseLine: View {
 
 private struct NextClassHomeView: View {
     @Environment(\.widgetFamily) private var family
-    let entry: Entry
+    let entry: NextClassEntry
     var body: some View {
-        let dashboard = entry.dashboard
+        let state = entry.state
         if family == .systemSmall {
             VStack(alignment: .leading, spacing: 6) {
-                Header(title: nextHeading(dashboard, entry.date), icon: dashboard.nextStatus == "ongoing" ? "play.circle.fill" : "clock", badge: "")
-                Text(nextText(dashboard, entry.date)).font(.headline.weight(.semibold)).lineLimit(2).minimumScaleFactor(0.78)
+                Header(title: nextHeading(state), icon: state.status == "ongoing" ? "play.circle.fill" : "clock", badge: "")
+                Text(nextText(state)).font(.headline.weight(.semibold)).lineLimit(2).minimumScaleFactor(0.78)
                 Divider()
                 HStack(spacing: 5) {
                     Image(systemName: "clock").foregroundStyle(.secondary)
-                    Text(dashboard.nextTime.isEmpty ? "时间待定" : dashboard.nextTime).lineLimit(1).minimumScaleFactor(0.7)
+                    Text(state.time.isEmpty ? "时间待定" : state.time).lineLimit(1).minimumScaleFactor(0.7)
                 }.font(.caption)
                 HStack(alignment: .top, spacing: 5) {
                     Image(systemName: "mappin.and.ellipse").foregroundStyle(.secondary)
-                    Text(nextLocation(dashboard)).lineLimit(2).minimumScaleFactor(0.7)
+                    Text(nextLocation(state)).lineLimit(2).minimumScaleFactor(0.7)
                 }.font(.caption).foregroundStyle(.secondary)
                 HStack(spacing: 5) {
                     Image(systemName: "person").foregroundStyle(.secondary)
-                    Text(dashboard.nextTeacher.isEmpty ? "教师待定" : dashboard.nextTeacher).lineLimit(1).minimumScaleFactor(0.7)
+                    Text(state.teacher.isEmpty ? "教师待定" : state.teacher).lineLimit(1).minimumScaleFactor(0.7)
                 }.font(.caption).foregroundStyle(.secondary)
             }.padding().widgetURL(targetURL("schedule"))
         } else {
             VStack(alignment: .leading, spacing: 8) {
-                Header(title: nextHeading(dashboard, entry.date), icon: dashboard.nextStatus == "ongoing" ? "play.circle.fill" : "clock", badge: dashboard.nextTime.isEmpty ? "待定" : dashboard.nextTime)
-                Text(nextText(dashboard, entry.date)).font(.title3.weight(.semibold)).lineLimit(1)
-                Text(nextLocation(dashboard)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                Text(dashboard.nextTeacher.isEmpty ? "教师待定" : dashboard.nextTeacher).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Header(title: nextHeading(state), icon: state.status == "ongoing" ? "play.circle.fill" : "clock", badge: state.time.isEmpty ? "待定" : state.time)
+                Text(nextText(state)).font(.title3.weight(.semibold)).lineLimit(1)
+                Text(nextLocation(state)).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Text(state.teacher.isEmpty ? "教师待定" : state.teacher).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }.padding().widgetURL(targetURL("schedule"))
         }
     }
@@ -241,7 +299,7 @@ private struct NextClassHomeView: View {
 private struct NextClassHomeWidget: Widget {
     let kind = nextClassHomeScreenWidgetKind
     var body: some WidgetConfiguration {
-        StaticConfiguration(kind: kind, provider: Provider()) { NextClassHomeView(entry: $0) }
+        StaticConfiguration(kind: kind, provider: NextClassProvider()) { NextClassHomeView(entry: $0) }
             .configurationDisplayName("下一节课").description("查看下一节课程、时间、地点与教师。").supportedFamilies([.systemSmall, .systemMedium])
     }
 }
@@ -581,40 +639,40 @@ private struct WeeklyScheduleWidget: Widget {
 
 private struct NextClassLockScreenView: View {
     @Environment(\.widgetFamily) private var family
-    let entry: Entry
+    let entry: NextClassEntry
     var body: some View {
-        let dashboard = entry.dashboard
+        let state = entry.state
         switch family {
         case .accessoryInline:
-            Text("\(nextTimeText(dashboard)) · \(nextText(dashboard, entry.date)) · \(nextLocation(dashboard))")
+            Text("\(nextTimeText(state)) · \(nextText(state)) · \(nextLocation(state))")
         case .accessoryCircular:
             VStack(spacing: 1) {
-                Text(nextTimeText(dashboard).prefix(5))
+                Text(nextTimeText(state).prefix(5))
                     .font(.system(size: 11, weight: .bold, design: .rounded))
                     .lineLimit(1)
-                Text(nextText(dashboard, entry.date))
+                Text(nextText(state))
                     .font(.system(size: 9, weight: .semibold))
                     .lineLimit(1)
                     .minimumScaleFactor(0.65)
             }
         case .accessoryRectangular:
             VStack(alignment: .leading, spacing: 2) {
-                Text(nextHeading(dashboard, entry.date)).font(.caption2)
+                Text(nextHeading(state)).font(.caption2)
                 VStack(alignment: .leading, spacing: 0) {
-                    Text(nextTimeText(dashboard)).font(.caption2)
-                    Text(nextText(dashboard, entry.date)).font(.headline).lineLimit(1)
+                    Text(nextTimeText(state)).font(.caption2)
+                    Text(nextText(state)).font(.headline).lineLimit(1)
                 }
-                Text(nextLocation(dashboard)).font(.caption).lineLimit(1)
+                Text(nextLocation(state)).font(.caption).lineLimit(1)
             }
         default:
-            Text("\(nextText(dashboard, entry.date)) · \(nextLocation(dashboard))")
+            Text("\(nextText(state)) · \(nextLocation(state))")
         }
     }
 }
 private struct NextClassLockScreenWidget: Widget {
     let kind = nextClassLockScreenWidgetKind
     var body: some WidgetConfiguration {
-        StaticConfiguration(kind: kind, provider: Provider()) { NextClassLockScreenView(entry: $0) }
+        StaticConfiguration(kind: kind, provider: NextClassProvider()) { NextClassLockScreenView(entry: $0) }
             .configurationDisplayName("下一节课").description("在锁屏上查看下一节课程、时间与地点。").supportedFamilies([.accessoryInline, .accessoryCircular, .accessoryRectangular])
     }
 }
@@ -630,30 +688,14 @@ private struct GzusLiveActivityWidget: Widget {
         } dynamicIsland: { context in
             DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    if context.attributes.activityType == "ecard_reminder" ||
-                        !hasLiveActivityCountdown(
-                            context.state,
-                            activityType: context.attributes.activityType
-                        ) {
-                        Image(systemName: liveActivityIcon(context.attributes.activityType))
-                            .font(.caption.weight(.bold))
-                            .foregroundStyle(liveActivityColor(context.attributes.activityType))
-                    } else {
-                        HStack(spacing: 5) {
-                            Image(systemName: liveActivityIcon(context.attributes.activityType))
-                            Text(context.state.shortText)
-                                .lineLimit(1)
-                        }
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(liveActivityColor(context.attributes.activityType))
-                    }
+                    GzusLiveActivityIconLane(type: context.attributes.activityType)
                 }
                 DynamicIslandExpandedRegion(.trailing) {
                     if hasLiveActivityCountdown(
                         context.state,
                         activityType: context.attributes.activityType
                     ) {
-                        GzusLiveActivityTimer(state: context.state)
+                        GzusLiveActivityTimer(state: context.state, fontSize: 22)
                     }
                 }
                 DynamicIslandExpandedRegion(.center) {
@@ -663,30 +705,18 @@ private struct GzusLiveActivityWidget: Widget {
                         .minimumScaleFactor(0.7)
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    VStack(alignment: .leading, spacing: 7) {
-                        if context.attributes.activityType == "ecard_reminder" {
-                            GzusUtilityMetrics(text: context.state.body)
-                        } else {
-                            Text(context.state.body)
-                                .font(.caption)
-                                .lineLimit(2)
-                            if let progress = context.state.progress,
-                               shouldShowLiveActivityProgress(progress) {
-                                SwiftUI.ProgressView(value: progress, total: 1)
-                                    .tint(liveActivityColor(context.attributes.activityType))
-                                    .frame(height: 5)
-                            }
-                        }
-                    }
+                    GzusLiveActivityDetails(
+                        type: context.attributes.activityType,
+                        state: context.state,
+                        expanded: true
+                    )
                 }
             } compactLeading: {
-                Image(systemName: liveActivityIcon(context.attributes.activityType))
-                    .foregroundStyle(liveActivityColor(context.attributes.activityType))
+                GzusLiveActivityIconLane(type: context.attributes.activityType)
             } compactTrailing: {
                 GzusLiveActivityCompactTrailing(context: context)
             } minimal: {
-                Image(systemName: liveActivityIcon(context.attributes.activityType))
-                    .foregroundStyle(liveActivityColor(context.attributes.activityType))
+                GzusLiveActivityMinimal(context: context)
             }
             .widgetURL(URL(string: context.attributes.deepLink))
         }
@@ -700,44 +730,39 @@ private struct GzusLiveActivityLockScreenView: View {
     let context: ActivityViewContext<GzusLiveActivityAttributes>
 
     var body: some View {
-        HStack(spacing: 12) {
-            ZStack {
-                Circle()
-                    .fill(liveActivityColor(context.attributes.activityType).opacity(0.16))
-                Image(systemName: liveActivityIcon(context.attributes.activityType))
-                    .font(.title3.weight(.bold))
-                    .foregroundStyle(liveActivityColor(context.attributes.activityType))
-            }
-            .frame(width: 40, height: 40)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(context.state.title)
-                    .font(.headline.weight(.bold))
-                    .lineLimit(1)
-                if context.attributes.activityType == "ecard_reminder" {
-                    GzusUtilityMetrics(text: context.state.body)
-                } else {
-                    Text(context.state.body)
-                        .font(.subheadline)
-                        .lineLimit(2)
-                    if let progress = context.state.progress,
-                       shouldShowLiveActivityProgress(progress) {
-                        SwiftUI.ProgressView(value: progress, total: 1)
-                            .tint(liveActivityColor(context.attributes.activityType))
-                            .frame(height: 5)
-                    }
-                }
-            }
+        HStack(alignment: .top, spacing: 12) {
+            GzusLiveActivityIconLane(type: context.attributes.activityType, large: true)
+            GzusLiveActivityDetails(
+                type: context.attributes.activityType,
+                state: context.state,
+                expanded: true
+            )
             if hasLiveActivityCountdown(
                 context.state,
                 activityType: context.attributes.activityType
             ) {
                 Spacer(minLength: 8)
-                GzusLiveActivityTimer(state: context.state)
+                GzusLiveActivityTimer(state: context.state, fontSize: 26)
+                    .frame(minWidth: 78, alignment: .trailing)
             }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .foregroundStyle(.white)
+        .clipShape(ContainerRelativeShape())
+    }
+}
+
+@available(iOS 16.1, *)
+private struct GzusLiveActivityIconLane: View {
+    let type: String
+    var large = false
+
+    var body: some View {
+        Image(systemName: liveActivityIcon(type))
+            .font(.system(size: large ? 21 : 15, weight: .semibold))
+            .foregroundStyle(liveActivityColor(type))
+            .frame(width: 24, alignment: .leading)
     }
 }
 
@@ -752,35 +777,139 @@ private struct GzusLiveActivityCompactTrailing: View {
         ) {
             GzusLiveActivityTimer(state: context.state)
         } else {
-            Text(context.state.shortText)
+            Text(liveActivityCompactValue(type: context.attributes.activityType, state: context.state))
                 .font(.caption2.weight(.bold).monospacedDigit())
                 .foregroundStyle(liveActivityColor(context.attributes.activityType))
                 .lineLimit(1)
                 .truncationMode(.tail)
-                .frame(maxWidth: 56, alignment: .trailing)
+                .frame(maxWidth: 64, alignment: .trailing)
+        }
+    }
+}
+
+@available(iOS 16.1, *)
+private struct GzusLiveActivityMinimal: View {
+    let context: ActivityViewContext<GzusLiveActivityAttributes>
+
+    var body: some View {
+        if hasLiveActivityCountdown(context.state, activityType: context.attributes.activityType) {
+            GzusLiveActivityTimer(state: context.state, fontSize: 13)
+        } else {
+            Text(liveActivityMinimalValue(type: context.attributes.activityType, state: context.state))
+                .font(.caption2.weight(.bold).monospacedDigit())
+                .foregroundStyle(liveActivityColor(context.attributes.activityType))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+        }
+    }
+}
+
+@available(iOS 16.1, *)
+private struct GzusLiveActivityDetails: View {
+    let type: String
+    let state: GzusLiveActivityAttributes.ContentState
+    let expanded: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: expanded ? 7 : 4) {
+            switch type {
+            case "ecard_reminder":
+                GzusUtilityMetrics(metrics: state.utilityMetrics, compact: !expanded)
+            case "grade_update":
+                GzusGradeDetails(state: state, expanded: expanded)
+            case "course_reminder", "exam_reminder":
+                GzusCourseExamDetails(type: type, state: state, expanded: expanded)
+            default:
+                Text(state.body)
+                    .font(expanded ? .subheadline : .caption)
+                    .lineLimit(expanded ? 2 : 1)
+            }
+            if type != "ecard_reminder",
+               type != "grade_update",
+               type != "course_reminder",
+               type != "exam_reminder",
+               let progress = state.progress,
+               shouldShowLiveActivityProgress(progress) {
+                SwiftUI.ProgressView(value: progress, total: 1)
+                    .tint(liveActivityColor(type))
+                    .frame(height: 5)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+@available(iOS 16.1, *)
+private struct GzusCourseExamDetails: View {
+    let type: String
+    let state: GzusLiveActivityAttributes.ContentState
+    let expanded: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: expanded ? 4 : 2) {
+            Text(state.courseName ?? state.title)
+                .font(expanded ? .headline.weight(.bold) : .caption.weight(.semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+            if let location = state.location, !location.isEmpty {
+                HStack(spacing: 4) {
+                    Text(location)
+                    if type == "exam_reminder", let seat = state.seat, !seat.isEmpty {
+                        Text("·")
+                        Text("座位 \(seat)")
+                    }
+                }
+                .font(expanded ? .subheadline : .caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+            }
+        }
+    }
+}
+
+@available(iOS 16.1, *)
+private struct GzusGradeDetails: View {
+    let state: GzusLiveActivityAttributes.ContentState
+    let expanded: Bool
+
+    var body: some View {
+        HStack(alignment: .lastTextBaseline, spacing: 8) {
+            Text(state.score ?? "")
+                .font(.system(size: expanded ? 34 : 17, weight: .bold, design: .rounded))
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.65)
+            let outcome = liveActivityGradeOutcome(state)
+            Text(outcome.label)
+                .font((expanded ? Font.subheadline : Font.caption).weight(.semibold))
+                .foregroundStyle(outcome.color)
+                .lineLimit(1)
         }
     }
 }
 
 @available(iOS 16.1, *)
 private struct GzusUtilityMetrics: View {
-    let text: String
-
-    private var values: [Substring] {
-        text.split(whereSeparator: { $0 == "·" || $0 == "|" }).prefix(3).map { $0 }
-    }
+    let metrics: [LiveActivityMetric]
+    let compact: Bool
 
     var body: some View {
-        HStack(spacing: 6) {
-            ForEach(Array(values.enumerated()), id: \.offset) { _, value in
-                Text(value.trimmingCharacters(in: .whitespacesAndNewlines))
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(Color.cyan)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 7)
-                    .background(Color.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 8))
+        HStack(alignment: .lastTextBaseline, spacing: compact ? 6 : 10) {
+            ForEach(Array(metrics.enumerated()), id: \.offset) { _, metric in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(metric.value)
+                        .font(.system(size: compact ? 13 : 21, weight: .bold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(metric.isAlert ? .orange : .white)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.65)
+                    Text(metric.label)
+                        .font(compact ? .caption2 : .caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }
@@ -789,17 +918,25 @@ private struct GzusUtilityMetrics: View {
 @available(iOS 16.1, *)
 private struct GzusLiveActivityTimer: View {
     let state: GzusLiveActivityAttributes.ContentState
+    let fontSize: CGFloat
+
+    init(state: GzusLiveActivityAttributes.ContentState, fontSize: CGFloat = 15) {
+        self.state = state
+        self.fontSize = fontSize
+    }
 
     var body: some View {
         if let start = activityDate(state.startEpochMillis),
            let end = activityDate(state.endEpochMillis),
            end > start {
             Text(timerInterval: start...end, countsDown: true)
-                .font(.caption.weight(.bold).monospacedDigit())
-                .minimumScaleFactor(0.7)
+                .font(.system(size: fontSize, weight: .bold, design: .rounded))
+                .monospacedDigit()
+                .minimumScaleFactor(0.6)
+                .lineLimit(1)
         } else {
             Text(state.shortText)
-                .font(.caption.weight(.bold))
+                .font(.system(size: fontSize, weight: .bold, design: .rounded))
                 .lineLimit(1)
         }
     }
@@ -828,6 +965,61 @@ private func hasLiveActivityCountdown(
 @available(iOS 16.1, *)
 private func shouldShowLiveActivityProgress(_ progress: Double) -> Bool {
     progress < 1
+}
+
+@available(iOS 16.1, *)
+private func liveActivityCompactValue(
+    type: String,
+    state: GzusLiveActivityAttributes.ContentState
+) -> String {
+    switch type {
+    case "grade_update":
+        return state.score ?? state.shortText
+    case "ecard_reminder":
+        return state.utilityPrimaryValue ?? state.utilityMetrics.first(where: { $0.isAlert })?.value ?? state.utilityMetrics.first?.value ?? state.shortText
+    default:
+        return state.shortText
+    }
+}
+
+@available(iOS 16.1, *)
+private func liveActivityMinimalValue(
+    type: String,
+    state: GzusLiveActivityAttributes.ContentState
+) -> String {
+    switch type {
+    case "grade_update":
+        let outcome = liveActivityGradeOutcome(state)
+        return state.score.map { "\($0) \(outcome.symbol)" } ?? outcome.label
+    case "ecard_reminder":
+        return state.utilityPrimaryValue ?? state.utilityMetrics.first(where: { $0.isAlert })?.value ?? state.shortText
+    default:
+        return state.shortText
+    }
+}
+
+@available(iOS 16.1, *)
+private func liveActivityGradeOutcome(
+    _ state: GzusLiveActivityAttributes.ContentState
+) -> (label: String, symbol: String, color: Color) {
+    if let status = state.gradeStatus, !status.isEmpty {
+        let passed = state.gradePassed ?? liveActivityStatusPassed(status)
+        return (status, passed == true ? "✓" : passed == false ? "!" : "·", passed == false ? .orange : .green)
+    }
+    if let score = state.score,
+       let value = Double(score.replacingOccurrences(of: "分", with: "").trimmingCharacters(in: .whitespacesAndNewlines)) {
+        let passed = value >= 60
+        return (passed ? "合格" : "不及格", passed ? "✓" : "!", passed ? .green : .orange)
+    }
+    return ("成绩已发布", "·", .yellow)
+}
+
+@available(iOS 16.1, *)
+private func liveActivityStatusPassed(_ status: String) -> Bool? {
+    let value = status.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    if ["不及格", "不通过", "未通过", "挂科", "fail", "failed", "unqualified"].contains(where: { value.contains($0) }) { return false }
+    if ["合格", "及格", "通过", "pass", "passed", "qualified"].contains(where: { value.contains($0) }) { return true }
+    return nil
 }
 
 @available(iOS 16.1, *)

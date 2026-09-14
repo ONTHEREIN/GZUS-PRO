@@ -50,6 +50,8 @@ def _status(row: BackgroundNotificationProfile | None) -> BackgroundNotification
             gradesEnabled=True,
             examsEnabled=True,
             attendanceEnabled=True,
+            attendanceLastCheckedAt=None,
+            attendanceLastError=None,
         )
     return BackgroundNotificationStatus(
         enabled=True,
@@ -61,6 +63,8 @@ def _status(row: BackgroundNotificationProfile | None) -> BackgroundNotification
         gradesEnabled=row.grades_enabled,
         examsEnabled=row.exams_enabled,
         attendanceEnabled=row.attendance_enabled,
+        attendanceLastCheckedAt=row.attendance_last_checked_at,
+        attendanceLastError=row.attendance_last_error,
     )
 
 

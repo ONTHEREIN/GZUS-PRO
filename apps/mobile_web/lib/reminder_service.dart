@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
+
 import 'api_client.dart';
 import 'live_activity_service.dart';
 import 'live_update_service.dart';
@@ -25,8 +27,10 @@ class CourseReminderSlot {
     required this.title,
     required this.body,
     required this.courseName,
+    required this.location,
     required this.countdownTarget,
     required this.shortCriticalText,
+    required this.eventKey,
   });
 
   final int id;
@@ -35,27 +39,44 @@ class CourseReminderSlot {
   final String title;
   final String body;
   final String courseName;
+  final String? location;
   final DateTime countdownTarget;
   final String shortCriticalText;
+  final String eventKey;
 }
 
 class ReminderService {
   static final List<Timer> _courseTimers = [];
   static final List<Timer> _cancelTimers = [];
   static String? _courseSignature;
+  static List<String> _localCourseEventKeys = const [];
+  static DateTime? _localCourseValidUntil;
+  static List<ScheduledLocalNotification> _localCourseNotifications = const [];
 
   static int get pendingCourseReminderCount => _courseTimers.length;
 
-  static void configureCourseReminders({
+  static List<String> get localCourseEventKeys => _localCourseEventKeys;
+
+  static DateTime? get localCourseValidUntil => _localCourseValidUntil;
+
+  static bool get hasLocalCoursePlan => _courseSignature != null;
+
+  static Future<void> configureCourseReminders({
     required List<ScheduleCourse> courses,
     required DateTime firstWeekStart,
     required CourseReminderSettings settings,
-  }) {
+  }) async {
     final signature = _signature(courses, firstWeekStart, settings);
     if (_courseSignature == signature) return;
-    cancelCourseReminders();
+    _cancelActiveTimers();
     _courseSignature = signature;
-    if (!settings.enabled) return;
+    if (!settings.enabled) {
+      _localCourseEventKeys = const [];
+      _localCourseValidUntil = null;
+      _localCourseNotifications = const [];
+      await LocalNotificationService.cancelCourseReminders();
+      return;
+    }
 
     final now = DateTime.now();
     final slots = buildCourseReminderSlots(
@@ -64,6 +85,33 @@ class ReminderService {
       settings: settings,
       now: now,
     );
+    _localCourseEventKeys = [for (final slot in slots) slot.eventKey];
+    _localCourseValidUntil = slots.isEmpty
+        ? null
+        : slots.last.remindAt.add(const Duration(minutes: 2));
+    _localCourseNotifications = [
+      for (final slot in slots)
+        ScheduledLocalNotification(
+          id: slot.id,
+          scheduledAt: slot.remindAt,
+          title: slot.title,
+          body: slot.body,
+          extras: {
+            'id': 'course:${slot.id}',
+            'type': 'course_reminder',
+            'targetTab': 'schedule',
+            'courseName': slot.courseName,
+            'location': slot.location,
+            'eventKey': slot.eventKey,
+          },
+        ),
+    ];
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
+      await LocalNotificationService.replaceCourseReminders(
+        _localCourseNotifications,
+      );
+      return;
+    }
     for (final slot in slots) {
       final delay = slot.remindAt.difference(now);
       _courseTimers.add(Timer(delay, () async {
@@ -79,10 +127,12 @@ class ReminderService {
           targetTab: 'schedule',
           ongoing: true,
           progress: _slotProgress(slot),
+          location: slot.location,
         );
         final extras = {
           'type': 'course_reminder',
           'courseName': slot.courseName,
+          'location': slot.location,
         };
         LiveActivityController.instance.show(event);
         final iosPosted = await LiveActivityService.startOrUpdate(event);
@@ -128,6 +178,31 @@ class ReminderService {
     }
     _cancelTimers.clear();
     _courseSignature = null;
+    _localCourseEventKeys = const [];
+    _localCourseValidUntil = null;
+    _localCourseNotifications = const [];
+    unawaited(LocalNotificationService.cancelCourseReminders());
+  }
+
+  static Future<void> refreshLocalCourseReminders() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.iOS) return;
+    // 进程重启后内存中的课程列表尚未恢复时，不要把系统已经保存的计划清空。
+    // 课表页重新加载课程后会通过 configureCourseReminders 重建计划。
+    if (!hasLocalCoursePlan) return;
+    await LocalNotificationService.replaceCourseReminders(
+      _localCourseNotifications,
+    );
+  }
+
+  static void _cancelActiveTimers() {
+    for (final timer in _courseTimers) {
+      timer.cancel();
+    }
+    _courseTimers.clear();
+    for (final timer in _cancelTimers) {
+      timer.cancel();
+    }
+    _cancelTimers.clear();
   }
 
   static List<CourseReminderSlot> buildCourseReminderSlots({
@@ -181,8 +256,10 @@ class ReminderService {
             body: _courseBody(course, classStart,
                 prefix: '${settings.beforeStartMinutes} 分钟后'),
             courseName: course.name,
+            location: course.classroom,
             countdownTarget: classStart,
             shortCriticalText: '${settings.beforeStartMinutes}min',
+            eventKey: _eventKey('start', course.name, startReminder),
           ));
         }
         if (endReminder.isAfter(now) && !endReminder.isAfter(endAt)) {
@@ -193,8 +270,10 @@ class ReminderService {
             body: _courseBody(course, classEnd,
                 prefix: '${settings.beforeEndMinutes} 分钟后下课'),
             courseName: course.name,
+            location: course.classroom,
             countdownTarget: classEnd,
             shortCriticalText: '${settings.beforeEndMinutes}min',
+            eventKey: _eventKey('end', course.name, endReminder),
           ));
         }
       }
@@ -236,6 +315,13 @@ class ReminderService {
     return Object.hash(course.name, course.weekday, course.startSection,
             course.endSection, remindAt.millisecondsSinceEpoch, kind)
         .abs();
+  }
+
+  static String _eventKey(String kind, String courseName, DateTime remindAt) {
+    final date = dateText(remindAt);
+    final hour = remindAt.hour.toString().padLeft(2, '0');
+    final minute = remindAt.minute.toString().padLeft(2, '0');
+    return 'course:$kind:$courseName:$date:$hour:$minute';
   }
 
   static DateTime _atTime(DateTime day, String hhmm) {

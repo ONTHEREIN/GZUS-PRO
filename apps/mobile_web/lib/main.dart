@@ -24,6 +24,7 @@ import 'background_service.dart' deferred as background_service;
 import 'update_service.dart' deferred as update_service;
 import 'web_pwa_cache.dart' deferred as web_pwa_cache;
 import 'push_service.dart' deferred as push_service;
+import 'reminder_service.dart' deferred as reminder_service;
 
 import 'models/nav_config.dart';
 import 'models/schedule_settings.dart';
@@ -273,6 +274,22 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
     try {
       await push_service.loadLibrary();
       push_service.PushService.resume();
+    } catch (_) {}
+    try {
+      await reminder_service.loadLibrary();
+      await reminder_service.ReminderService.refreshLocalCourseReminders();
+      if (!kIsWeb &&
+          defaultTargetPlatform == TargetPlatform.iOS &&
+          reminder_service.ReminderService.hasLocalCoursePlan) {
+        await push_service.loadLibrary();
+        await push_service.PushService.syncIosPushToken(api);
+        await push_service.PushService.syncIosCourseSchedule(
+          api: api,
+          eventKeys: reminder_service.ReminderService.localCourseEventKeys,
+          validUntil: reminder_service.ReminderService.localCourseValidUntil ??
+              DateTime.now(),
+        );
+      }
     } catch (_) {}
     try {
       await ws_service.loadLibrary();

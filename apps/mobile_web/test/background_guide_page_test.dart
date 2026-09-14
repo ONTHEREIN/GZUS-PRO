@@ -23,7 +23,7 @@ void main() {
         .setMockMethodCallHandler(permissionChannel, null);
   });
 
-  testWidgets('iOS 引导仅展示通知权限且授权后可完成', (tester) async {
+  testWidgets('iOS 引导以系统通知权限自动开启服务器推送', (tester) async {
     await tester.pumpWidget(
       MaterialApp(
         home: BackgroundGuidePage(
@@ -37,6 +37,8 @@ void main() {
     expect(find.text('自启动权限'), findsNothing);
     expect(find.text('电池优化'), findsNothing);
     expect(find.text('精确闹钟'), findsNothing);
+    expect(find.text('服务器推送通知'), findsOneWidget);
+    expect(find.text('后台持续通知'), findsNothing);
 
     final completeButton = tester.widget<FilledButton>(
       find.widgetWithText(FilledButton, '已完成配置'),

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../api_client.dart';
 import '../../gzus_design.dart';
@@ -40,6 +41,7 @@ class _LoginPageState extends State<LoginPage>
   bool agreedToTerms = false;
   bool passwordVisible = false;
   String? error;
+  String? passwordChangeUrl;
   String _appVersion = '';
   String _appBuild = '';
   int _carouselIndex = 0;
@@ -442,6 +444,18 @@ class _LoginPageState extends State<LoginPage>
                                                     color: Theme.of(context)
                                                         .colorScheme
                                                         .onErrorContainer)),
+                                            if (passwordChangeUrl != null) ...[
+                                              const SizedBox(
+                                                  height: GzusSpacing.s),
+                                              TextButton.icon(
+                                                onPressed: loading
+                                                    ? null
+                                                    : _openPasswordChangePage,
+                                                icon: const Icon(
+                                                    Icons.open_in_new),
+                                                label: const Text('去学校修改密码'),
+                                              ),
+                                            ],
                                           ],
                                         ),
                                       ),
@@ -900,10 +914,23 @@ class _LoginPageState extends State<LoginPage>
                   color: scheme.errorContainer,
                   borderRadius: BorderRadius.circular(GzusRadii.md),
                 ),
-                child: Text(
-                  error!,
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: scheme.onErrorContainer),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      error!,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: scheme.onErrorContainer),
+                    ),
+                    if (passwordChangeUrl != null) ...[
+                      const SizedBox(height: GzusSpacing.xs),
+                      TextButton.icon(
+                        onPressed: loading ? null : _openPasswordChangePage,
+                        icon: const Icon(Icons.open_in_new),
+                        label: const Text('去学校修改密码'),
+                      ),
+                    ],
+                  ],
                 ),
               ),
             ),
@@ -999,6 +1026,7 @@ class _LoginPageState extends State<LoginPage>
     setState(() {
       loading = true;
       error = null;
+      passwordChangeUrl = null;
     });
     try {
       final result = await widget.api.autoLogin(
@@ -1028,11 +1056,32 @@ class _LoginPageState extends State<LoginPage>
         ehallAuthToken: result.ehallAuthToken,
       ));
     } on ApiException catch (exc) {
-      setState(() => error = exc.message);
+      if (!mounted) return;
+      setState(() {
+        error = exc.message;
+        passwordChangeUrl =
+            exc.code == 'password_change_required' ? exc.actionUrl : null;
+      });
     } catch (exc) {
       setState(() => error = '无法连接服务器，请检查网络或确认服务已启动');
     } finally {
       setState(() => loading = false);
+    }
+  }
+
+  Future<void> _openPasswordChangePage() async {
+    final url = passwordChangeUrl;
+    if (url == null || url.isEmpty) {
+      throw StateError('学校改密链接为空');
+    }
+    final opened = await launchUrl(
+      Uri.parse(url),
+      mode: LaunchMode.externalApplication,
+    );
+    if (!opened && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('无法打开学校统一认证安全中心')),
+      );
     }
   }
 

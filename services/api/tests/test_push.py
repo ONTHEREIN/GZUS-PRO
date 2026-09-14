@@ -1,5 +1,6 @@
 import json
 import base64
+from datetime import datetime, timedelta, timezone
 
 import pytest
 import httpx
@@ -63,6 +64,8 @@ def test_push_sends_regular_apns_when_live_activity_succeeds(monkeypatch):
     )
 
     assert delivered == 2
+    assert delivered.regular_delivered == 1
+    assert delivered.live_activity_delivered == 1
     assert calls == ["apns", "live_activity"]
 
 
@@ -119,6 +122,35 @@ class TestPushRoutes:
         assert unregister_response.status_code == 200
         with factory() as db:
             assert db.query(IosPushToken).count() == 0
+
+    def test_ios_course_schedule_sync_records_local_coverage(self, client):
+        session_id = client.post("/push/test-session").json()["sessionId"]
+        token = "b" * 64
+        headers = {"X-Session-Id": session_id}
+        client.post(
+            "/push/ios/register",
+            json={"deviceToken": token, "environment": "production"},
+            headers=headers,
+        )
+
+        response = client.post(
+            "/push/ios/course-schedule",
+            json={
+                "deviceToken": token,
+                "environment": "production",
+                "eventKeys": ["course:start:高等数学:2026-09-15:08:50"],
+                "validUntil": "2026-09-29T00:00:00Z",
+            },
+            headers=headers,
+        )
+
+        assert response.status_code == 200
+        with get_sync_session_factory()() as db:
+            row = db.query(IosPushToken).one()
+            assert json.loads(row.course_local_event_keys_json) == [
+                "course:start:高等数学:2026-09-15:08:50"
+            ]
+            assert row.course_local_valid_until is not None
 
     def test_ios_token_registration_moves_device_to_new_student(self, client):
         first_session_id = client.post("/push/test-session").json()["sessionId"]
@@ -285,6 +317,49 @@ def test_apns_token_for_old_bundle_is_removed(monkeypatch):
 
     with factory() as db:
         assert db.query(IosPushToken).filter_by(environment="sandbox").count() == 0
+
+
+def test_apns_course_reminder_skips_events_covered_by_ios_local_schedule(monkeypatch):
+    factory = get_sync_session_factory()
+    with factory() as db:
+        db.add(
+            IosPushToken(
+                student_id="20260001",
+                device_token="d" * 64,
+                environment="production",
+                course_local_event_keys_json='["course:start:高等数学:2026-09-15:08:50"]',
+                course_local_valid_until=datetime.now(timezone.utc) + timedelta(hours=1),
+            )
+        )
+        db.commit()
+
+    calls: list[str] = []
+    monkeypatch.setattr(apns_service, "is_apns_enabled", lambda: True)
+    monkeypatch.setattr(apns_service, "_credentials", lambda _: object())
+    monkeypatch.setattr(apns_service, "_send_with_retry", lambda *_args: calls.append("sent"))
+
+    covered = apns_service.send_apns_to_student(
+        "20260001",
+        "即将上课",
+        "课程提醒",
+        {
+            "type": "course_reminder",
+            "eventKey": "course:start:高等数学:2026-09-15:08:50",
+        },
+    )
+    fallback = apns_service.send_apns_to_student(
+        "20260001",
+        "即将上课",
+        "课程提醒",
+        {
+            "type": "course_reminder",
+            "eventKey": "course:end:高等数学:2026-09-15:09:35",
+        },
+    )
+
+    assert covered == 0
+    assert fallback == 1
+    assert calls == ["sent"]
 
 
 def test_live_activity_payload_supports_start_update_and_end():

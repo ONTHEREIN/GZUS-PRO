@@ -136,8 +136,21 @@ def _should_return_jwxt_cookies(request: Request) -> bool:
     return (request.headers.get("x-client-platform") or "").lower() in {"android", "ios"}
 
 
-def _raise_cas_login_error(error: str, error_status: int | None) -> None:
+def _raise_cas_login_error(
+    error: str,
+    error_status: int | None,
+    error_code: str | None,
+) -> None:
     """将 CAS 可恢复故障与需要人工验证的失败映射为不同 HTTP 状态。"""
+    if error_code == "password_change_required":
+        raise HTTPException(
+            status_code=error_status or status.HTTP_428_PRECONDITION_REQUIRED,
+            detail={
+                "code": error_code,
+                "message": error,
+                "actionUrl": get_settings().cas_password_change_url,
+            },
+        )
     raise HTTPException(status_code=error_status or status.HTTP_503_SERVICE_UNAVAILABLE, detail=error)
 
 
@@ -330,7 +343,7 @@ def relogin(payload: ReloginRequest, request: Request) -> dict:
     )
     result = cas_auto_login.auto_login(account, password)
     if result.error:
-        _raise_cas_login_error(result.error, result.error_status)
+        _raise_cas_login_error(result.error, result.error_status, result.error_code)
 
     client = SchoolSdkClient(
         base_url=settings.jw_base_url,
@@ -403,7 +416,7 @@ def auto_login(payload: AutoLoginRequest, request: Request) -> dict:
     logger.info("[TIMING] cas_auto_login.auto_login: %.2fs", time.time() - t1)
 
     if result.error:
-        _raise_cas_login_error(result.error, result.error_status)
+        _raise_cas_login_error(result.error, result.error_status, result.error_code)
 
     client = SchoolSdkClient(
         base_url=settings.jw_base_url,

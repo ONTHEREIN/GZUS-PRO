@@ -402,7 +402,7 @@ class _FlutterMobileNavBar extends StatelessWidget {
       padding: const EdgeInsets.symmetric(
           horizontal: GzusSpacing.xs, vertical: GzusSpacing.s),
       borderRadius: BorderRadius.circular(26),
-      material: LiquidGlassMaterial.regular,
+      material: LiquidGlassMaterial.dock,
       semanticsLabel: '底部导航栏',
       child: Container(
         key: const ValueKey('mobile-bottom-nav'),

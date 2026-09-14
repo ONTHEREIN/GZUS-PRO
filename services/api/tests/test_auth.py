@@ -245,6 +245,38 @@ def test_auto_login_creates_reusable_credential_and_session(
     assert session.credential_fingerprint == credential_fingerprint(credential_id)
 
 
+def test_auto_login_exposes_password_change_action(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class PasswordChangeRequiredConnector:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        def auto_login(self, account: str, password: str) -> CasLoginResult:
+            return CasLoginResult(
+                account=account,
+                cookies="",
+                error="首次登录必须先修改学校统一认证密码",
+                error_status=428,
+                error_code="password_change_required",
+            )
+
+    monkeypatch.setattr("app.cas_auto_login.CasAutoLogin", PasswordChangeRequiredConnector)
+    client = TestClient(create_app())
+
+    response = client.post(
+        "/auth/auto-login",
+        json={"account": "20240005", "password": "default-password"},
+    )
+
+    assert response.status_code == 428
+    assert response.json()["detail"] == {
+        "code": "password_change_required",
+        "message": "首次登录必须先修改学校统一认证密码",
+        "actionUrl": "https://cas.gzus.edu.cn/aqzx/#/password/passwordModify",
+    }
+
+
 def test_relogin_upgrades_legacy_credential_and_rotates_session(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

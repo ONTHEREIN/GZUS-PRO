@@ -76,6 +76,8 @@ class IosPushToken(Base):
     student_id = Column(String(100), nullable=False, index=True)
     device_token = Column(String(512), nullable=False)
     environment = Column(String(20), nullable=False)
+    course_local_event_keys_json = Column(Text, nullable=True)
+    course_local_valid_until = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
 
@@ -221,6 +223,8 @@ class BackgroundNotificationProfile(Base):
     grades_enabled = Column(Boolean, default=True, nullable=False)
     exams_enabled = Column(Boolean, default=True, nullable=False)
     attendance_enabled = Column(Boolean, default=True, nullable=False)
+    attendance_last_checked_at = Column(DateTime, nullable=True)
+    attendance_last_error = Column(Text, nullable=True)
     last_checked_at = Column(DateTime, nullable=True)
     last_error = Column(Text, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
@@ -228,7 +232,7 @@ class BackgroundNotificationProfile(Base):
 
 
 class NotificationDelivery(Base):
-    """持久化成功投递的去重键；失败尝试不保留记录，由轮询快照触发重试。"""
+    """持久化通知去重键，并保留失败尝试供审计与后续重试。"""
 
     __tablename__ = "notification_deliveries"
     __table_args__ = (UniqueConstraint("student_id", "event_key", name="uq_notification_delivery"),)
@@ -526,6 +530,8 @@ def init_db():
         "grades_enabled": "BOOLEAN DEFAULT TRUE",
         "exams_enabled": "BOOLEAN DEFAULT TRUE",
         "attendance_enabled": "BOOLEAN DEFAULT TRUE",
+        "attendance_last_checked_at": "TIMESTAMP",
+        "attendance_last_error": "TEXT",
     })
     _ensure_columns(engine, "notification_deliveries", {
         "delivery_status": "TEXT DEFAULT 'delivered'",
@@ -533,6 +539,10 @@ def init_db():
         "last_failure_reason": "TEXT",
         "last_attempt_at": "TIMESTAMP",
         "succeeded_at": "TIMESTAMP",
+    })
+    _ensure_columns(engine, "ios_push_tokens", {
+        "course_local_event_keys_json": "TEXT",
+        "course_local_valid_until": "TIMESTAMP",
     })
 
     if _is_sqlite(engine):

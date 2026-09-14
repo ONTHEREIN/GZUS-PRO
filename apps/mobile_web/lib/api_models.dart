@@ -176,10 +176,12 @@ class RequestCache {
 }
 
 class ApiException implements Exception {
-  ApiException(this.message, {this.statusCode});
+  ApiException(this.message, {this.statusCode, this.code, this.actionUrl});
 
   final String message;
   final int? statusCode;
+  final String? code;
+  final String? actionUrl;
 
   @override
   String toString() => message;
@@ -540,13 +542,17 @@ class GradeItem {
         score = json['score'] as String?,
         credit = json['credit'] as String?,
         gradePoint = json['gradePoint'] as String?,
-        term = json['term'] as String?;
+        term = json['term'] as String?,
+        gradeStatus = json['gradeStatus'] as String?,
+        gradePassed = json['gradePassed'] as bool?;
 
   final String courseName;
   final String? score;
   final String? credit;
   final String? gradePoint;
   final String? term;
+  final String? gradeStatus;
+  final bool? gradePassed;
 }
 
 class WeatherData {

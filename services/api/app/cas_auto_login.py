@@ -101,6 +101,7 @@ class CasLoginResult:
     ehall_auth_token: str | None = None
     error: str | None = None
     error_status: int | None = None
+    error_code: str | None = None
     httpx_client: Any | None = None
 
 
@@ -470,7 +471,13 @@ class CasAutoLogin:
         if code == _CODE_NEED_2FA:
             return CasLoginResult(account=account, cookies="", error="需要二次验证，暂不支持", error_status=401)
         if code == _CODE_NEED_CHANGE_PASS:
-            return CasLoginResult(account=account, cookies="", error="需要修改密码，暂不支持", error_status=401)
+            return CasLoginResult(
+                account=account,
+                cookies="",
+                error="首次登录必须先修改学校统一认证密码",
+                error_status=428,
+                error_code="password_change_required",
+            )
         if code == _CODE_MULTI_ACCOUNT:
             return CasLoginResult(account=account, cookies="", error="多账号，暂不支持", error_status=401)
 

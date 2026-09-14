@@ -1962,6 +1962,20 @@ class ApiClient {
     );
   }
 
+  Future<void> syncIosCourseSchedule({
+    required String deviceToken,
+    required String environment,
+    required List<String> eventKeys,
+    required DateTime validUntil,
+  }) async {
+    await _post('/push/ios/course-schedule', {
+      'deviceToken': deviceToken,
+      'environment': environment,
+      'eventKeys': eventKeys,
+      'validUntil': validUntil.toUtc().toIso8601String(),
+    });
+  }
+
   Future<void> registerIosLiveActivityToken({
     required String tokenType,
     required String token,
@@ -2378,22 +2392,24 @@ class ApiClient {
   }
 
   Future<Map<String, dynamic>> _getDashboardObject(String path) async {
-    final url = _requireBaseUrl();
-    final response = await _http
-        .get(Uri.parse('$url$path'), headers: _headers())
-        .timeout(const Duration(seconds: 12));
-    if (response.statusCode >= 400) {
-      // 错误响应通常很小，直接走统一错误语义
-      return _decodeObject(response);
-    }
-    // dashboard 聚合响应较大（全学期课表/成绩/考试/考勤），
-    // JSON 解码放到后台 isolate，避免主 isolate 掉帧
-    final body = utf8.decode(response.bodyBytes);
-    final dynamic decoded = await compute(_decodeJsonString, body);
-    if (decoded is! Map<String, dynamic>) {
-      throw ApiException('服务器返回了意外的数据格式');
-    }
-    return decoded;
+    return _withReloginRetry(() async {
+      final url = _requireBaseUrl();
+      final response = await _http
+          .get(Uri.parse('$url$path'), headers: _headers())
+          .timeout(const Duration(seconds: 12));
+      if (response.statusCode >= 400) {
+        // 错误响应通常很小，直接走统一错误语义
+        return _decodeObject(response);
+      }
+      // dashboard 聚合响应较大（全学期课表/成绩/考试/考勤），
+      // JSON 解码放到后台 isolate，避免主 isolate 掉帧
+      final body = utf8.decode(response.bodyBytes);
+      final dynamic decoded = await compute(_decodeJsonString, body);
+      if (decoded is! Map<String, dynamic>) {
+        throw ApiException('服务器返回了意外的数据格式');
+      }
+      return decoded;
+    });
   }
 
   String _requireBaseUrl() {
@@ -2648,9 +2664,12 @@ class ApiClient {
     }
     if (response.statusCode >= 400) {
       final detail = decoded is Map<String, dynamic> ? decoded['detail'] : null;
+      final detailMap = detail is Map<String, dynamic> ? detail : null;
       throw ApiException(
-        detail?.toString() ?? '请求失败',
+        detailMap?['message']?.toString() ?? detail?.toString() ?? '请求失败',
         statusCode: response.statusCode,
+        code: detailMap?['code']?.toString(),
+        actionUrl: detailMap?['actionUrl']?.toString(),
       );
     }
     return decoded;
@@ -3111,6 +3130,9 @@ class SchoolDirectClient {
         'credit': _stringOrNull(item['xf']) ?? item['credit'],
         'gradePoint': _stringOrNull(item['jd']) ?? item['gradePoint'],
         'term': item['xqmc'] ?? item['xq'] ?? item['term'],
+        'gradeStatus':
+            item['gradeStatus'] ?? item['grade_status'] ?? item['status'],
+        'gradePassed': item['gradePassed'] ?? item['grade_passed'],
       };
 
   Map<String, dynamic> _normalizeScheduleCourse(Map<String, dynamic> item) {

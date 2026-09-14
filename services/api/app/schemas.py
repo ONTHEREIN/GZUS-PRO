@@ -217,6 +217,8 @@ class GradeItem(BaseModel):
     credit: str | None = None
     grade_point: str | None = Field(default=None, alias="gradePoint")
     term: str | None = None
+    grade_status: str | None = Field(default=None, alias="gradeStatus")
+    grade_passed: bool | None = Field(default=None, alias="gradePassed")
 
 
 class AttendanceRecord(BaseModel):
@@ -497,6 +499,15 @@ class IosPushTokenRequest(BaseModel):
     environment: Literal["sandbox", "production"]
 
 
+class IosCourseScheduleSyncRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    device_token: str = Field(alias="deviceToken", min_length=32, max_length=512, pattern=r"^[A-Fa-f0-9]+$")
+    environment: Literal["sandbox", "production"]
+    event_keys: list[str] = Field(alias="eventKeys", max_length=120)
+    valid_until: datetime = Field(alias="validUntil")
+
+
 class IosLiveActivityTokenRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -549,6 +560,8 @@ class BackgroundNotificationStatus(BaseModel):
     grades_enabled: bool = Field(alias="gradesEnabled")
     exams_enabled: bool = Field(alias="examsEnabled")
     attendance_enabled: bool = Field(alias="attendanceEnabled")
+    attendance_last_checked_at: datetime | None = Field(default=None, alias="attendanceLastCheckedAt")
+    attendance_last_error: str | None = Field(default=None, alias="attendanceLastError")
 
 
 class NotificationPreferencesUpdate(BaseModel):
