@@ -1,0 +1,137 @@
+group 'com.tencent.reshub_flutter'
+version '1.0-SNAPSHOT'
+
+buildscript {
+    ext.kotlin_version = '1.5.20'
+    ext.reshub_version = '1.8.22-RC04'
+    ext.rdelivery_version = '1.3.38-RC02'
+    ext.mmkv_version = '1.0.22'
+    repositories {
+        google()
+        mavenCentral()
+
+        maven { url "https://maven.cnb.cool/tencent-tds/shiply-public/-/packages/" }
+    }
+
+    dependencies {
+        classpath 'com.android.tools.build:gradle:4.1.0'
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+    }
+}
+
+rootProject.allprojects {
+    repositories {
+        google()
+        mavenCentral()
+
+        maven { url "https://maven.cnb.cool/tencent-tds/shiply-public/-/packages/" }
+    }
+}
+
+apply plugin: 'com.android.library'
+apply plugin: 'kotlin-android'
+
+def getFlutterVersion() {
+    def flutterRoot = project.properties['flutter.sdk'] ?: System.env.FLUTTER_ROOT
+    println "getFlutterVersion $flutterRoot"
+    if (!flutterRoot) {
+        // 从项目local.properties 中获取 flutter.sdk
+        def localProperties = new Properties()
+        def localPropertiesFile = rootProject.file('local.properties')
+        if (localPropertiesFile.exists()) {
+            localProperties.load(localPropertiesFile.newDataInputStream())
+        }
+        flutterRoot = localProperties.getProperty('flutter.sdk')
+        println "getFlutterVersion from local.properties, $flutterRoot"
+    }
+    if (!flutterRoot) {
+        throw new GradleException("Flutter SDK not found. Define flutter.sdk in local.properties")
+    }
+    
+    // ① 首先尝试读取传统的 version 文件
+    def versionFile = new File("$flutterRoot/version")
+    if (versionFile.exists()) {
+        return versionFile.text.trim()
+    }
+    
+    // ② 回退读取新版 flutter.version.json
+    def jsonFile = new File("$flutterRoot/bin/cache/flutter.version.json")
+    if (jsonFile.exists()) {
+        try {
+            def json = new groovy.json.JsonSlurper().parseText(jsonFile.text)
+            def ver = json.flutterVersion ?: json.frameworkVersion
+            if (ver) {
+                println "➤ Got Flutter version from 'flutter.version.json': $ver"
+                return ver
+            }
+        } catch (Exception e) {
+            println "➤ Failed to parse flutter.version.json: $e"
+        }
+    }
+    
+    return null
+}
+
+def resolveCompileSdkVersion() {
+    def flutterVersion = getFlutterVersion()
+    println "resolveCompileSdkVersion $flutterVersion"
+    if (flutterVersion) {
+        def (major, minor, patch) = flutterVersion.tokenize('.')
+        if (major.toInteger() > 3 || (major == '3' && minor.toInteger() >= 24)) {
+            println "➤ Flutter $flutterVersion >= 3.24.0, using compileSdkVersion 34"
+            return 34
+        }
+    }
+    println "➤ Flutter version < 3.24.0 or not detected, using compileSdkVersion 30"
+    return 30
+}
+
+android {
+    compileSdkVersion resolveCompileSdkVersion()
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    // 兼容 AGP 8.0+ 的命名空间声明
+    if (project.android.hasProperty("namespace")) {
+        // AGP 8.0+ 使用 namespace 属性
+        namespace "com.tencent.reshub_flutter"
+    }
+
+    kotlinOptions {
+        jvmTarget = '1.8'
+    }
+
+    sourceSets {
+        main.java.srcDirs += 'src/main/kotlin'
+    }
+    defaultConfig {
+        minSdkVersion 16
+    }
+}
+
+dependencies {
+    compileOnly "com.tencent:mmkv:$mmkv_version"
+    implementation "com.tencent.shiply:rdelivery:$rdelivery_version"
+    implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk7:$kotlin_version"
+
+    implementation "com.tencent.shiply:reshub-sdk:$reshub_version"					// ResHub核心SDK
+    implementation "com.tencent.shiply:reshub-net:$reshub_version"					// 可选，默认的简单网络下载实现
+    implementation "com.tencent.shiply:reshub-report:$reshub_version"					// 可选，默认的灯塔上报
+    implementation "com.tencent.shiply:reshub-patch-sdk:$reshub_version"		        // 可选，差量更新SDK
+
+}
+
+//subprojects {
+//    afterEvaluate { project ->
+//        if (project.plugins.hasPlugin("com.android.application") ||
+//                project.plugins.hasPlugin("com.android.library")) {
+//            project.android {
+//                compileSdkVersion 34
+//                buildToolsVersion "34.0.0"
+//            }
+//        }
+//    }
+//}

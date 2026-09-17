@@ -38,6 +38,8 @@ def build_leave_preview(
     year: int,
     term: int,
     first_week_start: date | None = None,
+    effective_occurrences: list[dict] | None = None,
+    selected_course_keys: list[str] | None = None,
 ) -> dict:
     if end_date < start_date:
         raise ValueError("结束日期不能早于开始日期")
@@ -49,9 +51,27 @@ def build_leave_preview(
         week = ((current - semester_start).days // 7) + 1
         if 1 <= week <= 30:
             weekday = current.weekday() + 1
-            for course in courses:
-                if not _course_occurs_on(course, week, weekday):
-                    continue
+            if effective_occurrences:
+                day_courses = [
+                    item for item in effective_occurrences
+                    if str(item.get("date") or "") == current.isoformat()
+                ]
+            else:
+                day_courses = [
+                    course for course in courses
+                    if _course_occurs_on(course, week, weekday)
+                ]
+            for course in day_courses:
+                if selected_course_keys:
+                    key = str(
+                        course.get("occurrenceKey")
+                        or course.get("courseKey")
+                        or course.get("courseCode")
+                        or course.get("courseName")
+                        or ""
+                    )
+                    if key not in selected_course_keys:
+                        continue
                 normalized = _normalize_leave_course(course)
                 key = (
                     normalized["courseName"],

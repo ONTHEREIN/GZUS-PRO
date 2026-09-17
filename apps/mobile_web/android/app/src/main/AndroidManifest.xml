@@ -91,13 +91,6 @@
             </intent-filter>
         </receiver>
         <receiver
-            android:name=".KeepAliveReceiver"
-            android:exported="false">
-            <intent-filter>
-                <action android:name="cn.gzus.pro.action.KEEP_ALIVE"/>
-            </intent-filter>
-        </receiver>
-        <receiver
             android:name=".NextClassWidgetProvider"
             android:exported="true">
             <intent-filter>

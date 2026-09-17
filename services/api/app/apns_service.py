@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -25,6 +26,7 @@ _APNS_TOKEN_TTL_SECONDS: Final = 50 * 60
 _APNS_RETRY_COUNT: Final = 3
 _APNS_TIMEOUT_SECONDS: Final = 10.0
 _token_cache: tuple[str, int] | None = None
+_APNS_REJECTION_PATTERN: Final = re.compile(r"status=(\d+), reason=([^,\s]+)")
 
 
 class ApnsConfigurationError(RuntimeError):
@@ -341,6 +343,14 @@ def _send_live_activity_with_retry(
     raise last_error
 
 
+def _live_activity_failure_reason(error: Exception) -> str:
+    """提取不含令牌内容的 APNs 拒绝原因，供结构化日志使用。"""
+    match = _APNS_REJECTION_PATTERN.search(str(error))
+    if match:
+        return f"status={match.group(1)} reason={match.group(2)}"
+    return type(error).__name__
+
+
 def send_apns_to_student(student_id: str, title: str, body: str, extras: dict | None) -> int:
     settings = get_settings()
     if not is_apns_enabled():
@@ -408,9 +418,6 @@ def send_live_activity_to_student(
     extras: dict,
 ) -> int:
     settings = get_settings()
-    if not is_apns_enabled():
-        return 0
-    credentials = _credentials(settings)
     payload = build_live_activity_payload(action, title, body, extras)
     token_type = "start" if action == "start" else "activity"
     query = {"student_id": student_id, "token_type": token_type}
@@ -419,59 +426,40 @@ def send_live_activity_to_student(
         query["activity_id"] = activity_id
     factory = get_sync_session_factory()
     with factory() as db:
-        if action == "start":
-            incoming_priority = int(extras.get("priority") or 5)
-            active = db.query(IosLiveActivityToken).filter_by(
-                student_id=student_id,
-                token_type="activity",
-            ).all()
-            for current in active:
-                current_priority = _live_activity_type_priority(current.activity_type)
-                if incoming_priority > current_priority:
-                    logger.info(
-                        "live_activity_start_ignored_lower_priority",
-                        extra={
-                            "student_id": student_id,
-                            "activity_id": current.activity_id,
-                            "incoming_priority": incoming_priority,
-                            "current_priority": current_priority,
-                        },
-                    )
-                    return 0
-            for current in active:
-                if not current.activity_id:
-                    continue
-                end_extras = {
-                    "id": current.activity_id,
-                    "type": current.activity_type or "notification",
-                    "targetTab": "home",
-                    "dismissImmediately": True,
-                }
-                end_payload = build_live_activity_payload("end", "", "", end_extras)
-                try:
-                    _send_live_activity_with_retry(
-                        credentials,
-                        current.token,
-                        current.environment,
-                        end_payload,
-                    )
-                    db.delete(current)
-                    db.commit()
-                except ApnsUnregisteredError:
-                    db.delete(current)
-                    db.commit()
-                except (ApnsConfigurationError, ApnsDeliveryError) as exc:
-                    logger.error(
-                        "apns_live_activity_previous_end_failed",
-                        extra={
-                            "student_id": student_id,
-                            "activity_id": current.activity_id,
-                            "error": str(exc),
-                        },
-                    )
-                    return 0
+        now = datetime.now(timezone.utc)
+        expired_query = db.query(IosLiveActivityToken).filter(
+            IosLiveActivityToken.student_id == student_id,
+            IosLiveActivityToken.token_type == "activity",
+            IosLiveActivityToken.expires_at.is_not(None),
+            IosLiveActivityToken.expires_at <= now,
+        )
+        expired_count = expired_query.count()
+        if expired_count:
+            expired_query.delete(synchronize_session=False)
+            db.commit()
+        if not is_apns_enabled():
+            logger.info(
+                "live_activity_delivery",
+                extra={
+                    "action": action,
+                    "token_type": token_type,
+                    "candidate_count": 0,
+                    "expired_count": expired_count,
+                    "delivered": 0,
+                    "removed": 0,
+                    "failures": 0,
+                    "rejection_reasons": {},
+                    "failure_reason": "apns_disabled",
+                },
+            )
+            return 0
+        credentials = _credentials(settings)
         subscriptions = db.query(IosLiveActivityToken).filter_by(**query).all()
+        candidate_count = len(subscriptions)
         delivered = 0
+        removed = 0
+        failures = 0
+        rejection_reasons: dict[str, int] = {}
         for subscription in subscriptions:
             try:
                 _send_live_activity_with_retry(
@@ -481,31 +469,41 @@ def send_live_activity_to_student(
                     payload,
                 )
                 delivered += 1
-            except ApnsUnregisteredError:
+            except ApnsUnregisteredError as exc:
                 db.delete(subscription)
                 db.commit()
-                logger.info(
-                    "apns_live_activity_token_removed",
-                    extra={"student_id": student_id, "token_type": token_type},
-                )
+                removed += 1
+                reason = _live_activity_failure_reason(exc)
+                rejection_reasons[reason] = rejection_reasons.get(reason, 0) + 1
             except (ApnsConfigurationError, ApnsDeliveryError) as exc:
+                failures += 1
+                reason = _live_activity_failure_reason(exc)
+                rejection_reasons[reason] = rejection_reasons.get(reason, 0) + 1
                 logger.error(
                     "apns_live_activity_failed",
                     extra={
-                        "student_id": student_id,
-                        "activity_id": activity_id,
+                        "action": action,
+                        "token_type": token_type,
                         "environment": subscription.environment,
-                        "error": str(exc),
+                        "reason": reason,
                     },
                 )
+        if action == "end":
+            removed += db.query(IosLiveActivityToken).filter_by(**query).delete(
+                synchronize_session=False
+            )
+            db.commit()
+        logger.info(
+            "live_activity_delivery",
+            extra={
+                "action": action,
+                "token_type": token_type,
+                "candidate_count": candidate_count,
+                "expired_count": expired_count,
+                "delivered": delivered,
+                "removed": removed,
+                "failures": failures,
+                "rejection_reasons": rejection_reasons,
+            },
+        )
         return delivered
-
-
-def _live_activity_type_priority(activity_type: str | None) -> int:
-    if activity_type in {"course_reminder", "exam_reminder"}:
-        return 1
-    if activity_type == "business_reminder":
-        return 3
-    if activity_type in {"grade_update", "attendance_update", "business_update", "new_notice"}:
-        return 4
-    return 5

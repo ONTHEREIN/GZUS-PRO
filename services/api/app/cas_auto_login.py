@@ -80,6 +80,33 @@ _CODE_NEED_2FA = "ISPHONEOREMAILORANSWER"  # need 2FA
 _CODE_NEED_CHANGE_PASS = "ISMODIFYPASS"  # need to change password
 _CODE_NETWORK_COMMIT = "NETWORKCOMMITMENT"  # network commitment needed
 _CODE_MULTI_ACCOUNT = "PEOPLEMOREACCOUNT"  # multiple accounts
+_SCHOOL_SESSION_LIMIT_CODES = frozenset({
+    "DEVICE_LIMIT",
+    "DEVICELIMIT",
+    "MAXDEVICE",
+    "DEVICECOUNTLIMIT",
+    "DEVICECOUNT",
+    "LOGINLIMIT",
+    "SESSIONLIMIT",
+    "SESSIONCOUNTLIMIT",
+    "SESSION_COUNT_LIMIT",
+    "TOO_MANY_DEVICES",
+    "TOO_MANY_SESSIONS",
+    "EXCEED_DEVICE_LIMIT",
+    "EXCEEDLIMIT",
+})
+_ORDINARY_LOGIN_ERROR_CODES = frozenset({
+    _CODE_FALSE,
+    _CODE_CAPTCHA_FALSE,
+    _CODE_PASS_ERROR,
+    _CODE_NO_USER,
+    _CODE_USER_DISABLED,
+    _CODE_USER_LOCK,
+    _CODE_NEED_2FA,
+    _CODE_NEED_CHANGE_PASS,
+    _CODE_NETWORK_COMMIT,
+    _CODE_MULTI_ACCOUNT,
+})
 
 # Common OCR misrecognition corrections for arithmetic captchas
 # Only applied when the raw OCR text fails to parse as a valid expression
@@ -103,6 +130,25 @@ class CasLoginResult:
     error_status: int | None = None
     error_code: str | None = None
     httpx_client: Any | None = None
+
+
+def is_school_session_limit_error(error: str | None, error_code: str | None) -> bool:
+    """仅识别明确的校方设备/会话数上限，避免误暂停普通登录故障。"""
+    code = (error_code or "").strip().upper().replace("-", "_")
+    if code in _ORDINARY_LOGIN_ERROR_CODES:
+        return False
+    if code in _SCHOOL_SESSION_LIMIT_CODES or (
+        ("DEVICE" in code or "SESSION" in code)
+        and any(marker in code for marker in ("LIMIT", "COUNT", "MAX", "EXCEED", "TOO_MANY"))
+    ):
+        return True
+    text = (error or "").lower()
+    has_subject = any(token in text for token in ("设备", "device", "会话", "session", "登录数"))
+    has_limit = any(
+        token in text
+        for token in ("上限", "超出", "达到", "已满", "限制", "limit", "maximum", "too many", "exceeded")
+    )
+    return has_subject and has_limit
 
 
 def _rsa_encrypt(plaintext: str) -> str:
@@ -434,11 +480,20 @@ class CasAutoLogin:
                             ticket = st_response.text.strip()
                             return self._finalize_login(client, account, ticket, tgt)
 
+        sanitized_body = _sanitize_response_body(response.text)
         logger.warning(
             "Login request returned status %d: %s",
             response.status_code,
-            _sanitize_response_body(response.text),
+            sanitized_body,
         )
+        if is_school_session_limit_error(sanitized_body, None):
+            return CasLoginResult(
+                account=account,
+                cookies="",
+                error="校方设备或会话数达到上限",
+                error_status=503,
+                error_code="DEVICE_LIMIT",
+            )
         return CasLoginResult(
             account=account,
             cookies="",
@@ -481,8 +536,14 @@ class CasAutoLogin:
         if code == _CODE_MULTI_ACCOUNT:
             return CasLoginResult(account=account, cookies="", error="多账号，暂不支持", error_status=401)
 
-        logger.warning("Unknown CAS error code: %s (data=%s)", code, data_obj)
-        return CasLoginResult(account=account, cookies="", error=f"登录失败 (code={code})", error_status=503)
+        logger.warning("Unknown CAS error code: %s", code)
+        return CasLoginResult(
+            account=account,
+            cookies="",
+            error=f"登录失败 (code={code})",
+            error_status=503,
+            error_code=str(code) if code else None,
+        )
 
     # ------------------------------------------------------------------
     # Step 4: Finalize login – follow service URL with ticket

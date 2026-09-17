@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -84,8 +83,6 @@ class _EhallWebViewPageState extends State<_EhallWebViewPage> {
   LeaveSubmissionStage leaveStage = LeaveSubmissionStage.waitingForForm;
   int _lastApprovalCycle = -1;
   bool sessionExpired = false;
-  String? _pendingUserLoginToken;
-  Uri? _pendingTargetUrl;
 
   @override
   void initState() {
@@ -118,7 +115,6 @@ class _EhallWebViewPageState extends State<_EhallWebViewPage> {
           onPageFinished: (url) {
             if (!mounted) return;
             setState(() => loading = false);
-            unawaited(_handlePageFinished(url));
             unawaited(_detectLeaveLoginPage(url));
             _injectFillScript();
           },
@@ -469,28 +465,12 @@ class _EhallWebViewPageState extends State<_EhallWebViewPage> {
         widget.fillScript == null &&
         authToken != null &&
         authToken.isNotEmpty) {
-      // 先在 ehall 同源页面写入前端登录态，避免业务页首次加载即跳转登录。
-      _pendingUserLoginToken = authToken;
-      _pendingTargetUrl = uri;
-      await _loadUrl(Uri.parse('https://ehall.gzus.edu.cn/'));
-      _schedulePrimeFallback();
+      // 办事大厅首屏同步检查该参数，等首页完成后再写 Storage 已来不及，
+      // 会被它的脚本先重定向至 CAS。
+      await _loadUrl(withEhallAuthorization(uri, authToken));
       return;
     }
     await _loadUrl(uri);
-  }
-
-  Future<void> _handlePageFinished(String urlString) async {
-    final token = _pendingUserLoginToken;
-    if (token == null) return;
-    final uri = Uri.tryParse(urlString);
-    if (uri == null || !isEhallHost(uri.host)) return;
-    _pendingUserLoginToken = null;
-    final target = _pendingTargetUrl;
-    _pendingTargetUrl = null;
-    await _writeUserLoginToken(token);
-    if (target != null) {
-      await _loadUrl(target);
-    }
   }
 
   Future<void> _detectLeaveLoginPage(String urlString) async {
@@ -517,19 +497,6 @@ Boolean(document.querySelector('input[type="password"], input[name*="password" i
     });
   }
 
-  /// 若 ehall 首页长时间未完成（例如被重定向到统一认证），仍继续打开目标页。
-  void _schedulePrimeFallback() {
-    unawaited(Future<void>.delayed(const Duration(seconds: 8), () async {
-      if (!mounted || _pendingUserLoginToken == null) return;
-      final target = _pendingTargetUrl;
-      _pendingUserLoginToken = null;
-      _pendingTargetUrl = null;
-      if (target != null) {
-        await _loadUrl(target);
-      }
-    }));
-  }
-
   Future<void> _loadUrl(Uri uri) async {
     final authToken = widget.api.ehallAuthToken;
     final headers = <String, String>{
@@ -541,20 +508,6 @@ Boolean(document.querySelector('input[type="password"], input[name*="password" i
     } catch (_) {
       // 加载失败统一由 onWebResourceError 提示，页内可随时跳转外部浏览器。
     }
-  }
-
-  Future<void> _writeUserLoginToken(String authToken) async {
-    try {
-      await controller.runJavaScript('''
-(() => {
-  try {
-    const payload = JSON.stringify({ tokenId: ${jsonEncode(authToken)} });
-    sessionStorage.setItem('userLogin', payload);
-    localStorage.setItem('userLogin', payload);
-  } catch (e) {}
-})()
-''');
-    } catch (_) {}
   }
 
   Future<void> _injectSchoolCookies(ApiClient api, Uri targetUri) async {

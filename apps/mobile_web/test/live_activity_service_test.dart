@@ -1,6 +1,12 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:gzus_pro_mobile_web/api_client.dart';
 import 'package:gzus_pro_mobile_web/live_activity_service.dart';
 
 void main() {
@@ -233,5 +239,67 @@ void main() {
     });
 
     expect(course.priority, lessThan(grade.priority));
+  });
+
+  test('multiple native activities start without preempting each other', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    SharedPreferences.setMockInitialValues({
+      'live_activities_enabled': true,
+    });
+    const channel = MethodChannel('cn.gzus.pro/live_activities');
+    final nativeCalls = <String>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      nativeCalls.add(call.method);
+      switch (call.method) {
+        case 'configure':
+          return true;
+        case 'getCapabilities':
+          return <String, Object?>{
+            'available': true,
+            'enabled': true,
+            'installationId': 'test-installation',
+          };
+        case 'start':
+          return <String, Object?>{
+            'activityId': (call.arguments as Map)['activityId'],
+          };
+        case 'end':
+          return true;
+        default:
+          return null;
+      }
+    });
+    addTearDown(() async {
+      await LiveActivityService.stop();
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null);
+      debugDefaultTargetPlatformOverride = null;
+    });
+
+    final api = ApiClient(
+      baseUrl: 'https://api.example.test',
+      httpClient: MockClient((_) async => http.Response('{}', 200)),
+    )..sessionId = 'test-session';
+    await LiveActivityService.initialize(api: api);
+    final course = LiveActivityEvent.courseReminder(
+      id: 1,
+      title: '课程提醒',
+      body: '高等数学',
+      courseName: '高等数学',
+      countdownTarget: DateTime.now().add(const Duration(minutes: 20)),
+      shortText: '课程',
+    );
+    final utility = LiveActivityEvent(
+      id: 'ecard:1',
+      type: 'ecard_reminder',
+      title: '水电提醒',
+      body: '电费偏低',
+    );
+
+    expect(await LiveActivityService.startOrUpdate(course), isTrue);
+    expect(await LiveActivityService.startOrUpdate(utility), isTrue);
+    expect(nativeCalls.where((method) => method == 'start'), hasLength(2));
+    expect(nativeCalls.where((method) => method == 'end'), isEmpty);
   });
 }

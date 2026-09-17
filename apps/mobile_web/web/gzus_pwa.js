@@ -119,14 +119,22 @@ window.gzusWebPushUnsubscribe = async function(apiBaseUrl, sessionId, callback) 
   try {
     const swReg = await navigator.serviceWorker.ready;
     const subscription = await swReg.pushManager.getSubscription();
+    const endpoint = subscription?.endpoint || '';
     if (subscription) {
       await subscription.unsubscribe();
     }
     window.localStorage.removeItem('gzus_web_push_vapid_key');
-    await fetch(apiUrl(apiBaseUrl, '/push/web/unregister'), {
-      method: 'POST',
-      headers: requestHeaders(sessionId),
-    });
+    // 只注销当前浏览器的订阅，不能影响同一账号的其它设备。
+    if (endpoint) {
+      const response = await fetch(apiUrl(apiBaseUrl, '/push/web/unregister'), {
+        method: 'POST',
+        headers: requestHeaders(sessionId),
+        body: JSON.stringify({ endpoint: endpoint }),
+      });
+      if (!response.ok) {
+        throw new Error(`Web push unregister failed: ${response.status}`);
+      }
+    }
     callback(true);
   } catch (e) {
     console.error('Unsubscribe failed:', e);

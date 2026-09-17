@@ -44,12 +44,16 @@ class EcardBinding(Base):
     reminder_items = Column(Text, default='["power","cold_water","hot_water"]', nullable=False)
     low_cold_water_threshold = Column(Float, default=5.0, nullable=False)
     low_hot_water_threshold = Column(Float, default=10.0, nullable=False)
-    last_reminded_times = Column(Text, default='{}', nullable=True)
+    last_reminded_times = Column(Text, default="{}", nullable=True)
     # 热水余额缓存（独立于 last_summary_json，用于超时 fallback）
     hot_water_balance_cache = Column(Float, nullable=True)
     hot_water_cache_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    updated_at = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
 
 
 class WebPushSubscription(Base):
@@ -63,13 +67,19 @@ class WebPushSubscription(Base):
     expiration_time = Column(DateTime, nullable=True)
     user_agent = Column(String(500), nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    updated_at = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
 
 
 class IosPushToken(Base):
     __tablename__ = "ios_push_tokens"
     __table_args__ = (
-        UniqueConstraint("device_token", "environment", name="uq_ios_push_tokens_token_environment"),
+        UniqueConstraint(
+            "device_token", "environment", name="uq_ios_push_tokens_token_environment"
+        ),
     )
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -79,7 +89,12 @@ class IosPushToken(Base):
     course_local_event_keys_json = Column(Text, nullable=True)
     course_local_valid_until = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
-    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
 
 
 class IosLiveActivityToken(Base):
@@ -95,8 +110,15 @@ class IosLiveActivityToken(Base):
     environment = Column(String(20), nullable=False)
     activity_id = Column(String(200), nullable=True, index=True)
     activity_type = Column(String(80), nullable=True)
+    device_id = Column(String(128), nullable=True, index=True)
+    expires_at = Column(DateTime, nullable=True, index=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
-    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
 
 
 class DataCache(Base):
@@ -136,7 +158,11 @@ class StaffMember(Base):
     wf_or_unid = Column(String(100), nullable=True)
     wf_last_modified = Column(String(100), nullable=True)
     sort_number = Column(Integer, nullable=True)
-    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    updated_at = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
 
 
 class AppSessionModel(Base):
@@ -154,7 +180,9 @@ class AppSessionModel(Base):
     student_account = Column(String(100), nullable=True)
     # 管理后台标记：登录时查 admin_users 表写入，require_admin 依赖据此鉴权。
     is_admin = Column(Boolean, default=False, nullable=False)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
+    created_at = Column(
+        DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True
+    )
     last_active_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
     # 兼容早期推送会话表：已改用 web_push_subscriptions，但旧库仍保留非空平台列。
     push_registration_id = Column(String(500), nullable=True)
@@ -164,6 +192,8 @@ class AppSessionModel(Base):
     ehall_auth_token = Column(Text, nullable=True)
     # 长期自动登录凭据中的设备标识哈希；不保存可解密凭据或明文密码。
     credential_fingerprint = Column(String(64), nullable=True, index=True)
+    # 账号级学校会话版本；版本变化后前台逻辑会话会重建客户端。
+    school_session_version = Column(Integer, nullable=True)
     # 仅保留旧数据库结构兼容；SessionStore 会清空该列且不再写入登录凭据。
     encrypted_credentials = Column(Text, nullable=True)
     revoked_at = Column(DateTime, nullable=True, index=True)
@@ -178,6 +208,37 @@ class CredentialRevocation(Base):
     credential_fingerprint = Column(String(64), primary_key=True)
     revoked_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
     reason = Column(String(100), nullable=False)
+
+
+class SchoolAccountSession(Base):
+    """按学号共享的学校会话。
+
+    cookie/token 字段保存 Fernet 密文，业务代码只能通过 school_session_service
+    解密后重建短生命周期客户端，避免每台设备各自触发 CAS 登录。
+    """
+
+    __tablename__ = "school_account_sessions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    student_id = Column(String(100), nullable=False, unique=True, index=True)
+    student_name = Column(String(100), nullable=True)
+    jwxt_cookies = Column(Text, nullable=True)
+    ehall_cookies = Column(Text, nullable=True)
+    ehall_auth_token = Column(Text, nullable=True)
+    version = Column(Integer, nullable=False, default=1)
+    last_used_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    expires_at = Column(DateTime, nullable=True, index=True)
+    suspended_at = Column(DateTime, nullable=True)
+    suspension_reason = Column(String(200), nullable=True)
+    next_retry_at = Column(DateTime, nullable=True)
+    limit_notified_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(
+        DateTime,
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
 
 
 class UserSettings(Base):
@@ -195,8 +256,47 @@ class UserSettings(Base):
     first_weeks_json = Column(Text, nullable=True)
     auto_week = Column(Boolean, default=True, nullable=False)
     onboarding_completed = Column(Boolean, default=False, nullable=False)
+    # 课表字段显示偏好，按账号同步；旧库为空时由客户端使用默认值。
+    schedule_display_json = Column(Text, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    updated_at = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
+class ScheduleAdjustment(Base):
+    """按日期保存的整日调课记录。
+
+    occurrence keys 与课程快照由客户端生成，服务端只负责鉴权、幂等及乐观并发，
+    这样不同客户端无需重新解析教务系统的课程文本即可重放同一调整。
+    """
+
+    __tablename__ = "schedule_adjustments"
+    __table_args__ = (
+        UniqueConstraint("student_id", "client_id", name="uq_schedule_adjustment_client"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    student_id = Column(String(100), nullable=False, index=True)
+    client_id = Column(String(100), nullable=False)
+    year = Column(Integer, nullable=False, index=True)
+    term = Column(Integer, nullable=False, index=True)
+    source_date = Column(String(10), nullable=False)
+    target_date = Column(String(10), nullable=False)
+    source_occurrence_keys_json = Column(Text, nullable=False, default="[]")
+    target_conflict_keys_json = Column(Text, nullable=False, default="[]")
+    conflict_mode = Column(String(30), nullable=False, default="coexist")
+    status = Column(String(20), nullable=False, default="active", index=True)
+    revision = Column(Integer, nullable=False, default=1)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
 
 
 class BackgroundNotificationProfile(Base):
@@ -213,6 +313,7 @@ class BackgroundNotificationProfile(Base):
     before_end_minutes = Column(Integer, default=5, nullable=False)
     first_week_start = Column(String(10), nullable=True)
     courses_json = Column(Text, nullable=True)
+    effective_occurrences_json = Column(Text, nullable=True)
     notice_keys_json = Column(Text, nullable=True)
     grade_snapshot_json = Column(Text, nullable=True)
     exam_keys_json = Column(Text, nullable=True)
@@ -227,12 +328,22 @@ class BackgroundNotificationProfile(Base):
     attendance_last_error = Column(Text, nullable=True)
     last_checked_at = Column(DateTime, nullable=True)
     last_error = Column(Text, nullable=True)
+    # 校方设备/会话数达到上限时暂停后台登录，按小时自动恢复。
+    suspended_at = Column(DateTime, nullable=True, index=True)
+    suspension_reason = Column(String(200), nullable=True)
+    next_retry_at = Column(DateTime, nullable=True, index=True)
+    limit_notified_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
-    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
 
 
 class NotificationDelivery(Base):
-    """持久化通知去重键，并保留失败尝试供审计与后续重试。"""
+    """持久化通知事件、传输状态，并保留失败尝试供审计与后续重试。"""
 
     __tablename__ = "notification_deliveries"
     __table_args__ = (UniqueConstraint("student_id", "event_key", name="uq_notification_delivery"),)
@@ -241,12 +352,39 @@ class NotificationDelivery(Base):
     student_id = Column(String(100), nullable=False, index=True)
     event_key = Column(String(300), nullable=False)
     notification_type = Column(String(50), nullable=False)
+    title = Column(String(200), nullable=True)
+    body = Column(Text, nullable=True)
+    extras_json = Column(Text, nullable=True)
+    expires_at = Column(DateTime, nullable=True, index=True)
+    presented_at = Column(DateTime, nullable=True)
+    read_at = Column(DateTime, nullable=True)
     delivery_status = Column(String(20), default="pending", nullable=False)
     retry_count = Column(Integer, default=0, nullable=False)
     last_failure_reason = Column(Text, nullable=True)
     last_attempt_at = Column(DateTime, nullable=True)
     succeeded_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
+    created_at = Column(
+        DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True
+    )
+
+
+class NotificationPresentation(Base):
+    """按安装实例记录系统通知是否已经展示，避免后台重启后重复弹出。"""
+
+    __tablename__ = "notification_presentations"
+    __table_args__ = (
+        UniqueConstraint(
+            "notification_id",
+            "installation_id",
+            name="uq_notification_presentation_installation",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    notification_id = Column(Integer, nullable=False, index=True)
+    student_id = Column(String(100), nullable=False, index=True)
+    installation_id = Column(String(128), nullable=False)
+    presented_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
 
 
 class AdminUser(Base):
@@ -260,7 +398,11 @@ class AdminUser(Base):
     student_id = Column(String(100), primary_key=True)
     role = Column(String(20), default="admin", nullable=False)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    updated_at = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
 
 
 class AdminAuditLog(Base):
@@ -275,6 +417,26 @@ class AdminAuditLog(Base):
     target_id = Column(String(100), nullable=True)
     detail = Column(Text, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+
+
+class FeedbackTicket(Base):
+    """用户反馈工单及其诊断日志、附件。"""
+
+    __tablename__ = "feedback_tickets"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    student_id = Column(String(100), nullable=False, index=True)
+    student_name = Column(String(100), nullable=True)
+    category = Column(String(20), nullable=False, index=True)
+    title = Column(String(200), nullable=False)
+    description = Column(Text, nullable=False)
+    contact = Column(String(200), nullable=True)
+    client_logs = Column(Text, nullable=False)
+    attachments_json = Column(Text, nullable=False, default="[]")
+    status = Column(String(20), nullable=False, default="open", index=True)
+    created_at = Column(
+        DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True
+    )
 
 
 class WxArticle(Base):
@@ -296,7 +458,11 @@ class WxArticle(Base):
     source = Column(String(20), default="album", nullable=False)
     hidden = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    updated_at = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
 
 
 class WechatSyncState(Base):
@@ -308,7 +474,11 @@ class WechatSyncState(Base):
     key = Column(String(50), nullable=False, unique=True)
     last_synced_at = Column(DateTime, nullable=True)
     last_error = Column(Text, nullable=True)
-    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    updated_at = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
 
 
 class MaintenanceJobStatus(Base):
@@ -323,7 +493,11 @@ class MaintenanceJobStatus(Base):
     last_error = Column(Text, nullable=True)
     last_processed = Column(Integer, nullable=True)
     last_delivered = Column(Integer, nullable=True)
-    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    updated_at = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
 
 
 class AdminNotice(Base):
@@ -343,7 +517,11 @@ class AdminNotice(Base):
     is_pinned = Column(Boolean, default=False, nullable=False)
     published = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    updated_at = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
 
 
 class LoginCarouselSlide(Base):
@@ -359,7 +537,11 @@ class LoginCarouselSlide(Base):
     sort_order = Column(Integer, nullable=False, default=0)
     published = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    updated_at = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
 
 
 _engine = None
@@ -378,6 +560,7 @@ _APP_SESSION_COMPAT_COLUMNS: dict[str, str] = {
     "encrypted_credentials": "TEXT",
     "revoked_at": "TIMESTAMP",
     "revoked_reason": "VARCHAR(100)",
+    "school_session_version": "INTEGER",
 }
 
 
@@ -393,8 +576,10 @@ def _resolve_sync_url(raw_url: str) -> str:
 
 def _validate_database_url(raw_url: str) -> None:
     if not raw_url:
-        raise RuntimeError("DATABASE_URL must be set to a PostgreSQL connection string. "
-                           "Example: postgresql://user:pass@127.0.0.1:5432/dbname")
+        raise RuntimeError(
+            "DATABASE_URL must be set to a PostgreSQL connection string. "
+            "Example: postgresql://user:pass@127.0.0.1:5432/dbname"
+        )
     if raw_url.startswith(("postgres://", "postgresql://", "postgresql+asyncpg://")):
         return
     if raw_url.startswith(("sqlite://", "sqlite+aiosqlite://")):
@@ -405,8 +590,7 @@ def _validate_database_url(raw_url: str) -> None:
             "Use PostgreSQL for deployment or sqlite:///:memory: for tests."
         )
     raise RuntimeError(
-        "DATABASE_URL must be a PostgreSQL or SQLite connection string. "
-        f"Got: {raw_url[:50]}..."
+        f"DATABASE_URL must be a PostgreSQL or SQLite connection string. Got: {raw_url[:50]}..."
     )
 
 
@@ -514,36 +698,89 @@ def init_db():
     # Lightweight migration: add columns that exist in the model but might not
     # exist in the database yet (e.g., added after initial deployment).
     _ensure_columns(engine, "app_sessions", _APP_SESSION_COMPAT_COLUMNS)
-    _ensure_columns(engine, "ecard_bindings", {
-        "hot_water_balance_cache": "FLOAT",
-        "hot_water_cache_at": "TIMESTAMP",
-    })
-    _ensure_columns(engine, "maintenance_job_status", {
-        "last_processed": "INTEGER",
-        "last_delivered": "INTEGER",
-    })
-    _ensure_columns(engine, "background_notification_profiles", {
-        "attendance_snapshot_json": "TEXT",
-        "exam_reminder_keys_json": "TEXT",
-        "course_sync_error": "TEXT",
-        "notices_enabled": "BOOLEAN DEFAULT TRUE",
-        "grades_enabled": "BOOLEAN DEFAULT TRUE",
-        "exams_enabled": "BOOLEAN DEFAULT TRUE",
-        "attendance_enabled": "BOOLEAN DEFAULT TRUE",
-        "attendance_last_checked_at": "TIMESTAMP",
-        "attendance_last_error": "TEXT",
-    })
-    _ensure_columns(engine, "notification_deliveries", {
-        "delivery_status": "TEXT DEFAULT 'delivered'",
-        "retry_count": "INTEGER DEFAULT 0",
-        "last_failure_reason": "TEXT",
-        "last_attempt_at": "TIMESTAMP",
-        "succeeded_at": "TIMESTAMP",
-    })
-    _ensure_columns(engine, "ios_push_tokens", {
-        "course_local_event_keys_json": "TEXT",
-        "course_local_valid_until": "TIMESTAMP",
-    })
+    _ensure_columns(
+        engine,
+        "ecard_bindings",
+        {
+            "hot_water_balance_cache": "FLOAT",
+            "hot_water_cache_at": "TIMESTAMP",
+        },
+    )
+    _ensure_columns(
+        engine,
+        "maintenance_job_status",
+        {
+            "last_processed": "INTEGER",
+            "last_delivered": "INTEGER",
+        },
+    )
+    _ensure_columns(
+        engine,
+        "background_notification_profiles",
+        {
+            "attendance_snapshot_json": "TEXT",
+            "exam_reminder_keys_json": "TEXT",
+            "course_sync_error": "TEXT",
+            "notices_enabled": "BOOLEAN DEFAULT TRUE",
+            "grades_enabled": "BOOLEAN DEFAULT TRUE",
+            "exams_enabled": "BOOLEAN DEFAULT TRUE",
+            "attendance_enabled": "BOOLEAN DEFAULT TRUE",
+            "attendance_last_checked_at": "TIMESTAMP",
+            "attendance_last_error": "TEXT",
+            "effective_occurrences_json": "TEXT",
+            "suspended_at": "TIMESTAMP",
+            "suspension_reason": "VARCHAR(200)",
+            "next_retry_at": "TIMESTAMP",
+            "limit_notified_at": "TIMESTAMP",
+        },
+    )
+    _ensure_columns(
+        engine,
+        "notification_deliveries",
+        {
+            "title": "VARCHAR(200)",
+            "body": "TEXT",
+            "extras_json": "TEXT",
+            "expires_at": "TIMESTAMP",
+            "presented_at": "TIMESTAMP",
+            "read_at": "TIMESTAMP",
+            "delivery_status": "TEXT DEFAULT 'delivered'",
+            "retry_count": "INTEGER DEFAULT 0",
+            "last_failure_reason": "TEXT",
+            "last_attempt_at": "TIMESTAMP",
+            "succeeded_at": "TIMESTAMP",
+        },
+    )
+    _ensure_columns(
+        engine,
+        "ios_push_tokens",
+        {
+            "course_local_event_keys_json": "TEXT",
+            "course_local_valid_until": "TIMESTAMP",
+        },
+    )
+    _ensure_columns(
+        engine,
+        "user_settings",
+        {
+            "schedule_display_json": "TEXT",
+        },
+    )
+    _ensure_columns(
+        engine,
+        "ios_live_activity_tokens",
+        {
+            "device_id": "VARCHAR(128)",
+            "expires_at": "TIMESTAMP",
+        },
+    )
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "DELETE FROM ios_live_activity_tokens "
+                "WHERE token_type = 'activity' AND expires_at IS NULL"
+            )
+        )
 
     if _is_sqlite(engine):
         _apply_sqlite_pragmas(engine)
@@ -577,8 +814,7 @@ def _ensure_columns(engine: Engine, table: str, columns: Mapping[str, str]) -> N
                 statement = f"ALTER TABLE {table} ADD COLUMN {column_name} {column_type}"
             else:
                 statement = (
-                    f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS "
-                    f"{column_name} {column_type}"
+                    f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column_name} {column_type}"
                 )
             connection.exec_driver_sql(statement)
 

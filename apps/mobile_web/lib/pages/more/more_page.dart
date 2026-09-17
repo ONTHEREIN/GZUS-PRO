@@ -15,6 +15,7 @@ import '../../widgets/scale_tap.dart';
 import '../../widgets/seed_color_picker.dart';
 import '../../update_service.dart' deferred as update_service;
 import '../admin/admin_page.dart';
+import 'feedback_page.dart';
 
 class MorePage extends StatefulWidget {
   const MorePage({
@@ -30,6 +31,8 @@ class MorePage extends StatefulWidget {
     this.onThemeChanged,
     this.seedColor = GzusColors.blue,
     this.onSeedColorChanged,
+    required this.fontScale,
+    required this.onFontScaleChanged,
     this.onLogout,
     this.onYearChanged,
     this.onTermChanged,
@@ -52,6 +55,8 @@ class MorePage extends StatefulWidget {
   final ValueChanged<ThemeMode>? onThemeChanged;
   final Color seedColor;
   final ValueChanged<Color>? onSeedColorChanged;
+  final double fontScale;
+  final ValueChanged<double> onFontScaleChanged;
   final VoidCallback? onLogout;
   final ValueChanged<int>? onYearChanged;
   final ValueChanged<int>? onTermChanged;
@@ -63,6 +68,8 @@ class MorePage extends StatefulWidget {
   /// 管理后台身份（由 main.dart 传入，控制「管理后台」入口显隐与 owner 权限）
   final bool isAdmin;
   final bool isOwner;
+
+  static const List<double> fontScales = [0.9, 1, 1.15, 1.3];
 
   @override
   State<MorePage> createState() => _MorePageState();
@@ -432,6 +439,18 @@ class _MorePageState extends State<MorePage> {
                         trailing: const Icon(Icons.chevron_right),
                         onTap: widget.onShowBackgroundGuide,
                       ),
+                    ListTile(
+                      key: const ValueKey('feedback-entry-tile'),
+                      leading: const Icon(Icons.feedback_outlined),
+                      title: const Text('反馈问题'),
+                      subtitle: const Text('提交 Bug、使用建议和相关附件'),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (context) => FeedbackPage(api: widget.api),
+                        ),
+                      ),
+                    ),
                     if (widget.isAdmin)
                       ListTile(
                         leading: const Icon(Icons.admin_panel_settings),
@@ -766,6 +785,25 @@ class _MorePageState extends State<MorePage> {
                 ),
               ),
             ),
+          _settingBlock(
+            context: context,
+            icon: Icons.format_size_outlined,
+            title: '字体大小',
+            child: Center(
+              child: SegmentedButton<double>(
+                key: ValueKey('font-scale-${widget.fontScale}'),
+                segments: const [
+                  ButtonSegment(value: 0.9, label: Text('小')),
+                  ButtonSegment(value: 1, label: Text('标准')),
+                  ButtonSegment(value: 1.15, label: Text('大')),
+                  ButtonSegment(value: 1.3, label: Text('特大')),
+                ],
+                selected: {widget.fontScale},
+                onSelectionChanged: (selection) =>
+                    widget.onFontScaleChanged(selection.first),
+              ),
+            ),
+          ),
           if (widget.onAutoHideNavBarChanged != null)
             SwitchListTile(
               contentPadding: contentPadding,
@@ -785,6 +823,19 @@ class _MorePageState extends State<MorePage> {
               iconColor: null,
               onTap: widget.onShowBackgroundGuide!,
             ),
+          _settingTile(
+            key: const ValueKey('feedback-entry-tile'),
+            icon: Icons.feedback_outlined,
+            title: '反馈问题',
+            subtitle: '提交 Bug、使用建议和相关附件',
+            titleColor: null,
+            iconColor: null,
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (context) => FeedbackPage(api: widget.api),
+              ),
+            ),
+          ),
           if (widget.onShowNotificationSettings != null)
             _settingTile(
               key: const ValueKey('notification-settings-tile'),

@@ -41,6 +41,20 @@ class DataResult<T> {
   final DataSourceInfo source;
 }
 
+class ShiplyContentExport {
+  const ShiplyContentExport({
+    required this.bytes,
+    required this.sha256,
+    required this.generatedAt,
+    required this.counts,
+  });
+
+  final Uint8List bytes;
+  final String sha256;
+  final String generatedAt;
+  final Map<String, int> counts;
+}
+
 class DashboardModule {
   const DashboardModule({
     required this.status,
@@ -240,6 +254,7 @@ class LoginCarouselSlide {
     required this.published,
     required this.sortOrder,
     this.description,
+    this.localImagePath,
   });
 
   factory LoginCarouselSlide.fromJson(Map<String, dynamic> json) {
@@ -259,12 +274,25 @@ class LoginCarouselSlide {
     );
   }
 
+  factory LoginCarouselSlide.fromShiply(ShiplyLoginSlide slide) {
+    return LoginCarouselSlide(
+      id: slide.id,
+      title: slide.title,
+      description: slide.description,
+      imageUrl: slide.localImagePath,
+      localImagePath: slide.localImagePath,
+      published: true,
+      sortOrder: slide.sortOrder,
+    );
+  }
+
   final int id;
   final String title;
   final String? description;
   final String imageUrl;
   final bool published;
   final int sortOrder;
+  final String? localImagePath;
 }
 
 class StudentInfo {
@@ -439,6 +467,7 @@ bool _weekSpecContains(String spec, int week) {
   for (final segment in normalized.split(RegExp(r'[,;]'))) {
     final text = segment.trim();
     if (text.isEmpty) continue;
+    if (RegExp(r'\d').hasMatch(text)) foundNumber = true;
     final oddOnly = text.contains('单');
     final evenOnly = text.contains('双');
     if (oddOnly && week.isEven) continue;
@@ -446,7 +475,6 @@ bool _weekSpecContains(String spec, int week) {
 
     final ranges = RegExp(r'(\d+)\s*-\s*(\d+)').allMatches(text).toList();
     if (ranges.isNotEmpty) {
-      foundNumber = true;
       for (final match in ranges) {
         final start = int.tryParse(match.group(1)!);
         final end = int.tryParse(match.group(2)!);
@@ -804,7 +832,46 @@ class NoticeItem {
         url = json['url'] as String?,
         summary = _noticeSummaryFromJson(json),
         coverUrl = _firstText(json, const ['coverUrl', 'cover_url', 'cover']),
-        source = _noticeSourceFromJson(json);
+        localCoverPath = null,
+        source = _noticeSourceFromJson(json),
+        isPinned = json['isPinned'] as bool? ?? false;
+
+  NoticeItem._shiply({
+    required this.category,
+    required this.title,
+    required this.date,
+    required this.url,
+    required this.summary,
+    required this.coverUrl,
+    required this.localCoverPath,
+    required this.source,
+    required this.isPinned,
+  });
+
+  factory NoticeItem.fromShiply(ShiplyPublicNotice item) => NoticeItem._shiply(
+        category: item.category,
+        title: item.title,
+        date: item.date,
+        url: item.url,
+        summary: item.summary ?? item.description,
+        coverUrl: null,
+        localCoverPath: item.localCoverPath,
+        source: NoticeSource.admin,
+        isPinned: item.isPinned,
+      );
+
+  factory NoticeItem.fromShiplyWechat(ShiplyWechatArticle item) =>
+      NoticeItem._shiply(
+        category: '公众号',
+        title: item.title,
+        date: item.date,
+        url: item.articleUrl,
+        summary: item.summary,
+        coverUrl: null,
+        localCoverPath: item.localCoverPath,
+        source: NoticeSource.wechat,
+        isPinned: false,
+      );
 
   final String category;
   final String title;
@@ -812,7 +879,9 @@ class NoticeItem {
   final String? url;
   final String? summary;
   final String? coverUrl;
+  final String? localCoverPath;
   final NoticeSource source;
+  final bool isPinned;
 }
 
 enum NoticeSource { jwxt, ehall, admin, wechat }

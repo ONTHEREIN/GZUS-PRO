@@ -1,5 +1,9 @@
 from app.apns_service import build_live_activity_payload
-from app.live_activity_data import grade_live_fields, utility_live_metrics
+from app.live_activity_data import (
+    grade_live_fields,
+    live_activity_priority,
+    utility_live_metrics,
+)
 
 
 def test_grade_live_fields_prefers_official_status():
@@ -59,3 +63,11 @@ def test_live_activity_payload_transmits_structured_fields():
     assert state["location"] == "A101"
     assert state["seat"] == "12"
     assert decoded["aps"]["attributes"]["priority"] == 1
+
+
+def test_live_activity_priority_is_unified_and_display_only():
+    assert live_activity_priority("course_reminder", True) == 1
+    assert live_activity_priority("course_reminder", False) == 2
+    assert live_activity_priority("ecard_reminder", False) == 5
+    assert live_activity_priority("new_notice", False) == 4
+    assert live_activity_priority("unknown", False) == 5

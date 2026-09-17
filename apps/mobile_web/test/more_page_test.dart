@@ -16,6 +16,7 @@ void main() {
     await tester.pumpWidget(_morePage(
       onConfigChanged: () {},
       onNavigate: (_) {},
+      onFontScaleChanged: (_) {},
     ));
 
     expect(find.byKey(const ValueKey('page-panel-banner')), findsOneWidget);
@@ -37,6 +38,7 @@ void main() {
     await tester.pumpWidget(_morePage(
       onConfigChanged: () => configChanged++,
       onNavigate: (_) {},
+      onFontScaleChanged: (_) {},
     ));
 
     await tester.tap(find.byTooltip('编辑导航'));
@@ -69,6 +71,7 @@ void main() {
     await tester.pumpWidget(_morePage(
       onConfigChanged: () => configChanged++,
       onNavigate: (_) {},
+      onFontScaleChanged: (_) {},
     ));
 
     await tester.tap(find.byTooltip('编辑导航'));
@@ -87,6 +90,7 @@ void main() {
     await tester.pumpWidget(_morePage(
       onConfigChanged: () {},
       onNavigate: (_) {},
+      onFontScaleChanged: (_) {},
       year: 2026,
       term: 1,
     ));
@@ -115,6 +119,7 @@ void main() {
     await tester.pumpWidget(_morePage(
       onConfigChanged: () {},
       onNavigate: (_) {},
+      onFontScaleChanged: (_) {},
       year: 2025,
       term: 2,
     ));
@@ -143,6 +148,21 @@ void main() {
     );
     expect(find.byKey(const ValueKey('more-term-1')), findsNothing);
   });
+
+  testWidgets('字体大小选择会通知应用根部更新', (tester) async {
+    double? selectedScale;
+    await tester.pumpWidget(_morePage(
+      onConfigChanged: () {},
+      onNavigate: (_) {},
+      onFontScaleChanged: (value) => selectedScale = value,
+    ));
+
+    expect(find.byKey(const ValueKey('font-scale-1.0')), findsOneWidget);
+    await tester.tap(find.text('大'));
+    await tester.pumpAndSettle();
+
+    expect(selectedScale, 1.15);
+  });
 }
 
 Future<void> _setViewport({
@@ -157,6 +177,7 @@ Future<void> _setViewport({
 Widget _morePage({
   required VoidCallback onConfigChanged,
   required ValueChanged<String> onNavigate,
+  required ValueChanged<double> onFontScaleChanged,
   int year = 2026,
   int term = 1,
 }) {
@@ -182,6 +203,8 @@ Widget _morePage({
         onTermChanged: (_) {},
         onThemeChanged: (_) {},
         onSeedColorChanged: (_) {},
+        fontScale: 1,
+        onFontScaleChanged: onFontScaleChanged,
         onAutoHideNavBarChanged: (_) {},
         onShowBackgroundGuide: () {},
       ),

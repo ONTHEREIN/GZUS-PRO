@@ -17,6 +17,7 @@ class CourseReminderScheduler(private val context: Context) {
     companion object {
         const val PREFS_NAME = "gzus_course_reminders"
         const val KEY_COURSES_JSON = "coursesJson"
+        const val KEY_EFFECTIVE_OCCURRENCES_JSON = "effectiveOccurrencesJson"
         const val KEY_BEFORE_START_MINUTES = "beforeStartMinutes"
         const val KEY_BEFORE_END_MINUTES = "beforeEndMinutes"
         const val KEY_FIRST_WEEK_START = "firstWeekStart"
@@ -35,12 +36,14 @@ class CourseReminderScheduler(private val context: Context) {
         fun saveCourseData(
             context: Context,
             coursesJson: String,
+            effectiveOccurrencesJson: String,
             beforeStartMinutes: Int,
             beforeEndMinutes: Int,
             firstWeekStart: String,
         ) {
             context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
                 .putString(KEY_COURSES_JSON, coursesJson)
+                .putString(KEY_EFFECTIVE_OCCURRENCES_JSON, effectiveOccurrencesJson)
                 .putInt(KEY_BEFORE_START_MINUTES, beforeStartMinutes)
                 .putInt(KEY_BEFORE_END_MINUTES, beforeEndMinutes)
                 .putString(KEY_FIRST_WEEK_START, firstWeekStart)
@@ -53,6 +56,7 @@ class CourseReminderScheduler(private val context: Context) {
         cancelAll()
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val coursesJson = prefs.getString(KEY_COURSES_JSON, null) ?: return
+        val effectiveOccurrencesJson = prefs.getString(KEY_EFFECTIVE_OCCURRENCES_JSON, "[]") ?: "[]"
         val beforeStart = prefs.getInt(KEY_BEFORE_START_MINUTES, 10)
         val beforeEnd = prefs.getInt(KEY_BEFORE_END_MINUTES, 5)
         val firstWeekStart = prefs.getString(KEY_FIRST_WEEK_START, null) ?: return
@@ -64,6 +68,17 @@ class CourseReminderScheduler(private val context: Context) {
 
         val now = System.currentTimeMillis()
         val horizonMs = 14L * 24 * 60 * 60 * 1000
+
+        if (effectiveOccurrencesJson.isNotBlank() && effectiveOccurrencesJson != "[]") {
+            scheduleEffectiveOccurrences(
+                effectiveOccurrencesJson,
+                now,
+                horizonMs,
+                beforeStart,
+                beforeEnd,
+            )
+            return
+        }
 
         for (i in 0 until courses.length()) {
             val course = courses.optJSONObject(i) ?: continue
@@ -131,6 +146,72 @@ class CourseReminderScheduler(private val context: Context) {
                         name,
                     )
                 }
+            }
+        }
+    }
+
+    private fun scheduleEffectiveOccurrences(
+        occurrencesJson: String,
+        now: Long,
+        horizonMs: Long,
+        beforeStart: Int,
+        beforeEnd: Int,
+    ) {
+        val occurrences = try {
+            JSONArray(occurrencesJson)
+        } catch (_: Exception) {
+            return
+        }
+        val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+        for (i in 0 until occurrences.length()) {
+            val occurrence = occurrences.optJSONObject(i) ?: continue
+            val date = try {
+                sdf.parse(occurrence.optString("date", "")) ?: continue
+            } catch (_: Exception) {
+                continue
+            }
+            val dayCal = Calendar.getInstance().apply { time = date }
+            val startSection = occurrence.optInt("startSection", 0)
+            val endSection = occurrence.optInt("endSection", startSection)
+            if (startSection !in 1..SECTION_TIMES.size) continue
+            val startTime = SECTION_TIMES[startSection - 1].first
+            val endTime = SECTION_TIMES[minOf(endSection, SECTION_TIMES.size) - 1].second
+            val name = occurrence.optString("name", "")
+            val classroom = occurrence.optString("classroom", "")
+            val teacher = occurrence.optString("teacher", "")
+            val occurrenceKey = occurrence.optString("occurrenceKey", name)
+            val startReminderTime = dateTime(dayCal, startTime).apply {
+                add(Calendar.MINUTE, -beforeStart)
+            }
+            if (startReminderTime.timeInMillis > now && startReminderTime.timeInMillis < now + horizonMs) {
+                val classStart = dateTime(dayCal, startTime)
+                val body = "${beforeStart}分钟后：${formatTime(startTime)} $name" +
+                    (if (classroom.isNotBlank()) " · $classroom" else "") +
+                    (if (teacher.isNotBlank()) " · $teacher" else "")
+                scheduleAlarm(
+                    startReminderTime.timeInMillis,
+                    "即将上课",
+                    body,
+                    classStart.timeInMillis,
+                    "${beforeStart}min",
+                    hashId(occurrenceKey, dayCal.get(Calendar.DAY_OF_WEEK), startSection, startReminderTime.timeInMillis, "start"),
+                    name,
+                )
+            }
+            val endReminderTime = dateTime(dayCal, endTime).apply {
+                add(Calendar.MINUTE, -beforeEnd)
+            }
+            if (endReminderTime.timeInMillis > now && endReminderTime.timeInMillis < now + horizonMs) {
+                val classEnd = dateTime(dayCal, endTime)
+                scheduleAlarm(
+                    endReminderTime.timeInMillis,
+                    "即将下课",
+                    "${beforeEnd}分钟后下课：${formatTime(endTime)} $name",
+                    classEnd.timeInMillis,
+                    "${beforeEnd}min",
+                    hashId(occurrenceKey, dayCal.get(Calendar.DAY_OF_WEEK), startSection, endReminderTime.timeInMillis, "end"),
+                    name,
+                )
             }
         }
     }

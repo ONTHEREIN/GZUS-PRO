@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from typing import Any, Literal
 from datetime import date, datetime
 
@@ -6,6 +8,37 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
 LEAVE_ATTACHMENT_MAX_COUNT = 5
 LEAVE_ATTACHMENT_MAX_BYTES = 7 * 1024 * 1024
+FEEDBACK_ATTACHMENT_MAX_COUNT = 5
+FEEDBACK_ATTACHMENT_MAX_BYTES = 6 * 1024 * 1024
+FEEDBACK_LOG_MAX_CHARS = 100_000
+
+
+class FeedbackAttachmentPayload(BaseModel):
+    """反馈附件的 base64 载荷。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=255)
+    mime_type: str | None = Field(default=None, alias="mimeType", max_length=100)
+    content_base64: str = Field(alias="contentBase64", min_length=1, max_length=8_400_000)
+
+
+class FeedbackCreateRequest(BaseModel):
+    """用户提交反馈的请求体。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    category: Literal["bug", "suggestion"] = Field(
+        validation_alias=AliasChoices("category", "type")
+    )
+    title: str = Field(min_length=1, max_length=200)
+    description: str = Field(min_length=1, max_length=20_000)
+    contact: str | None = Field(default=None, max_length=200)
+    client_logs: str = Field(default="", alias="clientLogs", max_length=FEEDBACK_LOG_MAX_CHARS)
+    attachments: list[FeedbackAttachmentPayload] = Field(
+        default_factory=list,
+        max_length=FEEDBACK_ATTACHMENT_MAX_COUNT,
+    )
 
 
 class CredentialLoginRequest(BaseModel):
@@ -360,6 +393,12 @@ class LeavePreviewRequest(BaseModel):
     end_date: date = Field(alias="endDate")
     first_week_start: date | None = Field(default=None, alias="firstWeekStart")
     courses: list[dict[str, Any]] = Field(default_factory=list)
+    effective_occurrences: list[dict[str, Any]] = Field(
+        default_factory=list, alias="effectiveOccurrences"
+    )
+    selected_course_keys: list[str] = Field(
+        default_factory=list, alias="selectedCourseKeys", max_length=100
+    )
 
 
 class TeacherHandlerSelection(BaseModel):
@@ -376,7 +415,9 @@ class LeaveAttachmentItem(BaseModel):
 
 class LeaveFillRequest(LeavePreviewRequest):
     reason: str = Field(min_length=1)
-    attachments: list[LeaveAttachmentItem] = Field(default_factory=list, max_length=LEAVE_ATTACHMENT_MAX_COUNT)
+    attachments: list[LeaveAttachmentItem] = Field(
+        default_factory=list, max_length=LEAVE_ATTACHMENT_MAX_COUNT
+    )
     attachment_name: str | None = Field(default=None, alias="attachmentName", min_length=1)
     attachment_content_base64: str | None = Field(
         default=None, alias="attachmentContentBase64", min_length=1
@@ -487,6 +528,14 @@ class WebPushSubscriptionRequest(BaseModel):
     expiration_time: int | None = Field(default=None, alias="expirationTime")
 
 
+class WebPushSubscriptionUnregisterRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # 旧客户端不发送 body，服务端继续保留“注销该账号全部订阅”的兼容行为；
+    # 新客户端必须带当前浏览器 endpoint，避免误删其它设备。
+    endpoint: str | None = Field(default=None, min_length=1, max_length=500)
+
+
 class WebPushConfigResponse(BaseModel):
     enabled: bool
     publicKey: str | None = None
@@ -495,14 +544,18 @@ class WebPushConfigResponse(BaseModel):
 class IosPushTokenRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    device_token: str = Field(alias="deviceToken", min_length=32, max_length=512, pattern=r"^[A-Fa-f0-9]+$")
+    device_token: str = Field(
+        alias="deviceToken", min_length=32, max_length=512, pattern=r"^[A-Fa-f0-9]+$"
+    )
     environment: Literal["sandbox", "production"]
 
 
 class IosCourseScheduleSyncRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    device_token: str = Field(alias="deviceToken", min_length=32, max_length=512, pattern=r"^[A-Fa-f0-9]+$")
+    device_token: str = Field(
+        alias="deviceToken", min_length=32, max_length=512, pattern=r"^[A-Fa-f0-9]+$"
+    )
     environment: Literal["sandbox", "production"]
     event_keys: list[str] = Field(alias="eventKeys", max_length=120)
     valid_until: datetime = Field(alias="validUntil")
@@ -516,6 +569,24 @@ class IosLiveActivityTokenRequest(BaseModel):
     environment: Literal["sandbox", "production"]
     activity_id: str | None = Field(default=None, alias="activityId", max_length=200)
     activity_type: str | None = Field(default=None, alias="activityType", max_length=80)
+    device_id: str | None = Field(default=None, alias="deviceId", min_length=1, max_length=128)
+    expires_at: datetime | None = Field(default=None, alias="expiresAt")
+
+
+class IosLiveActivityTokenUnregisterRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    environment: Literal["sandbox", "production"]
+    activity_id: str = Field(alias="activityId", min_length=1, max_length=200)
+    device_id: str = Field(alias="deviceId", min_length=1, max_length=128)
+
+
+class IosLiveActivityTokensUnregisterRequest(BaseModel):
+    """注销当前安装实例的实况令牌；无 deviceId 时兼容旧客户端全量注销。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    device_id: str | None = Field(default=None, alias="deviceId", min_length=1, max_length=128)
 
 
 class CourseReminderSyncCourse(BaseModel):
@@ -530,6 +601,17 @@ class CourseReminderSyncCourse(BaseModel):
     weeks: list[int] = Field(default_factory=list, max_length=30)
 
 
+class CourseReminderSyncOccurrence(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    name: str = Field(min_length=1, max_length=200)
+    start_section: int = Field(alias="startSection", ge=1, le=16)
+    end_section: int = Field(alias="endSection", ge=1, le=16)
+    classroom: str = Field(default="", max_length=200)
+    teacher: str = Field(default="", max_length=100)
+
+
 class CourseReminderSyncRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -538,6 +620,9 @@ class CourseReminderSyncRequest(BaseModel):
     before_end_minutes: int = Field(alias="beforeEndMinutes", ge=1, le=120)
     first_week_start: str = Field(alias="firstWeekStart", pattern=r"^\d{4}-\d{2}-\d{2}$")
     courses: list[CourseReminderSyncCourse] = Field(default_factory=list, max_length=200)
+    effective_occurrences: list[CourseReminderSyncOccurrence] = Field(
+        default_factory=list, alias="effectiveOccurrences", max_length=1000
+    )
 
 
 class BackgroundNotificationAccessRequest(BaseModel):
@@ -560,8 +645,33 @@ class BackgroundNotificationStatus(BaseModel):
     grades_enabled: bool = Field(alias="gradesEnabled")
     exams_enabled: bool = Field(alias="examsEnabled")
     attendance_enabled: bool = Field(alias="attendanceEnabled")
-    attendance_last_checked_at: datetime | None = Field(default=None, alias="attendanceLastCheckedAt")
+    attendance_last_checked_at: datetime | None = Field(
+        default=None, alias="attendanceLastCheckedAt"
+    )
     attendance_last_error: str | None = Field(default=None, alias="attendanceLastError")
+    suspended: bool = False
+    suspension_reason: str | None = Field(default=None, alias="suspensionReason")
+    next_retry_at: datetime | None = Field(default=None, alias="nextRetryAt")
+
+
+class NotificationEvent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    notification_type: str = Field(alias="type")
+    title: str
+    body: str
+    extras: dict[str, Any]
+    created_at: datetime = Field(alias="createdAt")
+    expires_at: datetime | None = Field(alias="expiresAt")
+    presented_at: datetime | None = Field(alias="presentedAt")
+    read_at: datetime | None = Field(alias="readAt")
+
+
+class NotificationEventList(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    events: list[NotificationEvent]
 
 
 class NotificationPreferencesUpdate(BaseModel):
@@ -584,6 +694,17 @@ class ScheduleSettingsUpdate(BaseModel):
     first_weeks: dict[str, str] | None = Field(default=None, alias="firstWeeks")
     auto_week: bool | None = Field(default=None, alias="autoWeek")
     onboarding_completed: bool | None = Field(default=None, alias="onboardingCompleted")
+    display: ScheduleDisplaySettings | None = None
+
+
+class ScheduleDisplaySettings(BaseModel):
+    """课表字段显示偏好；课程名始终显示，服务端只同步用户选择。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    show_time: bool = Field(default=True, alias="showTime")
+    show_classroom: bool = Field(default=True, alias="showClassroom")
+    show_teacher: bool = Field(default=True, alias="showTeacher")
 
 
 class ScheduleSettings(BaseModel):
@@ -594,3 +715,56 @@ class ScheduleSettings(BaseModel):
     first_weeks: dict[str, str] = Field(default_factory=dict, alias="firstWeeks")
     auto_week: bool = Field(default=True, alias="autoWeek")
     onboarding_completed: bool = Field(default=False, alias="onboardingCompleted")
+    display: ScheduleDisplaySettings | None = None
+
+
+class ScheduleAdjustmentPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    client_id: str = Field(alias="clientId", min_length=1, max_length=100)
+    year: int = Field(ge=2000, le=3000)
+    term: int = Field(ge=1, le=2)
+    source_date: str = Field(alias="sourceDate", pattern=r"^\d{4}-\d{2}-\d{2}$")
+    target_date: str = Field(alias="targetDate", pattern=r"^\d{4}-\d{2}-\d{2}$")
+    source_occurrence_keys: list[str] = Field(
+        default_factory=list, alias="sourceOccurrenceKeys", max_length=100
+    )
+    target_conflict_keys: list[str] = Field(
+        default_factory=list, alias="targetConflictKeys", max_length=100
+    )
+    conflict_mode: Literal["replaceConflicts", "coexist"] = Field(
+        default="coexist", alias="conflictMode"
+    )
+
+
+class ScheduleAdjustmentCreate(ScheduleAdjustmentPayload):
+    pass
+
+
+class ScheduleAdjustmentUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_date: str | None = Field(
+        default=None, alias="sourceDate", pattern=r"^\d{4}-\d{2}-\d{2}$"
+    )
+    target_date: str | None = Field(
+        default=None, alias="targetDate", pattern=r"^\d{4}-\d{2}-\d{2}$"
+    )
+    source_occurrence_keys: list[str] | None = Field(
+        default=None, alias="sourceOccurrenceKeys", max_length=100
+    )
+    target_conflict_keys: list[str] | None = Field(
+        default=None, alias="targetConflictKeys", max_length=100
+    )
+    conflict_mode: Literal["replaceConflicts", "coexist"] | None = Field(
+        default=None, alias="conflictMode"
+    )
+    expected_revision: int = Field(alias="expectedRevision", ge=1)
+
+
+class ScheduleAdjustmentResponse(ScheduleAdjustmentPayload):
+    id: int
+    status: Literal["active", "restored", "archived"]
+    revision: int
+    created_at: datetime = Field(alias="createdAt")
+    updated_at: datetime = Field(alias="updatedAt")

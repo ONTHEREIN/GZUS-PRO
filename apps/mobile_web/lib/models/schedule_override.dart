@@ -25,25 +25,34 @@ class ScheduleOverride {
   });
 
   final String id;
+
   /// 匹配键：`'kch:<课程代码>'` 或 `'name:<课程名>'`；null 表示新增课程。
   final String? matchKey;
+
   /// 可选匹配限定：星期（1-7）。
   final int? matchWeekday;
+
   /// 可选匹配限定：开始节次。
   final int? matchStartSection;
+
   /// 作用周次（同教务 `zcd` 格式，如 "8"、"1-16周(单)"）；空 = 全部周。
   final String? weeks;
+
   /// true = 停课（隐藏匹配课程）；false = 新增/替换显示 [course]。
   final bool hidden;
+
   /// 新增或替换后显示的课程内容。
   final ScheduleCourse? course;
+
   /// 备注（如调课原因）。
   final String? note;
 
   /// 新增课程
   bool get isAdd => matchKey == null && !hidden;
+
   /// 停课（隐藏）
   bool get isHide => matchKey != null && hidden;
+
   /// 调整（替换）
   bool get isReplace => matchKey != null && !hidden;
 
@@ -109,8 +118,7 @@ class ScheduleOverrideStore {
       final list = jsonDecode(raw) as List<dynamic>? ?? const [];
       return [
         for (final item in list)
-          if (item is Map<String, dynamic>)
-            ScheduleOverride.fromJson(item),
+          if (item is Map<String, dynamic>) ScheduleOverride.fromJson(item),
       ];
     } catch (_) {
       return const [];
@@ -163,6 +171,11 @@ List<ScheduleCourse> applyScheduleOverrides(
   if (overrides.isEmpty) return items;
   final result = <ScheduleCourse>[];
   for (final item in items) {
+    // 已经叠加过的本地替换/新增条目不再重复匹配，保证生效课程计算可安全重入。
+    if (item.isLocal) {
+      result.add(item);
+      continue;
+    }
     final override = _firstMatch(overrides, item);
     if (override == null) {
       result.add(item);
@@ -177,7 +190,14 @@ List<ScheduleCourse> applyScheduleOverrides(
   }
   for (final override in overrides) {
     if (override.isAdd && override.course != null) {
-      result.add(override.course!.copyWith(isLocal: true));
+      final local = override.course!.copyWith(isLocal: true);
+      if (!result.any((item) =>
+          item.isLocal &&
+          item.name == local.name &&
+          item.weekday == local.weekday &&
+          item.startSection == local.startSection)) {
+        result.add(local);
+      }
     }
   }
   return result;

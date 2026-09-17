@@ -408,6 +408,8 @@ Future<void> _pumpDashboardShell(
           studentName: '测试学生',
           themeMode: ThemeMode.light,
           onThemeChanged: (_) {},
+          fontScale: 1,
+          onFontScaleChanged: (_) {},
           onLogout: () {},
           isAdmin: isAdmin,
         ),

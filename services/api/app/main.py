@@ -15,7 +15,20 @@ from app.cache_service import ExamReminderCache, GradeUpdateCache, NoticeCache
 from app.config import get_settings
 from app.database import check_database_ready, get_sync_session_factory, init_db
 from app.rate_limit import limiter
-from app.routes import academic, admin, auth, content, ecard, ehall, notifications, push, settings, weather
+from app.routes import (
+    academic,
+    admin,
+    auth,
+    content,
+    ecard,
+    ehall,
+    feedback,
+    notifications,
+    push,
+    schedule_adjustments,
+    settings,
+    weather,
+)
 from app.rsa_keys import rsa_key_manager
 from app.sessions import SessionStore, SessionStoreUnavailableError
 from app.ws import ConnectionManager, ws_router
@@ -187,15 +200,18 @@ def create_app() -> FastAPI:
     app.include_router(academic.router)
     app.include_router(admin.router)
     app.include_router(ehall.router)
+    app.include_router(feedback.router)
     app.include_router(ecard.router)
     app.include_router(push.router)
     app.include_router(notifications.router)
     app.include_router(weather.router)
     app.include_router(settings.router)
+    app.include_router(schedule_adjustments.router)
     app.include_router(ws_router)
 
     # Internal cron endpoints are only reachable from the loopback server.
     from app.routes.internal import router as internal_router
+
     app.include_router(internal_router)
 
     @app.get("/health")

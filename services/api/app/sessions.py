@@ -79,6 +79,8 @@ class AppSession:
     # 管理后台标记：登录时查 admin_users 表写入（sessions.create 参数），
     # 与 DB 列 AppSessionModel.is_admin 保持一致。
     is_admin: bool = False
+    # 账号级学校会话版本；None 表示旧会话尚未迁移。
+    school_session_version: int | None = None
 
 
 def _get_fernet(key: str) -> Fernet:
@@ -185,7 +187,8 @@ def _rebuild_ehall_client(ehall_cookies: str | None, ehall_auth_token: str | Non
 class SessionStore:
     """Persistent session store backed by PostgreSQL.
 
-    会话元数据与 JWXT/ehall cookie 保存在数据库中，进程重启后按需重建客户端。
+    会话元数据保存在数据库中；新版账号使用 school_account_sessions 的加密
+    cookie，旧会话才从 app_sessions 遗留字段按需重建客户端。
 
     Usage:
         store = SessionStore(ttl_seconds=7200, db_factory=get_sync_session_factory)
@@ -297,6 +300,7 @@ class SessionStore:
         student_account: str | None = None,
         is_admin: bool | None = None,
         credential_fingerprint: str | None = None,
+        school_session_version: int | None = None,
     ) -> AppSession:
         from app.database import AppSessionModel
 
@@ -330,6 +334,15 @@ class SessionStore:
                 )
                 is_admin = False
 
+        if school_session_version is None and resolved_student_account:
+            try:
+                from app.school_session_service import get_school_account_session
+
+                shared = get_school_account_session(resolved_student_account)
+                school_session_version = shared.version if shared is not None else None
+            except Exception:
+                logger.warning("Failed to resolve shared school session version", exc_info=True)
+
         ehall_cookies = ""
         ehall_auth_token = ""
         if ehall_client is not None:
@@ -342,6 +355,12 @@ class SessionStore:
             except Exception:
                 pass
 
+        # 新版登录已经写入账号级加密会话；app_sessions 不再复制明文 cookie。
+        if school_session_version is not None:
+            jwxt_cookies = ""
+            ehall_cookies = ""
+            ehall_auth_token = ""
+
         session = AppSession(
             id=uuid.uuid4().hex,
             client=client,
@@ -350,6 +369,7 @@ class SessionStore:
             student_account=resolved_student_account,
             credential_fingerprint=credential_fingerprint,
             is_admin=is_admin,
+            school_session_version=school_session_version,
         )
 
         db = self._open_db("create", session.id)
@@ -367,6 +387,7 @@ class SessionStore:
                 ehall_cookies=ehall_cookies or None,
                 ehall_auth_token=ehall_auth_token or None,
                 credential_fingerprint=credential_fingerprint,
+                school_session_version=school_session_version,
             )
             db.add(row)
             db.commit()
@@ -442,10 +463,15 @@ class SessionStore:
             and
             cached is not None
             and cached.revoked_at is None
+            and not cached.student_account
             and checked_at is not None
             and now_naive - checked_at < self._memory_cache_ttl
             and now_naive - cached.last_active_at < self._ttl
         ):
+            previous_version = cached.school_session_version
+            self._sync_shared_school_session(cached)
+            if cached.school_session_version != previous_version:
+                self._persist_school_session_version(session_id, cached.school_session_version)
             if touch:
                 self.touch(session_id)
             return cached
@@ -526,6 +552,7 @@ class SessionStore:
                     student_account=row.student_account,
                     credential_fingerprint=row.credential_fingerprint,
                     is_admin=bool(getattr(row, "is_admin", False)),
+                    school_session_version=getattr(row, "school_session_version", None),
                 )
 
             # Compute created_utc for AppSession construction below
@@ -545,6 +572,11 @@ class SessionStore:
                 cached.student_account = row.student_account
                 cached.credential_fingerprint = row.credential_fingerprint
                 cached.is_admin = bool(getattr(row, "is_admin", False))
+                cached.school_session_version = getattr(row, "school_session_version", None)
+                self._sync_shared_school_session(cached)
+                if cached.school_session_version != getattr(row, "school_session_version", None):
+                    row.school_session_version = cached.school_session_version
+                    db.commit()
                 self._session_checked_at[session_id] = datetime.now(timezone.utc).replace(tzinfo=None)
                 if touch:
                     self.touch(session_id)
@@ -589,7 +621,14 @@ class SessionStore:
                 student_account=row.student_account,
                 credential_fingerprint=row.credential_fingerprint,
                 is_admin=bool(getattr(row, "is_admin", False)),
+                school_session_version=getattr(row, "school_session_version", None),
             )
+
+            previous_version = session.school_session_version
+            self._sync_shared_school_session(session)
+            if session.school_session_version != previous_version:
+                row.school_session_version = session.school_session_version
+                db.commit()
 
             self._sessions[session.id] = session
             self._session_checked_at[session.id] = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -604,6 +643,47 @@ class SessionStore:
                 exc_info=True,
             )
             raise self._persistence_error("get", session_id, exc) from exc
+        finally:
+            db.close()
+
+    @staticmethod
+    def _sync_shared_school_session(session: AppSession) -> None:
+        """按账号共享会话版本刷新前台客户端；旧会话没有共享记录时保持兼容。"""
+        account = (session.student_account or "").strip()
+        if not account:
+            return
+        from app.school_session_service import (
+            SchoolSessionUnavailableError,
+            get_school_account_session,
+            load_shared_school_clients,
+        )
+        from app.school_client import AuthenticationError
+
+        shared = get_school_account_session(account)
+        if shared is None or (
+            shared.version == session.school_session_version and session.client is not None
+        ):
+            return
+        try:
+            client, ehall_client, snapshot = load_shared_school_clients(account)
+        except (SchoolSessionUnavailableError, AuthenticationError):
+            return
+        session.client = client
+        session.ehall_client = ehall_client
+        session.school_session_version = snapshot.version
+
+    def _persist_school_session_version(self, session_id: str, version: int | None) -> None:
+        from app.database import AppSessionModel
+
+        db = self._open_db("sync_school_session_version", session_id)
+        try:
+            db.query(AppSessionModel).filter(AppSessionModel.id == session_id).update(
+                {"school_session_version": version}, synchronize_session=False
+            )
+            db.commit()
+        except SQLAlchemyError as exc:
+            db.rollback()
+            raise self._persistence_error("sync_school_session_version", session_id, exc) from exc
         finally:
             db.close()
 
@@ -698,9 +778,11 @@ class SessionStore:
         from app.database import AppSessionModel
 
         db = self._open_db("remove", session_id)
+        student_account: str | None = None
         try:
             row = db.query(AppSessionModel).filter(AppSessionModel.id == session_id).first()
             if row is not None:
+                student_account = row.student_account
                 db.delete(row)
                 db.commit()
             with self._lock:
@@ -712,6 +794,10 @@ class SessionStore:
             raise self._persistence_error("remove", session_id, exc) from exc
         finally:
             db.close()
+        if student_account:
+            from app.school_session_service import release_if_unused
+
+            release_if_unused(student_account)
 
     # ------------------------------------------------------------------
     # Cleanup
@@ -740,7 +826,15 @@ class SessionStore:
 
         cutoff = datetime.now(timezone.utc) - self._ttl
         db = self._get_db()
+        student_accounts: set[str] = set()
         try:
+            expired_rows = (
+                db.query(AppSessionModel.student_account)
+                .filter(AppSessionModel.last_active_at < cutoff)
+                .filter(AppSessionModel.revoked_at.is_(None))
+                .all()
+            )
+            student_accounts = {str(row[0]) for row in expired_rows if row[0]}
             deleted = (
                 db.query(AppSessionModel)
                 .filter(AppSessionModel.last_active_at < cutoff)
@@ -757,6 +851,10 @@ class SessionStore:
                             self._session_checked_at.pop(session_id, None)
                             self._last_touch_at.pop(session_id, None)
                 logger.info("Purged %d expired sessions", deleted)
+            for student_account in student_accounts:
+                from app.school_session_service import release_if_unused
+
+                release_if_unused(student_account)
         except SQLAlchemyError:
             db.rollback()
             raise

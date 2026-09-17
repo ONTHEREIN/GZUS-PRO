@@ -18,11 +18,14 @@ class LiveActivityService {
   static ApiClient? _api;
   static bool _enabled = true;
   static bool _initialized = false;
-  static LiveActivityEvent? _activeEvent;
+  static String? _deviceId;
+  static String? _sessionId;
+  static final Map<String, LiveActivityEvent> _activeEvents = {};
 
   static Future<void> initialize({required ApiClient api}) async {
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.iOS) return;
     _api = api;
+    _sessionId = api.sessionId;
     final prefs = await SharedPreferences.getInstance();
     _enabled = prefs.getBool('live_activities_enabled') ?? true;
     await _channel.invokeMethod<bool>('configure', {
@@ -35,6 +38,7 @@ class LiveActivityService {
       _initialized = true;
     }
     final capabilities = await _getCapabilities();
+    _deviceId = capabilities['installationId']?.toString().trim();
     if (capabilities['enabled'] != true) return;
     final token = capabilities['pushToStartToken']?.toString();
     if (_enabled && token != null && token.isNotEmpty) {
@@ -45,18 +49,24 @@ class LiveActivityService {
   static Future<void> stop() async {
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.iOS) return;
     final api = _api;
+    final deviceId = _deviceId;
+    final sessionId = _sessionId ?? api?.sessionId;
     _api = null;
     _enabled = false;
-    _activeEvent = null;
+    _deviceId = null;
+    _sessionId = null;
+    _activeEvents.clear();
     try {
       await _channel.invokeMethod<bool>('endAll');
     } on PlatformException {
       // 没有原生实现时由系统自行清理，不影响登出流程。
     }
-    final sessionId = api?.sessionId;
-    if (sessionId != null && sessionId.isNotEmpty) {
+    if (sessionId != null &&
+        sessionId.isNotEmpty &&
+        deviceId != null &&
+        deviceId.isNotEmpty) {
       try {
-        await api!.unregisterIosLiveActivityTokens(sessionId);
+        await api!.unregisterIosLiveActivityTokens(sessionId, deviceId: deviceId);
       } on ApiException {
         // 会话可能已经失效，原生配置仍需清除。
       }
@@ -74,15 +84,21 @@ class LiveActivityService {
     await prefs.setBool('live_activities_enabled', enabled);
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.iOS) return;
     if (!enabled) {
-      _activeEvent = null;
+      _activeEvents.clear();
       try {
         await _channel.invokeMethod<bool>('endAll');
       } on PlatformException {
         return;
       }
       final api = _api;
-      if (api != null && api.sessionId != null) {
-        await api.unregisterIosLiveActivityTokens(api.sessionId!);
+      if (api != null &&
+          api.sessionId != null &&
+          _deviceId != null &&
+          _deviceId!.isNotEmpty) {
+        await api.unregisterIosLiveActivityTokens(
+          api.sessionId!,
+          deviceId: _deviceId,
+        );
       }
       return;
     }
@@ -97,18 +113,13 @@ class LiveActivityService {
     if (!_enabled || kIsWeb || defaultTargetPlatform != TargetPlatform.iOS) {
       return false;
     }
-    final active = _activeEvent;
-    if (active != null && active.id != event.id) {
-      if (event.priority > active.priority) return false;
-      await _endNative(active, immediate: true);
-    }
     try {
       final result = await _channel.invokeMethod<Map<Object?, Object?>>(
         'start',
         _arguments(event),
       );
-      if (result == null || result['ignored'] == true) return false;
-      _activeEvent = event;
+      if (result == null) return false;
+      _activeEvents[event.id] = event;
       return true;
     } on MissingPluginException {
       return false;
@@ -125,7 +136,7 @@ class LiveActivityService {
     try {
       final result =
           await _channel.invokeMethod<bool>('update', _arguments(event));
-      if (result == true) _activeEvent = event;
+      if (result == true) _activeEvents[event.id] = event;
       return result == true;
     } on PlatformException {
       return false;
@@ -138,7 +149,7 @@ class LiveActivityService {
   }) async {
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.iOS) return false;
     final result = await _endNative(event, immediate: immediate);
-    if (result && _activeEvent?.id == event.id) _activeEvent = null;
+    if (result) _activeEvents.remove(event.id);
     return result;
   }
 
@@ -175,6 +186,13 @@ class LiveActivityService {
     final arguments = call.arguments is Map
         ? Map<String, dynamic>.from(call.arguments as Map)
         : <String, dynamic>{};
+    if (call.method == 'activityEnded') {
+      final activityId = arguments['activityId']?.toString();
+      if (activityId != null && activityId.isNotEmpty) {
+        _activeEvents.remove(activityId);
+      }
+      return;
+    }
     final token = arguments['token']?.toString();
     if (token == null || token.isEmpty || !_enabled) return;
     final api = _api;
@@ -187,6 +205,7 @@ class LiveActivityService {
         tokenType: 'activity',
         activityId: arguments['activityId']?.toString(),
         activityType: arguments['activityType']?.toString(),
+        expiresAt: DateTime.tryParse(arguments['expiresAt']?.toString() ?? ''),
       );
     }
   }
@@ -196,6 +215,7 @@ class LiveActivityService {
     required String tokenType,
     String? activityId,
     String? activityType,
+    DateTime? expiresAt,
   }) async {
     final api = _api;
     if (api == null) return;
@@ -205,6 +225,8 @@ class LiveActivityService {
       environment: _iosPushEnvironment,
       activityId: activityId,
       activityType: activityType,
+      deviceId: _deviceId,
+      expiresAt: expiresAt,
     );
   }
 

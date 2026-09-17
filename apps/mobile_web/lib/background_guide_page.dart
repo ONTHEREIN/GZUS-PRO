@@ -44,6 +44,9 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
   bool _webPushSubscribed = false;
   bool _cloudNotificationEnabled = false;
   String? _cloudNotificationError;
+  bool _cloudNotificationSuspended = false;
+  String? _cloudNotificationSuspensionReason;
+  DateTime? _cloudNotificationNextRetryAt;
 
   /// Web Push 是否可用（后端启用 VAPID 且浏览器支持）。
   /// 不可用时只要求通知权限即可完成配置。
@@ -160,6 +163,11 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
       }
       final cloudStatus = await widget.api.fetchBackgroundNotificationStatus();
       cloudEnabled = cloudStatus?.enabled ?? false;
+      if (cloudStatus != null) {
+        _cloudNotificationSuspended = cloudStatus.suspended;
+        _cloudNotificationSuspensionReason = cloudStatus.suspensionReason;
+        _cloudNotificationNextRetryAt = cloudStatus.nextRetryAt;
+      }
       if (cloudStatus?.courseSyncError != null && mounted) {
         _cloudNotificationError = cloudStatus!.courseSyncError;
       }
@@ -302,6 +310,9 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
       setState(() {
         _cloudNotificationEnabled = status.enabled;
         _cloudNotificationError = status.lastError;
+        _cloudNotificationSuspended = status.suspended;
+        _cloudNotificationSuspensionReason = status.suspensionReason;
+        _cloudNotificationNextRetryAt = status.nextRetryAt;
       });
       if (value && _isIos) {
         await reminder_service.loadLibrary();
@@ -658,6 +669,9 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
                   notificationGranted: _notificationGranted,
                   serverPushEnabled: _cloudNotificationEnabled,
                   error: _cloudNotificationError,
+                  suspended: _cloudNotificationSuspended,
+                  suspensionReason: _cloudNotificationSuspensionReason,
+                  nextRetryAt: _cloudNotificationNextRetryAt,
                   checking: _checking || _busy,
                 )
               else
@@ -665,7 +679,9 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
                   contentPadding: EdgeInsets.zero,
                   title: const Text('后台持续通知'),
                   subtitle: Text(
-                    _cloudNotificationError ??
+                    _cloudNotificationSuspended
+                        ? '后台监测已暂停：${_cloudNotificationSuspensionReason ?? '校方设备或会话数达到上限'}${_cloudNotificationNextRetryAt == null ? '' : ' · ${_cloudNotificationNextRetryAt!.toLocal().hour.toString().padLeft(2, '0')}:${_cloudNotificationNextRetryAt!.toLocal().minute.toString().padLeft(2, '0')} 自动重试'}'
+                        : _cloudNotificationError ??
                         '授权后，服务端会加密保存登录凭据，用于在您关闭 App 后检测课程、通知、成绩和考试。',
                   ),
                   value: _cloudNotificationEnabled,
@@ -711,18 +727,29 @@ class _IosServerPushStatus extends StatelessWidget {
     required this.notificationGranted,
     required this.serverPushEnabled,
     required this.error,
+    required this.suspended,
+    required this.suspensionReason,
+    required this.nextRetryAt,
     required this.checking,
   });
 
   final bool notificationGranted;
   final bool serverPushEnabled;
   final String? error;
+  final bool suspended;
+  final String? suspensionReason;
+  final DateTime? nextRetryAt;
   final bool checking;
 
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
-    final detail = error ??
+    final retryText = nextRetryAt == null
+        ? ''
+        : ' · ${nextRetryAt!.toLocal().hour.toString().padLeft(2, '0')}:${nextRetryAt!.toLocal().minute.toString().padLeft(2, '0')} 自动重试';
+    final detail = suspended
+        ? '后台监测已暂停：${suspensionReason ?? '校方设备或会话数达到上限'}$retryText'
+        : error ??
         (notificationGranted
             ? serverPushEnabled
                 ? '已随系统通知权限自动开启服务器推送。'
@@ -734,8 +761,16 @@ class _IosServerPushStatus extends StatelessWidget {
       color: colorScheme.surfaceContainerLow,
       child: ListTile(
         leading: Icon(
-          enabled ? Icons.cloud_done_outlined : Icons.cloud_upload_outlined,
-          color: enabled ? colorScheme.secondary : colorScheme.primary,
+          suspended
+              ? Icons.pause_circle_outline
+              : enabled
+                  ? Icons.cloud_done_outlined
+                  : Icons.cloud_upload_outlined,
+          color: suspended
+              ? colorScheme.error
+              : enabled
+                  ? colorScheme.secondary
+                  : colorScheme.primary,
         ),
         title: const Text('服务器推送通知'),
         subtitle: Text(detail),

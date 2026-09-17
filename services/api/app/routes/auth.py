@@ -283,7 +283,22 @@ def _complete_sso_ticket(ticket: str, request: Request) -> dict:
             detail="统一认证未返回有效学号，请重新登录",
         )
 
-    session = sessions.create(client, student_name, student_account=student_id)
+    from app.school_session_service import record_authenticated_session
+
+    shared = record_authenticated_session(
+        student_id,
+        student_name,
+        client.get_jwxt_cookies_string(),
+        None,
+        None,
+        None,
+    )
+    session = sessions.create(
+        client,
+        student_name,
+        student_account=student_id,
+        school_session_version=shared.version,
+    )
     response = {
         "status": "ok",
         "sessionId": session.id,
@@ -364,11 +379,22 @@ def relogin(payload: ReloginRequest, request: Request) -> dict:
             timeout_seconds=settings.request_timeout_seconds,
         )
 
+    from app.school_session_service import record_authenticated_session
+
+    shared = record_authenticated_session(
+        account,
+        student_name,
+        result.cookies,
+        result.ehall_cookies,
+        result.ehall_auth_token,
+        None,
+    )
     session = sessions.create(
         client, student_name=student_name,
         ehall_client=ehall_client,
         student_account=account,
         credential_fingerprint=fingerprint,
+        school_session_version=shared.version,
     )
 
     response = {
@@ -452,11 +478,22 @@ def auto_login(payload: AutoLoginRequest, request: Request) -> dict:
         payload.account, password, credential_id, settings.credential_encryption_key
     )
 
+    from app.school_session_service import record_authenticated_session
+
+    shared = record_authenticated_session(
+        payload.account,
+        student_name,
+        result.cookies,
+        result.ehall_cookies,
+        result.ehall_auth_token,
+        None,
+    )
     session = sessions.create(
         client, student_name,
         ehall_client=ehall_client,
         student_account=payload.account,
         credential_fingerprint=credential_fingerprint(credential_id),
+        school_session_version=shared.version,
     )
 
     logger.info("[TIMING] auto_login endpoint total: %.2fs", time.time() - t_total)

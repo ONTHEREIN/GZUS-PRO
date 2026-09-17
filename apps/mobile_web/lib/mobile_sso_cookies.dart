@@ -8,6 +8,28 @@ bool isEhallHost(String host) => host.toLowerCase() == 'ehall.gzus.edu.cn';
 
 bool isJwxtHost(String host) => host.toLowerCase() == 'jwxt.gzus.edu.cn';
 
+/// 将办事大厅令牌交给其内置的前端 SSO 流程。
+///
+/// 办事大厅在首屏脚本执行时便会检查 URL 中的 `Authorization` 参数；
+/// 若缺失，即使 WebView 已写入 Cookie，也会立刻跳转 CAS。带 hash 的
+/// 页面将参数保留在 fragment 内，令牌不会发送到服务端或出现在 Referer 中。
+Uri withEhallAuthorization(Uri uri, String authToken) {
+  if (uri.fragment.isEmpty) {
+    return uri.replace(
+      queryParameters: <String, String>{
+        ...uri.queryParameters,
+        'Authorization': authToken,
+      },
+    );
+  }
+  // 与办事大厅前端的 URL 拼接规则保持一致，兼容入口在 hash 前已有查询参数。
+  final separator = uri.toString().contains('?') ? '&' : '?';
+  return uri.replace(
+    fragment: '${uri.fragment}${separator}Authorization='
+        '${Uri.encodeQueryComponent(authToken)}',
+  );
+}
+
 /// 办事大厅 Cookie 只应写入 ehall 域名，避免把 ehall 会话泄漏给教务系统。
 List<String> ehallCookieDomains(Uri targetUri) {
   if (!isGzusHost(targetUri.host)) return const <String>[];

@@ -400,14 +400,6 @@ packages:
       url: "https://pub.flutter-io.cn"
     source: hosted
     version: "4.0.0"
-  ftpconnect:
-    dependency: "direct main"
-    description:
-      name: ftpconnect
-      sha256: a9ebac24a50b17dc9a1101fff85c3729fd8c16ec41346b0fa6e549616e23b2f6
-      url: "https://pub.flutter-io.cn"
-    source: hosted
-    version: "2.0.10"
   gbk_codec:
     dependency: "direct main"
     description:
@@ -528,14 +520,6 @@ packages:
       url: "https://pub.flutter-io.cn"
     source: hosted
     version: "0.2.2"
-  intl:
-    dependency: transitive
-    description:
-      name: intl
-      sha256: "1ca20c894b1717686a2319b8548763d812bc0aabdac580420a44c5178c57a867"
-      url: "https://pub.flutter-io.cn"
-    source: hosted
-    version: "0.20.3"
   io:
     dependency: transitive
     description:
@@ -808,6 +792,13 @@ packages:
       url: "https://pub.flutter-io.cn"
     source: hosted
     version: "2.2.0"
+  reshub_flutter:
+    dependency: "direct main"
+    description:
+      path: "../../third_party/reshub_flutter"
+      relative: true
+    source: path
+    version: "0.0.27"
   riverpod:
     dependency: transitive
     description:

@@ -10,6 +10,8 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../api_client.dart';
 import '../../gzus_design.dart';
 import '../../responsive/spacing.dart';
+import '../../shiply_image.dart';
+import '../../shiply_platform.dart';
 import '../../test_flags.dart';
 import '../../widgets/icon_label.dart';
 import '../../widgets/liquid_glass.dart';
@@ -619,6 +621,11 @@ class _LoginPageState extends State<LoginPage>
         builder: (context, snapshot) {
           final slides = snapshot.data ?? const <LoginCarouselSlide>[];
           _configureCarousel(slides.length);
+          if (snapshot.hasError) {
+            return shiplyPublicContentSupported
+                ? _buildCarouselUnavailable(context, compact)
+                : _buildCarouselFallback(context, compact);
+          }
           if (slides.isEmpty) {
             return _buildCarouselFallback(context, compact);
           }
@@ -673,8 +680,10 @@ class _LoginPageState extends State<LoginPage>
     return Stack(
       fit: StackFit.expand,
       children: [
-        Image.network(
-          widget.api.resolveMediaUrl(slide.imageUrl),
+        Image(
+          image: slide.localImagePath == null
+              ? NetworkImage(widget.api.resolveMediaUrl(slide.imageUrl))
+              : shiplyLocalImageProvider(slide.localImagePath!),
           fit: BoxFit.cover,
           errorBuilder: (_, __, ___) => ColoredBox(color: primary),
         ),
@@ -775,6 +784,27 @@ class _LoginPageState extends State<LoginPage>
                   ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCarouselUnavailable(BuildContext context, bool compact) {
+    final scheme = Theme.of(context).colorScheme;
+    return DecoratedBox(
+      key: const ValueKey('login-carousel-unavailable'),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [scheme.surfaceContainerHighest, scheme.surface],
+        ),
+      ),
+      child: Padding(
+        padding: EdgeInsets.all(compact ? 18 : 36),
+        child: const Align(
+          alignment: Alignment.bottomLeft,
+          child: Text('公共资源暂不可用，请稍后重试'),
         ),
       ),
     );

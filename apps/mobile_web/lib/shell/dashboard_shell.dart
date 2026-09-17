@@ -20,6 +20,8 @@ class DashboardShell extends StatefulWidget {
     required this.studentName,
     required this.themeMode,
     required this.onThemeChanged,
+    required this.fontScale,
+    required this.onFontScaleChanged,
     required this.onLogout,
     this.seedColor = GzusColors.blue,
     this.onSeedColorChanged,
@@ -35,6 +37,8 @@ class DashboardShell extends StatefulWidget {
   final String? studentName;
   final ThemeMode themeMode;
   final ValueChanged<ThemeMode> onThemeChanged;
+  final double fontScale;
+  final ValueChanged<double> onFontScaleChanged;
   final Color seedColor;
   final ValueChanged<Color>? onSeedColorChanged;
   final VoidCallback onLogout;
@@ -276,6 +280,13 @@ class _DashboardShellState extends State<DashboardShell> {
             final mobileSelected =
                 activeMobileIndex >= 0 ? activeMobileIndex : moreMobileIndex;
             if (compact) {
+              // 底栏固定显示时，内容区需为悬浮导航预留空间，避免列表末项
+              // （例如「更多」中的退出登录）被底栏遮挡。
+              final mobileContentBottomInset = _autoHideNavBar
+                  ? GzusSpacing.none
+                  : _mobileNavBarHeight +
+                      GzusSpacing.s +
+                      MediaQuery.paddingOf(context).bottom;
               return _withIosBackGesture(Stack(
                 children: [
                   Positioned.fill(
@@ -362,7 +373,7 @@ class _DashboardShellState extends State<DashboardShell> {
                                 GzusInsets.contentGutter(context),
                                 8,
                                 GzusInsets.contentGutter(context),
-                                0,
+                                mobileContentBottomInset,
                               ),
                               child: Theme(
                                 data: Theme.of(context).copyWith(
@@ -499,9 +510,11 @@ class _DashboardShellState extends State<DashboardShell> {
   }
 
   List<NavTabConfig> _filterRestrictedTabs(List<NavTabConfig> tabs) {
-    return tabs
-        .where((t) => !hideEcardOnCurrentPlatform || t.tabId != 'ecard')
-        .toList();
+    return tabs.where((t) {
+      if (hideEcardOnCurrentPlatform && t.tabId == 'ecard') return false;
+      if (kIsWeb && t.tabId == 'leave') return false;
+      return true;
+    }).toList();
   }
 
   /// 惰性保活页面栈：页面首次激活时才构建，之后常驻 Stack 不销毁。
@@ -643,7 +656,7 @@ class _DashboardShellState extends State<DashboardShell> {
             term: term,
             onSessionExpired: widget.onLogout);
       case 'leave':
-        if (hideEcardOnCurrentPlatform) {
+        if (kIsWeb) {
           return const WebUnsupportedPage(
             title: '自动请假',
             icon: Icons.fact_check,
@@ -704,6 +717,8 @@ class _DashboardShellState extends State<DashboardShell> {
             term: term,
             themeMode: widget.themeMode,
             onThemeChanged: widget.onThemeChanged,
+            fontScale: widget.fontScale,
+            onFontScaleChanged: widget.onFontScaleChanged,
             seedColor: widget.seedColor,
             onSeedColorChanged: widget.onSeedColorChanged,
             onLogout: widget.onLogout,
@@ -745,6 +760,7 @@ class _DashboardShellState extends State<DashboardShell> {
 
   void _navigateToTab(String tabId) {
     if (hideEcardOnCurrentPlatform && tabId == 'ecard') return;
+    if (kIsWeb && tabId == 'leave') return;
     final activeTabId = _activeTabId;
     if (activeTabId == tabId) return;
     _recordTabHistory(activeTabId);

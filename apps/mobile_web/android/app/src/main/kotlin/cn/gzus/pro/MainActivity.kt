@@ -239,6 +239,7 @@ class MainActivity : FlutterActivity() {
                         action = BackgroundService.ACTION_START
                         putExtra(BackgroundService.EXTRA_API_BASE_URL, call.argument<String>("apiBaseUrl"))
                         putExtra(BackgroundService.EXTRA_SESSION_ID, call.argument<String>("sessionId"))
+                        putExtra(BackgroundService.EXTRA_INSTALLATION_ID, call.argument<String>("installationId"))
                     }
                     try {
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -268,11 +269,12 @@ class MainActivity : FlutterActivity() {
                 }
                 "updateCourseReminders" -> {
                     val coursesJson = call.argument<String>("coursesJson") ?: "[]"
+                    val effectiveOccurrencesJson = call.argument<String>("effectiveOccurrencesJson") ?: "[]"
                     val beforeStartMinutes = call.argument<Int>("beforeStartMinutes") ?: 10
                     val beforeEndMinutes = call.argument<Int>("beforeEndMinutes") ?: 5
                     val firstWeekStart = call.argument<String>("firstWeekStart") ?: ""
                     CourseReminderScheduler.saveCourseData(
-                        this, coursesJson, beforeStartMinutes, beforeEndMinutes, firstWeekStart
+                        this, coursesJson, effectiveOccurrencesJson, beforeStartMinutes, beforeEndMinutes, firstWeekStart
                     )
                     result.success(true)
                 }

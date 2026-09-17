@@ -32,6 +32,7 @@ import WidgetKit
   private let locationChannelName = "cn.gzus.pro/location"
   private let pushChannelName = "cn.gzus.pro/push"
   private let calendarChannelName = "cn.gzus.pro/calendar"
+  private let selectedCalendarDefaultsKey = "onegzus.selected.calendar.identifier"
   private let remotePushTokenDefaultsKey = "remote_push_token"
   private let notificationOpenDefaultsKey = "notification_open_extras"
   /// 课程节次时间表（与 lib/schedule_utils.dart 的 scheduleTimes 保持一致）
@@ -229,6 +230,10 @@ import WidgetKit
   }
 
   private func handleCalendarMethod(call: FlutterMethodCall, result: @escaping FlutterResult) {
+    if call.method == "listCalendars" {
+      listWritableCalendars(result: result)
+      return
+    }
     guard call.method == "importEvents" else {
       result(FlutterMethodNotImplemented)
       return
@@ -239,18 +244,99 @@ import WidgetKit
       result(0)
       return
     }
-    importEventsToCalendar(events, result: result)
+    let calendarIdentifier = arguments["calendarIdentifier"] as? String
+    let cleanupStale = arguments["cleanupStale"] as? Bool ?? true
+    let migrateLegacy = arguments["migrateLegacy"] as? Bool ?? false
+    importEventsToCalendar(
+      events,
+      calendarIdentifier: calendarIdentifier,
+      cleanupStale: cleanupStale,
+      migrateLegacy: migrateLegacy,
+      result: result
+    )
+  }
+
+  private func listWritableCalendars(result: @escaping FlutterResult) {
+    let store = EKEventStore()
+    if #available(iOS 17.0, *) {
+      let status = EKEventStore.authorizationStatus(for: .event)
+      if status == .notDetermined {
+        store.requestFullAccessToEvents { [weak self] granted, error in
+          DispatchQueue.main.async {
+            guard let self else {
+              result(FlutterError(code: "CALENDAR_PERMISSION_DENIED", message: "日历授权请求已失效", details: nil))
+              return
+            }
+            guard granted else {
+              result(FlutterError(code: "CALENDAR_PERMISSION_DENIED", message: "未授予完整日历访问权限", details: error?.localizedDescription))
+              return
+            }
+            self.listWritableCalendars(result: result)
+          }
+        }
+        return
+      }
+      guard status == .fullAccess else {
+        result(FlutterError(code: "CALENDAR_PERMISSION_REQUIRED", message: "需要完整日历访问权限才能读取可写日历", details: nil))
+        return
+      }
+    } else {
+      let status = EKEventStore.authorizationStatus(for: .event)
+      if status == .notDetermined {
+        store.requestAccess(to: .event) { [weak self] granted, error in
+          DispatchQueue.main.async {
+            guard let self else {
+              result(FlutterError(code: "CALENDAR_PERMISSION_DENIED", message: "日历授权请求已失效", details: nil))
+              return
+            }
+            guard granted else {
+              result(FlutterError(code: "CALENDAR_PERMISSION_DENIED", message: "未授予日历访问权限", details: error?.localizedDescription))
+              return
+            }
+            self.listWritableCalendars(result: result)
+          }
+        }
+        return
+      }
+      guard status == .authorized else {
+        result(FlutterError(code: "CALENDAR_PERMISSION_REQUIRED", message: "需要日历访问权限才能读取可写日历", details: nil))
+        return
+      }
+    }
+    let calendars = store.calendars(for: .event).filter { $0.allowsContentModifications }
+    let rangeStart = Date().addingTimeInterval(-86400 * 365)
+    let rangeEnd = Date().addingTimeInterval(86400 * 365)
+    result(calendars.map { calendar in
+      let predicate = store.predicateForEvents(
+        withStart: rangeStart,
+        end: rangeEnd,
+        calendars: [calendar]
+      )
+      let legacyEventCount = store.events(matching: predicate).filter {
+        $0.notes?.contains("OneGZUS-ID:") == true
+      }.count
+      return [
+        "identifier": calendar.calendarIdentifier,
+        "title": calendar.title,
+        "legacyEventCount": legacyEventCount,
+      ]
+    })
   }
 
   private func importEventsToCalendar(
     _ events: [[String: Any]],
+    calendarIdentifier: String?,
+    cleanupStale: Bool,
+    migrateLegacy: Bool,
     result: @escaping FlutterResult
   ) {
     let store = EKEventStore()
     if #available(iOS 17.0, *) {
       switch EKEventStore.authorizationStatus(for: .event) {
-      case .fullAccess, .writeOnly:
-        insertCalendarEvents(events, store: store, result: result)
+      case .fullAccess:
+        insertCalendarEvents(events, calendarIdentifier: calendarIdentifier, cleanupStale: cleanupStale, migrateLegacy: migrateLegacy, store: store, result: result)
+      case .writeOnly:
+        result(FlutterError(code: "CALENDAR_FULL_ACCESS_REQUIRED", message: "当前仅有写入权限，无法读取日历完成去重。请在系统设置中授予完整访问权限。", details: nil))
       case .notDetermined:
         store.requestFullAccessToEvents { [weak self] granted, error in
           DispatchQueue.main.async {
@@ -259,7 +345,7 @@ import WidgetKit
               return
             }
             if granted {
-              self.insertCalendarEvents(events, store: store, result: result)
+              self.insertCalendarEvents(events, calendarIdentifier: calendarIdentifier, cleanupStale: cleanupStale, migrateLegacy: migrateLegacy, store: store, result: result)
             } else {
               result(FlutterError(
                 code: "CALENDAR_PERMISSION_DENIED",
@@ -279,7 +365,7 @@ import WidgetKit
     } else {
       switch EKEventStore.authorizationStatus(for: .event) {
       case .authorized:
-        insertCalendarEvents(events, store: store, result: result)
+        insertCalendarEvents(events, calendarIdentifier: calendarIdentifier, cleanupStale: cleanupStale, migrateLegacy: migrateLegacy, store: store, result: result)
       case .notDetermined:
         store.requestAccess(to: .event) { [weak self] granted, error in
           DispatchQueue.main.async {
@@ -288,7 +374,7 @@ import WidgetKit
               return
             }
             if granted {
-              self.insertCalendarEvents(events, store: store, result: result)
+              self.insertCalendarEvents(events, calendarIdentifier: calendarIdentifier, cleanupStale: cleanupStale, migrateLegacy: migrateLegacy, store: store, result: result)
             } else {
               result(FlutterError(
                 code: "CALENDAR_PERMISSION_DENIED",
@@ -310,10 +396,16 @@ import WidgetKit
 
   private func insertCalendarEvents(
     _ events: [[String: Any]],
+    calendarIdentifier: String?,
+    cleanupStale: Bool,
+    migrateLegacy: Bool,
     store: EKEventStore,
     result: @escaping FlutterResult
   ) {
-    guard let targetCalendar = store.defaultCalendarForNewEvents else {
+    let rememberedIdentifier = calendarIdentifier ?? UserDefaults.standard.string(forKey: selectedCalendarDefaultsKey)
+    let targetCalendar = rememberedIdentifier.flatMap { store.calendar(withIdentifier: $0) }
+      ?? store.defaultCalendarForNewEvents
+    guard let targetCalendar, targetCalendar.allowsContentModifications else {
       result(FlutterError(
         code: "NO_CALENDAR",
         message: "设备上没有可写入的系统日历",
@@ -324,7 +416,9 @@ import WidgetKit
     var added = 0
     var updated = 0
     var skipped = 0
+    var deleted = 0
     var lastError: String?
+    var desiredMarkers = Set<String>()
     for raw in events {
       guard let start = (raw["startMillis"] as? NSNumber)?.doubleValue,
             let end = (raw["endMillis"] as? NSNumber)?.doubleValue else {
@@ -336,6 +430,7 @@ import WidgetKit
         continue
       }
       let marker = "OneGZUS-ID:\(sourceId)"
+      desiredMarkers.insert(marker)
       let startDate = Date(timeIntervalSince1970: start / 1000)
       let endDate = Date(timeIntervalSince1970: end / 1000)
       let predicate = store.predicateForEvents(
@@ -371,8 +466,46 @@ import WidgetKit
         lastError = error.localizedDescription
       }
     }
+    if migrateLegacy {
+      let legacyCalendars = store.calendars(for: .event).filter {
+        $0.allowsContentModifications && $0.calendarIdentifier != targetCalendar.calendarIdentifier
+      }
+      let legacyStart = Date().addingTimeInterval(-86400 * 365)
+      let legacyEnd = Date().addingTimeInterval(86400 * 365)
+      let legacyPredicate = store.predicateForEvents(
+        withStart: legacyStart,
+        end: legacyEnd,
+        calendars: legacyCalendars
+      )
+      for legacy in store.events(matching: legacyPredicate) {
+        guard legacy.notes?.contains("OneGZUS-ID:") == true else { continue }
+        do {
+          try store.remove(legacy, span: .thisEvent, commit: true)
+          deleted += 1
+        } catch {
+          lastError = error.localizedDescription
+        }
+      }
+    }
+    if cleanupStale {
+      let rangeStart = Date().addingTimeInterval(-86400 * 30)
+      let rangeEnd = Date().addingTimeInterval(86400 * 365)
+      let stalePredicate = store.predicateForEvents(withStart: rangeStart, end: rangeEnd, calendars: [targetCalendar])
+      for stale in store.events(matching: stalePredicate) {
+        guard let notes = stale.notes else { continue }
+        let marker = notes.split(separator: "\n").first(where: { $0.hasPrefix("OneGZUS-ID:") }).map(String.init)
+        guard let marker, marker.hasPrefix("OneGZUS-ID:"), !desiredMarkers.contains(marker) else { continue }
+        do {
+          try store.remove(stale, span: .thisEvent, commit: true)
+          deleted += 1
+        } catch {
+          lastError = error.localizedDescription
+        }
+      }
+    }
     if added + updated + skipped > 0 {
-      result(["added": added, "updated": updated, "skipped": skipped])
+      UserDefaults.standard.set(targetCalendar.calendarIdentifier, forKey: selectedCalendarDefaultsKey)
+      result(["added": added, "updated": updated, "deleted": deleted, "skipped": skipped, "calendarName": targetCalendar.title])
     } else {
       result(FlutterError(
         code: "CALENDAR_SAVE_FAILED",

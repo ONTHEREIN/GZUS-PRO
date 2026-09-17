@@ -24,6 +24,23 @@ _PASS_VALUES: Final[frozenset[str]] = frozenset(
 _FAIL_VALUES: Final[frozenset[str]] = frozenset(
     {"不及格", "不通过", "未通过", "挂科", "fail", "failed", "unqualified", "false", "0"}
 )
+_LIVE_ACTIVITY_PRIORITIES: Final[dict[str, int]] = {
+    "course_reminder": 2,
+    "exam_reminder": 3,
+    "business_reminder": 3,
+    "grade_update": 4,
+    "attendance_update": 4,
+    "business_update": 4,
+    "new_notice": 4,
+    "ecard_reminder": 5,
+}
+
+
+def live_activity_priority(notification_type: str, ongoing: bool) -> int:
+    """返回统一的展示相关性等级；该值不参与服务端投递决策。"""
+    if ongoing and notification_type in {"course_reminder", "exam_reminder"}:
+        return 1
+    return _LIVE_ACTIVITY_PRIORITIES.get(notification_type, 5)
 
 
 def _text(value: object) -> str:

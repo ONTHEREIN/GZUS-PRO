@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -80,9 +81,11 @@ class NavTabConfig {
         shortLabel: '上传'),
   ];
 
-  static List<NavTabConfig> get available => hideEcardOnCurrentPlatform
-      ? all.where((tab) => tab.tabId != 'ecard').toList()
-      : all;
+  static List<NavTabConfig> get available => all.where((tab) {
+        if (hideEcardOnCurrentPlatform && tab.tabId == 'ecard') return false;
+        if (kIsWeb && tab.tabId == 'leave') return false;
+        return true;
+      }).toList();
 
   static const moreTab = NavTabConfig(
       tabId: 'more',
@@ -97,7 +100,7 @@ class NavTabConfig {
       'info',
       'applications',
       'schedule',
-      'leave',
+      if (!kIsWeb) 'leave',
       'attendance',
       'exams',
       'grades',

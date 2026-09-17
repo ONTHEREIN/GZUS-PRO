@@ -1,26 +1,16 @@
 #import "ShiplyManager.h"
-
-#import <ShiplyPro/Shiply.h>
-#import <ShiplyPro/ShiplyLoggerProtocol.h>
 #import <UIKit/UIKit.h>
+#import <reshub_flutter/ResHubDependImpl.h>
+#import <reshub_flutter/ReshubHostApiImpl.h>
+#import <ShiplyResHub/ResHub.h>
+#import <ShiplyResHub/ResHubCenter.h>
+#import <ShiplyResHub/ResHubParam+Private.h>
+#import <ShiplyResHub/ResHubParam.h>
 #import <sys/utsname.h>
 
-@interface ShiplyLogger : NSObject <ShiplyLoggerProtocol>
-@end
-
-@implementation ShiplyLogger
-
-- (void)logMsg:(NSString *)msg level:(RAFTLogLevel)level {
-    (void)level;
-    NSLog(@"[Shiply] %@", msg);
-}
-
-@end
-
 @interface ShiplyManager ()
-@property (nonatomic, strong, nullable) Shiply *shiply;
-@property (nonatomic, strong) ShiplyLogger *logger;
 @property (nonatomic, strong) FlutterMethodChannel *channel;
+@property (nonatomic, assign) BOOL initialized;
 @end
 
 @implementation ShiplyManager
@@ -35,27 +25,22 @@
 }
 
 - (void)initializeSDK {
-    if (self.shiply != nil) {
+    if (self.initialized) {
         return;
     }
-
-    ShiplyParams *params = [[ShiplyParams alloc] init];
-    params.appId = @"29f3fb41fe";
-    params.appKey = @"7332bf11-142b-44d0-8ea3-d45d3655f7de";
-    params.deviceId = [self deviceIdentifier];
-    // SharedPreferences 在 iOS 上使用 UserDefaults；优先带 flutter 前缀的键，兼容旧数据。
-    params.userId = [self storedStudentId] ?: @"";
-    params.devModel = [self deviceModel];
-    params.hostAppVersion = [NSBundle mainBundle].infoDictionary[@"CFBundleShortVersionString"] ?: @"";
-    params.systemVersion = UIDevice.currentDevice.systemVersion;
-    params.appChannel = @"gzus_pro";
-    params.platform = ShiplyPlatformIOS;
-
-    self.logger = [[ShiplyLogger alloc] init];
-    self.shiply = [[Shiply alloc] initWithParams:params loggerDelegate:self.logger];
-
-    // getResHubInstance() 内部使用 APP_START | SCHEDULED 更新策略，创建即启用启动时拉取。
-    (void)[self.shiply getResHubInstance];
+    ResHubParam *param = [[ResHubParam alloc] init];
+    param.appVersion = NSBundle.mainBundle.infoDictionary[@"CFBundleShortVersionString"] ?: @"";
+    param.qimei = [self deviceIdentifier];
+    param.deviceType = [self deviceModel];
+    param.systemVersion = UIDevice.currentDevice.systemVersion;
+    param.callbackOnMainThread = YES;
+    param.fetchProjectWhenAppOnly = YES;
+    param.depends = [ResHubDependImpl defaultDepends];
+    param.environment = ResHubEnvironmentRelease;
+    [[ResHubCenter sharedInstance] initSDK:param];
+    // Flutter Wrapper 后续只负责创建资源产品实例，避免重复初始化 ResHubCenter。
+    [[ReshubHostApiImpl sharedInstance] markHasInitReshubCenter];
+    self.initialized = YES;
 }
 
 - (void)registerWithMessenger:(NSObject<FlutterBinaryMessenger> *)messenger {
@@ -72,7 +57,6 @@
             return;
         }
         if ([call.method isEqualToString:@"getResHubInstance"]) {
-            [strongSelf initializeSDK];
             result(@YES);
             return;
         }
@@ -83,14 +67,6 @@
 - (NSString *)deviceIdentifier {
     NSString *identifier = UIDevice.currentDevice.identifierForVendor.UUIDString;
     return identifier.length > 0 ? identifier : [NSUUID UUID].UUIDString;
-}
-
-- (NSString *)storedStudentId {
-    NSString *studentId = [[NSUserDefaults standardUserDefaults] stringForKey:@"flutter.auth.studentId"];
-    if (studentId.length == 0) {
-        studentId = [[NSUserDefaults standardUserDefaults] stringForKey:@"auth.studentId"];
-    }
-    return studentId.length > 0 ? studentId : nil;
 }
 
 - (NSString *)deviceModel {

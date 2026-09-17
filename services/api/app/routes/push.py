@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request, Header, status
 
 from app.config import get_settings
@@ -14,12 +14,18 @@ from app.schemas import (
     IosCourseScheduleSyncRequest,
     IosLiveActivityTokenRequest,
     IosPushTokenRequest,
+    IosLiveActivityTokenUnregisterRequest,
+    IosLiveActivityTokensUnregisterRequest,
     WebPushConfigResponse,
     WebPushSubscriptionRequest,
+    WebPushSubscriptionUnregisterRequest,
 )
 from app.sessions import AppSession, student_id_of
 
 router = APIRouter(prefix="/push", tags=["push"])
+
+_LEGACY_ACTIVITY_TOKEN_TTL = timedelta(hours=6)
+_ACTIVITY_EXPIRY_GRACE = timedelta(minutes=15)
 
 
 class _TestPushClient:
@@ -98,6 +104,7 @@ def register_web_push(
 
 @router.post("/web/unregister")
 def unregister_web_push(
+    payload: WebPushSubscriptionUnregisterRequest | None = None,
     session: AppSession = Depends(require_session),
 ) -> dict[str, str]:
     student_id = student_id_of(session)
@@ -106,9 +113,12 @@ def unregister_web_push(
     
     factory = get_sync_session_factory()
     with factory() as db:
-        db.query(WebPushSubscription).filter(
+        query = db.query(WebPushSubscription).filter(
             WebPushSubscription.student_id == student_id
-        ).delete()
+        )
+        if payload is not None and payload.endpoint:
+            query = query.filter(WebPushSubscription.endpoint == payload.endpoint)
+        query.delete(synchronize_session=False)
         db.commit()
     
     return {"status": "ok"}
@@ -207,8 +217,30 @@ def register_ios_live_activity_token(
         raise HTTPException(status_code=422, detail="activity token 缺少 activityId")
 
     token = payload.token.lower()
+    now = datetime.now(timezone.utc)
+    expires_at = None
+    if payload.token_type == "activity":
+        if payload.expires_at is None:
+            expires_at = now + _LEGACY_ACTIVITY_TOKEN_TTL
+        else:
+            expires_at = payload.expires_at
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            expires_at = expires_at.astimezone(timezone.utc) + _ACTIVITY_EXPIRY_GRACE
     factory = get_sync_session_factory()
     with factory() as db:
+        if payload.device_id:
+            stale_rows = db.query(IosLiveActivityToken).filter_by(
+                student_id=student_id,
+                environment=payload.environment,
+                token_type=payload.token_type,
+                device_id=payload.device_id,
+            )
+            if payload.token_type == "activity":
+                stale_rows = stale_rows.filter(IosLiveActivityToken.activity_id == payload.activity_id)
+            for stale_row in stale_rows.all():
+                if stale_row.token != token:
+                    db.delete(stale_row)
         existing = db.query(IosLiveActivityToken).filter(
             IosLiveActivityToken.token == token,
             IosLiveActivityToken.environment == payload.environment,
@@ -218,7 +250,9 @@ def register_ios_live_activity_token(
             existing.student_id = student_id
             existing.activity_id = payload.activity_id
             existing.activity_type = payload.activity_type
-            existing.updated_at = datetime.now(timezone.utc)
+            existing.device_id = payload.device_id
+            existing.expires_at = expires_at
+            existing.updated_at = now
         else:
             db.add(IosLiveActivityToken(
                 student_id=student_id,
@@ -227,13 +261,16 @@ def register_ios_live_activity_token(
                 environment=payload.environment,
                 activity_id=payload.activity_id,
                 activity_type=payload.activity_type,
+                device_id=payload.device_id,
+                expires_at=expires_at,
             ))
         db.commit()
     return {"status": "ok"}
 
 
-@router.post("/ios/live-activity-tokens/unregister")
-def unregister_ios_live_activity_tokens(
+@router.post("/ios/live-activity-tokens/activity/unregister")
+def unregister_ios_live_activity_token(
+    payload: IosLiveActivityTokenUnregisterRequest,
     session: AppSession = Depends(require_session),
 ) -> dict[str, str]:
     student_id = student_id_of(session)
@@ -241,9 +278,33 @@ def unregister_ios_live_activity_tokens(
         return {"status": "error", "message": "Student ID not found"}
     factory = get_sync_session_factory()
     with factory() as db:
-        db.query(IosLiveActivityToken).filter(
+        db.query(IosLiveActivityToken).filter_by(
+            student_id=student_id,
+            token_type="activity",
+            environment=payload.environment,
+            activity_id=payload.activity_id,
+            device_id=payload.device_id,
+        ).delete(synchronize_session=False)
+        db.commit()
+    return {"status": "ok"}
+
+
+@router.post("/ios/live-activity-tokens/unregister")
+def unregister_ios_live_activity_tokens(
+    payload: IosLiveActivityTokensUnregisterRequest | None = None,
+    session: AppSession = Depends(require_session),
+) -> dict[str, str]:
+    student_id = student_id_of(session)
+    if not student_id:
+        return {"status": "error", "message": "Student ID not found"}
+    factory = get_sync_session_factory()
+    with factory() as db:
+        query = db.query(IosLiveActivityToken).filter(
             IosLiveActivityToken.student_id == student_id
-        ).delete()
+        )
+        if payload is not None and payload.device_id:
+            query = query.filter(IosLiveActivityToken.device_id == payload.device_id)
+        query.delete(synchronize_session=False)
         db.commit()
     return {"status": "ok"}
 

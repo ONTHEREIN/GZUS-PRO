@@ -1,9 +1,12 @@
+from datetime import datetime, timezone
+
 import pytest
 from sqlalchemy import event, inspect
 from sqlalchemy.exc import NoSuchTableError
 
 from app import database
 from app.config import get_settings
+from app.database import IosLiveActivityToken, get_sync_session_factory
 
 
 def test_requires_database_url(monkeypatch):
@@ -94,3 +97,32 @@ def test_init_db_initializes_schema_in_production(monkeypatch):
 
     assert database._db_initialized is True
     assert database._engine is not None
+
+
+def test_init_db_removes_legacy_activity_tokens_without_expiry():
+    database.init_db()
+    factory = get_sync_session_factory()
+    with factory() as db:
+        db.add(IosLiveActivityToken(
+            student_id="20260001",
+            token_type="activity",
+            token="a" * 64,
+            environment="production",
+            activity_id="legacy:activity",
+        ))
+        db.add(IosLiveActivityToken(
+            student_id="20260001",
+            token_type="activity",
+            token="b" * 64,
+            environment="production",
+            activity_id="new:activity",
+            expires_at=datetime.now(timezone.utc),
+        ))
+        db.commit()
+
+    database._db_initialized = False
+    database.init_db()
+
+    with factory() as db:
+        assert db.query(IosLiveActivityToken).filter_by(token="a" * 64).count() == 0
+        assert db.query(IosLiveActivityToken).filter_by(token="b" * 64).count() == 1

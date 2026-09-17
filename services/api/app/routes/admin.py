@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -18,9 +19,11 @@ from app.database import (
     AdminUser,
     AppSessionModel,
     BackgroundNotificationProfile,
+    CredentialRevocation,
     Base,
     DataCache,
     EcardBinding,
+    FeedbackTicket,
     MaintenanceJobStatus,
     WebPushSubscription,
     get_sync_engine,
@@ -28,6 +31,7 @@ from app.database import (
 )
 from app.routes.deps import require_admin
 from app.sessions import AppSession, student_id_of
+from app.shiply_content import ShiplyContentExportError, build_public_content_bundle
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +54,7 @@ def ensure_admin_tables() -> None:
         tables=[
             AdminUser.__table__,
             AdminAuditLog.__table__,
+            FeedbackTicket.__table__,
             AdminNotice.__table__,
             LoginCarouselSlide.__table__,
         ],
@@ -125,6 +130,7 @@ def _session_row_to_dict(row: AppSessionModel) -> dict[str, Any]:
 
 # ─── 请求/响应模型 ─────────────────────────────────────────────
 
+
 class AdminMeResponse(BaseModel):
     is_admin: bool = True
     role: str
@@ -138,6 +144,7 @@ class AdminUserPayload(BaseModel):
 
 # ─── 端点 ──────────────────────────────────────────────────────
 
+
 @router.get("/me", response_model=AdminMeResponse)
 def admin_me(
     session: AppSession = Depends(require_admin),
@@ -145,6 +152,44 @@ def admin_me(
     """当前会话的管理员身份与角色（前端恢复会话后确认 isAdmin 用）。"""
     student_id = student_id_of(session)
     return AdminMeResponse(role=_current_role(session), student_id=student_id)
+
+
+@router.post("/shiply/public-content/export")
+def admin_shiply_public_content_export(
+    request: Request,
+    session: AppSession = Depends(require_admin),
+) -> Response:
+    """生成供管理员下载并手动上传到 Shiply 的公共资源 ZIP。"""
+    ensure_admin_tables()
+    try:
+        bundle = build_public_content_bundle()
+    except ShiplyContentExportError as exc:
+        logger.error("shiply public content export failed: %s", exc)
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    operator_id = student_id_of(session)
+    factory = get_sync_session_factory()
+    with factory() as db:
+        _log_audit(
+            db,
+            operator_id=operator_id,
+            action="export_shiply_public_content",
+            target_type="shiply_resource",
+            target_id="gzus_public_content",
+            detail=json.dumps(
+                {"sha256": bundle.sha256, "generatedAt": bundle.generated_at, "counts": bundle.counts},
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+        )
+        db.commit()
+    headers = {
+        "Content-Disposition": 'attachment; filename="gzus_public_content.zip"',
+        "X-Shiply-Content-Sha256": bundle.sha256,
+        "X-Shiply-Generated-At": bundle.generated_at,
+        "X-Shiply-Content-Counts": json.dumps(bundle.counts, ensure_ascii=False, separators=(",", ":")),
+    }
+    return Response(content=bundle.archive, media_type="application/zip", headers=headers)
 
 
 @router.get("/overview")
@@ -165,8 +210,12 @@ def admin_overview(
             .filter(AppSessionModel.revoked_at.is_(None))
             .count()
         )
-        sessions_today = db.query(AppSessionModel).filter(AppSessionModel.created_at >= today_start).count()
-        revoked_sessions = db.query(AppSessionModel).filter(AppSessionModel.revoked_at.is_not(None)).count()
+        sessions_today = (
+            db.query(AppSessionModel).filter(AppSessionModel.created_at >= today_start).count()
+        )
+        revoked_sessions = (
+            db.query(AppSessionModel).filter(AppSessionModel.revoked_at.is_not(None)).count()
+        )
         web_push = db.query(WebPushSubscription).count()
         ecard_bindings = db.query(EcardBinding).count()
         cache_entries = db.query(DataCache).count()
@@ -223,19 +272,35 @@ def revoke_session(
         if row.revoked_at is not None:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="会话已下线")
         if row.id == session.id:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="不能下线自己的会话")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="不能下线自己的会话"
+            )
         if _current_role(session) != "owner" and bool(getattr(row, "is_admin", False)):
             target_role = admin_role_of(row.student_account) if row.student_account else None
             if target_role == "owner":
-                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="不能下线 owner 管理员")
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN, detail="不能下线 owner 管理员"
+                )
         credential_fingerprint = row.credential_fingerprint
 
     request.app.state.sessions.revoke(session_id, reason="admin_kick")
     if credential_fingerprint:
         request.app.state.sessions.revoke_credential(credential_fingerprint, reason="admin_kick")
+    if row.student_account and credential_fingerprint:
+        from app.school_session_service import revoke_account_school_access
+
+        # 管理员撤销任一设备凭据即要求该账号重新授权，清理后台配置、共享学校会话及其它前台会话。
+        revoke_account_school_access(row.student_account)
 
     with factory() as db:
         if credential_fingerprint:
+            if db.get(CredentialRevocation, credential_fingerprint) is None:
+                db.add(
+                    CredentialRevocation(
+                        credential_fingerprint=credential_fingerprint,
+                        reason="admin_kick",
+                    )
+                )
             db.query(BackgroundNotificationProfile).filter(
                 BackgroundNotificationProfile.credential_fingerprint == credential_fingerprint
             ).delete()
@@ -295,7 +360,9 @@ def admin_users_add(
             detail=payload.role,
         )
         db.commit()
-    logger.info("Admin %s added admin user %s (role=%s)", operator_id, payload.student_id, payload.role)
+    logger.info(
+        "Admin %s added admin user %s (role=%s)", operator_id, payload.student_id, payload.role
+    )
     return {"ok": True, "studentId": payload.student_id, "role": payload.role}
 
 
@@ -310,16 +377,16 @@ def admin_users_remove(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="仅 owner 可删除管理员")
     operator_id = student_id_of(session)
     if student_id == operator_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="不能删除自己的管理员身份")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="不能删除自己的管理员身份"
+        )
     factory = get_sync_session_factory()
     with factory() as db:
         row = db.query(AdminUser).filter(AdminUser.student_id == student_id).first()
         if row is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="该学号不是管理员")
         if row.role == "owner":
-            owner_count = (
-                db.query(AdminUser).filter(AdminUser.role == "owner").count()
-            )
+            owner_count = db.query(AdminUser).filter(AdminUser.role == "owner").count()
             if owner_count <= 1:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -357,7 +424,9 @@ def admin_push(
         web_items = [
             {
                 "studentId": row.student_id,
-                "endpoint": row.endpoint[:48] + "…" if len(row.endpoint or "") > 48 else row.endpoint,
+                "endpoint": row.endpoint[:48] + "…"
+                if len(row.endpoint or "") > 48
+                else row.endpoint,
                 "userAgent": row.user_agent,
                 "createdAt": row.created_at,
             }
@@ -422,7 +491,9 @@ def admin_cache_clear(
             detail=f"deleted={deleted}",
         )
         db.commit()
-    logger.info("Admin %s cleared cache (resource=%s, deleted=%d)", operator_id, resource or "*", deleted)
+    logger.info(
+        "Admin %s cleared cache (resource=%s, deleted=%d)", operator_id, resource or "*", deleted
+    )
     return {"ok": True, "deleted": deleted}
 
 
@@ -437,7 +508,9 @@ def admin_ecard(
     factory = get_sync_session_factory()
     with factory() as db:
         total = db.query(EcardBinding).count()
-        reminder_enabled = db.query(EcardBinding).filter(EcardBinding.reminder_enabled.is_(True)).count()
+        reminder_enabled = (
+            db.query(EcardBinding).filter(EcardBinding.reminder_enabled.is_(True)).count()
+        )
         rows = (
             db.query(EcardBinding)
             .order_by(EcardBinding.updated_at.desc())
@@ -487,6 +560,7 @@ def admin_status(
         background_notification_profiles = db.query(BackgroundNotificationProfile).count()
     from app.apns_service import apns_configuration_error, is_apns_enabled
     from app.push import is_web_push_enabled
+
     return {
         "status": "ok",
         "debug": settings.debug,
@@ -513,12 +587,7 @@ def admin_audit_log(
     factory = get_sync_session_factory()
     with factory() as db:
         total = db.query(AdminAuditLog).count()
-        rows = (
-            db.query(AdminAuditLog)
-            .order_by(AdminAuditLog.created_at.desc())
-            .limit(limit)
-            .all()
-        )
+        rows = db.query(AdminAuditLog).order_by(AdminAuditLog.created_at.desc()).limit(limit).all()
         items = [
             {
                 "operatorId": row.operator_id,
@@ -531,6 +600,87 @@ def admin_audit_log(
             for row in rows
         ]
     return {"total": total, "items": items}
+
+
+# ─── 用户反馈工单 ─────────────────────────────────────────────
+
+
+def _feedback_attachments(row: FeedbackTicket, include_content: bool) -> list[dict[str, Any]]:
+    try:
+        raw_attachments = json.loads(row.attachments_json or "[]")
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"反馈工单 #{row.id} 的附件数据损坏") from exc
+    if not isinstance(raw_attachments, list):
+        raise RuntimeError(f"反馈工单 #{row.id} 的附件数据格式无效")
+
+    result: list[dict[str, Any]] = []
+    for item in raw_attachments:
+        if not isinstance(item, dict):
+            raise RuntimeError(f"反馈工单 #{row.id} 的附件条目格式无效")
+        attachment = {
+            "name": str(item.get("name") or "附件"),
+            "mimeType": str(item.get("mimeType") or "application/octet-stream"),
+            "size": int(item.get("size") or 0),
+        }
+        if include_content:
+            attachment["contentBase64"] = str(item.get("contentBase64") or "")
+        result.append(attachment)
+    return result
+
+
+def _feedback_to_dict(row: FeedbackTicket, include_details: bool) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "id": row.id,
+        "studentId": row.student_id,
+        "studentName": row.student_name,
+        "category": row.category,
+        "title": row.title,
+        "description": row.description,
+        "contact": row.contact,
+        "status": row.status,
+        "attachments": _feedback_attachments(row, include_content=include_details),
+        "createdAt": row.created_at,
+    }
+    if include_details:
+        result["clientLogs"] = row.client_logs
+    return result
+
+
+@router.get("/feedback")
+def admin_feedback_list(
+    session: AppSession = Depends(require_admin),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+) -> dict[str, Any]:
+    """管理员查看反馈工单列表；列表不返回大体积附件内容和日志。"""
+    ensure_admin_tables()
+    factory = get_sync_session_factory()
+    with factory() as db:
+        total = db.query(FeedbackTicket).count()
+        rows = (
+            db.query(FeedbackTicket)
+            .order_by(FeedbackTicket.created_at.desc())
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+        items = [_feedback_to_dict(row, include_details=False) for row in rows]
+    return {"total": total, "items": items}
+
+
+@router.get("/feedback/{feedback_id}")
+def admin_feedback_detail(
+    feedback_id: int,
+    session: AppSession = Depends(require_admin),
+) -> dict[str, Any]:
+    """管理员查看单个反馈工单的完整描述、日志和附件内容。"""
+    ensure_admin_tables()
+    factory = get_sync_session_factory()
+    with factory() as db:
+        row = db.get(FeedbackTicket, feedback_id)
+        if row is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="反馈工单不存在")
+        return _feedback_to_dict(row, include_details=True)
 
 
 # ─── 校历/通知上传（图片为主） ──────────────────────────────────
@@ -619,7 +769,9 @@ def admin_notices_create(
         try:
             raw_len = len(base64.b64decode(image_data))
         except Exception as exc:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"图片 base64 解析失败: {exc}")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=f"图片 base64 解析失败: {exc}"
+            )
         if raw_len > ADMIN_IMAGE_MAX_BYTES:
             raise HTTPException(
                 status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
@@ -681,9 +833,13 @@ def admin_notices_update(
             try:
                 raw_len = len(base64.b64decode(image_data))
             except Exception as exc:
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"图片 base64 解析失败: {exc}")
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST, detail=f"图片 base64 解析失败: {exc}"
+                )
             if raw_len > ADMIN_IMAGE_MAX_BYTES:
-                raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="图片不能超过 3MB")
+                raise HTTPException(
+                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="图片不能超过 3MB"
+                )
             row.image_data = image_data
             row.image_mime = payload.image_mime
         if payload.is_pinned is not None:
@@ -990,7 +1146,10 @@ def admin_login_slides_order(
         )
         db.commit()
         ordered_rows = [rows_by_id[slide_id] for slide_id in payload.ids]
-        return {"total": len(ordered_rows), "items": [_login_slide_to_dict(row) for row in ordered_rows]}
+        return {
+            "total": len(ordered_rows),
+            "items": [_login_slide_to_dict(row) for row in ordered_rows],
+        }
 
 
 @router.delete("/login-slides/{slide_id}")

@@ -12,8 +12,12 @@ final class LiveActivityManager {
     private let liveActivityConfigKey = "live_activity_configuration"
     private let liveActivitySessionService = "cn.gzus.pro.live-activity"
     private let liveActivitySessionAccount = "session-id"
+    private let liveActivityInstallationAccount = "installation-id"
     private weak var channel: FlutterMethodChannel?
     private var observerTasks: [Task<Void, Never>] = []
+    private var observedActivityIds: Set<String> = []
+    private var pushTokenTasks: [String: Task<Void, Never>] = [:]
+    private var activityStateTasks: [String: Task<Void, Never>] = [:]
 
     private init() {}
 
@@ -25,6 +29,9 @@ final class LiveActivityManager {
         self.channel = channel
         observePushToStartTokens()
         observeActivityUpdates()
+        for activity in Activity<GzusLiveActivityAttributes>.activities {
+            observeActivity(for: activity)
+        }
     }
 
     private func handle(call: FlutterMethodCall, result: @escaping FlutterResult) {
@@ -38,6 +45,7 @@ final class LiveActivityManager {
             var capabilities: [String: Any] = [
                 "available": true,
                 "enabled": authorization.areActivitiesEnabled,
+                "installationId": installationIdentifier(),
             ]
             if let token = currentPushToStartToken() {
                 capabilities["pushToStartToken"] = token
@@ -45,7 +53,7 @@ final class LiveActivityManager {
             result(capabilities)
         case "registerPushToStartToken":
             if let value = currentPushToStartToken() {
-                syncToken(token: value, tokenType: "start", activityId: nil, activityType: nil)
+                syncToken(token: value, tokenType: "start", activityId: nil, activityType: nil, expiresAt: nil)
                 result(value)
             } else {
                 result(nil)
@@ -86,7 +94,7 @@ final class LiveActivityManager {
             forKey: liveActivityConfigKey
         )
         if let token = currentPushToStartToken() {
-            syncToken(token: token, tokenType: "start", activityId: nil, activityType: nil)
+            syncToken(token: token, tokenType: "start", activityId: nil, activityType: nil, expiresAt: nil)
         }
         result(true)
     }
@@ -125,24 +133,8 @@ final class LiveActivityManager {
             }
             return
         }
-        let competing = Activity<GzusLiveActivityAttributes>.activities.filter {
-            $0.attributes.activityId != payload.activityId
-        }
-        if let current = competing.min(by: {
-            ($0.attributes.priority ?? 5) < ($1.attributes.priority ?? 5)
-        }), payload.priority > (current.attributes.priority ?? 5) {
-            result(["ignored": true, "activityId": current.id])
-            return
-        }
         Task { [weak self] in
             guard let self else { return }
-            for current in competing {
-                if #available(iOS 16.2, *) {
-                    await current.end(nil, dismissalPolicy: .immediate)
-                } else {
-                    await current.end(using: current.contentState, dismissalPolicy: .immediate)
-                }
-            }
             do {
                 let activity: Activity<GzusLiveActivityAttributes>
                 if #available(iOS 16.2, *) {
@@ -158,7 +150,7 @@ final class LiveActivityManager {
                         pushType: .token
                     )
                 }
-                self.observePushToken(for: activity)
+                self.observeActivity(for: activity)
                 await MainActor.run { result(["activityId": activity.id]) }
             } catch let caughtError {
                 await MainActor.run {
@@ -239,7 +231,7 @@ final class LiveActivityManager {
             guard let self else { return }
             for await token in Activity<GzusLiveActivityAttributes>.pushToStartTokenUpdates {
                 let value = self.tokenString(token)
-                self.syncToken(token: value, tokenType: "start", activityId: nil, activityType: nil)
+                self.syncToken(token: value, tokenType: "start", activityId: nil, activityType: nil, expiresAt: nil)
                 self.send(method: "pushToStartToken", arguments: ["token": value])
             }
         })
@@ -248,13 +240,40 @@ final class LiveActivityManager {
     private func observeActivityUpdates() {
         observerTasks.append(Task { [weak self] in
             for await activity in Activity<GzusLiveActivityAttributes>.activityUpdates {
-                self?.observePushToken(for: activity)
+                self?.observeActivity(for: activity)
             }
         })
     }
 
+    private func observeActivity(for activity: Activity<GzusLiveActivityAttributes>) {
+        let activityId = activity.id
+        guard observedActivityIds.insert(activityId).inserted else { return }
+        observePushToken(for: activity)
+        activityStateTasks[activityId] = Task { [weak self] in
+            guard let self else { return }
+            for await state in activity.activityStateUpdates {
+                guard state == .ended || state == .dismissed else { continue }
+                self.send(method: "activityEnded", arguments: [
+                    "activityId": activity.attributes.activityId,
+                ])
+                self.unregisterToken(
+                    activityId: activity.attributes.activityId,
+                    environment: self.currentEnvironment(),
+                    deviceId: self.installationIdentifier()
+                )
+                self.pushTokenTasks.removeValue(forKey: activityId)?.cancel()
+                self.activityStateTasks.removeValue(forKey: activityId)
+                self.observedActivityIds.remove(activityId)
+                break
+            }
+        }
+    }
+
     private func observePushToken(for activity: Activity<GzusLiveActivityAttributes>) {
-        observerTasks.append(Task { [weak self] in
+        let activityId = activity.id
+        guard pushTokenTasks[activityId] == nil else { return }
+        let expiresAt = activityEndDate(activity)
+        pushTokenTasks[activityId] = Task { [weak self] in
             guard let self else { return }
             for await token in activity.pushTokenUpdates {
                 let value = self.tokenString(token)
@@ -262,15 +281,17 @@ final class LiveActivityManager {
                     token: value,
                     tokenType: "activity",
                     activityId: activity.attributes.activityId,
-                    activityType: activity.attributes.activityType
+                    activityType: activity.attributes.activityType,
+                    expiresAt: expiresAt
                 )
                 self.send(method: "activityToken", arguments: [
                     "activityId": activity.attributes.activityId,
                     "token": value,
                     "activityType": activity.attributes.activityType,
+                    "expiresAt": self.iso8601(expiresAt),
                 ])
             }
-        })
+        }
     }
 
     private func currentPushToStartToken() -> String? {
@@ -288,7 +309,8 @@ final class LiveActivityManager {
         token: String,
         tokenType: String,
         activityId: String?,
-        activityType: String?
+        activityType: String?,
+        expiresAt: Date?
     ) {
         guard let config = UserDefaults(suiteName: appGroupIdentifier)?.dictionary(forKey: liveActivityConfigKey),
               let baseUrl = config["baseUrl"] as? String,
@@ -303,9 +325,11 @@ final class LiveActivityManager {
             "tokenType": tokenType,
             "token": token,
             "environment": environment,
+            "deviceId": installationIdentifier(),
         ]
         if let activityId, !activityId.isEmpty { body["activityId"] = activityId }
         if let activityType, !activityType.isEmpty { body["activityType"] = activityType }
+        if let expiresAt { body["expiresAt"] = iso8601(expiresAt) }
         guard let data = try? JSONSerialization.data(withJSONObject: body) else { return }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -326,6 +350,86 @@ final class LiveActivityManager {
             }
             NSLog("live_activity_token_sync_succeeded: token_type=%@ status=%ld", tokenType, response.statusCode)
         }.resume()
+    }
+
+    private func unregisterToken(activityId: String, environment: String, deviceId: String) {
+        guard let config = UserDefaults(suiteName: appGroupIdentifier)?.dictionary(forKey: liveActivityConfigKey),
+              let baseUrl = config["baseUrl"] as? String,
+              let sessionId = loadSession(),
+              let url = URL(string: "\(baseUrl)/push/ios/live-activity-tokens/activity/unregister") else {
+            return
+        }
+        let body: [String: String] = [
+            "activityId": activityId,
+            "environment": environment,
+            "deviceId": deviceId,
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: body) else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 20
+        request.httpBody = data
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(sessionId, forHTTPHeaderField: "X-Session-Id")
+        URLSession.shared.dataTask(with: request) { _, response, error in
+            if let error {
+                NSLog("live_activity_token_unregister_failed: %@", error.localizedDescription)
+                return
+            }
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            guard (200..<300).contains(status) else {
+                NSLog("live_activity_token_unregister_failed: status=%ld", status)
+                return
+            }
+            NSLog("live_activity_token_unregister_succeeded: status=%ld", status)
+        }.resume()
+    }
+
+    private func currentEnvironment() -> String {
+        let config = UserDefaults(suiteName: appGroupIdentifier)?.dictionary(forKey: liveActivityConfigKey)
+        return config?["environment"] as? String ?? "production"
+    }
+
+    private func activityEndDate(_ activity: Activity<GzusLiveActivityAttributes>) -> Date? {
+        let endEpochMillis: Int64
+        if #available(iOS 16.2, *) {
+            endEpochMillis = activity.content.state.endEpochMillis
+        } else {
+            endEpochMillis = activity.contentState.endEpochMillis
+        }
+        guard endEpochMillis > 0 else { return nil }
+        return Date(timeIntervalSince1970: TimeInterval(endEpochMillis) / 1000)
+    }
+
+    private func iso8601(_ date: Date?) -> String {
+        guard let date else { return "" }
+        return ISO8601DateFormatter().string(from: date)
+    }
+
+    private func installationIdentifier() -> String {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: liveActivitySessionService,
+            kSecAttrAccount as String: liveActivityInstallationAccount,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        var item: CFTypeRef?
+        if SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
+           let data = item as? Data,
+           let value = String(data: data, encoding: .utf8),
+           !value.isEmpty {
+            return value
+        }
+        let value = UUID().uuidString.lowercased()
+        var saved = query
+        saved.removeValue(forKey: kSecReturnData as String)
+        saved.removeValue(forKey: kSecMatchLimit as String)
+        saved[kSecValueData as String] = Data(value.utf8)
+        guard SecItemAdd(saved as CFDictionary, nil) == errSecSuccess else {
+            return value
+        }
+        return value
     }
 
     private func saveSession(_ sessionId: String) -> Bool {
@@ -427,6 +531,8 @@ final class LiveActivityManager {
 
     deinit {
         observerTasks.forEach { $0.cancel() }
+        pushTokenTasks.values.forEach { $0.cancel() }
+        activityStateTasks.values.forEach { $0.cancel() }
     }
 }
 

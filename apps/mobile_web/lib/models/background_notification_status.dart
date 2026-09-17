@@ -11,6 +11,9 @@ class BackgroundNotificationStatus {
     required this.attendanceEnabled,
     required this.attendanceLastCheckedAt,
     required this.attendanceLastError,
+    required this.suspended,
+    required this.suspensionReason,
+    required this.nextRetryAt,
   });
 
   factory BackgroundNotificationStatus.fromJson(Map<String, dynamic> json) {
@@ -31,6 +34,11 @@ class BackgroundNotificationStatus {
           ? null
           : DateTime.tryParse(rawAttendanceCheckedAt),
       attendanceLastError: json['attendanceLastError'] as String?,
+      suspended: json['suspended'] == true,
+      suspensionReason: json['suspensionReason'] as String?,
+      nextRetryAt: json['nextRetryAt'] == null
+          ? null
+          : DateTime.tryParse(json['nextRetryAt'] as String),
     );
   }
 
@@ -45,4 +53,7 @@ class BackgroundNotificationStatus {
   final bool attendanceEnabled;
   final DateTime? attendanceLastCheckedAt;
   final String? attendanceLastError;
+  final bool suspended;
+  final String? suspensionReason;
+  final DateTime? nextRetryAt;
 }

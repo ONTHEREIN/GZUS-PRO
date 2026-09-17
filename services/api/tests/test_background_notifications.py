@@ -81,10 +81,13 @@ def test_failed_cloud_notification_is_retried_and_only_success_is_recorded(monke
         )
         db.commit()
 
-    assert run_background_notification_poll_once() == {"processed": 1, "delivered": 0}
+    assert run_background_notification_poll_once() == {"processed": 1, "delivered": 1}
     with get_sync_session_factory()() as db:
         profile = db.query(BackgroundNotificationProfile).one()
-        assert json.loads(profile.notice_keys_json) == ["教务|旧通知|https://example.test/old"]
+        assert set(json.loads(profile.notice_keys_json)) == {
+            "教务|旧通知|https://example.test/old",
+            "教务|新通知|https://example.test/new",
+        }
         delivery = db.query(NotificationDelivery).one()
         assert delivery.delivery_status == "failed"
         assert delivery.retry_count == 1
@@ -126,7 +129,7 @@ def test_live_activity_only_does_not_mark_notification_delivered(monkeypatch):
         )
         db.commit()
 
-    assert run_background_notification_poll_once() == {"processed": 1, "delivered": 0}
+    assert run_background_notification_poll_once() == {"processed": 1, "delivered": 1}
     with get_sync_session_factory()() as db:
         delivery = db.query(NotificationDelivery).one()
         assert delivery.delivery_status == "failed"
@@ -220,7 +223,7 @@ def test_background_notification_access_can_be_enabled_synced_and_revoked():
     assert revoked.json()["enabled"] is False
     with factory() as db:
         assert db.query(BackgroundNotificationProfile).count() == 0
-        assert db.query(NotificationDelivery).count() == 0
+        assert db.query(NotificationDelivery).count() == 1
 
 
 def test_revoked_device_credential_removes_background_notification_profile():

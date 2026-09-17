@@ -9,7 +9,13 @@ from fastapi.testclient import TestClient
 
 from app import apns_service
 from app import push as push_service
-from app.database import IosLiveActivityToken, IosPushToken, get_sync_session_factory
+from app.database import (
+    IosLiveActivityToken,
+    IosPushToken,
+    NotificationDelivery,
+    WebPushSubscription,
+    get_sync_session_factory,
+)
 from app.main import app
 from app.sessions import SessionStore
 
@@ -80,6 +86,7 @@ class TestPushRoutes:
         paths = set(app.openapi()["paths"])
 
         assert "/push/ios/live-activity-tokens" in paths
+        assert "/push/ios/live-activity-tokens/activity/unregister" in paths
         assert "/push/ios/live-activity-tokens/unregister" in paths
 
     def test_native_registration_routes_are_removed(self, client):
@@ -94,6 +101,35 @@ class TestPushRoutes:
 
         assert response.status_code == 200
         assert "enabled" in response.json()
+
+    def test_web_push_unregistration_only_removes_current_endpoint(self, client):
+        session_id = client.post("/push/test-session").json()["sessionId"]
+        headers = {"X-Session-Id": session_id}
+        endpoints = [
+            "https://push.example.test/device-a",
+            "https://push.example.test/device-b",
+        ]
+        for endpoint in endpoints:
+            response = client.post(
+                "/push/web/register",
+                json={
+                    "endpoint": endpoint,
+                    "keys": {"p256dh": "p256dh", "auth": "auth"},
+                },
+                headers=headers,
+            )
+            assert response.status_code == 200
+
+        response = client.post(
+            "/push/web/unregister",
+            json={"endpoint": endpoints[0]},
+            headers=headers,
+        )
+
+        assert response.status_code == 200
+        with get_sync_session_factory()() as db:
+            rows = db.query(WebPushSubscription).all()
+            assert [row.endpoint for row in rows] == [endpoints[1]]
 
     def test_ios_token_registration_updates_current_device(self, client):
         session_response = client.post("/push/test-session")
@@ -217,6 +253,9 @@ class TestPushRoutes:
             rows = db.query(IosLiveActivityToken).all()
             assert {row.token_type for row in rows} == {"start", "activity"}
             assert {row.student_id for row in rows} == {"test-student"}
+            activity_row = next(row for row in rows if row.token_type == "activity")
+            assert activity_row.expires_at is not None
+            assert timedelta(hours=5) < activity_row.expires_at - activity_row.created_at < timedelta(hours=7)
 
         unregister_response = client.post(
             "/push/ios/live-activity-tokens/unregister",
@@ -225,6 +264,85 @@ class TestPushRoutes:
         assert unregister_response.status_code == 200
         with get_sync_session_factory()() as db:
             assert db.query(IosLiveActivityToken).count() == 0
+
+    def test_live_activity_token_rotation_replaces_only_same_device_activity(self, client):
+        session_id = client.post("/push/test-session").json()["sessionId"]
+        headers = {"X-Session-Id": session_id}
+        base = {
+            "tokenType": "activity",
+            "environment": "production",
+            "activityId": "ecard:today",
+            "activityType": "ecard_reminder",
+            "deviceId": "device-a",
+            "expiresAt": "2026-09-17T09:00:00Z",
+        }
+        first = client.post(
+            "/push/ios/live-activity-tokens",
+            json={**base, "token": "a" * 64},
+            headers=headers,
+        )
+        rotated = client.post(
+            "/push/ios/live-activity-tokens",
+            json={**base, "token": "b" * 64},
+            headers=headers,
+        )
+        second_device = client.post(
+            "/push/ios/live-activity-tokens",
+            json={**base, "token": "c" * 64, "deviceId": "device-b"},
+            headers=headers,
+        )
+
+        assert first.status_code == rotated.status_code == second_device.status_code == 200
+        with get_sync_session_factory()() as db:
+            rows = db.query(IosLiveActivityToken).order_by(IosLiveActivityToken.device_id).all()
+            assert [(row.device_id, row.token) for row in rows] == [
+                ("device-a", "b" * 64),
+                ("device-b", "c" * 64),
+            ]
+            assert rows[0].expires_at is not None
+
+        unregistered = client.post(
+            "/push/ios/live-activity-tokens/activity/unregister",
+            json={
+                "environment": "production",
+                "activityId": "ecard:today",
+                "deviceId": "device-a",
+            },
+            headers=headers,
+        )
+        assert unregistered.status_code == 200
+        with get_sync_session_factory()() as db:
+            rows = db.query(IosLiveActivityToken).all()
+            assert [(row.device_id, row.token) for row in rows] == [("device-b", "c" * 64)]
+
+    def test_bulk_live_activity_unregister_is_scoped_to_device(self, client):
+        session_id = client.post("/push/test-session").json()["sessionId"]
+        headers = {"X-Session-Id": session_id}
+        for device_id, token in (("device-a", "d" * 64), ("device-b", "e" * 64)):
+            response = client.post(
+                "/push/ios/live-activity-tokens",
+                json={
+                    "tokenType": "activity",
+                    "token": token,
+                    "environment": "production",
+                    "activityId": "notice:today",
+                    "activityType": "new_notice",
+                    "deviceId": device_id,
+                },
+                headers=headers,
+            )
+            assert response.status_code == 200
+
+        response = client.post(
+            "/push/ios/live-activity-tokens/unregister",
+            json={"deviceId": "device-a"},
+            headers=headers,
+        )
+
+        assert response.status_code == 200
+        with get_sync_session_factory()() as db:
+            rows = db.query(IosLiveActivityToken).all()
+            assert [(row.device_id, row.token) for row in rows] == [("device-b", "e" * 64)]
 
     def test_poll_receives_queued_test_message(self, client):
         session_response = client.post("/push/test-session")
@@ -248,6 +366,44 @@ class TestPushRoutes:
 
         empty_response = client.get("/push/poll", headers={"X-Session-Id": session_id})
         assert empty_response.json()["messages"] == []
+
+    def test_notification_events_are_persisted_and_acknowledged_per_installation(self, client):
+        session_id = client.post("/push/test-session").json()["sessionId"]
+        with get_sync_session_factory()() as db:
+            db.add(NotificationDelivery(
+                student_id="test-student",
+                event_key="grade:test:90",
+                notification_type="grade_update",
+                title="成绩更新",
+                body="高等数学：90",
+                extras_json=json.dumps({"type": "grade_update", "targetTab": "grades"}),
+                expires_at=datetime.now(timezone.utc) + timedelta(days=30),
+            ))
+            db.commit()
+
+        headers = {
+            "X-Session-Id": session_id,
+            "X-Installation-Id": "android-test-installation",
+        }
+        events = client.get("/notifications/events", headers=headers)
+        assert events.status_code == 200
+        assert events.json()["events"][0]["id"] == "grade:test:90"
+
+        pending = client.get("/notifications/events/pending", headers=headers)
+        assert [item["id"] for item in pending.json()["events"]] == ["grade:test:90"]
+        presented = client.post(
+            "/notifications/events/grade%3Atest%3A90/presented",
+            headers=headers,
+        )
+        assert presented.status_code == 200
+        assert client.get("/notifications/events/pending", headers=headers).json()["events"] == []
+
+        read = client.post(
+            "/notifications/events/grade%3Atest%3A90/read",
+            headers={"X-Session-Id": session_id},
+        )
+        assert read.status_code == 200
+        assert client.get("/notifications/events", headers=headers).json()["events"][0]["readAt"]
 
 
 def test_apns_payload_keeps_only_notification_routing_metadata():
@@ -388,6 +544,108 @@ def test_live_activity_payload_supports_start_update_and_end():
         else:
             assert "attributes" not in decoded
         assert len(payload) <= 4096
+
+
+def test_live_activity_start_prunes_expired_activity_tokens_and_allows_parallel_events(monkeypatch):
+    now = datetime.now(timezone.utc)
+    factory = get_sync_session_factory()
+    with factory() as db:
+        db.add(IosLiveActivityToken(
+            student_id="20260001",
+            token_type="activity",
+            token="a" * 64,
+            environment="production",
+            activity_id="course:old",
+            activity_type="course_reminder",
+            expires_at=now - timedelta(minutes=1),
+        ))
+        db.add(IosLiveActivityToken(
+            student_id="20260001",
+            token_type="start",
+            token="b" * 64,
+            environment="production",
+        ))
+        db.add(IosLiveActivityToken(
+            student_id="20260001",
+            token_type="activity",
+            token="c" * 64,
+            environment="production",
+            activity_id="course:active",
+            activity_type="course_reminder",
+            expires_at=now + timedelta(hours=1),
+        ))
+        db.commit()
+
+    monkeypatch.setattr(apns_service, "is_apns_enabled", lambda: True)
+    monkeypatch.setattr(apns_service, "_credentials", lambda _settings: object())
+    sent: list[bytes] = []
+    monkeypatch.setattr(
+        apns_service,
+        "_send_live_activity_with_retry",
+        lambda _credentials, _token, _environment, payload: sent.append(payload),
+    )
+
+    delivered = apns_service.send_live_activity_to_student(
+        "20260001",
+        "start",
+        "水电提醒",
+        "电费余额偏低",
+        {"id": "ecard:new", "type": "ecard_reminder"},
+    )
+
+    assert delivered == 1
+    assert len(sent) == 1
+    with factory() as db:
+        assert db.query(IosLiveActivityToken).filter_by(token="a" * 64).count() == 0
+        assert db.query(IosLiveActivityToken).filter_by(token="c" * 64).count() == 1
+
+
+def test_live_activity_end_removes_successfully_ended_activity_tokens(monkeypatch):
+    factory = get_sync_session_factory()
+    with factory() as db:
+        db.add(IosLiveActivityToken(
+            student_id="20260001",
+            token_type="activity",
+            token="c" * 64,
+            environment="production",
+            activity_id="ecard:old",
+            activity_type="ecard_reminder",
+            device_id="device-a",
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        ))
+        db.add(IosLiveActivityToken(
+            student_id="20260001",
+            token_type="activity",
+            token="d" * 64,
+            environment="production",
+            activity_id="ecard:old",
+            activity_type="ecard_reminder",
+            device_id="device-b",
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+        ))
+        db.commit()
+
+    monkeypatch.setattr(apns_service, "is_apns_enabled", lambda: True)
+    monkeypatch.setattr(apns_service, "_credentials", lambda _settings: object())
+    sent: list[str] = []
+    monkeypatch.setattr(
+        apns_service,
+        "_send_live_activity_with_retry",
+        lambda _credentials, token, _environment, _payload: sent.append(token),
+    )
+
+    delivered = apns_service.send_live_activity_to_student(
+        "20260001",
+        "end",
+        "",
+        "",
+        {"id": "ecard:old", "type": "ecard_reminder", "dismissImmediately": True},
+    )
+
+    assert delivered == 2
+    assert set(sent) == {"c" * 64, "d" * 64}
+    with factory() as db:
+        assert db.query(IosLiveActivityToken).count() == 0
 
 
 def test_live_activity_request_uses_liveactivity_topic_and_push_type(monkeypatch):

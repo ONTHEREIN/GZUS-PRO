@@ -154,6 +154,8 @@ Future<void> _pumpDashboard({
           studentName: _longStudentName,
           themeMode: ThemeMode.light,
           onThemeChanged: (_) {},
+          fontScale: 1,
+          onFontScaleChanged: (_) {},
           onLogout: () {},
           isAdmin: true,
           isOwner: true,

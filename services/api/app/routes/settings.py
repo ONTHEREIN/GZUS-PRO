@@ -36,11 +36,19 @@ def _row_to_settings(row: UserSettings) -> dict[str, Any]:
         first_weeks = {}
     if not isinstance(first_weeks, dict):
         first_weeks = {}
-    return {
+    result: dict[str, Any] = {
         "firstWeeks": {str(k): str(v) for k, v in first_weeks.items()},
         "autoWeek": row.auto_week,
         "onboardingCompleted": row.onboarding_completed,
     }
+    if row.schedule_display_json:
+        try:
+            display = json.loads(row.schedule_display_json)
+        except json.JSONDecodeError:
+            display = None
+        if isinstance(display, dict):
+            result["display"] = display
+    return result
 
 
 def _require_student_id(session: AppSession) -> str:
@@ -53,7 +61,7 @@ def _require_student_id(session: AppSession) -> str:
     return student_id
 
 
-@router.get("/schedule", response_model=ScheduleSettings)
+@router.get("/schedule", response_model=ScheduleSettings, response_model_exclude_none=True)
 def get_schedule_settings(
     session: AppSession = Depends(require_session),
 ) -> dict[str, Any]:
@@ -68,7 +76,7 @@ def get_schedule_settings(
         return _row_to_settings(row)
 
 
-@router.put("/schedule", response_model=ScheduleSettings)
+@router.put("/schedule", response_model=ScheduleSettings, response_model_exclude_none=True)
 def put_schedule_settings(
     payload: ScheduleSettingsUpdate,
     session: AppSession = Depends(require_session),
@@ -95,6 +103,9 @@ def put_schedule_settings(
             row.auto_week = payload.auto_week
         if payload.onboarding_completed is not None:
             row.onboarding_completed = payload.onboarding_completed
+        if payload.display is not None:
+            display = payload.display.model_dump(by_alias=True)
+            row.schedule_display_json = json.dumps(display, ensure_ascii=False)
         row.updated_at = datetime.now(timezone.utc)
         db.commit()
         db.refresh(row)

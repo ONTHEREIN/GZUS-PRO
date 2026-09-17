@@ -86,6 +86,12 @@ dependencies {
     implementation("commons-net:commons-net:3.11.1")
     implementation("com.tencent.shiply:upgrade:2.2.2")
     implementation("com.tencent.shiply:upgrade-ui:2.2.2")
+    implementation("com.tencent:mmkv:1.0.22")
+    implementation("com.tencent.shiply:rdelivery:1.3.38-RC02")
+    implementation("com.tencent.shiply:reshub-sdk:1.8.22-RC04")
+    implementation("com.tencent.shiply:reshub-net:1.8.22-RC04")
+    implementation("com.tencent.shiply:reshub-report:1.8.22-RC04")
+    implementation("com.tencent.shiply:reshub-patch-sdk:1.8.22-RC04")
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
     testImplementation("junit:junit:4.13.2")
 }

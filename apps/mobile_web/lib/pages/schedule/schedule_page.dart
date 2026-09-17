@@ -7,11 +7,14 @@ import 'package:flutter/foundation.dart'
 import 'package:flutter/material.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../api_client.dart';
 import '../../calendar_import.dart';
 import '../../gzus_design.dart';
 import '../../models/schedule_override.dart';
+import '../../models/schedule_settings.dart';
+import '../../schedule_adjustment_sync.dart';
 import '../../responsive/spacing.dart';
 import '../../schedule_utils.dart';
 import '../../background_service.dart' deferred as background_service;
@@ -708,9 +711,13 @@ class _SchedulePageState extends State<SchedulePage> {
   String? _lastNativeReminderSignature;
   String? _reminderSyncError;
   bool _reminderSettingsLoaded = false;
+  bool showTime = true;
+  bool showClassroom = true;
+  bool showTeacher = true;
 
   /// 本地调课条目（本学期），叠加到学校课表上显示。
   List<ScheduleOverride> _overrides = const [];
+  List<ScheduleAdjustmentRecord> _adjustments = const [];
 
   /// 最近一次叠加后的课表，供课程详情「调整此课」回调使用。
   List<ScheduleCourse> _lastItems = const [];
@@ -721,6 +728,7 @@ class _SchedulePageState extends State<SchedulePage> {
     _scheduleFuture = _loadSchedule();
     _loadReminderSettings();
     _loadOverrides();
+    _loadAdjustments();
     _loadViewPreferences();
   }
 
@@ -732,6 +740,26 @@ class _SchedulePageState extends State<SchedulePage> {
         oldWidget.term != widget.term) {
       _scheduleFuture = _loadSchedule();
       _loadOverrides();
+      _loadAdjustments();
+    }
+  }
+
+  Future<void> _loadAdjustments() async {
+    try {
+      await ScheduleAdjustmentSync.flush(
+        api: widget.api,
+        year: widget.year,
+        term: widget.term,
+      );
+      final records = await widget.api.fetchScheduleAdjustments(
+        year: widget.year,
+        term: widget.term,
+      );
+      if (!mounted) return;
+      setState(() => _adjustments = records);
+      _scheduleFuture = _loadSchedule();
+    } catch (error) {
+      debugPrint('同步日期调课失败: $error');
     }
   }
 
@@ -772,6 +800,14 @@ class _SchedulePageState extends State<SchedulePage> {
   Future<void> _applyCourseReminders(List<ScheduleCourse> courses) async {
     if (!_reminderSettingsLoaded) return;
     try {
+      final effectiveOccurrences = expandEffectiveSchedule(
+        courses: courses,
+        firstWeekStart: widget.firstWeekStart,
+        adjustments: _adjustments,
+        overrides: _overrides,
+        startDate: DateTime.now(),
+        endDate: DateTime.now().add(const Duration(days: 30)),
+      );
       await reminder_service.loadLibrary();
       await reminder_service.ReminderService.configureCourseReminders(
         courses: courses,
@@ -781,6 +817,7 @@ class _SchedulePageState extends State<SchedulePage> {
           beforeStartMinutes: courseStartReminderMinutes,
           beforeEndMinutes: courseEndReminderMinutes,
         ),
+        effectiveOccurrences: effectiveOccurrences,
       );
       final cloudStatus = await widget.api.fetchBackgroundNotificationStatus();
       if (cloudStatus?.enabled == true) {
@@ -790,6 +827,17 @@ class _SchedulePageState extends State<SchedulePage> {
           beforeEndMinutes: courseEndReminderMinutes,
           firstWeekStart: widget.firstWeekStart,
           courses: _courseReminderPayload(courses),
+          effectiveOccurrences: [
+            for (final occurrence in effectiveOccurrences)
+              {
+                'date': dateText(occurrence.date),
+                'name': occurrence.course.name,
+                'startSection': occurrence.course.startSection,
+                'endSection': occurrence.course.endSection,
+                'classroom': occurrence.course.classroom ?? '',
+                'teacher': occurrence.course.teacher ?? '',
+              },
+          ],
         );
         if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
           await push_service.loadLibrary();
@@ -813,6 +861,7 @@ class _SchedulePageState extends State<SchedulePage> {
           courseStartReminderMinutes,
           courseEndReminderMinutes,
           widget.firstWeekStart,
+          effectiveOccurrences,
         );
       }
     } catch (e) {
@@ -828,32 +877,156 @@ class _SchedulePageState extends State<SchedulePage> {
     await _scheduleFuture;
   }
 
+  Future<void> _adjustDate(
+    DateTime sourceDate,
+    DateTime targetDate,
+    String conflictMode,
+  ) async {
+    final sourceOccurrences = expandEffectiveSchedule(
+      courses: _lastItems,
+      firstWeekStart: widget.firstWeekStart,
+      adjustments: _adjustments,
+      overrides: _overrides,
+      startDate: sourceDate,
+      endDate: sourceDate,
+    );
+    if (sourceOccurrences.isEmpty) {
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        const SnackBar(content: Text('源日期没有可调课程')),
+      );
+      return;
+    }
+    final targetOccurrences = expandEffectiveSchedule(
+      courses: _lastItems,
+      firstWeekStart: widget.firstWeekStart,
+      adjustments: _adjustments,
+      overrides: _overrides,
+      startDate: targetDate,
+      endDate: targetDate,
+    );
+    final sourceKeys = [
+      for (final item in sourceOccurrences) item.occurrenceKey
+    ];
+    final targetKeys = <String>[];
+    if (conflictMode == 'replaceConflicts') {
+      for (final source in sourceOccurrences) {
+        for (final target in targetOccurrences) {
+          final aStart = source.course.startSection ?? 0;
+          final aEnd = source.course.endSection ?? aStart;
+          final bStart = target.course.startSection ?? 0;
+          final bEnd = target.course.endSection ?? bStart;
+          if (aStart <= bEnd && bStart <= aEnd) {
+            targetKeys.add(target.occurrenceKey);
+          }
+        }
+      }
+    }
+    final adjustment = ScheduleAdjustmentRecord(
+      clientId: '${DateTime.now().microsecondsSinceEpoch}',
+      year: widget.year,
+      term: widget.term,
+      sourceDate: DateTime(sourceDate.year, sourceDate.month, sourceDate.day),
+      targetDate: DateTime(targetDate.year, targetDate.month, targetDate.day),
+      sourceOccurrenceKeys: sourceKeys,
+      targetConflictKeys: targetKeys.toSet().toList(),
+      conflictMode: conflictMode,
+      status: 'active',
+      revision: 1,
+    );
+    setState(() => _adjustments = [..._adjustments, adjustment]);
+    // 日期级调整先在本地生效，提醒和原生组件随同一份生效实例立即重排。
+    unawaited(
+        _scheduleFuture.then((result) => _applyCourseReminders(result.items)));
+    unawaited(_syncCalendarAfterAdjustment());
+    await ScheduleAdjustmentSync.enqueue(adjustment);
+    try {
+      final synced = await widget.api.createScheduleAdjustment(adjustment);
+      if (!mounted) return;
+      setState(() {
+        _adjustments = [
+          for (final item in _adjustments)
+            if (item.clientId == adjustment.clientId) synced else item,
+        ];
+      });
+    } catch (error) {
+      debugPrint('日期调课已加入离线队列: $error');
+    }
+    if (!mounted) return;
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      SnackBar(
+        content: Text(
+          '已将 ${dateText(sourceDate)} 调至 ${dateText(targetDate)}'
+          '${conflictMode == 'replaceConflicts' ? '，已替换冲突课程' : '，两者并存'}',
+        ),
+        duration: const Duration(seconds: 8),
+        action: SnackBarAction(
+          label: '撤回',
+          onPressed: () => unawaited(_restoreAdjustment(adjustment.clientId)),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _restoreAdjustment(String clientId) async {
+    final current =
+        _adjustments.where((item) => item.clientId == clientId).firstOrNull;
+    if (current == null) return;
+    final restored = ScheduleAdjustmentRecord(
+      clientId: current.clientId,
+      year: current.year,
+      term: current.term,
+      sourceDate: current.sourceDate,
+      targetDate: current.targetDate,
+      sourceOccurrenceKeys: current.sourceOccurrenceKeys,
+      targetConflictKeys: current.targetConflictKeys,
+      conflictMode: current.conflictMode,
+      status: 'restored',
+      revision: current.revision + 1,
+      id: current.id,
+    );
+    setState(() {
+      _adjustments = [
+        for (final item in _adjustments)
+          item.clientId == clientId ? restored : item,
+      ];
+    });
+    unawaited(
+        _scheduleFuture.then((result) => _applyCourseReminders(result.items)));
+    unawaited(_syncCalendarAfterAdjustment());
+    await ScheduleAdjustmentSync.enqueue(restored);
+    try {
+      await widget.api.restoreScheduleAdjustment(
+        clientId: current.clientId,
+        expectedRevision: current.revision,
+      );
+    } catch (error) {
+      debugPrint('撤回调课云端同步失败: $error');
+    }
+  }
+
   Future<void> _loadViewPreferences() async {
-    final prefs = await SharedPreferences.getInstance();
-    final savedMode = prefs.getString('schedule.viewMode');
-    final savedX = prefs.getDouble('schedule.floatingMenu.x');
-    final savedY = prefs.getDouble('schedule.floatingMenu.y');
-    final mode = switch (savedMode) {
-      'today' => ScheduleViewMode.today,
-      // 旧版本的 week 即「本周」，恢复为独立的可选项。
-      'week' => ScheduleViewMode.week,
-      'calendar' => ScheduleViewMode.calendar,
-      'all' => ScheduleViewMode.all,
-      _ => null,
-    };
+    // 新版课表固定以整周工作台为主视图；旧版保存的悬浮菜单模式不再接管首屏。
+    final settings = await widget.api.fetchScheduleSettings();
     if (!mounted) return;
     setState(() {
-      if (mode != null) {
-        _viewMode = mode;
-        showAllCourses = mode == ScheduleViewMode.all;
-      }
-      if (savedX != null && savedY != null) {
-        _floatingMenuPosition = Offset(
-          savedX.clamp(0.0, 1.0).toDouble(),
-          savedY.clamp(0.0, 1.0).toDouble(),
-        );
+      _viewMode = ScheduleViewMode.calendar;
+      final display = settings?.display;
+      if (display != null) {
+        showTime = display.showTime;
+        showClassroom = display.showClassroom;
+        showTeacher = display.showTeacher;
       }
     });
+  }
+
+  Future<void> _saveDisplaySettings() async {
+    await widget.api.saveScheduleSettings(
+      display: ScheduleDisplaySettings(
+        showTime: showTime,
+        showClassroom: showClassroom,
+        showTeacher: showTeacher,
+      ),
+    );
   }
 
   void _setViewMode(ScheduleViewMode mode) {
@@ -867,6 +1040,48 @@ class _SchedulePageState extends State<SchedulePage> {
   Future<void> _saveViewMode(ScheduleViewMode mode) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('schedule.viewMode', mode.name);
+  }
+
+  Future<CalendarTarget?> _chooseCalendarTarget() async {
+    final calendars = await CalendarImportService.listCalendars();
+    if (calendars.isEmpty) {
+      throw const CalendarImportException('没有可写入的系统日历，请先在系统日历中创建日历');
+    }
+    CalendarTarget? selected;
+    if (calendars.length == 1 || !mounted) {
+      selected = calendars.first;
+    } else {
+      selected = await showModalBottomSheet<CalendarTarget>(
+        context: context,
+        showDragHandle: true,
+        builder: (sheetContext) => SafeArea(
+          child: ListView(
+            shrinkWrap: true,
+            children: [
+              const ListTile(
+                title: Text('选择目标日历'),
+                subtitle: Text('后续同步会记住这个日历'),
+              ),
+              for (final calendar in calendars)
+                ListTile(
+                  leading: const Icon(Icons.calendar_month),
+                  title: Text(calendar.title),
+                  onTap: () => Navigator.pop(sheetContext, calendar),
+                ),
+            ],
+          ),
+        ),
+      );
+    }
+    if (selected == null) return null;
+    final legacyInOtherCalendars = calendars
+        .where((item) => item.identifier != selected!.identifier)
+        .fold<int>(0, (sum, item) => sum + item.legacyEventCount);
+    return CalendarTarget(
+      identifier: selected.identifier,
+      title: selected.title,
+      legacyEventCount: legacyInOtherCalendars,
+    );
   }
 
   void _setFloatingMenuPosition(Offset position) {
@@ -884,17 +1099,31 @@ class _SchedulePageState extends State<SchedulePage> {
     int beforeStartMinutes,
     int beforeEndMinutes,
     DateTime firstWeekStart,
+    List<ScheduleOccurrence> effectiveOccurrences,
   ) async {
     final coursesJson = jsonEncode(_courseReminderPayload(courses));
+    final effectiveOccurrencesJson = jsonEncode([
+      for (final occurrence in effectiveOccurrences)
+        {
+          'date': dateText(occurrence.date),
+          'name': occurrence.course.name,
+          'startSection': occurrence.course.startSection,
+          'endSection': occurrence.course.endSection,
+          'classroom': occurrence.course.classroom ?? '',
+          'teacher': occurrence.course.teacher ?? '',
+          'occurrenceKey': occurrence.occurrenceKey,
+        },
+    ]);
     final firstWeekStr =
         '${firstWeekStart.year.toString().padLeft(4, '0')}-${firstWeekStart.month.toString().padLeft(2, '0')}-${firstWeekStart.day.toString().padLeft(2, '0')}';
     // 签名守卫：内容未变化时不重复向原生层全量推送
     final signature =
-        '$coursesJson|$beforeStartMinutes|$beforeEndMinutes|$firstWeekStr';
+        '$coursesJson|$effectiveOccurrencesJson|$beforeStartMinutes|$beforeEndMinutes|$firstWeekStr';
     if (signature == _lastNativeReminderSignature) return;
     await background_service.loadLibrary();
     await background_service.BackgroundService.updateCourseReminders(
       coursesJson: coursesJson,
+      effectiveOccurrencesJson: effectiveOccurrencesJson,
       beforeStartMinutes: beforeStartMinutes,
       beforeEndMinutes: beforeEndMinutes,
       firstWeekStart: firstWeekStr,
@@ -943,14 +1172,24 @@ class _SchedulePageState extends State<SchedulePage> {
         onSessionExpired: widget.onSessionExpired,
         builder: (result) {
           _lastItems = result.items;
+          final today = DateTime.now();
+          final todayDate = DateTime(today.year, today.month, today.day);
+          final effectiveTodayOccurrences = expandEffectiveSchedule(
+            courses: result.items,
+            firstWeekStart: widget.firstWeekStart,
+            adjustments: _adjustments,
+            overrides: _overrides,
+            startDate: todayDate,
+            endDate: todayDate,
+          );
           final weekItems = result.items
               .where((item) =>
                   item.occursInWeek(widget.currentWeek) &&
                   !isHiddenByOverrides(item, _overrides,
                       currentWeek: widget.currentWeek))
               .toList();
-          final todayItems = weekItems
-              .where((item) => item.weekday == DateTime.now().weekday)
+          final todayItems = effectiveTodayOccurrences
+              .map((item) => item.course)
               .toList()
             ..sort(_compareScheduleCourses);
           final displayItems = _viewMode == ScheduleViewMode.all ||
@@ -986,35 +1225,40 @@ class _SchedulePageState extends State<SchedulePage> {
                       firstWeekStart: widget.firstWeekStart,
                       currentWeek: widget.currentWeek,
                       overrides: _overrides,
+                      adjustments: _adjustments,
+                      showTime: showTime,
+                      showClassroom: showClassroom,
+                      showTeacher: showTeacher,
+                      onShowTools: () =>
+                          _showScheduleTools(result.prettyJson, result.items),
                       onAdjustCourse: _adjustCourse,
                       onMoveToDay: _moveCourseToDay,
+                      onAdjustDate: _adjustDate,
                     );
           final compact = MediaQuery.sizeOf(context).width < 600;
           if (compact) {
-            return LayoutBuilder(
-              builder: (context, constraints) => Stack(
-                children: [
-                  Positioned.fill(child: content),
-                  Positioned.fill(
-                    child: _ScheduleFloatingMenu(
-                      selected: _viewMode,
-                      currentWeek: widget.currentWeek,
-                      todayCount: todayItems.length,
-                      weekCount: weekItems.length,
-                      totalCount: result.items.length,
-                      position: _floatingMenuPosition,
-                      onViewChanged: _setViewMode,
-                      onToolsPressed: () =>
-                          _showScheduleTools(result.prettyJson, result.items),
-                      onPositionChanged: _setFloatingMenuPosition,
-                      onPositionSettled: (position) {
-                        _setFloatingMenuPosition(position);
-                        unawaited(_saveFloatingMenuPosition(position));
-                      },
-                    ),
+            return Stack(
+              children: [
+                content,
+                Positioned.fill(
+                  child: _ScheduleFloatingMenu(
+                    selected: _viewMode,
+                    currentWeek: widget.currentWeek,
+                    todayCount: todayItems.length,
+                    weekCount: weekItems.length,
+                    totalCount: result.items.length,
+                    position: _floatingMenuPosition,
+                    onViewChanged: _setViewMode,
+                    onToolsPressed: () =>
+                        _showScheduleTools(result.prettyJson, result.items),
+                    onPositionChanged: _setFloatingMenuPosition,
+                    onPositionSettled: (position) {
+                      _setFloatingMenuPosition(position);
+                      unawaited(_saveFloatingMenuPosition(position));
+                    },
                   ),
-                ],
-              ),
+                ),
+              ],
             );
           }
           return PagePanel(
@@ -1180,45 +1424,8 @@ class _SchedulePageState extends State<SchedulePage> {
                               TextButton(
                                 onPressed: items.isEmpty || _exporting
                                     ? null
-                                    : () async {
-                                        setState(() => _exporting = true);
-                                        localSetState(() {});
-                                        try {
-                                          final ics = generateIcs(
-                                            courses: items,
-                                            firstWeekStart:
-                                                widget.firstWeekStart,
-                                            year: widget.year,
-                                            term: widget.term,
-                                          );
-                                          final filename =
-                                              '课表_${widget.year}_${widget.term}.ics';
-                                          if (kIsWeb) {
-                                            await ics_download.loadLibrary();
-                                            await ics_download.downloadIcs(
-                                                ics, filename);
-                                          } else {
-                                            await Share.shareXFiles(
-                                              [
-                                                XFile.fromData(
-                                                  Uint8List.fromList(
-                                                      utf8.encode(ics)),
-                                                  name: filename,
-                                                  mimeType: 'text/calendar',
-                                                ),
-                                              ],
-                                              text: filename,
-                                            );
-                                          }
-                                        } finally {
-                                          if (mounted) {
-                                            setState(() => _exporting = false);
-                                          }
-                                          try {
-                                            localSetState(() {});
-                                          } catch (_) {}
-                                        }
-                                      },
+                                    : () =>
+                                        unawaited(_exportScheduleIcs(items)),
                                 child: IconLabel(
                                   icon: Icons.download,
                                   label: _exporting ? '导出中...' : '导出 ICS',
@@ -1241,6 +1448,8 @@ class _SchedulePageState extends State<SchedulePage> {
                                                   widget.firstWeekStart,
                                               year: widget.year,
                                               term: widget.term,
+                                              adjustments: _adjustments,
+                                              overrides: _overrides,
                                             );
                                             final filename =
                                                 '课表_${widget.year}_${widget.term}.ics';
@@ -1255,15 +1464,79 @@ class _SchedulePageState extends State<SchedulePage> {
                                                   widget.firstWeekStart,
                                               year: widget.year,
                                               term: widget.term,
+                                              adjustments: _adjustments,
+                                              overrides: _overrides,
                                             );
+                                            CalendarTarget? target;
+                                            var migrateLegacy = false;
+                                            if (!kIsWeb &&
+                                                defaultTargetPlatform ==
+                                                    TargetPlatform.iOS) {
+                                              target =
+                                                  await _chooseCalendarTarget();
+                                              if (!mounted || target == null) {
+                                                return;
+                                              }
+                                              if (target.legacyEventCount > 0 &&
+                                                  mounted) {
+                                                final pageContext = context;
+                                                if (!pageContext.mounted) {
+                                                  return;
+                                                }
+                                                migrateLegacy =
+                                                    await showDialog<bool>(
+                                                          context: pageContext,
+                                                          builder:
+                                                              (dialogContext) =>
+                                                                  AlertDialog(
+                                                            title: const Text(
+                                                                '发现旧版课表日程'),
+                                                            content: Text(
+                                                                '在其他日历发现 ${target!.legacyEventCount} 条旧标记日程。是否迁移去重？'),
+                                                            actions: [
+                                                              TextButton(
+                                                                onPressed: () =>
+                                                                    Navigator.pop(
+                                                                        dialogContext,
+                                                                        false),
+                                                                child:
+                                                                    const Text(
+                                                                        '保留不处理'),
+                                                              ),
+                                                              FilledButton(
+                                                                onPressed: () =>
+                                                                    Navigator.pop(
+                                                                        dialogContext,
+                                                                        true),
+                                                                child:
+                                                                    const Text(
+                                                                        '迁移去重'),
+                                                              ),
+                                                            ],
+                                                          ),
+                                                        ) ??
+                                                        false;
+                                              }
+                                            }
                                             final importResult =
                                                 await CalendarImportService
-                                                    .importEvents(events);
+                                                    .importEvents(
+                                              events,
+                                              calendarIdentifier:
+                                                  target?.identifier,
+                                              migrateLegacy: migrateLegacy,
+                                            );
+                                            final prefs =
+                                                await SharedPreferences
+                                                    .getInstance();
+                                            await prefs.setBool(
+                                                'schedule.calendarSyncEnabled',
+                                                true);
                                             if (mounted) {
                                               messenger?.showSnackBar(
                                                 SnackBar(
                                                   content: Text(
-                                                      '日历：新增 ${importResult.added} 条，更新 ${importResult.updated} 条，跳过 ${importResult.skipped} 条'),
+                                                      '日历${importResult.calendarName == null ? '' : '（${importResult.calendarName}）'}：新增 ${importResult.added} 条，更新 ${importResult.updated} 条，删除 ${importResult.deleted} 条，跳过 ${importResult.skipped} 条'),
                                                   duration: const Duration(
                                                       seconds: 2),
                                                 ),
@@ -1272,11 +1545,9 @@ class _SchedulePageState extends State<SchedulePage> {
                                           }
                                         } on CalendarImportException catch (e) {
                                           if (mounted) {
-                                            messenger?.showSnackBar(
-                                              SnackBar(
-                                                content:
-                                                    Text('日历导入失败：${e.message}'),
-                                              ),
+                                            unawaited(
+                                              _showCalendarImportFailure(
+                                                  e, items),
                                             );
                                           }
                                         } finally {
@@ -1305,7 +1576,60 @@ class _SchedulePageState extends State<SchedulePage> {
                                       : '管理调课(${_overrides.length})',
                                 ),
                               ),
+                              OutlinedButton.icon(
+                                onPressed: () {
+                                  Navigator.pop(sheetContext);
+                                  _showAdjustmentHistory();
+                                },
+                                icon: const Icon(Icons.history, size: 18),
+                                label: Text(
+                                  _adjustments.isEmpty
+                                      ? '调课记录'
+                                      : '调课记录(${_adjustments.length})',
+                                ),
+                              ),
                             ],
+                          ),
+                          const SizedBox(height: 12),
+                          Text(
+                            '显示字段（课程名始终显示）',
+                            style: Theme.of(context)
+                                .textTheme
+                                .titleSmall
+                                ?.copyWith(fontWeight: FontWeight.w800),
+                          ),
+                          SwitchListTile.adaptive(
+                            dense: true,
+                            contentPadding: EdgeInsets.zero,
+                            title: const Text('节次时间'),
+                            value: showTime,
+                            onChanged: (value) {
+                              setState(() => showTime = value);
+                              localSetState(() {});
+                              unawaited(_saveDisplaySettings());
+                            },
+                          ),
+                          SwitchListTile.adaptive(
+                            dense: true,
+                            contentPadding: EdgeInsets.zero,
+                            title: const Text('教室'),
+                            value: showClassroom,
+                            onChanged: (value) {
+                              setState(() => showClassroom = value);
+                              localSetState(() {});
+                              unawaited(_saveDisplaySettings());
+                            },
+                          ),
+                          SwitchListTile.adaptive(
+                            dense: true,
+                            contentPadding: EdgeInsets.zero,
+                            title: const Text('教师'),
+                            value: showTeacher,
+                            onChanged: (value) {
+                              setState(() => showTeacher = value);
+                              localSetState(() {});
+                              unawaited(_saveDisplaySettings());
+                            },
                           ),
                           const SizedBox(height: 12),
                           ScheduleInlineManage(
@@ -1363,6 +1687,158 @@ class _SchedulePageState extends State<SchedulePage> {
       ),
     );
     if (mounted) await _loadOverrides();
+  }
+
+  /// 查看日期级调课历史，并允许长期还原已生效的记录。
+  Future<void> _showAdjustmentHistory() async {
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, localSetState) {
+          final records = [..._adjustments]
+            ..sort((a, b) => b.targetDate.compareTo(a.targetDate));
+          return AlertDialog(
+            title: const Text('调课记录'),
+            content: SizedBox(
+              width: 420,
+              child: records.isEmpty
+                  ? const Text('本学期暂无日期级调课记录。')
+                  : ListView.separated(
+                      shrinkWrap: true,
+                      itemCount: records.length,
+                      separatorBuilder: (_, __) => const Divider(height: 1),
+                      itemBuilder: (_, index) {
+                        final item = records[index];
+                        final active = item.isActive;
+                        return ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          title: Text(
+                            '${dateText(item.sourceDate)} → ${dateText(item.targetDate)}',
+                            style: const TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                          subtitle: Text(
+                            '${item.conflictMode == 'replaceConflicts' ? '替换冲突课程' : '两者并存'} · ${active ? '已生效' : '已还原'}',
+                          ),
+                          trailing: active
+                              ? TextButton(
+                                  onPressed: () async {
+                                    await _restoreAdjustment(item.clientId);
+                                    if (context.mounted) localSetState(() {});
+                                  },
+                                  child: const Text('还原'),
+                                )
+                              : const Icon(Icons.check_circle_outline),
+                        );
+                      },
+                    ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('关闭'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Future<void> _syncCalendarAfterAdjustment() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.iOS) return;
+    final prefs = await SharedPreferences.getInstance();
+    if (!(prefs.getBool('schedule.calendarSyncEnabled') ?? false) ||
+        _lastItems.isEmpty) {
+      return;
+    }
+    final events = scheduleCalendarEvents(
+      courses: _lastItems,
+      firstWeekStart: widget.firstWeekStart,
+      year: widget.year,
+      term: widget.term,
+      adjustments: _adjustments,
+      overrides: _overrides,
+    );
+    try {
+      await CalendarImportService.importEvents(events);
+    } catch (error) {
+      debugPrint('调课后同步系统日历失败: $error');
+    }
+  }
+
+  Future<void> _exportScheduleIcs(List<ScheduleCourse> items) async {
+    if (_exporting || items.isEmpty) return;
+    setState(() => _exporting = true);
+    try {
+      final ics = generateIcs(
+        courses: items,
+        firstWeekStart: widget.firstWeekStart,
+        year: widget.year,
+        term: widget.term,
+        adjustments: _adjustments,
+        overrides: _overrides,
+      );
+      final filename = '课表_${widget.year}_${widget.term}.ics';
+      if (kIsWeb) {
+        await ics_download.loadLibrary();
+        await ics_download.downloadIcs(ics, filename);
+      } else {
+        await Share.shareXFiles(
+          [
+            XFile.fromData(
+              Uint8List.fromList(utf8.encode(ics)),
+              name: filename,
+              mimeType: 'text/calendar',
+            ),
+          ],
+          text: filename,
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _exporting = false);
+    }
+  }
+
+  Future<void> _showCalendarImportFailure(
+    CalendarImportException error,
+    List<ScheduleCourse> items,
+  ) async {
+    if (!mounted) return;
+    final canOpenSettings =
+        !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
+    final action = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('无法导入系统日历'),
+        content: Text('${error.message}\n\n你可以导出 ICS 文件，或前往系统设置检查日历权限。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('关闭'),
+          ),
+          if (canOpenSettings)
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, 'settings'),
+              child: const Text('打开系统设置'),
+            ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, 'ics'),
+            child: const Text('导出 ICS'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted) return;
+    if (action == 'ics') {
+      await _exportScheduleIcs(items);
+    } else if (action == 'settings') {
+      final opened = await launchUrl(Uri.parse('app-settings:'));
+      if (!opened && mounted) {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          const SnackBar(content: Text('无法打开系统设置，请手动进入“设置 > OneGZUS”')),
+        );
+      }
+    }
   }
 
   /// 课程详情「调整此课/编辑」入口：
@@ -1930,8 +2406,14 @@ class ScheduleReadableView extends StatelessWidget {
     required this.firstWeekStart,
     required this.currentWeek,
     required this.overrides,
+    required this.adjustments,
+    required this.showTime,
+    required this.showClassroom,
+    required this.showTeacher,
     this.onAdjustCourse,
     this.onMoveToDay,
+    this.onAdjustDate,
+    this.onShowTools,
   });
 
   final ScheduleViewMode mode;
@@ -1941,8 +2423,16 @@ class ScheduleReadableView extends StatelessWidget {
   final DateTime firstWeekStart;
   final int currentWeek;
   final List<ScheduleOverride> overrides;
+  final List<ScheduleAdjustmentRecord> adjustments;
+  final bool showTime;
+  final bool showClassroom;
+  final bool showTeacher;
   final void Function(ScheduleCourse course)? onAdjustCourse;
   final void Function(ScheduleCourse course)? onMoveToDay;
+  final void Function(
+          DateTime sourceDate, DateTime targetDate, String conflictMode)?
+      onAdjustDate;
+  final VoidCallback? onShowTools;
 
   @override
   Widget build(BuildContext context) {
@@ -1959,8 +2449,14 @@ class ScheduleReadableView extends StatelessWidget {
           firstWeekStart: firstWeekStart,
           currentWeek: currentWeek,
           overrides: overrides,
+          adjustments: adjustments,
+          showTime: showTime,
+          showClassroom: showClassroom,
+          showTeacher: showTeacher,
           onAdjustCourse: onAdjustCourse,
           onMoveToDay: onMoveToDay,
+          onAdjustDate: onAdjustDate,
+          onShowTools: onShowTools,
         );
       case ScheduleViewMode.all:
         return _AllReadableSchedule(
@@ -2087,16 +2583,30 @@ class _CalendarScheduleView extends StatefulWidget {
     required this.firstWeekStart,
     required this.currentWeek,
     required this.overrides,
+    required this.adjustments,
+    required this.showTime,
+    required this.showClassroom,
+    required this.showTeacher,
     this.onAdjustCourse,
     this.onMoveToDay,
+    this.onAdjustDate,
+    this.onShowTools,
   });
 
   final List<ScheduleCourse> items;
   final DateTime firstWeekStart;
   final int currentWeek;
   final List<ScheduleOverride> overrides;
+  final List<ScheduleAdjustmentRecord> adjustments;
+  final bool showTime;
+  final bool showClassroom;
+  final bool showTeacher;
   final void Function(ScheduleCourse course)? onAdjustCourse;
   final void Function(ScheduleCourse course)? onMoveToDay;
+  final void Function(
+          DateTime sourceDate, DateTime targetDate, String conflictMode)?
+      onAdjustDate;
+  final VoidCallback? onShowTools;
 
   @override
   State<_CalendarScheduleView> createState() => _CalendarScheduleViewState();
@@ -2104,18 +2614,23 @@ class _CalendarScheduleView extends StatefulWidget {
 
 class _CalendarScheduleViewState extends State<_CalendarScheduleView> {
   late final PageController _pageController;
+  late final TransformationController _transformationController;
   late int _weekIndex;
+  double _zoomScale = 1;
+  double _fitScale = 1;
 
   @override
   void initState() {
     super.initState();
     _weekIndex = widget.currentWeek;
     _pageController = PageController(initialPage: widget.currentWeek);
+    _transformationController = TransformationController();
   }
 
   @override
   void dispose() {
     _pageController.dispose();
+    _transformationController.dispose();
     super.dispose();
   }
 
@@ -2136,18 +2651,73 @@ class _CalendarScheduleViewState extends State<_CalendarScheduleView> {
     _pageController.jumpToPage(target);
   }
 
-  /// [date] 当天应显示的课程：星期匹配 + 周次匹配（学期外周次无课）
-  /// + 本地停课过滤；按节次排序。
+  void _setZoom(double value) {
+    final next = value.clamp(_fitScale, 2.4).toDouble();
+    _transformationController.value = Matrix4.identity();
+    setState(() => _zoomScale = next);
+  }
+
+  void _resetZoom() => _setZoom(_fitScale);
+
+  void _showAdjustDateSheet(DateTime sourceDate) {
+    widget.onAdjustDate == null
+        ? _showDayCourses(context, sourceDate)
+        : _pickAdjustmentTarget(sourceDate);
+  }
+
+  Future<void> _pickAdjustmentTarget(DateTime sourceDate) async {
+    final first = mondayOf(widget.firstWeekStart);
+    final last = first.add(const Duration(days: 209));
+    var selected = sourceDate.add(const Duration(days: 1));
+    if (selected.isAfter(last)) selected = first;
+    final target = await showDatePicker(
+      context: context,
+      initialDate: selected,
+      firstDate: first,
+      lastDate: last,
+      helpText: '选择调课目标日期',
+    );
+    if (target == null || !mounted || _sameDay(target, sourceDate)) return;
+    final mode = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('目标日有冲突时如何处理？'),
+        content: const Text('源日期课程会自动停课；目标日期重叠节次可替换或并存。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, 'cancel'),
+            child: const Text('取消'),
+          ),
+          OutlinedButton(
+            onPressed: () => Navigator.pop(dialogContext, 'coexist'),
+            child: const Text('两者并存'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, 'replaceConflicts'),
+            child: const Text('替换冲突课程'),
+          ),
+        ],
+      ),
+    );
+    if (mode == null || mode == 'cancel' || !mounted) return;
+    widget.onAdjustDate!(sourceDate, target, mode);
+  }
+
+  bool _sameDay(DateTime a, DateTime b) =>
+      a.year == b.year && a.month == b.month && a.day == b.day;
+
+  /// [date] 当天应显示的生效课程实例。
   List<ScheduleCourse> _coursesOn(DateTime date) {
-    final week = weekFromDate(widget.firstWeekStart, date);
-    if (week < 1 || week > 30) return const [];
-    final weekday = date.weekday;
     return [
-      for (final course in widget.items)
-        if (course.weekday == weekday &&
-            course.occursInWeek(week) &&
-            !isHiddenByOverrides(course, widget.overrides, currentWeek: week))
-          course,
+      for (final occurrence in expandEffectiveSchedule(
+        courses: widget.items,
+        firstWeekStart: widget.firstWeekStart,
+        adjustments: widget.adjustments,
+        overrides: widget.overrides,
+        startDate: date,
+        endDate: date,
+      ))
+        occurrence.course,
     ]..sort(_compareScheduleCourses);
   }
 
@@ -2157,14 +2727,15 @@ class _CalendarScheduleViewState extends State<_CalendarScheduleView> {
     if (week < 1 || week > 30) return const [];
     final seen = <String>{};
     return [
-      for (final course in widget.items)
-        if (course.weekday != null &&
-            course.weekday! >= 1 &&
-            course.weekday! <= 7 &&
-            course.occursInWeek(week) &&
-            !isHiddenByOverrides(course, widget.overrides, currentWeek: week) &&
-            seen.add('${course.weekday}-${course.startSection}-${course.name}'))
-          course,
+      for (final occurrence in effectiveOccurrencesForWeek(
+        courses: widget.items,
+        firstWeekStart: widget.firstWeekStart,
+        week: week,
+        adjustments: widget.adjustments,
+        overrides: widget.overrides,
+      ))
+        // 以具体实例键去重；同一节次的「两者并存」课程不能被课程名合并掉。
+        if (seen.add(occurrence.occurrenceKey)) occurrence.course,
     ]..sort(_compareScheduleCourses);
   }
 
@@ -2176,6 +2747,29 @@ class _CalendarScheduleViewState extends State<_CalendarScheduleView> {
       if (end > max) max = end;
     }
     return max.clamp(8, 16);
+  }
+
+  ScheduleCourse? _nextTodayCourse(
+    List<ScheduleCourse> courses,
+    DateTime now,
+  ) {
+    for (final course in courses) {
+      final section = course.startSection;
+      if (section == null || section < 1 || section > scheduleTimes.length) {
+        continue;
+      }
+      final parts = scheduleTimes[section - 1].$1.split(':');
+      if (parts.length != 2) continue;
+      final start = DateTime(
+        now.year,
+        now.month,
+        now.day,
+        int.tryParse(parts[0]) ?? 0,
+        int.tryParse(parts[1]) ?? 0,
+      );
+      if (!start.isBefore(now)) return course;
+    }
+    return null;
   }
 
   void _showDayCourses(BuildContext context, DateTime date) {
@@ -2355,7 +2949,8 @@ class _CalendarScheduleViewState extends State<_CalendarScheduleView> {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        const topControlsHeight = 68.0;
+        final compact = MediaQuery.sizeOf(context).width < 600;
+        final topControlsHeight = compact ? 112.0 : 68.0;
         const minPageHeight = 240.0;
         final pageViewHeight = constraints.hasBoundedHeight
             ? (constraints.maxHeight - topControlsHeight - 4)
@@ -2369,65 +2964,150 @@ class _CalendarScheduleViewState extends State<_CalendarScheduleView> {
             children: [
               Padding(
                 padding: const EdgeInsets.only(bottom: 4),
-                child: Row(
+                child: Column(
                   children: [
-                    IconButton(
-                      tooltip: '上一周',
-                      onPressed: _weekIndex <= 1
-                          ? null
-                          : () => _pageController.previousPage(
-                                duration: const Duration(milliseconds: 220),
-                                curve: Curves.easeOutCubic,
-                              ),
-                      icon: const Icon(Icons.chevron_left),
-                    ),
-                    Expanded(
-                      child: Center(
-                        child: InkWell(
-                          onTap: () => _showWeekPicker(context),
-                          borderRadius: BorderRadius.circular(10),
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 8, vertical: 4),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Flexible(
-                                  child: Text(
-                                    _weekTitle(_weekIndex),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: theme.textTheme.titleLarge
-                                        ?.copyWith(fontWeight: FontWeight.w900),
+                    Row(
+                      children: [
+                        IconButton(
+                          tooltip: '上一周',
+                          onPressed: _weekIndex <= 1
+                              ? null
+                              : () => _pageController.previousPage(
+                                    duration: const Duration(milliseconds: 220),
+                                    curve: Curves.easeOutCubic,
                                   ),
+                          icon: const Icon(Icons.chevron_left),
+                        ),
+                        Expanded(
+                          child: Center(
+                            child: InkWell(
+                              onTap: () => _showWeekPicker(context),
+                              borderRadius: BorderRadius.circular(10),
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 8, vertical: 4),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Flexible(
+                                      child: Text(
+                                        _weekTitle(_weekIndex),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: theme.textTheme.titleLarge
+                                            ?.copyWith(
+                                                fontWeight: FontWeight.w900),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Icon(Icons.expand_more,
+                                        size: 20,
+                                        color: colorScheme.onSurfaceVariant),
+                                  ],
                                 ),
-                                const SizedBox(width: 4),
-                                Icon(Icons.expand_more,
-                                    size: 20,
-                                    color: colorScheme.onSurfaceVariant),
-                              ],
+                              ),
                             ),
                           ),
                         ),
+                        IconButton(
+                          tooltip: '下一周',
+                          onPressed: _weekIndex >= 30
+                              ? null
+                              : () => _pageController.nextPage(
+                                    duration: const Duration(milliseconds: 220),
+                                    curve: Curves.easeOutCubic,
+                                  ),
+                          icon: const Icon(Icons.chevron_right),
+                        ),
+                        if (widget.onShowTools != null)
+                          IconButton(
+                            tooltip: '课表工具',
+                            onPressed: widget.onShowTools,
+                            icon: const Icon(Icons.tune),
+                          ),
+                      ],
+                    ),
+                    if (compact)
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          TextButton(
+                            onPressed: () => _goToWeek(widget.currentWeek),
+                            child: const Text('本周'),
+                          ),
+                          IconButton(
+                            tooltip: '缩小',
+                            onPressed: () => _setZoom(_zoomScale - 0.1),
+                            icon: const Icon(Icons.remove),
+                          ),
+                          IconButton(
+                            tooltip: '整周适配',
+                            onPressed: _resetZoom,
+                            icon: const Icon(Icons.fit_screen),
+                          ),
+                          IconButton(
+                            tooltip: '放大',
+                            onPressed: () => _setZoom(_zoomScale + 0.1),
+                            icon: const Icon(Icons.add),
+                          ),
+                        ],
                       ),
-                    ),
-                    IconButton(
-                      tooltip: '下一周',
-                      onPressed: _weekIndex >= 30
-                          ? null
-                          : () => _pageController.nextPage(
-                                duration: const Duration(milliseconds: 220),
-                                curve: Curves.easeOutCubic,
-                              ),
-                      icon: const Icon(Icons.chevron_right),
-                    ),
-                    const SizedBox(width: 4),
-                    TextButton(
-                      onPressed: () => _goToWeek(widget.currentWeek),
-                      child: const Text('本周'),
-                    ),
+                    if (!compact)
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          TextButton(
+                            onPressed: () => _goToWeek(widget.currentWeek),
+                            child: const Text('本周'),
+                          ),
+                          IconButton(
+                            tooltip: '缩小',
+                            onPressed: () => _setZoom(_zoomScale - 0.1),
+                            icon: const Icon(Icons.remove),
+                          ),
+                          IconButton(
+                            tooltip: '整周适配',
+                            onPressed: _resetZoom,
+                            icon: const Icon(Icons.fit_screen),
+                          ),
+                          IconButton(
+                            tooltip: '放大',
+                            onPressed: () => _setZoom(_zoomScale + 0.1),
+                            icon: const Icon(Icons.add),
+                          ),
+                        ],
+                      ),
                   ],
                 ),
+              ),
+              Builder(
+                builder: (context) {
+                  final todayCourses = _coursesOn(today);
+                  final next = _nextTodayCourse(todayCourses, now);
+                  final summary = next == null
+                      ? (todayCourses.isEmpty ? '今天暂无课程' : '今日课程已结束')
+                      : '下一节：${next.name} · ${_scheduleTimeText(next)}';
+                  return Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
+                    child: Row(
+                      children: [
+                        Icon(Icons.today, size: 16, color: colorScheme.primary),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            '今天 ${today.month}月${today.day}日 · $summary',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: colorScheme.onSurfaceVariant,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                },
               ),
               const SizedBox(height: 4),
               SizedBox(
@@ -2443,98 +3123,129 @@ class _CalendarScheduleViewState extends State<_CalendarScheduleView> {
                     final inTerm = week >= 1 && week <= 30;
                     final weekItems =
                         inTerm ? _weekCourses(week) : const <ScheduleCourse>[];
-                    final compact = MediaQuery.sizeOf(context).width < 600;
                     final timeColWidth = compact ? 46.0 : 54.0;
-                    final minDayWidth = compact ? 96.0 : 112.0;
                     final viewportWidth = constraints.maxWidth;
-                    final gridWidth = (timeColWidth + minDayWidth * 7)
-                        .clamp(viewportWidth, double.infinity)
-                        .toDouble();
+                    final gridWidth = viewportWidth;
                     final dayWidth = (gridWidth - timeColWidth) / 7;
                     final rowHeight =
-                        _rowHeightFor(weekItems, dayWidth, compact);
+                        _rowHeightFor(weekItems, dayWidth, compact)
+                            .clamp(34.0, 74.0)
+                            .toDouble();
                     final maxSection = _maxSectionFor(weekItems);
+                    final horizontalFit =
+                        (constraints.maxWidth / (timeColWidth + dayWidth * 7))
+                            .clamp(0.25, 1.0)
+                            .toDouble();
+                    final verticalFit =
+                        ((pageViewHeight - 58) / (maxSection * rowHeight + 48))
+                            .clamp(0.25, 1.0)
+                            .toDouble();
+                    _fitScale = verticalFit < horizontalFit
+                        ? verticalFit
+                        : horizontalFit;
+                    if (_zoomScale < _fitScale) _zoomScale = _fitScale;
                     if (!inTerm) {
                       return Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 3),
                         child: _OutOfTermCell(week: week),
                       );
                     }
-                    return Scrollbar(
-                      child: SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        physics: const ClampingScrollPhysics(),
-                        child: SizedBox(
-                          width: gridWidth,
-                          child: SingleChildScrollView(
-                            physics: const AlwaysScrollableScrollPhysics(),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                // 星期 + 日期表头（左侧时间列宽占位，与网格列对齐）。
-                                Row(
-                                  children: [
-                                    SizedBox(width: timeColWidth),
-                                    for (final day in days)
-                                      SizedBox(
-                                        width: dayWidth,
-                                        child: Column(
-                                          children: [
-                                            Text(
-                                              _scheduleWeekdayText(day.weekday),
-                                              style: theme.textTheme.bodyMedium
-                                                  ?.copyWith(
-                                                      fontWeight:
-                                                          FontWeight.w800),
-                                            ),
-                                            const SizedBox(height: 2),
-                                            Container(
-                                              width: 36,
-                                              height: 36,
-                                              alignment: Alignment.center,
-                                              decoration: day == today
-                                                  ? BoxDecoration(
-                                                      color:
-                                                          colorScheme.primary,
-                                                      shape: BoxShape.circle)
-                                                  : null,
-                                              child: Text(
-                                                '${day.day}',
-                                                style: TextStyle(
-                                                  fontSize: 15,
-                                                  fontWeight: day == today
-                                                      ? FontWeight.w800
-                                                      : FontWeight.w600,
-                                                  color: day == today
-                                                      ? colorScheme.onPrimary
-                                                      : colorScheme.onSurface,
+                    return GestureDetector(
+                      onDoubleTap: _resetZoom,
+                      child: InteractiveViewer(
+                        transformationController: _transformationController,
+                        minScale: _fitScale,
+                        maxScale: 2.4,
+                        scaleEnabled: true,
+                        panEnabled: _zoomScale > _fitScale,
+                        constrained: true,
+                        child: Transform.scale(
+                          scale: _zoomScale,
+                          alignment: Alignment.topLeft,
+                          child: SizedBox(
+                            width: gridWidth,
+                            child: SingleChildScrollView(
+                              physics: const AlwaysScrollableScrollPhysics(),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  // 星期 + 日期表头（左侧时间列宽占位，与网格列对齐）。
+                                  Row(
+                                    children: [
+                                      SizedBox(width: timeColWidth),
+                                      for (final day in days)
+                                        SizedBox(
+                                          width: dayWidth,
+                                          child: GestureDetector(
+                                            onLongPress: () =>
+                                                _showAdjustDateSheet(day),
+                                            child: Column(
+                                              children: [
+                                                Text(
+                                                  _scheduleWeekdayText(
+                                                      day.weekday),
+                                                  style: theme
+                                                      .textTheme.bodyMedium
+                                                      ?.copyWith(
+                                                          fontWeight:
+                                                              FontWeight.w800),
                                                 ),
-                                              ),
+                                                const SizedBox(height: 2),
+                                                Container(
+                                                  width: 36,
+                                                  height: 36,
+                                                  alignment: Alignment.center,
+                                                  decoration: day == today
+                                                      ? BoxDecoration(
+                                                          color: colorScheme
+                                                              .primary,
+                                                          shape:
+                                                              BoxShape.circle)
+                                                      : null,
+                                                  child: Text(
+                                                    '${day.day}',
+                                                    style: TextStyle(
+                                                      fontSize: 15,
+                                                      fontWeight: day == today
+                                                          ? FontWeight.w800
+                                                          : FontWeight.w600,
+                                                      color: day == today
+                                                          ? colorScheme
+                                                              .onPrimary
+                                                          : colorScheme
+                                                              .onSurface,
+                                                    ),
+                                                  ),
+                                                ),
+                                              ],
                                             ),
-                                          ],
+                                          ),
                                         ),
-                                      ),
-                                  ],
-                                ),
-                                const SizedBox(height: 6),
-                                SizedBox(
-                                  height: maxSection * rowHeight,
-                                  child: _WeekTimeGrid(
-                                    days: days,
-                                    items: weekItems,
-                                    maxSection: maxSection,
-                                    timeColWidth: timeColWidth,
-                                    dayWidth: dayWidth,
-                                    gridWidth: gridWidth,
-                                    rowHeight: rowHeight,
-                                    today: today,
-                                    onEmptyDayTap: (day) =>
-                                        _showDayCourses(context, day),
-                                    onAdjustCourse: widget.onAdjustCourse,
-                                    onMoveToDay: widget.onMoveToDay,
+                                    ],
                                   ),
-                                ),
-                              ],
+                                  const SizedBox(height: 6),
+                                  SizedBox(
+                                    height: maxSection * rowHeight,
+                                    child: _WeekTimeGrid(
+                                      days: days,
+                                      items: weekItems,
+                                      maxSection: maxSection,
+                                      timeColWidth: timeColWidth,
+                                      dayWidth: dayWidth,
+                                      gridWidth: gridWidth,
+                                      rowHeight: rowHeight,
+                                      today: today,
+                                      onEmptyDayTap: (day) =>
+                                          _showDayCourses(context, day),
+                                      onAdjustCourse: widget.onAdjustCourse,
+                                      onMoveToDay: widget.onMoveToDay,
+                                      showTime: widget.showTime,
+                                      showClassroom: widget.showClassroom,
+                                      showTeacher: widget.showTeacher,
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
                           ),
                         ),
@@ -2682,6 +3393,9 @@ class _WeekTimeGrid extends StatelessWidget {
     required this.gridWidth,
     required this.rowHeight,
     required this.today,
+    required this.showTime,
+    required this.showClassroom,
+    required this.showTeacher,
     required this.onEmptyDayTap,
     this.onAdjustCourse,
     this.onMoveToDay,
@@ -2695,6 +3409,9 @@ class _WeekTimeGrid extends StatelessWidget {
   final double gridWidth;
   final double rowHeight;
   final DateTime today;
+  final bool showTime;
+  final bool showClassroom;
+  final bool showTeacher;
   final void Function(DateTime day) onEmptyDayTap;
   final void Function(ScheduleCourse course)? onAdjustCourse;
   final void Function(ScheduleCourse course)? onMoveToDay;
@@ -2749,9 +3466,12 @@ class _WeekTimeGrid extends StatelessWidget {
             height: rowHeight,
             child: Center(
               child: Text(
-                row < scheduleTimes.length ? scheduleTimes[row].$1 : '',
+                row < scheduleTimes.length
+                    ? '第${row + 1}节\n${scheduleTimes[row].$1}–${scheduleTimes[row].$2}'
+                    : '',
+                textAlign: TextAlign.center,
                 style: TextStyle(
-                  fontSize: 11,
+                  fontSize: 9,
                   fontWeight: FontWeight.w600,
                   color: colorScheme.onSurfaceVariant,
                 ),
@@ -2780,6 +3500,9 @@ class _WeekTimeGrid extends StatelessWidget {
       height: span * rowHeight - gap * 2,
       child: _CalendarCourseChip(
         course: course,
+        showTime: showTime,
+        showClassroom: showClassroom,
+        showTeacher: showTeacher,
         onTap: () => _showReadableScheduleDetails(
             context, course, onAdjustCourse, onMoveToDay),
       ),
@@ -2790,10 +3513,19 @@ class _WeekTimeGrid extends StatelessWidget {
 /// 周网格中的课程块（拾光风格）：按节次定位，块内自上而下为
 /// 时间 → 课程名 → 教室；调色板色底 + 白字，本地课程加白边。
 class _CalendarCourseChip extends StatelessWidget {
-  const _CalendarCourseChip({required this.course, required this.onTap});
+  const _CalendarCourseChip({
+    required this.course,
+    required this.onTap,
+    required this.showTime,
+    required this.showClassroom,
+    required this.showTeacher,
+  });
 
   final ScheduleCourse course;
   final VoidCallback onTap;
+  final bool showTime;
+  final bool showClassroom;
+  final bool showTeacher;
 
   @override
   Widget build(BuildContext context) {
@@ -2818,18 +3550,20 @@ class _CalendarCourseChip extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              startTime,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.9),
-                fontSize: 11,
-                height: 1.2,
-                fontWeight: FontWeight.w600,
+            if (showTime) ...[
+              Text(
+                startTime,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.9),
+                  fontSize: 11,
+                  height: 1.2,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
-            ),
-            const SizedBox(height: 2),
+              const SizedBox(height: 2),
+            ],
             Expanded(
               child: Text(
                 course.name,
@@ -2841,7 +3575,7 @@ class _CalendarCourseChip extends StatelessWidget {
                 ),
               ),
             ),
-            if (classroom != null) ...[
+            if (showClassroom && classroom != null) ...[
               const SizedBox(height: 1),
               Text(
                 classroom,
@@ -2854,6 +3588,17 @@ class _CalendarCourseChip extends StatelessWidget {
                 ),
               ),
             ],
+            if (showTeacher && _cleanScheduleText(course.teacher) != null)
+              Text(
+                _cleanScheduleText(course.teacher)!,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.85),
+                  fontSize: 10,
+                  height: 1.1,
+                ),
+              ),
           ],
         ),
       ),

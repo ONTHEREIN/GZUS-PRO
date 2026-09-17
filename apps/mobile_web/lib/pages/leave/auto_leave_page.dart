@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import '../../api_client.dart';
 import '../../leave_attachment.dart';
 import '../../mobile_sso.dart' deferred as mobile_sso;
+import '../../models/schedule_override.dart';
 import '../../schedule_utils.dart';
 import '../../widgets/empty_state.dart';
 import '../../widgets/icon_label.dart';
@@ -41,6 +42,7 @@ class _AutoLeavePageState extends State<AutoLeavePage> {
   LeavePreviewResponse? _preview;
   LeaveFillResponse? _fillResult;
   List<Map<String, dynamic>>? _scheduleCourses;
+  List<Map<String, dynamic>>? _effectiveOccurrences;
   final Map<String, StaffCandidateItem> _teacherSelections = {};
   final Map<String, List<StaffCandidateItem>> _teacherSearchResults = {};
   _LeaveStep _step = _LeaveStep.materials;
@@ -371,14 +373,47 @@ class _AutoLeavePageState extends State<AutoLeavePage> {
       _loadingPreview = true;
       _clearGeneratedState();
       _scheduleCourses = null;
+      _effectiveOccurrences = null;
     });
     try {
+      final scheduleResult =
+          await widget.api.schedule(year: widget.year, term: widget.term);
       final courses =
-          (await widget.api.schedule(year: widget.year, term: widget.term))
-              .data
-              .items
-              .map((item) => item.toJson())
-              .toList();
+          scheduleResult.data.items.map((item) => item.toJson()).toList();
+      final overrides = await ScheduleOverrideStore.load(
+        widget.year,
+        widget.term,
+      );
+      List<ScheduleAdjustmentRecord> adjustments = const [];
+      try {
+        adjustments = await widget.api.fetchScheduleAdjustments(
+          year: widget.year,
+          term: widget.term,
+        );
+      } catch (error) {
+        // 兼容旧版服务端/离线请假：没有调课同步数据时仍使用原始课表。
+        debugPrint('读取日期调课失败，按原始课表预览请假: $error');
+      }
+      final effectiveOccurrences = [
+        for (final occurrence in expandEffectiveSchedule(
+          courses: scheduleResult.data.items,
+          firstWeekStart: mondayOf(widget.firstWeekStart),
+          adjustments: adjustments,
+          overrides: overrides,
+          startDate: range.$1,
+          endDate: range.$2,
+        ))
+          {
+            'date': dateText(occurrence.date),
+            'name': occurrence.course.name,
+            'occurrenceKey': occurrence.occurrenceKey,
+            'courseKey': occurrence.occurrenceKey,
+            'startSection': occurrence.course.startSection,
+            'endSection': occurrence.course.endSection,
+            'classroom': occurrence.course.classroom ?? '',
+            'teacher': occurrence.course.teacher ?? '',
+          },
+      ];
       final result = await widget.api.previewLeave(
         year: widget.year,
         term: widget.term,
@@ -386,11 +421,13 @@ class _AutoLeavePageState extends State<AutoLeavePage> {
         endDate: range.$2,
         firstWeekStart: mondayOf(widget.firstWeekStart),
         courses: courses,
+        effectiveOccurrences: effectiveOccurrences,
       );
       if (!mounted || requestRevision != _draftRevision) return false;
       setState(() {
         _preview = result;
         _scheduleCourses = courses.isEmpty ? null : courses;
+        _effectiveOccurrences = effectiveOccurrences;
       });
       return true;
     } catch (exc) {
@@ -439,6 +476,7 @@ class _AutoLeavePageState extends State<AutoLeavePage> {
         attachments: attachments,
         teacherHandlers: teacherHandlers,
         courses: _scheduleCourses ?? const [],
+        effectiveOccurrences: _effectiveOccurrences ?? const [],
       );
       if (!mounted || requestRevision != _draftRevision) return;
       setState(() {

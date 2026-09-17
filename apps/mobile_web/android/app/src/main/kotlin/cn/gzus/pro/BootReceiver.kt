@@ -3,7 +3,6 @@ package cn.gzus.pro
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.os.Build
 
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
@@ -12,21 +11,6 @@ class BootReceiver : BroadcastReceiver() {
         ) {
             return
         }
-        val prefs = context.getSharedPreferences(BackgroundService.PREFS_NAME, Context.MODE_PRIVATE)
-        val hasSession = !prefs.getString(BackgroundService.KEY_SESSION_ID, "").isNullOrBlank()
-        val hasBaseUrl = !prefs.getString(BackgroundService.KEY_API_BASE_URL, "").isNullOrBlank()
-        if (!hasSession || !hasBaseUrl || !BackgroundService.hasStoredAuthSession(context)) return
-
-        val serviceIntent = Intent(context, BackgroundService::class.java).apply {
-            action = BackgroundService.ACTION_START
-        }
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(serviceIntent)
-            } else {
-                context.startService(serviceIntent)
-            }
-        } catch (_: Exception) {
-        }
+        // Android 12+ 不允许在后台随意拉起前台服务；用户下次打开 App 时再恢复。
     }
 }

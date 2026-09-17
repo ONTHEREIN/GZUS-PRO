@@ -1,9 +1,9 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:ftpconnect/ftpconnect.dart';
 import 'package:flutter/services.dart';
 
+import 'ftp_gbk_client.dart';
 import 'ftp_upload_models.dart';
 
 const _channel = MethodChannel('cn.gzus.pro/ftp');
@@ -42,7 +42,7 @@ Future<List<FtpEntry>> listDirectory(FtpConfig config, String path) async {
   }
   return _withClient<List<FtpEntry>>(config, (client) async {
     await _changeToVirtualDirectory(client, path);
-    final entries = await _listDirectoryEntries(client);
+    final entries = await client.listDirectoryContent();
     final directory = _normalizeDirectory(path);
     return entries
         .where((entry) => entry.name != '.' && entry.name != '..')
@@ -50,9 +50,9 @@ Future<List<FtpEntry>> listDirectory(FtpConfig config, String path) async {
           (entry) => FtpEntry(
             name: entry.name,
             path: _childPath(directory, entry.name),
-            isDirectory: entry.type == FTPEntryType.dir ||
-                entry.type == FTPEntryType.link,
-            size: entry.type == FTPEntryType.file ? entry.size ?? 0 : 0,
+            isDirectory: entry.type == GbkFtpEntryType.directory ||
+                entry.type == GbkFtpEntryType.link,
+            size: entry.type == GbkFtpEntryType.file ? entry.size : 0,
           ),
         )
         .toList(growable: false);
@@ -77,7 +77,10 @@ Future<FtpUploadResult> uploadFile({
   }
   return _withClient<FtpUploadResult>(config, (client) async {
     await _changeToVirtualDirectory(client, remoteDirectory);
-    final uploaded = await client.uploadFile(localFile);
+    final uploaded = await client.uploadFile(
+      localFile,
+      _localFileName(localPath),
+    );
     if (!uploaded) {
       throw const FtpUploadException('UPLOAD_FAILED', '上传失败');
     }
@@ -139,7 +142,7 @@ Future<T?> _invokeAndroid<T>(String method, Map<String, Object?> args) async {
 
 Future<T> _withClient<T>(
   FtpConfig config,
-  Future<T> Function(FTPConnect client) operation,
+  Future<T> Function(GbkFtpClient client) operation,
 ) async {
   if (!config.passiveMode) {
     throw const FtpUploadException(
@@ -147,14 +150,13 @@ Future<T> _withClient<T>(
       '当前原生平台的 FTP 客户端仅支持被动模式，请开启被动模式后重试',
     );
   }
-  final client = FTPConnect(
-    config.host,
+  final client = GbkFtpClient(
+    host: config.host,
     port: config.port,
-    user: config.username,
-    pass: config.password,
-    timeout: config.timeoutSeconds,
+    username: config.username,
+    password: config.password,
+    timeoutSeconds: config.timeoutSeconds,
   );
-  client.transferMode = TransferMode.passive;
   var connected = false;
   try {
     connected = await client.connect();
@@ -164,8 +166,8 @@ Future<T> _withClient<T>(
     return await operation(client);
   } on FtpUploadException {
     rethrow;
-  } on FTPConnectException catch (error) {
-    throw _mapFtpConnectException(error);
+  } on GbkFtpException catch (error) {
+    throw _mapGbkFtpException(error);
   } on SocketException catch (error) {
     throw FtpUploadException('NETWORK_ERROR', 'FTP 网络错误：${error.message}');
   } on TimeoutException {
@@ -177,17 +179,7 @@ Future<T> _withClient<T>(
   }
 }
 
-Future<List<FTPEntry>> _listDirectoryEntries(FTPConnect client) async {
-  try {
-    return await client.listDirectoryContent();
-  } on FTPConnectException {
-    // 与 Android 客户端一致：MLSD 不可用时降级到广泛支持的 LIST。
-    client.listCommand = ListCommand.list;
-    return client.listDirectoryContent();
-  }
-}
-
-Future<void> _changeToVirtualDirectory(FTPConnect client, String path) async {
+Future<void> _changeToVirtualDirectory(GbkFtpClient client, String path) async {
   final serverPath = _serverDirectory(path);
   if (serverPath == null) return;
   final changed = await client.changeDirectory(serverPath);
@@ -196,7 +188,7 @@ Future<void> _changeToVirtualDirectory(FTPConnect client, String path) async {
   }
 }
 
-FtpUploadException _mapFtpConnectException(FTPConnectException error) {
+FtpUploadException _mapGbkFtpException(GbkFtpException error) {
   final detail = [error.message, error.response]
       .whereType<String>()
       .where((item) => item.trim().isNotEmpty)

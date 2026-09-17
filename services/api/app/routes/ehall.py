@@ -275,6 +275,11 @@ def leave_preview(
             year=payload.year,
             term=payload.term,
             first_week_start=payload.first_week_start,
+            effective_occurrences=[
+                item.model_dump(by_alias=True) for item in payload.effective_occurrences
+            ]
+            or None,
+            selected_course_keys=payload.selected_course_keys,
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
@@ -327,6 +332,11 @@ def leave_fill(
             year=payload.year,
             term=payload.term,
             first_week_start=payload.first_week_start,
+            effective_occurrences=[
+                item.model_dump(by_alias=True) for item in payload.effective_occurrences
+            ]
+            or None,
+            selected_course_keys=payload.selected_course_keys,
         )
         if preview["hasMissingFields"]:
             return {

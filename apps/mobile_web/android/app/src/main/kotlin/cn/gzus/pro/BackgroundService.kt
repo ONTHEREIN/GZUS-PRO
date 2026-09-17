@@ -9,6 +9,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.Handler
@@ -25,6 +26,7 @@ import java.net.URL
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
+import java.util.UUID
 
 class BackgroundService : Service() {
     companion object {
@@ -40,6 +42,7 @@ class BackgroundService : Service() {
         const val PREFS_NAME = "gzus_push_background"
         const val KEY_API_BASE_URL = "apiBaseUrl"
         const val KEY_SESSION_ID = "sessionId"
+        const val KEY_INSTALLATION_ID = "installationId"
         const val KEY_APP_FOREGROUND = "appForeground"
         const val KEY_PENDING_OPEN = "pendingOpen"
         const val KEY_LAST_RESTART_TIME = "lastRestartTime"
@@ -51,6 +54,7 @@ class BackgroundService : Service() {
         const val MAX_RESTART_COUNT = 3 // 5分钟内最多重启3次
         const val EXTRA_API_BASE_URL = "apiBaseUrl"
         const val EXTRA_SESSION_ID = "sessionId"
+        const val EXTRA_INSTALLATION_ID = "installationId"
         const val EXTRA_PUSH_EXTRAS = "pushExtras"
 
         fun storePendingOpen(context: Context, extrasJson: String?) {
@@ -217,96 +221,25 @@ class BackgroundService : Service() {
                 }
                 startPolling()
                 WidgetRefreshScheduler.triggerIfDue(this)
-                scheduleKeepAlive(this)
                 checkAppProcessAlive()
                 CourseReminderScheduler(this).scheduleAll()
             }
         }
-        return START_STICKY
+        // 用户划掉任务或系统回收后不由 Service 自动拉起；下次打开 App 时再恢复。
+        return START_NOT_STICKY
     }
 
     override fun onDestroy() {
         stopPolling()
-        if (!stoppingByUser) {
-            scheduleKeepAlive(this)
-        } else {
-            cancelKeepAlive(this)
-        }
         super.onDestroy()
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val apiBaseUrl = prefs.getString(KEY_API_BASE_URL, null)
-        val sessionId = prefs.getString(KEY_SESSION_ID, null)
-
-        // Check if we can restart (anti-loop protection)
-        if (!canRestartService(this)) {
-            super.onTaskRemoved(rootIntent)
-            return
-        }
-
-        // Record restart attempt
-        recordRestartAttempt(this)
-
-        // Immediate restart via Handler
-        Handler(Looper.getMainLooper()).postDelayed({
-            val restartIntent = Intent(this, BackgroundService::class.java).apply {
-                action = ACTION_START
-                if (apiBaseUrl != null) putExtra(EXTRA_API_BASE_URL, apiBaseUrl)
-                if (sessionId != null) putExtra(EXTRA_SESSION_ID, sessionId)
-            }
-            try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    startForegroundService(restartIntent)
-                } else {
-                    startService(restartIntent)
-                }
-            } catch (_: Exception) {
-                // Service start failed (e.g. quota exhausted), ignore
-            }
-        }, 1000L)
-
-        // AlarmManager fallback restart via KeepAliveReceiver
-        val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        val fallbackIntent = Intent(this, KeepAliveReceiver::class.java).apply {
-            action = ACTION_KEEP_ALIVE
-        }
-        val fallbackPendingIntent = PendingIntent.getBroadcast(
-            this,
-            KEEP_ALIVE_REQUEST_CODE,
-            fallbackIntent,
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-        )
-        val triggerTime = SystemClock.elapsedRealtime() + 5000L
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            if (alarmManager.canScheduleExactAlarms()) {
-                alarmManager.setExactAndAllowWhileIdle(
-                    AlarmManager.ELAPSED_REALTIME_WAKEUP,
-                    triggerTime,
-                    fallbackPendingIntent
-                )
-            } else {
-                alarmManager.setAndAllowWhileIdle(
-                    AlarmManager.ELAPSED_REALTIME_WAKEUP,
-                    triggerTime,
-                    fallbackPendingIntent
-                )
-            }
-        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            alarmManager.setExactAndAllowWhileIdle(
-                AlarmManager.ELAPSED_REALTIME_WAKEUP,
-                triggerTime,
-                fallbackPendingIntent
-            )
-        } else {
-            alarmManager.setExact(
-                AlarmManager.ELAPSED_REALTIME_WAKEUP,
-                triggerTime,
-                fallbackPendingIntent
-            )
-        }
-
+        // 任务被划掉后仍保留当前服务，但不再把应用误判为前台。
+        getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_APP_FOREGROUND, false)
+            .apply()
         super.onTaskRemoved(rootIntent)
     }
 
@@ -346,6 +279,11 @@ class BackgroundService : Service() {
         val editor = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
         if (apiBaseUrl != null) editor.putString(KEY_API_BASE_URL, apiBaseUrl)
         if (sessionId != null) editor.putString(KEY_SESSION_ID, sessionId)
+        val installationId = intent?.getStringExtra(EXTRA_INSTALLATION_ID)?.takeIf { it.isNotBlank() }
+            ?: getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getString(KEY_INSTALLATION_ID, null)
+            ?: UUID.randomUUID().toString()
+        editor.putString(KEY_INSTALLATION_ID, installationId)
         editor.apply()
     }
 
@@ -373,8 +311,16 @@ class BackgroundService : Service() {
 
     private fun pollOnce() {
         val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val apiBaseUrl = prefs.getString(KEY_API_BASE_URL, null)?.trimEnd('/') ?: return
-        val sessionId = prefs.getString(KEY_SESSION_ID, null)?.takeIf { it.isNotBlank() } ?: return
+        val apiBaseUrl = prefs.getString(KEY_API_BASE_URL, null)?.trimEnd('/')
+        val sessionId = prefs.getString(KEY_SESSION_ID, null)?.takeIf { it.isNotBlank() }
+        if (apiBaseUrl.isNullOrBlank() || sessionId == null) {
+            executor?.schedule({ pollOnce() }, pollIntervalSeconds, TimeUnit.SECONDS)
+            return
+        }
+        if (prefs.getBoolean(KEY_APP_FOREGROUND, false)) {
+            executor?.schedule({ pollOnce() }, pollIntervalSeconds, TimeUnit.SECONDS)
+            return
+        }
         when (val result = fetchMessages(apiBaseUrl, sessionId)) {
             is PollResult.Success -> {
                 consecutiveFailures = 0
@@ -403,11 +349,14 @@ class BackgroundService : Service() {
     }
 
     private fun fetchMessages(apiBaseUrl: String, sessionId: String): PollResult {
-        val connection = (URL("$apiBaseUrl/push/poll").openConnection() as HttpURLConnection).apply {
+        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val installationId = prefs.getString(KEY_INSTALLATION_ID, null).orEmpty()
+        val connection = (URL("$apiBaseUrl/notifications/events/pending").openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = 10000
             readTimeout = 10000
             setRequestProperty("X-Session-Id", sessionId)
+            setRequestProperty("X-Installation-Id", installationId)
         }
         return try {
             val status = connection.responseCode
@@ -427,7 +376,7 @@ class BackgroundService : Service() {
             if (body.contains(SINGLE_DEVICE_CONFLICT_MESSAGE)) {
                 PollResult.Unauthorized
             } else {
-                PollResult.Success(JSONObject(body).optJSONArray("messages") ?: JSONArray())
+                PollResult.Success(JSONObject(body).optJSONArray("events") ?: JSONArray())
             }
         } catch (_: Exception) {
             PollResult.Failure
@@ -520,6 +469,7 @@ class BackgroundService : Service() {
                         )
                     }
                     scheduleLiveUpdateCancel(notificationKey.hashCode(), cancelTime)
+                    markNotificationPresented(message.optString("eventKey").ifBlank { notificationKey })
                     return
                 }
             } catch (_: Exception) {
@@ -551,7 +501,32 @@ class BackgroundService : Service() {
         try {
             val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             manager.notify(notificationKey.hashCode(), notification)
+            markNotificationPresented(message.optString("eventKey").ifBlank { notificationKey })
         } catch (_: SecurityException) {
+        }
+    }
+
+    private fun markNotificationPresented(eventId: String) {
+        if (eventId.isBlank()) return
+        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val apiBaseUrl = prefs.getString(KEY_API_BASE_URL, null)?.trimEnd('/') ?: return
+        val sessionId = prefs.getString(KEY_SESSION_ID, null)?.takeIf { it.isNotBlank() } ?: return
+        val installationId = prefs.getString(KEY_INSTALLATION_ID, null)?.takeIf { it.isNotBlank() } ?: return
+        val connection = (URL(
+            "$apiBaseUrl/notifications/events/${Uri.encode(eventId)}/presented"
+        ).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 5000
+            readTimeout = 5000
+            setRequestProperty("X-Session-Id", sessionId)
+            setRequestProperty("X-Installation-Id", installationId)
+        }
+        try {
+            connection.responseCode
+        } catch (_: Exception) {
+            // 下次轮询会再次获取未确认事件。
+        } finally {
+            connection.disconnect()
         }
     }
 

@@ -37,4 +37,34 @@ void main() {
       isEmpty,
     );
   });
+
+  test('办事大厅 hash 路由将令牌留在 fragment 中', () {
+    expect(
+      withEhallAuthorization(
+        Uri.parse('https://ehall.gzus.edu.cn/#/affairs/guide?id=bsdt'),
+        'token/value',
+      ).toString(),
+      'https://ehall.gzus.edu.cn/#/affairs/guide?id=bsdt&Authorization=token%2Fvalue',
+    );
+  });
+
+  test('办事大厅普通链接将令牌作为查询参数传递', () {
+    expect(
+      withEhallAuthorization(
+        Uri.parse('https://ehall.gzus.edu.cn/bpm/r?wf_num=R_S003_B036'),
+        'token-value',
+      ).toString(),
+      'https://ehall.gzus.edu.cn/bpm/r?wf_num=R_S003_B036&Authorization=token-value',
+    );
+  });
+
+  test('保留 hash 前已有的办事大厅查询参数', () {
+    expect(
+      withEhallAuthorization(
+        Uri.parse('https://ehall.gzus.edu.cn/?source=app#/index'),
+        'token-value',
+      ).toString(),
+      'https://ehall.gzus.edu.cn/?source=app#/index&Authorization=token-value',
+    );
+  });
 }

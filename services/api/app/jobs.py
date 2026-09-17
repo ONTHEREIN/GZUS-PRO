@@ -14,8 +14,13 @@ from app.cloud_notifications import (
     _delivery_recorded,
     deliver_notification,
     has_background_notification_profile,
+    persist_notification_event,
 )
-from app.live_activity_data import grade_live_fields, utility_live_metrics
+from app.live_activity_data import (
+    grade_live_fields,
+    live_activity_priority,
+    utility_live_metrics,
+)
 
 __all__ = [
     "ExamReminderCache",
@@ -138,6 +143,7 @@ async def run_notice_poller_once(app) -> None:
             end_time = int((datetime.now(timezone.utc) + timedelta(minutes=30)).timestamp() * 1000)
             message = {
                 "id": event_id,
+                "eventKey": event_id,
                 "type": "new_notice",
                 "title": "新通知",
                 "body": title,
@@ -148,15 +154,37 @@ async def run_notice_poller_once(app) -> None:
                 "ongoing": False,
                 "shortCriticalText": "通知",
                 "progress": 1,
+                "priority": live_activity_priority("new_notice", False),
                 "endTime": end_time,
             }
+            notification_body = title if not body else f"{title}\n{body}"
+            if student_id:
+                persist_notification_event(
+                    student_id,
+                    event_id,
+                    "new_notice",
+                    "新通知",
+                    notification_body,
+                    {
+                        "id": event_id,
+                        "type": "new_notice",
+                        "targetTab": "notices",
+                        "url": item.get("url") or "",
+                        "liveUpdate": True,
+                        "ongoing": False,
+                        "shortCriticalText": "通知",
+                        "progress": 1,
+                        "priority": live_activity_priority("new_notice", False),
+                        "endTime": end_time,
+                    },
+                )
             await manager.send_to_session(session_id, message)
             if student_id and not _active_push_succeeded(
                 student_id,
                 event_id,
                 "new_notice",
                 "新通知",
-                title if not body else f"{title}\n{body}",
+                notification_body,
                 {
                     "id": event_id,
                     "type": "new_notice",
@@ -166,6 +194,7 @@ async def run_notice_poller_once(app) -> None:
                     "ongoing": False,
                     "shortCriticalText": "通知",
                     "progress": 1,
+                    "priority": live_activity_priority("new_notice", False),
                     "endTime": end_time,
                 },
             ):
@@ -403,6 +432,7 @@ async def run_ecard_reminder_once(app, reminder_time: str) -> None:
                     "style": "progress",
                     "ongoing": False,
                     "shortCriticalText": "水电",
+                    "priority": live_activity_priority("ecard_reminder", False),
                     "progressMax": 100,
                     "progressCurrent": progress_current,
                     "progress": progress_current / 100,
@@ -421,10 +451,19 @@ async def run_ecard_reminder_once(app, reminder_time: str) -> None:
                 event_key = ecard_reminder_event_key(
                     binding.student_id, today_key, reminder_time, item_key
                 )
+                live_payload["eventKey"] = event_key
                 # 同一时刻/项目的持久化事件键同时约束 WebSocket 与推送，避免
                 # 常驻任务重入时活动页收到重复提醒。
                 if _delivery_recorded(binding.student_id, event_key):
                     continue
+                persist_notification_event(
+                    binding.student_id,
+                    event_key,
+                    "ecard_reminder",
+                    title,
+                    body,
+                    live_payload,
+                )
                 await _send_ecard_ws(app, binding.student_id, title, body, summary, live_payload)
                 if _active_push_succeeded(
                     binding.student_id,
@@ -582,11 +621,11 @@ async def run_exam_reminder_once(app) -> None:
                 "progressCurrent": 0,
                 "progress": 0,
                 "startTime": now_ms,
-                "priority": 1 if live_activity else 3,
+                "priority": live_activity_priority("exam_reminder", live_activity),
             }
+            message["eventKey"] = f"exam:{key}"
             if end_time is not None:
                 message["endTime"] = end_time
-            await manager.send_to_session(session_id, message)
             extras: dict = {
                 "id": f"exam_reminder:{student_id}:{key}",
                 "type": "exam_reminder",
@@ -602,10 +641,20 @@ async def run_exam_reminder_once(app) -> None:
                 "progressCurrent": 0,
                 "progress": 0,
                 "startTime": now_ms,
-                "priority": 1 if live_activity else 3,
+                "priority": live_activity_priority("exam_reminder", live_activity),
             }
             if end_time is not None:
                 extras["endTime"] = end_time
+            if student_id:
+                persist_notification_event(
+                    student_id,
+                    f"exam:{key}",
+                    "exam_reminder",
+                    "考试提醒",
+                    body,
+                    extras,
+                )
+            await manager.send_to_session(session_id, message)
             if not student_id or _active_push_succeeded(
                 student_id,
                 f"exam:{key}",
@@ -687,13 +736,23 @@ async def run_grade_update_once(app) -> None:
                 "progressMax": 100,
                 "progressCurrent": 100,
                 "progress": 1,
-                "priority": 4,
+                "priority": live_activity_priority("grade_update", False),
             }
-            await manager.send_to_session(session_id, payload)
+            event_key = f"grade:{_grade_key(grade)}:{_grade_signature(grade)}"
+            payload["eventKey"] = event_key
             extras = {key: value for key, value in payload.items() if key not in {"title", "body"}}
+            persist_notification_event(
+                student_id,
+                event_key,
+                "grade_update",
+                title,
+                body,
+                extras,
+            )
+            await manager.send_to_session(session_id, payload)
             if not _active_push_succeeded(
                 student_id,
-                f"grade:{_grade_key(grade)}:{_grade_signature(grade)}",
+                event_key,
                 "grade_update",
                 title,
                 body,

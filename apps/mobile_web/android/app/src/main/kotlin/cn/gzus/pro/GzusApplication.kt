@@ -1,6 +1,14 @@
 package cn.gzus.pro
 
 import android.app.Application
+import android.util.Log
+import com.tencent.mmkv.MMKV
+import com.tencent.reshub_flutter.ReshubHostApiImpl
+import com.tencent.rdelivery.reshub.core.OriginDownloadStorageDelegateImpl
+import com.tencent.rdelivery.reshub.core.ResHubCenter
+import com.tencent.rdelivery.reshub.net.ResHubDefaultDownloadImpl
+import com.tencent.rdelivery.reshub.processor.TryPatchProcessor
+import com.tencent.rdelivery.reshub.report.ResHubDefaultReportImpl
 import com.tencent.upgrade.bean.UpgradeConfig
 import com.tencent.upgrade.core.UpgradeManager
 
@@ -12,7 +20,24 @@ class GzusApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        initReshubCenter()
         initShiply()
+    }
+
+    private fun initReshubCenter() {
+        try {
+            MMKV.initialize(applicationContext)
+            ResHubCenter.initWithoutResHubParams(
+                context = this,
+                downloadDelegate = ResHubDefaultDownloadImpl(),
+                reportDelegate = ResHubDefaultReportImpl(),
+            )
+            ResHubCenter.downloadStorageDelegate = OriginDownloadStorageDelegateImpl()
+            ResHubCenter.injectProcessor(listOf(TryPatchProcessor()))
+            ReshubHostApiImpl.markHasInitReshubCenter()
+        } catch (error: RuntimeException) {
+            Log.e("GzusApplication", "Shiply ResHubCenter 初始化失败", error)
+        }
     }
 
     private fun initShiply() {

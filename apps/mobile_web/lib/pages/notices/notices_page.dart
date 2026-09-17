@@ -11,6 +11,7 @@ import '../../widgets/meta_text.dart';
 import '../../widgets/open_browser.dart';
 import '../../widgets/page_panel.dart';
 import '../../widgets/page_silent_refresh.dart';
+import '../../shiply_image.dart';
 
 String _noticeItemTitle(NoticeItem item) {
   final value = item.title.trim();
@@ -229,6 +230,8 @@ class _NoticeDetailContentState extends ConsumerState<_NoticeDetailContent> {
   }
 
   String? _resolveCover() {
+    final localCover = widget.item.localCoverPath;
+    if (localCover != null && localCover.isNotEmpty) return localCover;
     final cover = widget.item.coverUrl;
     if (cover == null || cover.isEmpty) return null;
     if (cover.startsWith('http://') || cover.startsWith('https://')) {
@@ -326,7 +329,10 @@ class _NoticeDetailBody extends StatelessWidget {
           ),
           if (coverUrl != null) ...[
             const SizedBox(height: 12),
-            _NoticeCoverImage(url: coverUrl!),
+            _NoticeCoverImage(
+              url: coverUrl!,
+              localPath: item.localCoverPath,
+            ),
           ],
           const SizedBox(height: 16),
           if (error != null) ...[
@@ -398,9 +404,10 @@ String _noticePlainText(String value) {
 }
 
 class _NoticeCoverImage extends StatelessWidget {
-  const _NoticeCoverImage({required this.url});
+  const _NoticeCoverImage({required this.url, this.localPath});
 
   final String url;
+  final String? localPath;
 
   @override
   Widget build(BuildContext context) {
@@ -411,8 +418,10 @@ class _NoticeCoverImage extends StatelessWidget {
         constraints: BoxConstraints(
           maxHeight: MediaQuery.sizeOf(context).height * 0.7,
         ),
-        child: Image.network(
-          url,
+        child: Image(
+          image: localPath == null
+              ? NetworkImage(url)
+              : shiplyLocalImageProvider(localPath!),
           width: double.infinity,
           fit: BoxFit.contain,
           errorBuilder: (_, __, ___) => Container(
@@ -468,6 +477,8 @@ class NoticeCard extends StatelessWidget {
   }
 
   String? get _coverUrl {
+    final localCover = item.localCoverPath;
+    if (localCover != null && localCover.isNotEmpty) return localCover;
     final cover = item.coverUrl;
     if (cover == null || cover.isEmpty) return null;
     if (cover.startsWith('http://') || cover.startsWith('https://')) {
@@ -553,8 +564,10 @@ class NoticeCard extends StatelessWidget {
                   borderRadius: BorderRadius.circular(8),
                   child: AspectRatio(
                     aspectRatio: 16 / 9,
-                    child: Image.network(
-                      coverUrl,
+                    child: Image(
+                      image: item.localCoverPath == null
+                          ? NetworkImage(coverUrl)
+                          : shiplyLocalImageProvider(item.localCoverPath!),
                       fit: BoxFit.cover,
                       errorBuilder: (_, __, ___) => _coverPlaceholder(context),
                       loadingBuilder: (_, child, progress) {

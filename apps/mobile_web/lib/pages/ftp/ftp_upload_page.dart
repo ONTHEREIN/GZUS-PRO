@@ -1,6 +1,7 @@
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart' as path_provider;
+import 'package:share_plus/share_plus.dart';
 
 import '../../ftp_upload_service.dart';
 import '../../gzus_design.dart';
@@ -327,6 +328,14 @@ class _FtpUploadPageState extends State<FtpUploadPage> {
                   label: Text(_testing ? '测试中...' : '测试连接'),
                 ),
                 const SizedBox(height: 8),
+                OutlinedButton.icon(
+                  onPressed: !_settingsLoaded || _testing
+                      ? null
+                      : _saveCurrentSettings,
+                  icon: const Icon(Icons.save_outlined),
+                  label: const Text('保存 FTP 设置'),
+                ),
+                const SizedBox(height: 8),
                 Text(
                   '密码仅保存在系统安全区，不发送到软帮手后端。',
                   style: Theme.of(context).textTheme.bodySmall,
@@ -574,6 +583,12 @@ class _FtpUploadPageState extends State<FtpUploadPage> {
             for (final item in _downloads) ...[
               _FtpDownloadTile(
                 item: item,
+                onExport: item.status == _FtpDownloadStatus.done
+                    ? () => _exportDownloadedFile(item)
+                    : null,
+                onShare: item.status == _FtpDownloadStatus.done
+                    ? () => _shareDownloadedFile(item)
+                    : null,
                 onRemove: () => setState(() => _downloads.remove(item)),
               ),
               const SizedBox(height: 8),
@@ -659,6 +674,55 @@ class _FtpUploadPageState extends State<FtpUploadPage> {
       passiveMode: config.passiveMode,
       lastDirectory: _currentDirectory,
     );
+  }
+
+  Future<void> _saveCurrentSettings() async {
+    final host = _hostController.text.trim();
+    final port = int.tryParse(_portController.text.trim());
+    if (host.isEmpty || port == null || port < 1 || port > 65535) {
+      setState(() => _error = '请填写有效的 FTP 地址和端口');
+      return;
+    }
+    setState(() {
+      _error = null;
+      _message = null;
+    });
+    try {
+      await FtpUploadService.saveSettings(
+        host: host,
+        port: port,
+        username: _usernameController.text.trim(),
+        password: _passwordController.text,
+        passiveMode: _passiveMode,
+        lastDirectory: _currentDirectory,
+      );
+      if (!mounted) return;
+      setState(() => _message = 'FTP 设置已保存');
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _error = 'FTP 设置保存失败：$error');
+    }
+  }
+
+  Future<void> _exportDownloadedFile(_FtpDownloadingFile item) async {
+    await _presentDownloadedFile(item, '导出 ${item.name}');
+  }
+
+  Future<void> _shareDownloadedFile(_FtpDownloadingFile item) async {
+    await _presentDownloadedFile(item, item.name);
+  }
+
+  Future<void> _presentDownloadedFile(
+    _FtpDownloadingFile item,
+    String subject,
+  ) async {
+    try {
+      final file = XFile(item.localPath, name: item.name);
+      await Share.shareXFiles([file], subject: subject, text: item.name);
+    } catch (exc) {
+      if (!mounted) return;
+      setState(() => _error = '文件操作失败：$exc');
+    }
   }
 
   Future<void> _testConnection() async {
@@ -981,10 +1045,14 @@ class _FtpQueueTile extends StatelessWidget {
 class _FtpDownloadTile extends StatelessWidget {
   const _FtpDownloadTile({
     required this.item,
+    this.onExport,
+    this.onShare,
     this.onRemove,
   });
 
   final _FtpDownloadingFile item;
+  final VoidCallback? onExport;
+  final VoidCallback? onShare;
   final VoidCallback? onRemove;
 
   @override
@@ -1030,6 +1098,18 @@ class _FtpDownloadTile extends StatelessWidget {
               ],
             ),
           ),
+          if (onExport != null)
+            IconButton(
+              onPressed: onExport,
+              icon: const Icon(Icons.save_alt_outlined, size: 18),
+              tooltip: '导出到其他应用或文件',
+            ),
+          if (onShare != null)
+            IconButton(
+              onPressed: onShare,
+              icon: const Icon(Icons.share_outlined, size: 18),
+              tooltip: '分享文件',
+            ),
           if (onRemove != null)
             IconButton(
               onPressed: onRemove,

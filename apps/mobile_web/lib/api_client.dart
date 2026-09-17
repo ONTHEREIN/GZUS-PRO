@@ -11,14 +11,20 @@ import 'package:encrypt/encrypt.dart' as encrypt;
 import 'package:pointycastle/asymmetric/api.dart';
 
 import 'auth_storage.dart';
+import 'app_logger.dart';
 import 'calendar_import.dart';
 import 'leave_attachment.dart';
 import 'models/schedule_settings.dart';
+import 'models/schedule_override.dart';
 import 'models/background_notification_status.dart';
+import 'notification_installation.dart';
 import 'persistent_cache.dart';
 import 'schedule_utils.dart';
+import 'shiply_public_content.dart';
+import 'shiply_platform.dart';
 
 part 'api_models.dart';
+part 'models/effective_schedule.dart';
 
 const apiBaseUrl = String.fromEnvironment(
   'API_BASE_URL',
@@ -962,13 +968,67 @@ class ApiClient {
     Map<String, String>? firstWeeks,
     bool? autoWeek,
     bool? onboardingCompleted,
+    ScheduleDisplaySettings? display,
   }) async {
     await _put('/settings/schedule', {
       if (firstWeeks != null) 'firstWeeks': firstWeeks,
       if (autoWeek != null) 'autoWeek': autoWeek,
       if (onboardingCompleted != null)
         'onboardingCompleted': onboardingCompleted,
+      if (display != null) 'display': display.toJson(),
     });
+  }
+
+  Future<List<ScheduleAdjustmentRecord>> fetchScheduleAdjustments({
+    required int year,
+    required int term,
+  }) async {
+    final rows =
+        await _getList('/settings/schedule/adjustments?year=$year&term=$term');
+    return [for (final row in rows) ScheduleAdjustmentRecord.fromJson(row)];
+  }
+
+  Future<ScheduleAdjustmentRecord> createScheduleAdjustment(
+      ScheduleAdjustmentRecord adjustment) async {
+    final result = await _post(
+      '/settings/schedule/adjustments',
+      adjustment.toJson()
+        ..remove('status')
+        ..remove('revision')
+        ..remove('id'),
+    );
+    return ScheduleAdjustmentRecord.fromJson(result);
+  }
+
+  Future<ScheduleAdjustmentRecord> updateScheduleAdjustment({
+    required String clientId,
+    required int expectedRevision,
+    required DateTime sourceDate,
+    required DateTime targetDate,
+    required List<String> sourceOccurrenceKeys,
+    required List<String> targetConflictKeys,
+    required String conflictMode,
+  }) async {
+    final result = await _patch('/settings/schedule/adjustments/$clientId', {
+      'expectedRevision': expectedRevision,
+      'sourceDate': dateText(sourceDate),
+      'targetDate': dateText(targetDate),
+      'sourceOccurrenceKeys': sourceOccurrenceKeys,
+      'targetConflictKeys': targetConflictKeys,
+      'conflictMode': conflictMode,
+    });
+    return ScheduleAdjustmentRecord.fromJson(result);
+  }
+
+  Future<ScheduleAdjustmentRecord> restoreScheduleAdjustment({
+    required String clientId,
+    required int expectedRevision,
+  }) async {
+    final result = await _post(
+      '/settings/schedule/adjustments/$clientId/restore?expectedRevision=$expectedRevision',
+      const {},
+    );
+    return ScheduleAdjustmentRecord.fromJson(result);
   }
 
   Future<BackgroundNotificationStatus?>
@@ -1006,6 +1066,7 @@ class ApiClient {
     required int beforeEndMinutes,
     required DateTime firstWeekStart,
     required List<Map<String, dynamic>> courses,
+    List<Map<String, dynamic>> effectiveOccurrences = const [],
   }) async {
     await _put('/notifications/course-reminders', {
       'enabled': enabled,
@@ -1014,6 +1075,7 @@ class ApiClient {
       'firstWeekStart':
           '${firstWeekStart.year.toString().padLeft(4, '0')}-${firstWeekStart.month.toString().padLeft(2, '0')}-${firstWeekStart.day.toString().padLeft(2, '0')}',
       'courses': courses,
+      'effectiveOccurrences': effectiveOccurrences,
     });
   }
 
@@ -1406,10 +1468,12 @@ class ApiClient {
     final cacheSuffix = modules.isEmpty ? 'all' : modules.join('_');
     final cacheKey = 'dashboard_${year}_${term}_${week}_$cacheSuffix';
     Future<DataResult<DashboardSnapshot>> loadSnapshot(bool refresh) {
+      final includePublicQuery =
+          shiplyPublicContentSupported ? '&includePublic=false' : '';
       return _cacheFirstObject<DashboardSnapshot>(
         cacheKey: cacheKey,
         fetch: () => _plainObject(_getDashboardObject(
-          '/dashboard?year=$year&term=$term&week=$week$moduleQuery${refresh ? '&refresh=true' : ''}',
+          '/dashboard?year=$year&term=$term&week=$week$moduleQuery$includePublicQuery${refresh ? '&refresh=true' : ''}',
         )),
         fromJson: (json) => DashboardSnapshot.fromJson(json),
         forceRefresh: refresh,
@@ -1506,6 +1570,26 @@ class ApiClient {
 
   Future<DataResult<List<NoticeItem>>> notices(
       {bool forceRefresh = false}) async {
+    if (shiplyPublicContentSupported) {
+      final result = await _cacheFirstList<NoticeItem>(
+        cacheKey: 'notices',
+        fetch: () => _plainList(
+          _getList(
+            '/notices?includePublic=false${forceRefresh ? '&refresh=true' : ''}',
+          ),
+        ),
+        fromJson: (json) => NoticeItem.fromJson(json),
+        forceRefresh: forceRefresh,
+        memoryTtl: const Duration(minutes: 2),
+      );
+      final personal = result.data.where(_isReadableNoticeItem).toList();
+      final publicContent =
+          await ShiplyPublicContentStore.instance.loadLatest();
+      return DataResult<List<NoticeItem>>(
+        data: _mergeMobilePublicNotices(publicContent, personal),
+        source: result.source,
+      );
+    }
     final result = await _cacheFirstList<NoticeItem>(
       cacheKey: 'notices',
       fetch: () => _plainList(
@@ -1523,11 +1607,30 @@ class ApiClient {
 
   List<NoticeItem>? cachedNotices() {
     final cached = _cache.get<List<dynamic>>('notices');
-    return cached
+    final personal = cached
         ?.whereType<Map<String, dynamic>>()
         .map(NoticeItem.fromJson)
         .where(_isReadableNoticeItem)
         .toList();
+    if (!shiplyPublicContentSupported || personal == null) return personal;
+    final publicContent = ShiplyPublicContentStore.instance.cached;
+    if (publicContent == null) return personal;
+    return _mergeMobilePublicNotices(publicContent, personal);
+  }
+
+  List<NoticeItem> _mergeMobilePublicNotices(
+    ShiplyPublicContent publicContent,
+    List<NoticeItem> personal,
+  ) {
+    final publicNotices = publicContent.notices
+        .map((item) => NoticeItem.fromShiply(item))
+        .toList(growable: false);
+    final pinned = publicNotices.where((item) => item.isPinned).toList();
+    final regular = publicNotices.where((item) => !item.isPinned).toList();
+    final articles = publicContent.wechatArticles
+        .map((item) => NoticeItem.fromShiplyWechat(item))
+        .toList(growable: false);
+    return [...pinned, ...personal, ...regular, ...articles];
   }
 
   Future<DataResult<NoticeDetail>> fetchNoticeDetail(
@@ -1550,6 +1653,8 @@ class ApiClient {
     required DateTime endDate,
     required DateTime firstWeekStart,
     List<Map<String, dynamic>> courses = const [],
+    List<Map<String, dynamic>> effectiveOccurrences = const [],
+    List<String> selectedCourseKeys = const [],
   }) async {
     final data = await _post('/ehall/leave/preview', {
       'year': year,
@@ -1558,6 +1663,10 @@ class ApiClient {
       'endDate': dateText(endDate),
       'firstWeekStart': dateText(firstWeekStart),
       if (courses.isNotEmpty) 'courses': courses,
+      if (effectiveOccurrences.isNotEmpty)
+        'effectiveOccurrences': effectiveOccurrences,
+      if (selectedCourseKeys.isNotEmpty)
+        'selectedCourseKeys': selectedCourseKeys,
     });
     return LeavePreviewResponse.fromJson(data);
   }
@@ -1572,6 +1681,8 @@ class ApiClient {
     required List<PickedAttachment> attachments,
     List<MatchedTeacherItem> teacherHandlers = const [],
     List<Map<String, dynamic>> courses = const [],
+    List<Map<String, dynamic>> effectiveOccurrences = const [],
+    List<String> selectedCourseKeys = const [],
   }) async {
     final data = await _post('/ehall/leave/fill', {
       'year': year,
@@ -1591,6 +1702,10 @@ class ApiClient {
         'teacherHandlers':
             teacherHandlers.map((item) => item.toJson()).toList(),
       if (courses.isNotEmpty) 'courses': courses,
+      if (effectiveOccurrences.isNotEmpty)
+        'effectiveOccurrences': effectiveOccurrences,
+      if (selectedCourseKeys.isNotEmpty)
+        'selectedCourseKeys': selectedCourseKeys,
     });
     return LeaveFillResponse.fromJson(data);
   }
@@ -1626,6 +1741,24 @@ class ApiClient {
     });
     return data['uploaded'] as bool? ?? false;
   }
+
+  /// 提交反馈工单；附件内容以 base64 传输，clientLogs 为自动采集的诊断日志。
+  Future<Map<String, dynamic>> submitFeedback({
+    required String category,
+    required String title,
+    required String description,
+    required String? contact,
+    required String clientLogs,
+    required List<Map<String, String>> attachments,
+  }) async =>
+      _post('/feedback', {
+        'category': category,
+        'title': title,
+        'description': description,
+        'contact': contact,
+        'clientLogs': clientLogs,
+        'attachments': attachments,
+      });
 
   Future<List<EhallAffairItem>> ehallAffairs(
           {bool forceRefresh = false}) async =>
@@ -1932,6 +2065,46 @@ class ApiClient {
     ];
   }
 
+  Future<List<Map<String, dynamic>>> pollPendingNotificationEvents() async {
+    final installationId = await NotificationInstallation.id();
+    final data = await _getWithHeaders(
+      '/notifications/events/pending',
+      {'X-Installation-Id': installationId},
+    );
+    final events = data['events'];
+    if (events is! List<dynamic>) return const [];
+    return [
+      for (final item in events)
+        if (item is Map<String, dynamic>) item,
+    ];
+  }
+
+  Future<void> markNotificationPresented(String eventId) async {
+    final installationId = await NotificationInstallation.id();
+    await _postWithHeaders(
+      '/notifications/events/${Uri.encodeComponent(eventId)}/presented',
+      {},
+      {'X-Installation-Id': installationId},
+    );
+  }
+
+  Future<void> markNotificationRead(String eventId) async {
+    await _post(
+      '/notifications/events/${Uri.encodeComponent(eventId)}/read',
+      {},
+    );
+  }
+
+  Future<List<Map<String, dynamic>>> notificationEvents() async {
+    final data = await _get('/notifications/events');
+    final events = data['events'];
+    if (events is! List<dynamic>) return const [];
+    return [
+      for (final item in events)
+        if (item is Map<String, dynamic>) item,
+    ];
+  }
+
   Future<Map<String, dynamic>> getWebPushConfig() async {
     final data = await _get('/push/web/config');
     return data;
@@ -1982,6 +2155,8 @@ class ApiClient {
     required String environment,
     String? activityId,
     String? activityType,
+    String? deviceId,
+    DateTime? expiresAt,
   }) async {
     await _post('/push/ios/live-activity-tokens', {
       'tokenType': tokenType,
@@ -1990,15 +2165,33 @@ class ApiClient {
       if (activityId != null && activityId.isNotEmpty) 'activityId': activityId,
       if (activityType != null && activityType.isNotEmpty)
         'activityType': activityType,
+      if (deviceId != null && deviceId.isNotEmpty) 'deviceId': deviceId,
+      if (expiresAt != null) 'expiresAt': expiresAt.toUtc().toIso8601String(),
+    });
+  }
+
+  Future<void> unregisterIosLiveActivityToken({
+    required String environment,
+    required String activityId,
+    required String deviceId,
+  }) async {
+    await _post('/push/ios/live-activity-tokens/activity/unregister', {
+      'environment': environment,
+      'activityId': activityId,
+      'deviceId': deviceId,
     });
   }
 
   Future<void> unregisterIosLiveActivityTokens(
-    String activeSessionId,
-  ) async {
-    await _postSessionCleanup(
+    String activeSessionId, {
+    String? deviceId,
+  }) async {
+    await _postSessionCleanupWithBody(
       '/push/ios/live-activity-tokens/unregister',
       activeSessionId,
+      {
+        if (deviceId != null && deviceId.isNotEmpty) 'deviceId': deviceId,
+      },
     );
   }
 
@@ -2059,6 +2252,17 @@ class ApiClient {
   Future<Map<String, dynamic>> adminAuditLog({int limit = 50}) async =>
       _get('/admin/audit-log?limit=$limit');
 
+  /// 反馈工单列表（管理员视角）。
+  Future<Map<String, dynamic>> adminFeedback({
+    int limit = 50,
+    int offset = 0,
+  }) async =>
+      _get('/admin/feedback?limit=$limit&offset=$offset');
+
+  /// 反馈工单详情（包含日志和附件内容）。
+  Future<Map<String, dynamic>> adminFeedbackDetail(int feedbackId) async =>
+      _get('/admin/feedback/$feedbackId');
+
   // ─── 管理后台 · 校历/通知上传 ─────────────────────────────
 
   /// 校历/通知列表（管理员视角，含未发布）。
@@ -2107,8 +2311,57 @@ class ApiClient {
   Future<Map<String, dynamic>> adminDeleteNotice(int noticeId) async =>
       _delete('/admin/notices/$noticeId');
 
+  Future<ShiplyContentExport> adminExportShiplyPublicContent() async {
+    return _withReloginRetry(() async {
+      final url = _requireBaseUrl();
+      final response = await _http
+          .post(
+            Uri.parse('$url/admin/shiply/public-content/export'),
+            headers: _headers(),
+          )
+          .timeout(_connectTimeout)
+          .timeout(_requestTimeout);
+      if (response.statusCode >= 400) {
+        _decode(response);
+        throw ApiException('Shiply 公共资源包生成失败', statusCode: response.statusCode);
+      }
+      final rawCounts = response.headers['x-shiply-content-counts'];
+      final decodedCounts = rawCounts == null ? null : jsonDecode(rawCounts);
+      if (decodedCounts is! Map<String, dynamic>) {
+        throw ApiException('Shiply 公共资源包响应缺少内容统计');
+      }
+      final counts = <String, int>{};
+      for (final entry in decodedCounts.entries) {
+        if (entry.value is! num) {
+          throw ApiException('Shiply 公共资源包内容统计格式错误: ${entry.key}');
+        }
+        counts[entry.key] = (entry.value as num).toInt();
+      }
+      final sha256 = response.headers['x-shiply-content-sha256'];
+      final generatedAt = response.headers['x-shiply-generated-at'];
+      if (sha256 == null ||
+          sha256.isEmpty ||
+          generatedAt == null ||
+          generatedAt.isEmpty) {
+        throw ApiException('Shiply 公共资源包响应缺少摘要或生成时间');
+      }
+      return ShiplyContentExport(
+        bytes: response.bodyBytes,
+        sha256: sha256,
+        generatedAt: generatedAt,
+        counts: counts,
+      );
+    });
+  }
+
   /// 未登录状态可读取的登录页轮播内容。
   Future<List<LoginCarouselSlide>> loginCarouselSlides() async {
+    if (shiplyPublicContentSupported) {
+      final content = await ShiplyPublicContentStore.instance.loadLatest();
+      return content.loginSlides
+          .map(LoginCarouselSlide.fromShiply)
+          .toList(growable: false);
+    }
     final memoryCached = _cache.get<List<dynamic>>(_publicLoginSlidesMemoryKey);
     final memoryItems =
         memoryCached?.whereType<Map<String, dynamic>>().toList();
@@ -2255,6 +2508,21 @@ class ApiClient {
     );
   }
 
+  Future<Map<String, dynamic>> _getWithHeaders(
+      String path, Map<String, String> extraHeaders) async {
+    return _withReloginRetry(
+      () async {
+        final url = _requireBaseUrl();
+        final response = await _http
+            .get(Uri.parse('$url$path'),
+                headers: {..._headers(), ...extraHeaders})
+            .timeout(_connectTimeout)
+            .timeout(_requestTimeout);
+        return _decodeObject(response);
+      },
+    );
+  }
+
   DataSourceInfo _sourceFromResponse(http.Response response) {
     if (response.headers['x-data-source'] != 'cache') {
       return const DataSourceInfo();
@@ -2328,13 +2596,24 @@ class ApiClient {
     return _withReloginRetry(() => _postWithoutRelogin(path, body));
   }
 
+  Future<Map<String, dynamic>> _postWithHeaders(String path,
+      Map<String, dynamic> body, Map<String, String> extraHeaders) async {
+    return _withReloginRetry(
+        () => _postWithoutReloginWithHeaders(path, body, extraHeaders));
+  }
+
   Future<Map<String, dynamic>> _postWithoutRelogin(
       String path, Map<String, dynamic> body) async {
+    return _postWithoutReloginWithHeaders(path, body, const {});
+  }
+
+  Future<Map<String, dynamic>> _postWithoutReloginWithHeaders(String path,
+      Map<String, dynamic> body, Map<String, String> extraHeaders) async {
     final url = _requireBaseUrl();
     final response = await _http
         .post(
           Uri.parse('$url$path'),
-          headers: _headers(),
+          headers: {..._headers(), ...extraHeaders},
           body: jsonEncode(body),
         )
         .timeout(_connectTimeout)
@@ -2663,6 +2942,7 @@ class ApiClient {
           statusCode: response.statusCode);
     }
     if (response.statusCode >= 400) {
+      AppLogger.warning('接口返回错误：HTTP ${response.statusCode}');
       final detail = decoded is Map<String, dynamic> ? decoded['detail'] : null;
       final detailMap = detail is Map<String, dynamic> ? detail : null;
       throw ApiException(
@@ -2725,42 +3005,52 @@ String generateIcs({
   required DateTime firstWeekStart,
   required int year,
   required int term,
+  List<ScheduleOccurrence>? occurrences,
+  List<ScheduleAdjustmentRecord> adjustments = const [],
+  List<ScheduleOverride> overrides = const [],
 }) {
   final lines = <String>[];
   lines.add('BEGIN:VCALENDAR');
   lines.add('PRODID:-//OneGZUS//Schedule//CN');
   lines.add('VERSION:2.0');
-  for (final course in courses) {
-    if (course.weekday == null ||
-        course.startSection == null ||
-        course.endSection == null) {
+  final effective = occurrences ??
+      expandEffectiveSchedule(
+        courses: courses,
+        firstWeekStart: firstWeekStart,
+        adjustments: adjustments,
+        overrides: overrides,
+      );
+  for (final occurrence in effective) {
+    final course = occurrence.course;
+    if (course.startSection == null || course.endSection == null) {
       continue;
     }
-    final weeks = parseWeeks(course.weeks);
     final startTime = scheduleTimes[course.startSection! - 1].$1;
     final endTime = scheduleTimes[course.endSection! - 1].$2;
-    for (final week in weeks) {
-      // 对齐到第一周所在周的周一，确保非周一日期也能正确生成 ICS
-      final mondayOfFirstWeek = firstWeekStart
-          .subtract(Duration(days: firstWeekStart.weekday - DateTime.monday));
-      final date = mondayOfFirstWeek
-          .add(Duration(days: (week - 1) * 7 + (course.weekday! - 1)));
-      final dateStr =
-          '${date.year}${date.month.toString().padLeft(2, '0')}${date.day.toString().padLeft(2, '0')}';
-      lines.add('BEGIN:VEVENT');
-      lines.add(
-          'UID:gzus-${course.name.hashCode.abs()}-$week-${course.weekday}@onegzus');
-      lines.add('DTSTART:${dateStr}T${startTime.replaceAll(':', '')}00');
-      lines.add('DTEND:${dateStr}T${endTime.replaceAll(':', '')}00');
-      lines.add('SUMMARY:${course.name}');
-      if (course.classroom != null && course.classroom!.isNotEmpty) {
-        lines.add('LOCATION:${course.classroom}');
-      }
-      if (course.teacher != null && course.teacher!.isNotEmpty) {
-        lines.add('DESCRIPTION:教师: ${course.teacher}');
-      }
-      lines.add('END:VEVENT');
+    final date = occurrence.date;
+    final dateStr =
+        '${date.year}${date.month.toString().padLeft(2, '0')}${date.day.toString().padLeft(2, '0')}';
+    lines.add('BEGIN:VEVENT');
+    lines.add(
+        'UID:gzus-${_calendarSourcePart(occurrence.occurrenceKey)}@onegzus');
+    lines.add('DTSTART:${dateStr}T${startTime.replaceAll(':', '')}00');
+    lines.add('DTEND:${dateStr}T${endTime.replaceAll(':', '')}00');
+    lines.add('SUMMARY:${course.name}');
+    if (course.classroom != null && course.classroom!.isNotEmpty) {
+      lines.add('LOCATION:${course.classroom}');
     }
+    final description = <String>[];
+    if (course.teacher != null && course.teacher!.isNotEmpty) {
+      description.add('教师: ${course.teacher}');
+    }
+    if (occurrence.isAdjusted) {
+      description
+          .add('调课：${dateText(occurrence.sourceDate!)} → ${dateText(date)}');
+    }
+    if (description.isNotEmpty) {
+      lines.add('DESCRIPTION:${description.join(' \\n ')}');
+    }
+    lines.add('END:VEVENT');
   }
   lines.add('END:VCALENDAR');
   return lines.join('\r\n');
@@ -2831,48 +3121,56 @@ List<CalendarImportEvent> scheduleCalendarEvents({
   required DateTime firstWeekStart,
   required int year,
   required int term,
+  List<ScheduleOccurrence>? occurrences,
+  List<ScheduleAdjustmentRecord> adjustments = const [],
+  List<ScheduleOverride> overrides = const [],
 }) {
   final events = <CalendarImportEvent>[];
-  final mondayOfFirstWeek = mondayOf(firstWeekStart);
-  for (final course in courses) {
-    if (course.weekday == null ||
-        course.startSection == null ||
-        course.endSection == null) {
+  final effective = occurrences ??
+      expandEffectiveSchedule(
+        courses: courses,
+        firstWeekStart: firstWeekStart,
+        adjustments: adjustments,
+        overrides: overrides,
+      );
+  for (final occurrence in effective) {
+    final course = occurrence.course;
+    if (course.startSection == null || course.endSection == null) {
       continue;
     }
-    final weeks = parseWeeks(course.weeks);
-    for (final week in weeks) {
-      final date = mondayOfFirstWeek
-          .add(Duration(days: (week - 1) * 7 + course.weekday! - 1));
-      final start = _dateTimeAtScheduleTime(
-        date,
-        scheduleTimes[course.startSection! - 1].$1,
-      );
-      final end = _dateTimeAtScheduleTime(
-        date,
-        scheduleTimes[course.endSection! - 1].$2,
-      );
-      final descParts = <String>[];
-      if (course.teacher != null && course.teacher!.isNotEmpty) {
-        descParts.add('教师: ${course.teacher}');
-      }
-      if (course.weeks != null && course.weeks!.isNotEmpty) {
-        descParts.add('周次: ${course.weeks}');
-      }
-      events.add(
-        CalendarImportEvent(
-          sourceId:
-              'course:$year-$term:${_calendarSourcePart('${course.raw['courseId'] ?? course.raw['kch_id'] ?? course.name}:${course.startSection}:${course.endSection}:${course.teacher ?? ''}:${course.classroom ?? ''}')}:$week:${course.weekday}:${date.year}-${date.month}-${date.day}',
-          title: course.name,
-          description: descParts.isEmpty ? null : descParts.join('\n'),
-          location: course.classroom != null && course.classroom!.isNotEmpty
-              ? course.classroom
-              : null,
-          start: start,
-          end: end,
-        ),
-      );
+    final date = occurrence.date;
+    final start = _dateTimeAtScheduleTime(
+      date,
+      scheduleTimes[course.startSection! - 1].$1,
+    );
+    final end = _dateTimeAtScheduleTime(
+      date,
+      scheduleTimes[course.endSection! - 1].$2,
+    );
+    final descParts = <String>[];
+    if (course.teacher != null && course.teacher!.isNotEmpty) {
+      descParts.add('教师: ${course.teacher}');
     }
+    if (course.weeks != null && course.weeks!.isNotEmpty) {
+      descParts.add('周次: ${course.weeks}');
+    }
+    if (occurrence.isAdjusted) {
+      descParts
+          .add('调课：${dateText(occurrence.sourceDate!)} → ${dateText(date)}');
+    }
+    events.add(
+      CalendarImportEvent(
+        sourceId:
+            'course:$year-$term:${_calendarSourcePart(occurrence.occurrenceKey)}',
+        title: course.name,
+        description: descParts.isEmpty ? null : descParts.join('\n'),
+        location: course.classroom != null && course.classroom!.isNotEmpty
+            ? course.classroom
+            : null,
+        start: start,
+        end: end,
+      ),
+    );
   }
   return events;
 }

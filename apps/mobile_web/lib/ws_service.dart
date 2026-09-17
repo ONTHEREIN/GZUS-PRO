@@ -17,16 +17,19 @@ class WsService {
   static int _reconnectDelay = 1;
   static bool _intentionalClose = false;
   static bool _isPaused = false;
+  static Future<void> Function(String eventId)? _onPresented;
 
   static void configure({
     required String apiBaseUrl,
     required String sessionId,
+    Future<void> Function(String eventId)? onPresented,
   }) {
     if (_sessionId != null && _sessionId != sessionId) {
       disconnect();
     }
     _baseUrl = apiBaseUrl;
     _sessionId = sessionId;
+    _onPresented = onPresented;
   }
 
   static Future<void> connect() async {
@@ -158,7 +161,10 @@ class WsService {
     if (defaultTargetPlatform == TargetPlatform.iOS &&
         msg['liveUpdate'] == true) {
       final posted = await LiveActivityService.startOrUpdate(event);
-      if (posted) return;
+      if (posted) {
+        _markPresented(msg);
+        return;
+      }
     }
     final liveUpdate =
         msg['liveUpdate'] == true || extras['liveUpdate'] == true;
@@ -169,6 +175,7 @@ class WsService {
         body: body,
         extras: extras,
       );
+      _markPresented(msg);
       return;
     }
 
@@ -213,6 +220,16 @@ class WsService {
         extras: extras,
       );
     }
+    _markPresented(msg);
+  }
+
+  static void _markPresented(Map<String, dynamic> msg) {
+    final eventId = (msg['eventKey'] ?? msg['id'])?.toString().trim();
+    final callback = _onPresented;
+    if (eventId == null || eventId.isEmpty || callback == null) return;
+    unawaited(callback(eventId).catchError((error) {
+      debugPrint('[WsService] Failed to record notification presentation: $error');
+    }));
   }
 
   static int notificationIdForMessage(Map<String, dynamic> msg) {

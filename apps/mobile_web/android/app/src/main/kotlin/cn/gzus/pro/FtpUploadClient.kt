@@ -115,9 +115,9 @@ class FtpUploadClient {
             throw FtpUploadException("INVALID_ARGUMENT", "FTP 参数不完整")
         }
 
-        // 参考 FTPclient-android：使用 autodetectUTF8 自动检测编码
+        // 中文校园 FTP 默认使用 GBK，避免中文文件名在下载和另存时被错误解析。
         val ftp = FTPClient()
-        ftp.autodetectUTF8 = true
+        ftp.controlEncoding = "GBK"
         ftp.connectTimeout = timeoutMillis
         ftp.defaultTimeout = timeoutMillis
         ftp.dataTimeout = Duration.ofMillis(timeoutMillis.toLong())
@@ -129,12 +129,6 @@ class FtpUploadClient {
             val loggedIn = ftp.login(username, password)
             if (!loggedIn) {
                 throw FtpUploadException("AUTH_FAILED", ftp.replyString?.trim().orEmpty().ifEmpty { "FTP 登录失败" })
-            }
-            // 登录后再协商 UTF-8，部分 FTP 服务器要求认证后才能执行 OPTS
-            val utf8Supported = ftp.sendCommand("OPTS", "UTF8 ON") == 200
-            if (!utf8Supported) {
-                // 服务器不支持 UTF-8，回退 GBK（中文 Windows FTP 常见编码）
-                ftp.controlEncoding = "GBK"
             }
             ftp.setFileType(FTP.BINARY_FILE_TYPE)
             ftp.controlKeepAliveTimeout = 10

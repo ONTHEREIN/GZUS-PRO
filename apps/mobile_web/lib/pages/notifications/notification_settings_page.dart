@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../api_client.dart';
 import '../../live_activity_service.dart';
 import '../../models/background_notification_status.dart';
+import '../home/home_page.dart';
 import '../../push_service.dart';
 import '../../responsive/breakpoints.dart';
 import '../../test_flags.dart';
@@ -178,9 +179,14 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
                         onClose: () => setState(() => _error = null)),
                   _BackgroundSummary(
                     enabled: _background?.enabled == true,
+                    suspended: _background?.suspended == true,
+                    suspensionReason: _background?.suspensionReason,
+                    nextRetryAt: _background?.nextRetryAt,
                     lastCheckedAt: _background?.lastCheckedAt,
                     onTap: widget.onOpenBackgroundGuide,
                   ),
+                  const SizedBox(height: 14),
+                  _NotificationHistory(api: widget.api),
                   if (_iosNotificationReady != null) ...[
                     const SizedBox(height: 8),
                     ListTile(
@@ -343,31 +349,155 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
   }
 }
 
+class _NotificationHistory extends StatefulWidget {
+  const _NotificationHistory({required this.api});
+
+  final ApiClient api;
+
+  @override
+  State<_NotificationHistory> createState() => _NotificationHistoryState();
+}
+
+class _NotificationHistoryState extends State<_NotificationHistory> {
+  late Future<List<Map<String, dynamic>>> _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = widget.api.notificationEvents();
+  }
+
+  Future<void> _markRead(Map<String, dynamic> event) async {
+    final id = event['id']?.toString();
+    if (id == null || id.isEmpty) return;
+    await widget.api.markNotificationRead(id);
+    if (!mounted) return;
+    setState(() {
+      event['readAt'] = DateTime.now().toUtc().toIso8601String();
+    });
+    final type = event['type']?.toString();
+    final tab = switch (type) {
+      'exam_reminder' => 'exams',
+      'ecard_reminder' => 'ecard',
+      'new_notice' => 'notices',
+      'grade_update' => 'grades',
+      'attendance_update' => 'attendance',
+      _ => null,
+    };
+    if (tab != null) {
+      if (mounted) Navigator.of(context).pop();
+      NotificationOpenBridge.openTab(tab);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return _SettingsSection(
+      title: '提醒记录',
+      children: [
+        FutureBuilder<List<Map<String, dynamic>>>(
+          future: _future,
+          builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return const Padding(
+                padding: EdgeInsets.all(16),
+                child: Center(child: CircularProgressIndicator()),
+              );
+            }
+            if (snapshot.hasError) {
+              return ListTile(
+                leading: const Icon(Icons.error_outline),
+                title: const Text('提醒记录加载失败'),
+                trailing: IconButton(
+                  icon: const Icon(Icons.refresh),
+                  onPressed: () => setState(() {
+                    _future = widget.api.notificationEvents();
+                  }),
+                ),
+              );
+            }
+            final events = snapshot.data ?? const [];
+            if (events.isEmpty) {
+              return const ListTile(
+                leading: Icon(Icons.notifications_none),
+                title: Text('暂无动态提醒'),
+              );
+            }
+            return Column(
+              children: [
+                for (final event in events.take(10))
+                  ListTile(
+                    leading: Icon(
+                      event['readAt'] == null
+                          ? Icons.markunread_outlined
+                          : Icons.notifications_none,
+                    ),
+                    title: Text(event['title']?.toString() ?? '提醒'),
+                    subtitle: Text(
+                      event['body']?.toString() ?? '',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    trailing: event['readAt'] == null
+                        ? const Icon(Icons.chevron_right)
+                        : null,
+                    onTap: event['readAt'] == null
+                        ? () => _markRead(event)
+                        : null,
+                  ),
+              ],
+            );
+          },
+        ),
+      ],
+    );
+  }
+}
+
 class _BackgroundSummary extends StatelessWidget {
   const _BackgroundSummary({
     required this.enabled,
+    required this.suspended,
+    required this.suspensionReason,
+    required this.nextRetryAt,
     required this.lastCheckedAt,
     required this.onTap,
   });
 
   final bool enabled;
+  final bool suspended;
+  final String? suspensionReason;
+  final DateTime? nextRetryAt;
   final DateTime? lastCheckedAt;
   final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
-    final detail = enabled
+    final retryText = nextRetryAt == null
+        ? ''
+        : '预计 ${nextRetryAt!.toLocal().hour.toString().padLeft(2, '0')}:${nextRetryAt!.toLocal().minute.toString().padLeft(2, '0')} 自动重试';
+    final detail = suspended
+        ? '后台监测已暂停：${suspensionReason ?? '校方设备或会话数达到上限'}${retryText.isEmpty ? '' : ' · $retryText'}'
+        : enabled
         ? lastCheckedAt == null
             ? '后台持续通知已开启'
             : '后台持续通知已开启 · 最近检查 ${lastCheckedAt!.hour.toString().padLeft(2, '0')}:${lastCheckedAt!.minute.toString().padLeft(2, '0')}'
         : '未开启后台持续通知，类别设置将在开启后生效';
     return Card(
       elevation: 0,
-      color: enabled ? colors.primaryContainer : colors.surfaceContainerLow,
+      color: suspended
+          ? colors.errorContainer
+          : enabled
+              ? colors.primaryContainer
+              : colors.surfaceContainerLow,
       child: ListTile(
         leading: Icon(
-            enabled ? Icons.notifications_active : Icons.notifications_off),
+          suspended
+              ? Icons.pause_circle_outline
+              : enabled
+                  ? Icons.notifications_active
+                  : Icons.notifications_off),
         title: const Text('后台通知'),
         subtitle: Text(detail),
         trailing: const Icon(Icons.chevron_right),

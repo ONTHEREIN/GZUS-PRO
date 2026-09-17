@@ -65,8 +65,14 @@ class ReminderService {
     required List<ScheduleCourse> courses,
     required DateTime firstWeekStart,
     required CourseReminderSettings settings,
+    List<ScheduleOccurrence> effectiveOccurrences = const [],
   }) async {
-    final signature = _signature(courses, firstWeekStart, settings);
+    final signature = _signature(
+      courses,
+      firstWeekStart,
+      settings,
+      effectiveOccurrences,
+    );
     if (_courseSignature == signature) return;
     _cancelActiveTimers();
     _courseSignature = signature;
@@ -84,6 +90,7 @@ class ReminderService {
       firstWeekStart: firstWeekStart,
       settings: settings,
       now: now,
+      effectiveOccurrences: effectiveOccurrences,
     );
     _localCourseEventKeys = [for (final slot in slots) slot.eventKey];
     _localCourseValidUntil = slots.isEmpty
@@ -210,9 +217,18 @@ class ReminderService {
     required DateTime firstWeekStart,
     required CourseReminderSettings settings,
     required DateTime now,
+    List<ScheduleOccurrence> effectiveOccurrences = const [],
     int horizonDays = 14,
   }) {
     if (!settings.enabled) return const [];
+    if (effectiveOccurrences.isNotEmpty) {
+      return _buildEffectiveCourseReminderSlots(
+        occurrences: effectiveOccurrences,
+        settings: settings,
+        now: now,
+        horizonDays: horizonDays,
+      );
+    }
     final normalizedFirstWeek = mondayOf(firstWeekStart);
     final endAt = now.add(Duration(days: horizonDays));
     final slots = <CourseReminderSlot>[];
@@ -286,6 +302,7 @@ class ReminderService {
     List<ScheduleCourse> courses,
     DateTime firstWeekStart,
     CourseReminderSettings settings,
+    List<ScheduleOccurrence> effectiveOccurrences,
   ) {
     final coursePart = courses
         .map((c) =>
@@ -297,7 +314,76 @@ class ReminderService {
       settings.beforeEndMinutes,
       mondayOf(firstWeekStart).toIso8601String(),
       coursePart,
+      effectiveOccurrences
+          .map((item) =>
+              '${item.occurrenceKey}|${dateText(item.date)}|${item.course.name}|${item.course.startSection}|${item.course.endSection}')
+          .join(';'),
     ].join('#');
+  }
+
+  static List<CourseReminderSlot> _buildEffectiveCourseReminderSlots({
+    required List<ScheduleOccurrence> occurrences,
+    required CourseReminderSettings settings,
+    required DateTime now,
+    required int horizonDays,
+  }) {
+    final endAt = now.add(Duration(days: horizonDays));
+    final slots = <CourseReminderSlot>[];
+    for (final occurrence in occurrences) {
+      final course = occurrence.course;
+      final startSection = course.startSection;
+      if (startSection == null ||
+          startSection < 1 ||
+          startSection > scheduleTimes.length ||
+          occurrence.date.isBefore(DateTime(now.year, now.month, now.day)) ||
+          occurrence.date.isAfter(endAt)) {
+        continue;
+      }
+      final safeEndSection = (course.endSection ?? startSection)
+          .clamp(1, scheduleTimes.length)
+          .toInt();
+      final day = DateTime(
+        occurrence.date.year,
+        occurrence.date.month,
+        occurrence.date.day,
+      );
+      final classStart = _atTime(day, scheduleTimes[startSection - 1].$1);
+      final classEnd = _atTime(day, scheduleTimes[safeEndSection - 1].$2);
+      final startReminder =
+          classStart.subtract(Duration(minutes: settings.beforeStartMinutes));
+      final endReminder =
+          classEnd.subtract(Duration(minutes: settings.beforeEndMinutes));
+      if (startReminder.isAfter(now) && !startReminder.isAfter(endAt)) {
+        slots.add(CourseReminderSlot(
+          id: _slotId(course, startReminder, 'start'),
+          remindAt: startReminder,
+          title: '即将上课',
+          body: _courseBody(course, classStart,
+              prefix: '${settings.beforeStartMinutes} 分钟后'),
+          courseName: course.name,
+          location: course.classroom,
+          countdownTarget: classStart,
+          shortCriticalText: '${settings.beforeStartMinutes}min',
+          eventKey: _eventKey('start', occurrence.occurrenceKey, startReminder),
+        ));
+      }
+      if (endReminder.isAfter(now) && !endReminder.isAfter(endAt)) {
+        slots.add(CourseReminderSlot(
+          id: _slotId(course, endReminder, 'end'),
+          remindAt: endReminder,
+          title: '即将下课',
+          body: _courseBody(course, classEnd,
+              prefix: '${settings.beforeEndMinutes} 分钟后下课'),
+          courseName: course.name,
+          location: course.classroom,
+          countdownTarget: classEnd,
+          shortCriticalText: '${settings.beforeEndMinutes}min',
+          eventKey: _eventKey('end', occurrence.occurrenceKey, endReminder),
+        ));
+      }
+    }
+    slots.sort((a, b) => a.remindAt.compareTo(b.remindAt));
+    return slots.take(64).toList();
   }
 
   static String _courseBody(ScheduleCourse course, DateTime time,

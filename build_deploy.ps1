@@ -17,6 +17,18 @@ if (-not $FlutterBin) {
 $ApkPath = "$ProjectRoot\apps\mobile_web\build\app\outputs\flutter-apk\app-release.apk"
 $PubspecPath = "$ProjectRoot\apps\mobile_web\pubspec.yaml"
 $CloudApiUrl = if ($env:API_BASE_URL) { $env:API_BASE_URL } else { "https://onegzus.onrein.top/api" }
+$ShiplyResourceAndroidAppId = if ($env:SHIPLY_RESOURCE_ANDROID_APP_ID) { $env:SHIPLY_RESOURCE_ANDROID_APP_ID } else { "6fe87f3a4f" }
+$ShiplyResourceAndroidAppKey = if ($env:SHIPLY_RESOURCE_ANDROID_APP_KEY) { $env:SHIPLY_RESOURCE_ANDROID_APP_KEY } else { "1428fb40-2640-4c74-a9b4-ea235190b290" }
+$ShiplyResourceIosAppId = if ($env:SHIPLY_RESOURCE_IOS_APP_ID) { $env:SHIPLY_RESOURCE_IOS_APP_ID } else { "8f9d6c4fe4" }
+$ShiplyResourceIosAppKey = if ($env:SHIPLY_RESOURCE_IOS_APP_KEY) { $env:SHIPLY_RESOURCE_IOS_APP_KEY } else { "9ad9941e-fcbb-41d7-a2fa-9beb1491ca28" }
+
+if ([string]::IsNullOrWhiteSpace($ShiplyResourceAndroidAppId) -or
+    [string]::IsNullOrWhiteSpace($ShiplyResourceAndroidAppKey) -or
+    [string]::IsNullOrWhiteSpace($ShiplyResourceIosAppId) -or
+    [string]::IsNullOrWhiteSpace($ShiplyResourceIosAppKey)) {
+    Write-Host "Missing Shiply public-resource credentials. Set SHIPLY_RESOURCE_ANDROID_APP_ID/KEY and SHIPLY_RESOURCE_IOS_APP_ID/KEY before a release build." -ForegroundColor Red
+    exit 1
+}
 
 # ---------- 自动递增版本号 ----------
 # 默认仅构建号 +1（每次构建）；-Major 大版本更新；-Minor 实质性更新（新功能）；-Patch 小修复
@@ -62,7 +74,12 @@ if ($UseCloud) {
 
 Write-Host "[1/3] Building APK (API_BASE_URL=$ApiUrl)..." -ForegroundColor Cyan
 Push-Location "$ProjectRoot\apps\mobile_web"
-& $FlutterBin build apk --release --target-platform=android-arm64,android-arm --dart-define=API_BASE_URL=$ApiUrl
+& $FlutterBin build apk --release --target-platform=android-arm64,android-arm `
+    --dart-define=API_BASE_URL=$ApiUrl `
+    --dart-define=SHIPLY_RESOURCE_ANDROID_APP_ID=$ShiplyResourceAndroidAppId `
+    --dart-define=SHIPLY_RESOURCE_ANDROID_APP_KEY=$ShiplyResourceAndroidAppKey `
+    --dart-define=SHIPLY_RESOURCE_IOS_APP_ID=$ShiplyResourceIosAppId `
+    --dart-define=SHIPLY_RESOURCE_IOS_APP_KEY=$ShiplyResourceIosAppKey
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Build failed!" -ForegroundColor Red
     Pop-Location

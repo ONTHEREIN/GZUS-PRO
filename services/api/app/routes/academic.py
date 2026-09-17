@@ -549,6 +549,7 @@ async def dashboard(
     week: str | None = None,
     modules: str | None = None,
     refresh: bool = False,
+    include_public: bool = Query(True, alias="includePublic"),
     session: AppSession = Depends(require_session),
 ) -> dict:
     """Return a home-page snapshot with module-level failures.
@@ -589,7 +590,7 @@ async def dashboard(
     modules = dict(await asyncio.gather(*module_jobs))
     _save_dashboard_module_caches(student_id, params, modules)
     notices_module = modules.get("notices")
-    if notices_module is not None and notices_module["status"] != "error":
+    if include_public and notices_module is not None and notices_module["status"] != "error":
         notices_module["data"] = _merge_public_notices(notices_module["data"])
     if "ecard" in requested_modules:
         ecard_summary = summary_for_student(student_id)
@@ -622,6 +623,7 @@ async def widget_snapshot(
         term=term,
         week=week,
         modules=",".join(sorted(_WIDGET_SNAPSHOT_MODULE_IDS)),
+        include_public=False,
         session=session,
     )
     snapshot = {"modules": _compact_widget_modules(payload["modules"])}
@@ -703,6 +705,7 @@ def _with_public_notices(result: JSONResponse | list[dict]) -> JSONResponse | li
 async def notices(
     request: Request,
     refresh: bool = False,
+    include_public: bool = Query(True, alias="includePublic"),
     session: AppSession = Depends(require_session),
 ) -> list[dict]:
     student_id = _get_student_id(session)
@@ -721,6 +724,8 @@ async def notices(
         )
 
     result = await _run_with_cache_fallback("notices", student_id, call, refresh=refresh)
+    if not include_public:
+        return _response_list(result) if isinstance(result, JSONResponse) else result
     return _with_public_notices(result)
 
 

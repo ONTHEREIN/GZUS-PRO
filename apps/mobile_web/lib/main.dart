@@ -6,11 +6,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'api_client.dart';
+import 'app_logger.dart';
 import 'app_providers.dart';
 import 'gzus_design.dart';
 import 'responsive/spacing.dart';
 import 'schedule_utils.dart';
 import 'services_deferred.dart';
+import 'shiply_public_content.dart';
+import 'shiply_platform.dart';
 
 import 'background_guide_page.dart';
 import 'browser_redirect.dart';
@@ -59,6 +62,10 @@ part 'shell/marquee_text.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  AppLogger.initialize();
+  if (shiplyPublicContentSupported) {
+    unawaited(ShiplyPublicContentStore.instance.initialize());
+  }
 
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
     statusBarColor: Colors.transparent,
@@ -119,6 +126,7 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
   final _scaffoldMessengerKey = GlobalKey<ScaffoldMessengerState>();
   ThemeMode themeMode = ThemeMode.system;
   Color seedColor = GzusColors.blue;
+  double fontScale = 1;
   bool _systemDark = false;
   bool loggedIn = false;
   bool _scheduleOnlyMode = false;
@@ -166,6 +174,7 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
     };
     _loadThemePreference();
     _loadSeedColorPreference();
+    _loadFontScalePreference();
     api.startWarmup();
     _bootstrapLoginState();
     if (kIsWeb) {
@@ -250,7 +259,7 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
       debugPrint(
           '[AppLifecycle] Resuming - calling WsService.resume() and setAppForeground(true)');
       unawaited(_handleAppResume());
-      // 仅在推送体验引导完成后才拉取离线消息，避免引导页触发不必要的 /push/poll 请求
+      // 仅在推送体验引导完成后才拉取离线消息，避免引导页触发不必要的接口请求。
       if (_backgroundGuideCompleted) {
         unawaited(_drainPendingPushMessages());
       }
@@ -362,6 +371,24 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
     await prefs.setString('theme.seedColor', _colorToHex(color));
   }
 
+  Future<void> _loadFontScalePreference() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getDouble('theme.fontScale');
+    if (saved == null || !MorePage.fontScales.contains(saved)) return;
+    if (mounted && saved != fontScale) {
+      setState(() => fontScale = saved);
+    }
+  }
+
+  Future<void> _setFontScale(double scale) async {
+    if (!MorePage.fontScales.contains(scale)) {
+      throw ArgumentError.value(scale, 'scale', '不支持的字体大小');
+    }
+    setState(() => fontScale = scale);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble('theme.fontScale', scale);
+  }
+
   static Color? _colorFromHex(String hex) {
     final buffer = StringBuffer();
     if (hex.length == 6) buffer.write('FF');
@@ -402,9 +429,12 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
       theme: _appTheme(Brightness.light, seedColor: seedColor),
       darkTheme: _appTheme(Brightness.dark, seedColor: seedColor),
       builder: (context, child) {
-        return MediaQuery.withClampedTextScaling(
-          minScaleFactor: 0.8,
-          maxScaleFactor: 1.3,
+        final systemScale = MediaQuery.textScalerOf(context).scale(1);
+        final effectiveScale = (systemScale * fontScale).clamp(0.8, 1.6);
+        return MediaQuery(
+          data: MediaQuery.of(context).copyWith(
+            textScaler: TextScaler.linear(effectiveScale),
+          ),
           child: child!,
         );
       },
@@ -645,10 +675,30 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
     } catch (_) {}
   }
 
+  Future<void>? _pendingNotificationDrain;
+
   Future<void> _drainPendingPushMessages() async {
+    final inFlight = _pendingNotificationDrain;
+    if (inFlight != null) {
+      await inFlight;
+      return;
+    }
+    final future = _drainPendingPushMessagesOnce();
+    _pendingNotificationDrain = future;
+    try {
+      await future;
+    } finally {
+      if (identical(_pendingNotificationDrain, future)) {
+        _pendingNotificationDrain = null;
+      }
+    }
+  }
+
+  Future<void> _drainPendingPushMessagesOnce() async {
     if (api.sessionId == null || api.sessionId!.isEmpty) return;
     try {
-      final messages = await api.pollPushMessages();
+      // 动态通知统一从提醒事件接口读取；避免与 WebSocket 已回执但旧队列尚未清理的消息重复展示。
+      final messages = await api.pollPendingNotificationEvents();
       await ws_service.loadLibrary();
       for (final message in messages) {
         await ws_service.WsService.handleNotificationMessage(message);
@@ -666,6 +716,8 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
         return 'ecard';
       case 'new_notice':
         return 'notices';
+      case 'attendance_update':
+        return 'attendance';
       default:
         return null;
     }
@@ -864,11 +916,6 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
   ) async {
     try {
       if (activeSessionId != null && activeSessionId.isNotEmpty) {
-        try {
-          await api.revokeBackgroundNotificationAccess(activeSessionId);
-        } catch (error) {
-          debugPrint('撤销后台通知授权失败: error=${error.runtimeType}');
-        }
         if (kIsWeb) {
           try {
             await LoginRequiredServices.unsubscribeWebPush(
@@ -963,6 +1010,8 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
       onThemeChanged: _setThemeMode,
       seedColor: seedColor,
       onSeedColorChanged: _setSeedColor,
+      fontScale: fontScale,
+      onFontScaleChanged: _setFontScale,
       onLogout: () {
         if (loggedIn) _logout();
       },

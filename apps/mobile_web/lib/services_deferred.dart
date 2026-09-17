@@ -114,7 +114,7 @@ class LoginRequiredServices {
       _initLiveActivityService(api),
       _syncIosPushToken(api),
       if (!_initialized) _initPersistentCache(),
-      _initWsService(apiBaseUrl, sessionId),
+      _initWsService(api, apiBaseUrl, sessionId),
       if (!_initialized) _initReminderService(),
       if (!_initialized) _initUpdateService(),
       _initBackgroundService(apiBaseUrl, sessionId),
@@ -201,12 +201,13 @@ class LoginRequiredServices {
   }
 
   static Future<void> _initWsService(
-      String apiBaseUrl, String sessionId) async {
+      ApiClient api, String apiBaseUrl, String sessionId) async {
     try {
       await ws_service.loadLibrary();
       ws_service.WsService.configure(
         apiBaseUrl: apiBaseUrl,
         sessionId: sessionId,
+        onPresented: api.markNotificationPresented,
       );
       await ws_service.WsService.connect();
     } catch (error) {
@@ -230,9 +231,12 @@ class LoginRequiredServices {
       String apiBaseUrl, String sessionId) async {
     try {
       await background_service.loadLibrary();
+      final installationId =
+          await background_service.BackgroundService.installationId();
       await background_service.BackgroundService.enableForegroundService(
         apiBaseUrl: apiBaseUrl,
         sessionId: sessionId,
+        installationId: installationId,
       );
     } catch (_) {}
   }
