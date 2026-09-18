@@ -175,10 +175,30 @@ class EcardConsumptionMonthOverview(BaseModel):
     cached_at: str = Field(alias="cachedAt")
 
 
+class EcardWaterMonthOverview(BaseModel):
+    month: str
+    recorded_days: int = Field(alias="recordedDays")
+    opening_balance: float = Field(alias="openingBalance")
+    closing_balance: float = Field(alias="closingBalance")
+    estimated_usage: float = Field(alias="estimatedUsage")
+    estimated_recharge: float = Field(alias="estimatedRecharge")
+    average_daily_usage: float = Field(alias="averageDailyUsage")
+    peak_date: str | None = Field(default=None, alias="peakDate")
+    peak_usage: float = Field(alias="peakUsage")
+    unit: str
+    cached_at: str = Field(alias="cachedAt")
+
+
 class EcardConsumptionOverviewResponse(BaseModel):
     status: Literal["ok", "limited"]
     message: str | None = None
     months: list[EcardConsumptionMonthOverview] = []
+    cold_water_months: list[EcardWaterMonthOverview] = Field(
+        default=[], alias="coldWaterMonths"
+    )
+    hot_water_months: list[EcardWaterMonthOverview] = Field(
+        default=[], alias="hotWaterMonths"
+    )
 
 
 class AuthResponse(BaseModel):

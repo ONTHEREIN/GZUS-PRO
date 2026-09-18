@@ -93,8 +93,7 @@ class LoginRequiredServices {
       // 同一会话再次进入前台/完成身份刷新时，重新同步可恢复的推送令牌。
       await Future.wait([
         _initWebPushService(api, onNotificationTap),
-        _initLiveActivityService(api),
-        _syncIosPushToken(api),
+        _initIosPushChannels(api),
       ]);
       return;
     }
@@ -111,8 +110,7 @@ class LoginRequiredServices {
       if (!_initialized) _initWebPushService(api, onNotificationTap),
       if (!_initialized) _initLocalNotificationService(onNotificationTap),
       if (!_initialized) _initPushService(api, onNotificationTap),
-      _initLiveActivityService(api),
-      _syncIosPushToken(api),
+      _initIosPushChannels(api),
       if (!_initialized) _initPersistentCache(),
       _initWsService(api, apiBaseUrl, sessionId),
       if (!_initialized) _initReminderService(),
@@ -181,6 +179,13 @@ class LoginRequiredServices {
     } catch (error) {
       debugPrint('[Push] iOS APNs 令牌同步失败: $error');
     }
+  }
+
+  /// iOS 的普通推送令牌同步可能触发会话自动恢复。
+  /// 先完成它，再上传 Live Activity 令牌，避免原生直连使用刚失效的会话。
+  static Future<void> _initIosPushChannels(ApiClient api) async {
+    await _syncIosPushToken(api);
+    await _initLiveActivityService(api);
   }
 
   static Future<void> _initLiveActivityService(ApiClient api) async {

@@ -1408,11 +1408,22 @@ class EcardConsumptionOverviewResponse {
         months = (json['months'] as List<dynamic>? ?? const [])
             .whereType<Map<String, dynamic>>()
             .map((item) => EcardConsumptionMonthOverview.fromJson(item))
+            .toList(),
+        coldWaterMonths =
+            (json['coldWaterMonths'] as List<dynamic>? ?? const [])
+                .whereType<Map<String, dynamic>>()
+                .map((item) => EcardWaterMonthOverview.fromJson(item))
+                .toList(),
+        hotWaterMonths = (json['hotWaterMonths'] as List<dynamic>? ?? const [])
+            .whereType<Map<String, dynamic>>()
+            .map((item) => EcardWaterMonthOverview.fromJson(item))
             .toList();
 
   final String status;
   final String? message;
   final List<EcardConsumptionMonthOverview> months;
+  final List<EcardWaterMonthOverview> coldWaterMonths;
+  final List<EcardWaterMonthOverview> hotWaterMonths;
 }
 
 class EcardConsumptionMonthOverview {
@@ -1431,6 +1442,33 @@ class EcardConsumptionMonthOverview {
   final double totalUsage;
   final double averageDailyUsage;
   final String peakDate;
+  final double peakUsage;
+  final String unit;
+  final String cachedAt;
+}
+
+class EcardWaterMonthOverview {
+  EcardWaterMonthOverview.fromJson(Map<String, dynamic> json)
+      : month = json['month'] as String? ?? '',
+        recordedDays = (json['recordedDays'] as num?)?.toInt() ?? 0,
+        openingBalance = _doubleFromJson(json['openingBalance']) ?? 0,
+        closingBalance = _doubleFromJson(json['closingBalance']) ?? 0,
+        estimatedUsage = _doubleFromJson(json['estimatedUsage']) ?? 0,
+        estimatedRecharge = _doubleFromJson(json['estimatedRecharge']) ?? 0,
+        averageDailyUsage = _doubleFromJson(json['averageDailyUsage']) ?? 0,
+        peakDate = json['peakDate'] as String?,
+        peakUsage = _doubleFromJson(json['peakUsage']) ?? 0,
+        unit = json['unit'] as String? ?? '',
+        cachedAt = json['cachedAt'] as String? ?? '';
+
+  final String month;
+  final int recordedDays;
+  final double openingBalance;
+  final double closingBalance;
+  final double estimatedUsage;
+  final double estimatedRecharge;
+  final double averageDailyUsage;
+  final String? peakDate;
   final double peakUsage;
   final String unit;
   final String cachedAt;

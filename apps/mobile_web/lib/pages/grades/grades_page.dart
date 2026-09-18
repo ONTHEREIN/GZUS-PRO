@@ -290,43 +290,42 @@ class _GradesPageState extends State<GradesPage>
         'grade_update:${_gradeSnapshotKey(latest)}:${current[_gradeSnapshotKey(latest)]}';
     final extras = {
       'id': eventId,
+      'eventKey': eventId,
       'type': 'grade_update',
       'liveUpdate': true,
-      'style': 'progress',
+      'style': 'metric',
       'shortCriticalText': '成绩',
-      'progressMax': 100,
-      'progressCurrent': 100,
+      'courseName': latest.grade.courseName,
+      'score': score,
+      'gradeStatus': latest.grade.gradeStatus,
+      'gradePassed': latest.grade.gradePassed,
+      'targetTab': 'grades',
     };
     final event = LiveActivityEvent(
       id: eventId,
       type: 'grade_update',
       title: title,
       body: body,
-      style: 'progress',
+      style: 'metric',
       shortText: '成绩',
       targetTab: 'grades',
       ongoing: false,
-      progress: 1,
+      courseName: latest.grade.courseName,
+      score: score,
+      gradeStatus: latest.grade.gradeStatus,
+      gradePassed: latest.grade.gradePassed,
     );
     LiveActivityController.instance.show(event);
     if (await LiveActivityService.startOrUpdate(event)) return;
-    final notificationId = eventId.hashCode.abs();
     await live_update_service.loadLibrary();
-    final posted = await live_update_service.LiveUpdateService.postLiveUpdate(
-      id: notificationId,
-      title: title,
-      body: body,
-      style: 'progress',
-      shortCriticalText: '成绩',
-      extras: extras,
-      ongoing: false,
-      progressMax: 100,
-      progressCurrent: 100,
+    final posted = await live_update_service.LiveUpdateService.postEvent(
+      event: event,
     );
     if (!posted) {
       await local_notification_service.loadLibrary();
       await local_notification_service.LocalNotificationService.show(
-        id: notificationId,
+        id: live_update_service.LiveUpdateService.notificationIdForEventId(
+            eventId),
         title: title,
         body: body,
         extras: extras,

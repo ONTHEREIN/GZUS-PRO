@@ -66,7 +66,8 @@ class LiveActivityService {
         deviceId != null &&
         deviceId.isNotEmpty) {
       try {
-        await api!.unregisterIosLiveActivityTokens(sessionId, deviceId: deviceId);
+        await api!
+            .unregisterIosLiveActivityTokens(sessionId, deviceId: deviceId);
       } on ApiException {
         // 会话可能已经失效，原生配置仍需清除。
       }
@@ -207,6 +208,14 @@ class LiveActivityService {
         activityType: arguments['activityType']?.toString(),
         expiresAt: DateTime.tryParse(arguments['expiresAt']?.toString() ?? ''),
       );
+    } else if (call.method == 'tokenSyncRequiresSession') {
+      await _registerToken(
+        token: token,
+        tokenType: arguments['tokenType']?.toString() ?? 'start',
+        activityId: arguments['activityId']?.toString(),
+        activityType: arguments['activityType']?.toString(),
+        expiresAt: DateTime.tryParse(arguments['expiresAt']?.toString() ?? ''),
+      );
     }
   }
 
@@ -317,21 +326,33 @@ class LiveActivityEvent {
     final utilityMetrics = _utilityMetrics(value('utilityMetrics'));
     final type = value('type')?.toString() ?? '';
     final style = value('style')?.toString() ?? 'metric';
+    final startTime = _dateTimeFromEpochMillis(
+      value('startTime') ??
+          value('startTimeMillis') ??
+          value('progressStartTime'),
+    );
+    final endTime = _dateTimeFromEpochMillis(
+      value('endTime') ?? value('endTimeMillis'),
+    );
+    final hasCountdown =
+        (type == 'course_reminder' || type == 'exam_reminder') &&
+            startTime != null &&
+            endTime != null &&
+            endTime.isAfter(startTime);
     return LiveActivityEvent(
       id: (value('id') ?? _fallbackId(message)).toString(),
       type: type,
       title: value('title')?.toString() ?? '软帮手',
       body: value('body')?.toString() ?? '',
       style: style,
-      startTime: _dateTimeFromEpochMillis(value('startTime')),
-      endTime: _dateTimeFromEpochMillis(value('endTime')),
+      startTime: startTime,
+      endTime: endTime,
       shortText: value('shortCriticalText')?.toString() ??
           value('shortText')?.toString(),
-      targetTab: targetTabForType(type),
-      url: value('url')?.toString(),
-      ongoing: value('ongoing') is bool
-          ? value('ongoing') as bool
-          : style != 'metric',
+      targetTab: value('targetTab')?.toString() ?? targetTabForType(type),
+      url: value('url')?.toString() ?? value('deepLink')?.toString(),
+      ongoing:
+          value('ongoing') is bool ? value('ongoing') as bool : hasCountdown,
       progress: _progressValue(
         value('progress'),
         value('progressMax'),
@@ -409,11 +430,44 @@ class LiveActivityEvent {
   }
 
   String get deepLink {
+    final explicit = url?.trim();
+    if (explicit != null && explicit.isNotEmpty) return explicit;
     return Uri(
       scheme: 'cn.gzus.pro',
       host: 'activity',
       queryParameters: {'tab': targetTab ?? 'home'},
     ).toString();
+  }
+
+  /// 生成 Android 原生通知和 iOS Activity 共用的结构化字段。
+  Map<String, dynamic> toAndroidPayload() {
+    return {
+      'id': id,
+      'eventKey': id,
+      'type': type,
+      'title': title,
+      'body': body,
+      'style': style,
+      'startTimeMillis': startTime?.millisecondsSinceEpoch ?? 0,
+      'endTimeMillis': endTime?.millisecondsSinceEpoch ?? 0,
+      'ongoing': ongoing,
+      'shortCriticalText': shortText ?? _defaultShortCriticalText(type),
+      'progressMax': 100,
+      'progressCurrent': ((progress ?? 0) * 100).round().clamp(0, 100),
+      'courseName': courseName,
+      'location': location,
+      'seat': seat,
+      'score': score,
+      'gradeStatus': gradeStatus,
+      'gradePassed': gradePassed,
+      'utilityMetrics': utilityMetrics
+          .map((metric) => metric.toJson())
+          .toList(growable: false),
+      'utilityPrimaryLabel': utilityPrimaryLabel,
+      'utilityPrimaryValue': utilityPrimaryValue,
+      'targetTab': targetTab ?? 'home',
+      'deepLink': deepLink,
+    };
   }
 
   /// Whether this event carries a meaningful countdown window.
@@ -543,6 +597,28 @@ class LiveActivityEvent {
       message['body'] ?? '',
       message['url'] ?? '',
     ).abs().toString();
+  }
+
+  static String _defaultShortCriticalText(String type) {
+    switch (type) {
+      case 'course_reminder':
+        return '上课';
+      case 'exam_reminder':
+        return '考试';
+      case 'grade_update':
+        return '成绩';
+      case 'ecard_reminder':
+        return '水电';
+      case 'attendance_update':
+        return '考勤';
+      case 'business_reminder':
+      case 'business_update':
+        return '业务';
+      case 'new_notice':
+        return '通知';
+      default:
+        return '动态';
+    }
   }
 }
 

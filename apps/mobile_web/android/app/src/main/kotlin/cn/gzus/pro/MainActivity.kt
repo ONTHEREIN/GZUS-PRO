@@ -302,33 +302,10 @@ class MainActivity : FlutterActivity() {
             when (call.method) {
                 "postLiveUpdate" -> {
                     try {
-                        val id = call.argument<Int>("id") ?: 0
-                        val title = call.argument<String>("title") ?: ""
-                        val body = call.argument<String>("body") ?: ""
-                        val style = call.argument<String>("style") ?: "timer"
-                        val endTimeMillis = when (val value = call.argument<Any>("endTimeMillis")) {
-                            is Long -> value
-                            is Int -> value.toLong()
-                            is Number -> value.toLong()
-                            else -> 0L
-                        }
-                        val shortCriticalText = call.argument<String>("shortCriticalText")
-                        val extrasJson = call.argument<String>("extras")
-                        val ongoing = call.argument<Boolean>("ongoing") ?: (style != "metric")
-                        val progressMax = call.argument<Int>("progressMax") ?: 0
-                        val progressCurrent = call.argument<Int>("progressCurrent") ?: 0
-                        val posted = helper.postLiveUpdate(
-                            id = id,
-                            title = title,
-                            body = body,
-                            style = style,
-                            endTimeMillis = endTimeMillis,
-                            shortCriticalText = shortCriticalText,
-                            extrasJson = extrasJson,
-                            ongoing = ongoing,
-                            progressMax = progressMax,
-                            progressCurrent = progressCurrent,
-                        )
+                        val arguments = call.arguments as? Map<*, *>
+                            ?: throw IllegalArgumentException("实况通知参数无效")
+                        val payload = LiveUpdatePayload.fromMethodArguments(arguments)
+                        val posted = helper.postLiveUpdate(payload)
                         result.success(posted)
                     } catch (e: Exception) {
                         result.error("LIVE_UPDATE_ERROR", e.message, null)
@@ -343,10 +320,16 @@ class MainActivity : FlutterActivity() {
                         result.error("LIVE_UPDATE_ERROR", e.message, null)
                     }
                 }
-                "canPostPromotedNotifications" -> {
+                "getPromotedNotificationStatus" -> {
                     try {
-                        val canPost = helper.canPostPromotedNotifications()
-                        result.success(canPost)
+                        result.success(helper.promotedNotificationStatus())
+                    } catch (e: Exception) {
+                        result.error("LIVE_UPDATE_ERROR", e.message, null)
+                    }
+                }
+                "openPromotedNotificationSettings" -> {
+                    try {
+                        result.success(openNotificationSettings())
                     } catch (e: Exception) {
                         result.error("LIVE_UPDATE_ERROR", e.message, null)
                     }
@@ -918,6 +901,15 @@ class MainActivity : FlutterActivity() {
                 false
             }
         }
+    }
+
+    private fun openNotificationSettings(): Boolean {
+        val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+            putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        startActivity(intent)
+        return true
     }
 
     private fun setHideFromRecents(hide: Boolean) {

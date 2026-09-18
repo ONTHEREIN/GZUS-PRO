@@ -1,9 +1,11 @@
-# 软帮手 登录页协议集成方案
+# 软帮手 登录页协议集成方案（历史集成记录）
 
-> **状态**: ✅ 已实现（2026-06-09）  
-> **目标**: 在登录页面展示《用户服务协议》和《隐私政策》，要求用户勾选同意后才能进行登录操作。  
-> **技术栈**: Flutter 3.x + Dart  
-> **修改文件**: `apps/mobile_web/lib/main.dart`
+> **状态**: ✅ 已实现（当前实现于 2026-09-18 同步）
+> **目标**: 在登录页面展示《用户服务协议》和《隐私政策》，要求用户勾选同意后才能进行登录操作。
+> **技术栈**: Flutter 3.x + Dart
+> **当前实现**: `apps/mobile_web/lib/pages/login/login_page.dart`
+
+本文保留最初的设计、实现步骤和验收记录，供维护者了解背景。当前实现和用户可见内容以登录页代码、[隐私政策](./privacy-policy.md) 和[用户服务协议](./terms-of-service.md) 为准。若修改登录、凭据存储、通知授权或数据处理逻辑，请同步更新这些文档和应用内摘要。
 
 ---
 
@@ -16,7 +18,7 @@
 | 强制同意 | 未勾选时登录按钮不可点击（或点击时弹出提示） |
 | 协议全文 | 点击协议名称弹出 BottomSheet 或新页面展示全文 |
 | 持久化 | 用户同意后存储到 SharedPreferences，下次自动勾选 |
-| Web版 | 协议全文渲染为静态 HTML 页面，支持浏览器访问 |
+| Web版 | 在 Flutter Web 登录页内展示摘要；完整版本链接到仓库文档 |
 
 ---
 
@@ -356,13 +358,13 @@ const _privacyPolicyText = '''
 信息仅用于展示课表、成绩、考勤、水电费等校内教务服务。
 
 三、信息存储
-密码不持久化存储，学校系统 Cookie 仅保存在服务端内存中。
+密码不会以明文持久化存储。勾选“记住密码并自动登录”后，密码和自动登录凭据保存在本机安全存储；开启“后台持续通知”后，服务端会保存加密的自动登录凭据和提醒配置。
 
-四、信息安全
-所有通信使用 HTTPS 加密，日志不记录密码等敏感信息。
+四、信息安全与权限
+生产通信使用 HTTPS 加密，日志不记录密码等敏感信息。通知、定位、相册/相机、日历等权限只在对应功能需要时申请。
 
 五、您的权利
-您有权查看、更正、删除您的数据，可随时退出登录或卸载应用。
+您可以关闭记住密码、后台持续通知和系统权限。退出登录会清除本机认证材料、账号缓存、推送注册并撤销当前应用会话；后台授权需在通知设置中单独关闭。
 
 （完整版本请查看应用内文档或项目仓库 docs/privacy-policy.md）
 ''';
@@ -379,21 +381,12 @@ const _privacyPolicyText = '''
 |---------|---------|---------|
 | **摘要版**（弹窗内） | 首次登录快速阅读 | 上述 `_AgreementContentView` 中硬编码摘要 |
 | **完整版**（新页面） | 需要细读时 | Navigator.push 到新页面，通过 Markdown 解析或网络加载 |
-| **Web版**（外部链接） | 浏览器访问 | 发布到项目网站 /privacy 和 /terms 路径 |
+| **Web版**（应用内） | 浏览器访问 | 登录页内展示摘要，完整版本维护在仓库 `docs/` |
 | **文档文件** | 离线分发 | 随 APK 打包或放在 GitHub 仓库 docs/ 目录 |
 
 ### Web 版完整协议页面
 
-在 `website/` 目录创建协议页面，将 Markdown 渲染为 HTML：
-
-```
-website/
-├── privacy.html       ← 隐私政策（从 docs/privacy-policy.md 转换）
-├── terms.html         ← 用户服务协议（从 docs/terms-of-service.md 转换）
-├── index.html
-├── v1-bento.html
-├── ...
-```
+当前仓库没有独立的 `website/` 静态协议目录。Flutter Web 登录页提供协议摘要，完整内容以仓库中的 [隐私政策](./privacy-policy.md) 和[用户服务协议](./terms-of-service.md) 为准。若未来增加独立网页，应在发布流程中确保网页与这两份 Markdown 同步。
 
 ---
 
@@ -411,7 +404,7 @@ website/
 | 卸载重装 | 协议状态重置，需重新勾选 |
 | 暗色模式 | 协议文本颜色适配深色主题 |
 | 小屏手机 | 协议文本行不溢出，自动换行 |
-| Web 版 | 可直接访问 /privacy.html 和 /terms.html |
+| Web 版 | 登录页可查看协议摘要，仓库文档提供完整版本 |
 
 ---
 
@@ -445,9 +438,7 @@ Future<String> _loadAgreementContent(String filename) async {
 | `docs/privacy-policy.md` | 隐私政策完整版（Markdown） |
 | `docs/terms-of-service.md` | 用户服务协议完整版（Markdown） |
 | `docs/privacy.md` | 开发团队内部隐私规范（技术视角） |
-| `apps/mobile_web/lib/main.dart` | 登录页面源代码（需按本方案修改） |
-| `website/privacy.html` | 隐私政策 Web 版 |
-| `website/terms.html` | 用户服务协议 Web 版 |
+| `apps/mobile_web/lib/pages/login/login_page.dart` | 当前登录页面和协议摘要 |
 | [GitHub 仓库](https://github.com/ONTHEREIN/GZUS-PRO) | 项目源码与完整文档 |
 
 ---

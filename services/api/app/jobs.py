@@ -8,6 +8,7 @@ from app.cache_service import ExamReminderCache, GradeUpdateCache, NoticeCache
 from app.config import get_settings
 from app.database import EcardBinding, get_sync_session_factory
 from app.ecard_client import EcardApiError, EcardClient, EcardConfigurationError, EcardRoomRef, safe_float
+from app.ecard_history import record_water_balance_snapshots
 from app.notice_utils import merge_notices, notice_key, valid_notice_items
 from app.sessions import student_id_of
 from app.cloud_notifications import (
@@ -406,6 +407,7 @@ async def run_ecard_reminder_once(app, reminder_time: str) -> None:
                 logger.warning("ecard reminder failed for %s: %s", binding.student_id, exc)
                 continue
             binding.last_summary_json = json.dumps(summary, ensure_ascii=False)
+            record_water_balance_snapshots(db, binding.room_id, summary, datetime.now(timezone.utc))
             binding.last_checked_at = datetime.now(timezone.utc)
             binding.updated_at = datetime.now(timezone.utc)
 

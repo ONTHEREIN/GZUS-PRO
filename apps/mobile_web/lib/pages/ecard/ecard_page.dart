@@ -1054,7 +1054,7 @@ class _EcardConsumptionOverviewPanelState
   @override
   Widget build(BuildContext context) {
     return PagePanel(
-      title: '电费历史总览',
+      title: '水电费历史总览',
       icon: Icons.insights_outlined,
       child: FutureBuilder<EcardConsumptionOverviewResponse>(
         future: _overviewFuture,
@@ -1064,42 +1064,342 @@ class _EcardConsumptionOverviewPanelState
           }
           if (snapshot.hasError) return const EmptyState(message: '历史总览加载失败');
           final data = snapshot.data;
-          if (data == null || data.months.isEmpty) {
+          if (data == null ||
+              (data.months.isEmpty &&
+                  data.coldWaterMonths.isEmpty &&
+                  data.hotWaterMonths.isEmpty)) {
             return EmptyState(message: data?.message ?? '查询月份后会在这里生成历史总览');
           }
           return Column(
             children: [
-              for (final month in data.months)
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: const Icon(Icons.calendar_month_outlined),
-                  title: Text(month.month),
-                  subtitle: Text(
-                    '共 ${month.recordedDays} 天 · 日均 ${month.averageDailyUsage.toStringAsFixed(2)} ${month.unit}',
-                  ),
-                  trailing: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      Text(
-                          '最高 ${month.peakUsage.toStringAsFixed(2)} ${month.unit}'),
-                      Text(
-                        month.peakDate,
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                      Text(
-                        '总计 ${month.totalUsage.toStringAsFixed(2)} ${month.unit}',
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                    ],
-                  ),
-                ),
+              _ElectricityHistoryCard(months: data.months),
+              const SizedBox(height: 12),
+              _WaterHistoryCard(
+                key: const Key('ecard-cold-water-history'),
+                title: '冷水余额趋势',
+                icon: Icons.water_drop_outlined,
+                color: Colors.lightBlue,
+                months: data.coldWaterMonths,
+              ),
+              const SizedBox(height: 12),
+              _WaterHistoryCard(
+                key: const Key('ecard-hot-water-history'),
+                title: '热水余额趋势',
+                icon: Icons.local_fire_department_outlined,
+                color: Colors.deepOrange,
+                months: data.hotWaterMonths,
+              ),
             ],
           );
         },
       ),
     );
   }
+}
+
+class _ElectricityHistoryCard extends StatelessWidget {
+  const _ElectricityHistoryCard({required this.months});
+
+  final List<EcardConsumptionMonthOverview> months;
+
+  @override
+  Widget build(BuildContext context) {
+    if (months.isEmpty) {
+      return const _HistoryCard(
+        key: Key('ecard-electricity-history'),
+        title: '电费月度用量',
+        icon: Icons.electric_bolt,
+        child: EmptyState(message: '查询电费月份后会在这里生成历史总览'),
+      );
+    }
+    final chartMonths = months.take(12).toList().reversed.toList();
+    return _HistoryCard(
+      key: const Key('ecard-electricity-history'),
+      title: '电费月度用量',
+      icon: Icons.electric_bolt,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _BarTrendChart(
+            values: [for (final month in chartMonths) month.totalUsage],
+            labels: [for (final month in chartMonths) month.month.substring(5)],
+            unit: chartMonths.last.unit,
+            color: Theme.of(context).colorScheme.primary,
+          ),
+          const SizedBox(height: 8),
+          for (final month in months)
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.calendar_month_outlined),
+              title: Text(month.month),
+              subtitle: Text(
+                '共 ${month.recordedDays} 天 · 日均 ${month.averageDailyUsage.toStringAsFixed(2)} ${month.unit} · 峰值 ${month.peakUsage.toStringAsFixed(2)} ${month.unit}',
+              ),
+              trailing: Text(
+                '总计 ${month.totalUsage.toStringAsFixed(2)} ${month.unit}',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _WaterHistoryCard extends StatelessWidget {
+  const _WaterHistoryCard({
+    super.key,
+    required this.title,
+    required this.icon,
+    required this.color,
+    required this.months,
+  });
+
+  final String title;
+  final IconData icon;
+  final Color color;
+  final List<EcardWaterMonthOverview> months;
+
+  @override
+  Widget build(BuildContext context) {
+    if (months.isEmpty) {
+      return _HistoryCard(
+        title: title,
+        icon: icon,
+        child: const EmptyState(message: '余额刷新后会在这里生成水费历史'),
+      );
+    }
+    final chartMonths = months.take(12).toList().reversed.toList();
+    return _HistoryCard(
+      title: title,
+      icon: icon,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '基于余额缓存估算；同日仅保留最新值，数据非官方消费明细',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          const SizedBox(height: 8),
+          _BalanceTrendChart(
+            values: [for (final month in chartMonths) month.closingBalance],
+            labels: [for (final month in chartMonths) month.month.substring(5)],
+            unit: chartMonths.last.unit,
+            color: color,
+          ),
+          const SizedBox(height: 8),
+          for (final month in months)
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.calendar_month_outlined),
+              title: Text(month.month),
+              isThreeLine: true,
+              subtitle: Text(
+                '记录 ${month.recordedDays} 天 · 期初 ${month.openingBalance.toStringAsFixed(2)} ${month.unit} · 期末 ${month.closingBalance.toStringAsFixed(2)} ${month.unit}\n消耗 ${month.estimatedUsage.toStringAsFixed(2)} ${month.unit} · 日均 ${month.averageDailyUsage.toStringAsFixed(2)} ${month.unit} · 峰值 ${month.peakUsage.toStringAsFixed(2)} ${month.unit}${month.peakDate == null ? '' : '（${month.peakDate}）'}',
+              ),
+              trailing: Text(
+                '充值 ${month.estimatedRecharge.toStringAsFixed(2)} ${month.unit}',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _HistoryCard extends StatelessWidget {
+  const _HistoryCard({
+    super.key,
+    required this.title,
+    required this.icon,
+    required this.child,
+  });
+
+  final String title;
+  final IconData icon;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      key: key,
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color:
+            theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.35),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, color: theme.colorScheme.primary),
+              const SizedBox(width: 8),
+              Text(title, style: theme.textTheme.titleMedium),
+            ],
+          ),
+          const SizedBox(height: 8),
+          child,
+        ],
+      ),
+    );
+  }
+}
+
+class _BarTrendChart extends StatelessWidget {
+  const _BarTrendChart({
+    required this.values,
+    required this.labels,
+    required this.unit,
+    required this.color,
+  });
+
+  final List<double> values;
+  final List<String> labels;
+  final String unit;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      label: values.isEmpty ? '暂无用电趋势数据' : '最近 ${values.length} 个月用电量，单位 $unit',
+      child: Column(
+        children: [
+          SizedBox(
+            height: 140,
+            child: CustomPaint(painter: _BarTrendPainter(values, color)),
+          ),
+          _ChartLabels(labels: labels),
+        ],
+      ),
+    );
+  }
+}
+
+class _BalanceTrendChart extends StatelessWidget {
+  const _BalanceTrendChart({
+    required this.values,
+    required this.labels,
+    required this.unit,
+    required this.color,
+  });
+
+  final List<double> values;
+  final List<String> labels;
+  final String unit;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      label:
+          values.isEmpty ? '暂无余额趋势数据' : '最近 ${values.length} 个月期末余额，单位 $unit',
+      child: Column(
+        children: [
+          SizedBox(
+            height: 140,
+            child: CustomPaint(painter: _LineTrendPainter(values, color)),
+          ),
+          _ChartLabels(labels: labels),
+        ],
+      ),
+    );
+  }
+}
+
+class _ChartLabels extends StatelessWidget {
+  const _ChartLabels({required this.labels});
+
+  final List<String> labels;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        for (final label in labels)
+          Text(label, style: Theme.of(context).textTheme.labelSmall),
+      ],
+    );
+  }
+}
+
+class _BarTrendPainter extends CustomPainter {
+  _BarTrendPainter(this.values, this.color);
+
+  final List<double> values;
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (values.isEmpty) return;
+    final maxValue = values.reduce((a, b) => a > b ? a : b);
+    final barWidth = size.width / (values.length * 1.7);
+    final gap = barWidth * 0.7;
+    final paint = Paint()..color = color.withValues(alpha: 0.75);
+    for (var index = 0; index < values.length; index++) {
+      final height =
+          maxValue <= 0 ? 0.0 : size.height * values[index] / maxValue;
+      final left = index * (barWidth + gap) + gap / 2;
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromLTWH(left, size.height - height, barWidth, height),
+          const Radius.circular(5),
+        ),
+        paint,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _BarTrendPainter oldDelegate) =>
+      oldDelegate.values != values || oldDelegate.color != color;
+}
+
+class _LineTrendPainter extends CustomPainter {
+  _LineTrendPainter(this.values, this.color);
+
+  final List<double> values;
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (values.isEmpty) return;
+    final minValue = values.reduce((a, b) => a < b ? a : b);
+    final maxValue = values.reduce((a, b) => a > b ? a : b);
+    final range =
+        (maxValue - minValue).abs() < 0.001 ? 1.0 : maxValue - minValue;
+    final points = <Offset>[];
+    for (var index = 0; index < values.length; index++) {
+      final x = values.length == 1
+          ? size.width / 2
+          : size.width * index / (values.length - 1);
+      final y = size.height - (values[index] - minValue) / range * size.height;
+      points.add(Offset(x, y));
+    }
+    final line = Paint()
+      ..color = color
+      ..strokeWidth = 3
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+    final path = Path()..moveTo(points.first.dx, points.first.dy);
+    for (final point in points.skip(1)) {
+      path.lineTo(point.dx, point.dy);
+    }
+    canvas.drawPath(path, line);
+    final dot = Paint()..color = color;
+    for (final point in points) {
+      canvas.drawCircle(point, 4, dot);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _LineTrendPainter oldDelegate) =>
+      oldDelegate.values != values || oldDelegate.color != color;
 }
 
 class _EcardConsumptionPanel extends StatefulWidget {

@@ -25,6 +25,11 @@ class DashboardShell extends StatefulWidget {
     required this.onLogout,
     this.seedColor = GzusColors.blue,
     this.onSeedColorChanged,
+    this.customBackground,
+    this.onPickCustomBackground,
+    this.onClearCustomBackground,
+    this.onCustomBackgroundBlurChanged,
+    this.onCustomBackgroundDarknessChanged,
     this.onSettingsPressed,
     this.dataSource = const DataSourceInfo(),
     this.cloudFirstWeeks = const {},
@@ -41,6 +46,11 @@ class DashboardShell extends StatefulWidget {
   final ValueChanged<double> onFontScaleChanged;
   final Color seedColor;
   final ValueChanged<Color>? onSeedColorChanged;
+  final CustomBackgroundSettings? customBackground;
+  final Future<void> Function()? onPickCustomBackground;
+  final Future<void> Function()? onClearCustomBackground;
+  final Future<void> Function(double value)? onCustomBackgroundBlurChanged;
+  final Future<void> Function(double value)? onCustomBackgroundDarknessChanged;
   final VoidCallback onLogout;
   final VoidCallback? onSettingsPressed;
   final DataSourceInfo dataSource;
@@ -189,6 +199,7 @@ class _DashboardShellState extends State<DashboardShell> {
     // 更多页位于保活页面栈中，外层主题/主题色变化时需要让缓存页重新接收最新参数。
     if (oldWidget.themeMode != widget.themeMode ||
         oldWidget.seedColor != widget.seedColor ||
+        oldWidget.customBackground != widget.customBackground ||
         oldWidget.isAdmin != widget.isAdmin ||
         oldWidget.isOwner != widget.isOwner) {
       _pageGeneration++;
@@ -290,8 +301,10 @@ class _DashboardShellState extends State<DashboardShell> {
               return _withIosBackGesture(Stack(
                 children: [
                   Positioned.fill(
-                    child:
-                        LiquidGlassAmbientBackdrop(seedColor: widget.seedColor),
+                    child: LiquidGlassAmbientBackdrop(
+                      seedColor: widget.seedColor,
+                      background: widget.customBackground,
+                    ),
                   ),
                   SafeArea(
                     bottom: false,
@@ -427,8 +440,10 @@ class _DashboardShellState extends State<DashboardShell> {
             return _withIosBackGesture(Stack(
               children: [
                 Positioned.fill(
-                  child:
-                      LiquidGlassAmbientBackdrop(seedColor: widget.seedColor),
+                  child: LiquidGlassAmbientBackdrop(
+                    seedColor: widget.seedColor,
+                    background: widget.customBackground,
+                  ),
                 ),
                 Row(
                   children: [
@@ -721,6 +736,12 @@ class _DashboardShellState extends State<DashboardShell> {
             onFontScaleChanged: widget.onFontScaleChanged,
             seedColor: widget.seedColor,
             onSeedColorChanged: widget.onSeedColorChanged,
+            customBackground: widget.customBackground,
+            onPickCustomBackground: widget.onPickCustomBackground,
+            onClearCustomBackground: widget.onClearCustomBackground,
+            onCustomBackgroundBlurChanged: widget.onCustomBackgroundBlurChanged,
+            onCustomBackgroundDarknessChanged:
+                widget.onCustomBackgroundDarknessChanged,
             onLogout: widget.onLogout,
             onYearChanged: (v) => _setAcademicPeriod(v, term),
             onTermChanged: (v) => _setAcademicPeriod(year, v),
@@ -898,18 +919,29 @@ class _DashboardShellState extends State<DashboardShell> {
     final loadYear = year;
     final loadTerm = term;
     final prefs = await SharedPreferences.getInstance();
-    final firstWeekText =
-        prefs.getString(_settingsKey(loadYear, loadTerm, 'firstWeekStart'));
+    final firstWeekText = prefs.getString(
+      _settingsKey(
+        widget.api.namespace,
+        loadYear,
+        loadTerm,
+        'firstWeekStart',
+      ),
+    );
     // 本地缺失时回退云端（按学期），最后才用默认推导值
     final cloudText = firstWeekText == null
         ? widget.cloudFirstWeeks['$loadYear-$loadTerm']
         : null;
-    final savedAuto =
-        prefs.getBool('schedule.autoWeek') ?? widget.cloudAutoWeek ?? autoWeek;
+    final savedAuto = prefs.getBool(
+          schedulePreferenceKey(widget.api.namespace, 'autoWeek'),
+        ) ??
+        widget.cloudAutoWeek ??
+        autoWeek;
     final defaultStart = defaultFirstWeekStart(loadYear, loadTerm);
     final parsedStart = DateTime.tryParse(firstWeekText ?? cloudText ?? '');
     final start = parsedStart ?? defaultStart;
-    final savedWeek = prefs.getInt(_settingsKey(loadYear, loadTerm, 'week'));
+    final savedWeek = prefs.getInt(
+      _settingsKey(widget.api.namespace, loadYear, loadTerm, 'week'),
+    );
     if (!mounted || loadYear != year || loadTerm != term) return;
     setState(() {
       firstWeekStart = start;
@@ -929,8 +961,8 @@ class _DashboardShellState extends State<DashboardShell> {
     _periodAutoCorrected = true;
     final firstWeeks = Map<String, String>.from(widget.cloudFirstWeeks);
     final prefs = await SharedPreferences.getInstance();
+    final prefix = 'schedule.${widget.api.namespace}.';
     for (final key in prefs.getKeys()) {
-      const prefix = 'schedule.';
       const suffix = '.firstWeekStart';
       if (!key.startsWith(prefix) || !key.endsWith(suffix)) continue;
       final value = prefs.getString(key);
@@ -955,11 +987,17 @@ class _DashboardShellState extends State<DashboardShell> {
   Future<void> _saveScheduleSettings() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(
-      _settingsKey(year, term, 'firstWeekStart'),
+      _settingsKey(widget.api.namespace, year, term, 'firstWeekStart'),
       dateText(firstWeekStart),
     );
-    await prefs.setInt(_settingsKey(year, term, 'week'), currentWeek);
-    await prefs.setBool('schedule.autoWeek', autoWeek);
+    await prefs.setInt(
+      _settingsKey(widget.api.namespace, year, term, 'week'),
+      currentWeek,
+    );
+    await prefs.setBool(
+      schedulePreferenceKey(widget.api.namespace, 'autoWeek'),
+      autoWeek,
+    );
     unawaited(_syncScheduleSettingsToCloud());
   }
 

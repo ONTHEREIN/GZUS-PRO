@@ -81,6 +81,8 @@ android {
 }
 
 dependencies {
+    // Android 16 的 Live Updates API（请求推广常驻通知）由 Core 1.17 提供兼容实现。
+    implementation("androidx.core:core:1.17.0")
     implementation("androidx.work:work-runtime-ktx:2.10.0")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
     implementation("commons-net:commons-net:3.11.1")
@@ -94,6 +96,7 @@ dependencies {
     implementation("com.tencent.shiply:reshub-patch-sdk:1.8.22-RC04")
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20180813")
 }
 
 kotlin {

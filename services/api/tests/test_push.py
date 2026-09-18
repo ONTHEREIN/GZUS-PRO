@@ -538,7 +538,8 @@ def test_live_activity_payload_supports_start_update_and_end():
         assert decoded["aps"]["event"] == action
         assert decoded["aps"]["content-state"]["endEpochMillis"] == 1_700_003_600_000
         if action == "start":
-            assert decoded["input-push-token"] == 1
+            assert decoded["aps"]["input-push-token"] == 1
+            assert "input-push-token" not in decoded
             assert decoded["aps"]["attributes-type"] == "GzusLiveActivityAttributes"
             assert decoded["aps"]["attributes"]["targetTab"] == "exams"
         else:

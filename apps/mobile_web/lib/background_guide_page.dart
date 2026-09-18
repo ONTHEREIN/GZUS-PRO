@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'api_client.dart';
 import 'gzus_design.dart';
+import 'onboarding_preferences.dart';
 import 'permission_service.dart';
 import 'responsive/spacing.dart';
 import 'background_service.dart';
@@ -19,12 +20,14 @@ class BackgroundGuidePage extends StatefulWidget {
   const BackgroundGuidePage({
     super.key,
     required this.api,
+    this.onBack,
     this.onComplete,
     this.currentStep,
     this.totalSteps,
   });
 
   final ApiClient api;
+  final VoidCallback? onBack;
   final VoidCallback? onComplete;
   final int? currentStep;
   final int? totalSteps;
@@ -51,9 +54,13 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
   /// Web Push 是否可用（后端启用 VAPID 且浏览器支持）。
   /// 不可用时只要求通知权限即可完成配置。
   bool _webPushEnabled = true;
+  String? _webPushConfigError;
 
   /// 防止 _checkPermissions() 重入
   bool _busy = false;
+
+  /// 防止完成/跳过操作重复提交
+  bool _finishing = false;
 
   /// 防抖：上次 resume 时间戳，跳过 1 秒内的重复回调
   int _lastResumeMs = 0;
@@ -100,7 +107,10 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
       _busy = false;
     }
     // iOS 以系统通知授权作为服务器推送通知的同意；旧用户进入引导时自动补同步。
-    if (mounted && _notificationGranted && !_cloudNotificationEnabled) {
+    if (mounted &&
+        _isIos &&
+        _notificationGranted &&
+        !_cloudNotificationEnabled) {
       unawaited(_setCloudNotificationEnabled(true));
     }
   }
@@ -122,6 +132,7 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
     String permStatus = 'default';
     bool webSub = false;
     bool webEnabled = true;
+    String? webConfigError;
     bool cloudEnabled = false;
     try {
       if (kIsWeb) {
@@ -129,15 +140,23 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
         await webPush.init();
         final results = await Future.wait([
           webPush.getPermissionStatus(),
-          webPush.isSubscribed(),
+          webPush.isSubscribed().timeout(
+                const Duration(seconds: 2),
+                onTimeout: () => false,
+              ),
           webPush.isSupported(),
-          _fetchWebPushConfig(),
         ]);
         permStatus = results[0] as String;
         webSub = results[1] as bool;
         final supported = results[2] as bool;
-        final config = results[3] as Map<String, dynamic>?;
-        webEnabled = supported && config != null && config['enabled'] == true;
+        try {
+          final config = await _fetchWebPushConfig();
+          webEnabled = supported && config['enabled'] == true;
+        } catch (error) {
+          webConfigError = error.toString();
+          // 配置未知时不能把它误判成“服务未启用”，否则会放行未订阅的 Web 用户。
+          webEnabled = true;
+        }
       } else if (_isAndroid) {
         final futures = <Future<bool>>[
           PermissionService.checkAutoStart(),
@@ -180,6 +199,7 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
           _notificationGranted = permStatus == 'granted';
           _webPushSubscribed = webSub;
           _webPushEnabled = webEnabled;
+          _webPushConfigError = webConfigError;
         } else {
           _autoStartGranted = autoStart;
           _batteryOptimizationDisabled = battery;
@@ -192,7 +212,9 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
   }
 
   bool get _allGranted => kIsWeb
-      ? (_notificationGranted && (!_webPushEnabled || _webPushSubscribed))
+      ? (_webPushConfigError == null &&
+          _notificationGranted &&
+          (!_webPushEnabled || _webPushSubscribed))
       : _isIos
           ? _notificationGranted
           : (_autoStartGranted &&
@@ -221,11 +243,11 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
       if (granted) {
         bool subscribed = false;
         bool pushEnabled = false;
+        String? pushError;
         try {
           final supported = await webPush.isSupported();
           final config = await _fetchWebPushConfig();
-          pushEnabled =
-              supported && config != null && config['enabled'] == true;
+          pushEnabled = supported && config['enabled'] == true;
           if (pushEnabled) {
             final publicKey = config['publicKey'] as String?;
             if (publicKey != null && publicKey.isNotEmpty) {
@@ -237,16 +259,27 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
               subscribed = true;
             }
           }
-        } catch (_) {}
+        } catch (error) {
+          pushError = error.toString();
+          if (mounted) {
+            setState(() {
+              _webPushConfigError = pushError;
+              _webPushEnabled = true;
+            });
+          }
+        }
         // 权限已授予，直接更新状态，无需重新走完整的异步检查
         if (mounted) {
           setState(() {
             _notificationGranted = true;
             _webPushSubscribed = subscribed;
-            _webPushEnabled = pushEnabled;
+            _webPushEnabled = pushError == null ? pushEnabled : true;
+            _webPushConfigError = pushError;
           });
         }
-        await _setCloudNotificationEnabled(true);
+        if (pushError == null) {
+          await _setCloudNotificationEnabled(true);
+        }
         return;
       }
     } else {
@@ -273,7 +306,7 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
       await webPush.init();
       final config = await _fetchWebPushConfig();
       bool subscribed = false;
-      final pushEnabled = config != null && config['enabled'] == true;
+      final pushEnabled = config['enabled'] == true;
       if (pushEnabled) {
         final publicKey = config['publicKey'] as String?;
         if (publicKey != null && publicKey.isNotEmpty) {
@@ -289,10 +322,13 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
         setState(() {
           _webPushSubscribed = subscribed;
           _webPushEnabled = pushEnabled;
+          _webPushConfigError = null;
         });
       }
-    } catch (_) {
-      // 订阅失败，保持现状
+    } catch (error) {
+      if (mounted) {
+        setState(() => _webPushConfigError = error.toString());
+      }
     } finally {
       _busy = false;
     }
@@ -336,9 +372,21 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
       if (error is StateError) {
         final messenger = ScaffoldMessenger.maybeOf(context);
         final prefs = await SharedPreferences.getInstance();
-        final shown = prefs.getBool('background.credentialGuideShown') ?? false;
+        final shown = prefs.getBool(
+              onboardingPreferenceKey(
+                widget.api.namespace,
+                'credentialGuideShown',
+              ),
+            ) ??
+            false;
         if (!shown && mounted && messenger != null) {
-          await prefs.setBool('background.credentialGuideShown', true);
+          await prefs.setBool(
+            onboardingPreferenceKey(
+              widget.api.namespace,
+              'credentialGuideShown',
+            ),
+            true,
+          );
           messenger.showSnackBar(
             const SnackBar(
               content: Text('后台通知需要保存凭据，请重新登录并勾选“记住密码并自动登录”。'),
@@ -353,10 +401,21 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
 
   Future<Map<String, dynamic>?> _courseReminderSnapshot() async {
     final prefs = await SharedPreferences.getInstance();
+    final namespace = widget.api.namespace;
     final (year, term) = onboardingAcademicPeriodOf(DateTime.now());
     final scheduleSettings = await widget.api.fetchScheduleSettings();
+    final localFirstWeekStart = prefs.getString(
+      scheduleAcademicPreferenceKey(
+        namespace,
+        year,
+        term,
+        'firstWeekStart',
+      ),
+    );
     final firstWeekStart = DateTime.tryParse(
-          scheduleSettings?.firstWeeks['$year-$term'] ?? '',
+          localFirstWeekStart ??
+              scheduleSettings?.firstWeeks['$year-$term'] ??
+              '',
         ) ??
         defaultFirstWeekStart(year, term);
     final result = await widget.api.schedule(year: year, term: term);
@@ -386,29 +445,39 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
       };
     }).toList();
     return {
-      'enabled': prefs.getBool('schedule.courseRemindersEnabled') ?? false,
-      'beforeStartMinutes':
-          prefs.getInt('schedule.courseStartReminderMinutes') ?? 10,
-      'beforeEndMinutes':
-          prefs.getInt('schedule.courseEndReminderMinutes') ?? 5,
+      'enabled': prefs.getBool(
+            schedulePreferenceKey(namespace, 'courseRemindersEnabled'),
+          ) ??
+          false,
+      'beforeStartMinutes': prefs.getInt(
+            schedulePreferenceKey(namespace, 'courseStartReminderMinutes'),
+          ) ??
+          10,
+      'beforeEndMinutes': prefs.getInt(
+            schedulePreferenceKey(namespace, 'courseEndReminderMinutes'),
+          ) ??
+          5,
       'firstWeekStart':
           '${firstWeekStart.year.toString().padLeft(4, '0')}-${firstWeekStart.month.toString().padLeft(2, '0')}-${firstWeekStart.day.toString().padLeft(2, '0')}',
       'courses': courses,
     };
   }
 
-  Future<Map<String, dynamic>?> _fetchWebPushConfig() async {
-    try {
-      return await widget.api.getWebPushConfig();
-    } catch (_) {
-      return null;
-    }
-  }
+  Future<Map<String, dynamic>> _fetchWebPushConfig() =>
+      widget.api.getWebPushConfig();
 
   Future<void> _complete() async {
+    if (_finishing) return;
+    _finishing = true;
     try {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool('background_guide_completed', true);
+      await prefs.setBool(
+        onboardingPreferenceKey(
+          widget.api.namespace,
+          'backgroundGuideCompleted',
+        ),
+        true,
+      );
       if (_isAndroid) {
         await prefs.setBool('foreground_service_enabled', true);
         await prefs.setBool('hide_from_recents', _hideFromRecents);
@@ -420,8 +489,14 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
           sessionId: widget.api.sessionId ?? '',
         );
       }
-    } catch (_) {
-      // Ignore errors and proceed to navigate away.
+    } catch (error) {
+      _finishing = false;
+      if (mounted) {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          SnackBar(content: Text('保存后台通知配置失败，请重试：$error')),
+        );
+      }
+      return;
     }
     if (!mounted) return;
     if (widget.onComplete != null) {
@@ -432,18 +507,25 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
   }
 
   Future<void> _skip() async {
+    if (_finishing) return;
+    _finishing = true;
     try {
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool('background_guide_completed', true);
-      if (_isAndroid) {
-        await prefs.setBool('foreground_service_enabled', true);
-        await BackgroundService.enableForegroundService(
-          apiBaseUrl: widget.api.baseUrl,
-          sessionId: widget.api.sessionId ?? '',
+      await prefs.setBool(
+        onboardingPreferenceKey(
+          widget.api.namespace,
+          'backgroundGuideCompleted',
+        ),
+        true,
+      );
+    } catch (error) {
+      _finishing = false;
+      if (mounted) {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          SnackBar(content: Text('保存引导状态失败，请重试：$error')),
         );
       }
-    } catch (_) {
-      // Ignore errors and proceed to navigate away.
+      return;
     }
     if (!mounted) return;
     if (widget.onComplete != null) {
@@ -460,7 +542,14 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
     final totalSteps = widget.totalSteps ?? 2;
     return Scaffold(
       appBar: AppBar(
-        automaticallyImplyLeading: false,
+        automaticallyImplyLeading: widget.onBack != null,
+        leading: widget.onBack == null
+            ? null
+            : IconButton(
+                tooltip: '返回上一步',
+                onPressed: widget.onBack,
+                icon: const Icon(Icons.arrow_back),
+              ),
         title: const SizedBox.shrink(),
       ),
       body: SafeArea(
@@ -632,7 +721,35 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
                 onAction: _requestNotification,
                 actionLabel: '授予权限',
               ),
+              if (kIsWeb && _webPushConfigError != null && !_checking) ...[
+                const SizedBox(height: GzusSpacing.m),
+                Container(
+                  padding: const EdgeInsets.all(GzusSpacing.l),
+                  decoration: BoxDecoration(
+                    color: colorScheme.errorContainer.withValues(alpha: 0.5),
+                    borderRadius: BorderRadius.circular(22),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.cloud_off,
+                          color: colorScheme.onErrorContainer),
+                      const SizedBox(width: GzusSpacing.m),
+                      Expanded(
+                        child: Text(
+                          '推送服务配置检查失败，请检查网络后重试。',
+                          style: TextStyle(color: colorScheme.onErrorContainer),
+                        ),
+                      ),
+                      OutlinedButton(
+                        onPressed: _retryWebPushSubscribe,
+                        child: const Text('重试'),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
               if (kIsWeb &&
+                  _webPushConfigError == null &&
                   _webPushEnabled &&
                   _notificationGranted &&
                   !_webPushSubscribed &&
@@ -682,7 +799,7 @@ class _BackgroundGuidePageState extends State<BackgroundGuidePage>
                     _cloudNotificationSuspended
                         ? '后台监测已暂停：${_cloudNotificationSuspensionReason ?? '校方设备或会话数达到上限'}${_cloudNotificationNextRetryAt == null ? '' : ' · ${_cloudNotificationNextRetryAt!.toLocal().hour.toString().padLeft(2, '0')}:${_cloudNotificationNextRetryAt!.toLocal().minute.toString().padLeft(2, '0')} 自动重试'}'
                         : _cloudNotificationError ??
-                        '授权后，服务端会加密保存登录凭据，用于在您关闭 App 后检测课程、通知、成绩和考试。',
+                            '授权后，服务端会加密保存登录凭据，用于在您关闭 App 后检测课程、通知、成绩和考试。',
                   ),
                   value: _cloudNotificationEnabled,
                   onChanged: _busy ? null : _setCloudNotificationEnabled,
@@ -750,11 +867,11 @@ class _IosServerPushStatus extends StatelessWidget {
     final detail = suspended
         ? '后台监测已暂停：${suspensionReason ?? '校方设备或会话数达到上限'}$retryText'
         : error ??
-        (notificationGranted
-            ? serverPushEnabled
-                ? '已随系统通知权限自动开启服务器推送。'
-                : '正在按系统通知权限开启服务器推送。'
-            : '授予系统通知权限，即视为同意接收服务器推送通知。');
+            (notificationGranted
+                ? serverPushEnabled
+                    ? '已随系统通知权限自动开启服务器推送。'
+                    : '正在按系统通知权限开启服务器推送。'
+                : '授予系统通知权限，即视为同意接收服务器推送通知。');
     final enabled = notificationGranted && serverPushEnabled;
     return Card(
       elevation: 0,

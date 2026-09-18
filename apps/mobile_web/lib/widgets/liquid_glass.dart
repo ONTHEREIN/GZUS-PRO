@@ -6,6 +6,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../gzus_design.dart';
+import '../local_background_image.dart';
+import '../models/custom_background.dart';
 
 const _nativeLiquidTabBarViewType = 'cn.gzus.pro/native-liquid-tab-bar';
 const _liquidGlassChannelName = 'cn.gzus.pro/liquid-glass';
@@ -80,6 +82,10 @@ abstract final class LiquidGlassPlatform {
 
   static void setNativeTabSelectionHandler(ValueChanged<int> handler) {
     _nativeTabSelectionHandler = handler;
+  }
+
+  static void clearNativeTabSelectionHandler() {
+    _nativeTabSelectionHandler = null;
   }
 
   static Future<void> updateNativeTabBarSelected({
@@ -170,6 +176,12 @@ class _NativeIosLiquidTabBarState extends State<NativeIosLiquidTabBar> {
   void initState() {
     super.initState();
     LiquidGlassPlatform.setNativeTabSelectionHandler(widget.onChanged);
+  }
+
+  @override
+  void dispose() {
+    LiquidGlassPlatform.clearNativeTabSelectionHandler();
+    super.dispose();
   }
 
   @override
@@ -395,12 +407,21 @@ class LiquidGlassSelectionIndicator extends StatelessWidget {
 
 /// 为玻璃材质提供极轻的背景层次；非 iOS 平台保持透明。
 class LiquidGlassAmbientBackdrop extends StatelessWidget {
-  const LiquidGlassAmbientBackdrop({super.key, required this.seedColor});
+  const LiquidGlassAmbientBackdrop({
+    super.key,
+    required this.seedColor,
+    this.background,
+  });
 
   final Color seedColor;
+  final CustomBackgroundSettings? background;
 
   @override
   Widget build(BuildContext context) {
+    final customBackground = background;
+    if (customBackground != null) {
+      return _CustomBackgroundBackdrop(settings: customBackground);
+    }
     final isIos = !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
     if (!isIos) return const SizedBox.expand();
     final dark = Theme.of(context).brightness == Brightness.dark;
@@ -436,6 +457,52 @@ class LiquidGlassAmbientBackdrop extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _CustomBackgroundBackdrop extends StatelessWidget {
+  const _CustomBackgroundBackdrop({required this.settings});
+
+  final CustomBackgroundSettings settings;
+
+  @override
+  Widget build(BuildContext context) {
+    final image = Positioned.fill(
+      child: Image(
+        image: localBackgroundImageProvider(settings.imagePath),
+        fit: BoxFit.cover,
+        filterQuality: FilterQuality.medium,
+      ),
+    );
+    final filteredImage = settings.blurSigma == 0
+        ? image
+        : Positioned.fill(
+            child: ImageFiltered(
+              imageFilter: ImageFilter.blur(
+                sigmaX: settings.blurSigma,
+                sigmaY: settings.blurSigma,
+              ),
+              child: Image(
+                image: localBackgroundImageProvider(settings.imagePath),
+                fit: BoxFit.cover,
+                filterQuality: FilterQuality.medium,
+              ),
+            ),
+          );
+    return IgnorePointer(
+      child: ClipRect(
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            filteredImage,
+            ColoredBox(
+              key: const ValueKey('custom-background-darkness-overlay'),
+              color: Colors.black.withValues(alpha: settings.darkness),
+            ),
+          ],
+        ),
       ),
     );
   }

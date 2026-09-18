@@ -34,6 +34,11 @@ class LoginPage extends StatefulWidget {
 
 class _LoginPageState extends State<LoginPage>
     with SingleTickerProviderStateMixin {
+  static const _casPasswordRecoveryUrl =
+      'https://cas.gzus.edu.cn/aqzx/#/password/passwordFound';
+  static const _casFreshmanPasswordChangeUrl =
+      'https://cas.gzus.edu.cn/lyuapServer/login';
+
   final accountController = TextEditingController();
   final passwordController = TextEditingController();
   final passwordFocusNode = FocusNode();
@@ -75,12 +80,19 @@ class _LoginPageState extends State<LoginPage>
     final prefs = await SharedPreferences.getInstance();
     final remember = prefs.getBool('auth.rememberPassword') ?? true;
     final account = prefs.getString('auth.account') ?? '';
+    final String? rememberedPassword;
+    if (remember) {
+      rememberedPassword = await widget.api.loadRememberedPassword();
+    } else {
+      await widget.api.clearRememberedPassword();
+      rememberedPassword = null;
+    }
     await prefs.remove('auth.password');
     if (!mounted) return;
     setState(() {
       rememberPassword = remember;
       accountController.text = account;
-      passwordController.text = '';
+      passwordController.text = rememberedPassword ?? '';
     });
   }
 
@@ -137,6 +149,7 @@ class _LoginPageState extends State<LoginPage>
           Positioned.fill(
             child: LiquidGlassAmbientBackdrop(
               seedColor: Theme.of(context).colorScheme.primary,
+              background: null,
             ),
           ),
           LayoutBuilder(
@@ -418,6 +431,7 @@ class _LoginPageState extends State<LoginPage>
                                       ),
                                     ),
                                   ),
+                                  _buildAccountHelpLinks(context),
                                   if (error != null) ...[
                                     const SizedBox(height: GzusSpacing.l),
                                     Card(
@@ -525,6 +539,7 @@ class _LoginPageState extends State<LoginPage>
           Positioned.fill(
             child: LiquidGlassAmbientBackdrop(
               seedColor: Theme.of(context).colorScheme.primary,
+              background: null,
             ),
           ),
           LayoutBuilder(
@@ -934,6 +949,7 @@ class _LoginPageState extends State<LoginPage>
               ),
             ),
           ),
+          _buildAccountHelpLinks(context),
           if (error != null) ...[
             const SizedBox(height: GzusSpacing.m),
             Semantics(
@@ -976,6 +992,42 @@ class _LoginPageState extends State<LoginPage>
               ),
             ),
           ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAccountHelpLinks(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(top: GzusSpacing.xs),
+      child: Column(
+        children: [
+          Text(
+            '新生首次登录请先在学校官网登录并修改默认密码。',
+            textAlign: TextAlign.center,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: scheme.onSurfaceVariant,
+                ),
+          ),
+          Wrap(
+            alignment: WrapAlignment.center,
+            spacing: GzusSpacing.xs,
+            children: [
+              TextButton.icon(
+                key: const ValueKey('login-forgot-password'),
+                onPressed: loading ? null : _openPasswordRecoveryPage,
+                icon: const Icon(Icons.help_outline, size: 18),
+                label: const Text('忘记密码'),
+              ),
+              TextButton.icon(
+                key: const ValueKey('login-freshman-password-change'),
+                onPressed: loading ? null : _openFreshmanPasswordChangePage,
+                icon: const Icon(Icons.lock_reset, size: 18),
+                label: const Text('新生修改默认密码'),
+              ),
+            ],
+          ),
         ],
       ),
     );
@@ -1066,6 +1118,7 @@ class _LoginPageState extends State<LoginPage>
       TextInput.finishAutofillContext(shouldSave: false);
       if (rememberPassword) {
         await widget.api.rememberAccount(account);
+        await widget.api.saveRememberedPassword(password);
         if (result.credentialToken != null) {
           await widget.api.saveCredentialToken(result.credentialToken);
         } else {
@@ -1104,13 +1157,37 @@ class _LoginPageState extends State<LoginPage>
     if (url == null || url.isEmpty) {
       throw StateError('学校改密链接为空');
     }
+    await _openExternalSchoolPage(
+      url: url,
+      failureMessage: '无法打开学校统一认证安全中心',
+    );
+  }
+
+  Future<void> _openPasswordRecoveryPage() async {
+    await _openExternalSchoolPage(
+      url: _casPasswordRecoveryUrl,
+      failureMessage: '无法打开学校统一认证找回密码页面',
+    );
+  }
+
+  Future<void> _openFreshmanPasswordChangePage() async {
+    await _openExternalSchoolPage(
+      url: _casFreshmanPasswordChangeUrl,
+      failureMessage: '无法打开学校统一认证官网登录页面',
+    );
+  }
+
+  Future<void> _openExternalSchoolPage({
+    required String url,
+    required String failureMessage,
+  }) async {
     final opened = await launchUrl(
       Uri.parse(url),
       mode: LaunchMode.externalApplication,
     );
     if (!opened && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('无法打开学校统一认证安全中心')),
+        SnackBar(content: Text(failureMessage)),
       );
     }
   }
@@ -1227,16 +1304,16 @@ class _AgreementContent extends StatelessWidget {
 信息仅用于展示课表、成绩、考勤、水电费等校内教务服务，遵循最小必要原则。
 
 三、信息存储
-密码不会以明文持久化存储。用户选择“记住密码并自动登录”后，前端系统安全存储会保存仅用于本设备自动登录的加密凭据；学校系统 Cookie 保存在限时服务端会话和前端系统安全存储中，并在退出登录或凭据被撤销时清除。服务端数据库不保存账号密码。
+密码不会以明文持久化存储。用户选择“记住密码并自动登录”后，密码和自动登录凭据保存在本设备系统安全存储区，用于下次填充和恢复登录；学校系统 Cookie 和认证令牌会在本机安全存储，并由服务端加密保存账号级学校会话。用户主动开启“后台持续通知”后，服务端还会保存加密的自动登录凭据和提醒配置；关闭该功能即可撤销并删除后台授权。
 
-四、信息安全
-所有通信使用HTTPS/TLS加密。日志不输出密码、Cookie等敏感信息。每位用户只能访问自己的教务数据。
+四、信息安全与权限
+所有生产通信使用HTTPS/TLS加密。日志不输出密码、Cookie等敏感信息。每位用户只能访问自己的教务数据。通知、定位、相册/相机、日历等权限仅在对应功能需要时申请，可在系统设置中关闭。
 
-五、第三方SDK
-本应用集成了Shiply（腾讯热更新与配置下发），仅收集设备型号、系统版本等设备层面信息。
+五、第三方服务
+本应用可能使用腾讯Shiply/ResHub、浏览器 Push、Apple APNs 和 wttr.in。天气功能只在授权后使用近似位置；推送服务只用于投递提醒。
 
 六、您的权利
-您有权查看、更正、删除数据，可随时退出登录或卸载应用。退出登录后所有本地存储数据将被清除。
+您可以关闭记住密码、后台持续通知、通知和定位权限。退出登录会清除本机认证材料、账号缓存、推送注册并撤销当前应用会话；若已开启后台持续通知，请在通知设置中关闭以同时撤销服务端后台授权。需要查询或删除服务端反馈、缓存等数据时，请通过项目 GitHub Issues 联系维护者。
 
 七、免责声明
 本项目为学生开源项目，仅供学习交流使用，非学校官方产品。数据以学校系统为准。

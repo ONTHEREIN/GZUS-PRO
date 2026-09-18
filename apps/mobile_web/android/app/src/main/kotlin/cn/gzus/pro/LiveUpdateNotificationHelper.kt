@@ -1,6 +1,5 @@
 package cn.gzus.pro
 
-import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -8,10 +7,8 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Color
 import android.os.Build
-import android.os.Bundle
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
-import org.json.JSONObject
 
 class LiveUpdateNotificationHelper(private val context: Context) {
 
@@ -30,7 +27,7 @@ class LiveUpdateNotificationHelper(private val context: Context) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
                 CHANNEL_NAME,
-                NotificationManager.IMPORTANCE_HIGH
+                NotificationManager.IMPORTANCE_HIGH,
             ).apply {
                 description = CHANNEL_DESCRIPTION
             }
@@ -39,234 +36,130 @@ class LiveUpdateNotificationHelper(private val context: Context) {
         }
     }
 
-    /**
-     * Check whether the app can post promoted notifications (API 35+).
-     * On older versions, returns false since promoted notifications are not supported.
-     */
-    fun canPostPromotedNotifications(): Boolean {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
-            val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            return manager.canPostPromotedNotifications()
+    /** 返回 Android 实况通知推广资格的三态结果。 */
+    fun promotedNotificationStatus(): String {
+        if (Build.VERSION.SDK_INT < 36) return "unsupported"
+        val notifications = NotificationManagerCompat.from(context)
+        if (!notifications.areNotificationsEnabled()) return "authorization_required"
+        return if (notifications.canPostPromotedNotifications()) {
+            "available"
+        } else {
+            "authorization_required"
         }
-        return false
     }
 
-    /**
-     * Post a live update notification.
-     *
-     * @param id Unique notification id
-     * @param title Notification title
-     * @param body Notification body text
-     * @param style "timer", "metric", or "progress"
-     * @param endTimeMillis End time for timer style (epoch millis, countdown target)
-     * @param shortCriticalText Short text for status chip on API 35+ (e.g. "5min", "低电量")
-     * @param extrasJson JSON string with extras for click intent
-     * @param ongoing Whether the notification is ongoing (default true for live updates)
-     */
-    fun postLiveUpdate(
-        id: Int,
-        title: String,
-        body: String,
-        style: String = "timer",
-        endTimeMillis: Long = 0L,
-        shortCriticalText: String? = null,
-        extrasJson: String? = null,
-        ongoing: Boolean = true,
-        progressMax: Int = 0,
-        progressCurrent: Int = 0,
-    ): Boolean {
+    /** 使用系统标准通知样式发布或更新一条实况通知。 */
+    fun postLiveUpdate(payload: LiveUpdatePayload): Boolean {
         val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) {
-            return false
-        }
-        val canPromote = canPostPromotedNotifications()
-        val eventType = typeFromExtras(extrasJson)
-        val accentColor = eventColor(eventType)
-        val safeProgressMax = progressMax.coerceAtLeast(0)
-        val safeProgressCurrent = progressCurrent.coerceIn(0, safeProgressMax)
+        if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) return false
+
+        val style = payload.renderedStyle
+        val safeProgressMax = payload.progressMax.coerceAtLeast(0)
+        val safeProgressCurrent = payload.progressCurrent.coerceIn(0, safeProgressMax)
         val showProgress = style == "progress" &&
             safeProgressMax > 0 &&
             safeProgressCurrent < safeProgressMax
-
-        val intent = Intent(context, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-            if (!extrasJson.isNullOrBlank()) {
-                putExtra(BackgroundService.EXTRA_PUSH_EXTRAS, extrasJson)
-            }
-        }
-        val pendingIntent = PendingIntent.getActivity(
-            context,
-            id,
-            intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
+        val detailText = LiveUpdateTextFormatter.detail(payload)
+        val requestsPromotion = payload.ongoing && isLiveUpdateStyle(style)
         val builder = NotificationCompat.Builder(context, CHANNEL_ID)
-            .setContentTitle(title)
-            .setContentText(body)
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setColor(accentColor)
-            .setContentIntent(pendingIntent)
-            .setOngoing(ongoing)
-            .setAutoCancel(!ongoing)
+            .setContentTitle(payload.title)
+            .setContentText(LiveUpdateTextFormatter.summary(payload))
+            .setSmallIcon(iconForType(payload.type))
+            .setColor(eventColor(payload.type))
+            .setContentIntent(pendingIntent(payload))
+            .setOngoing(payload.ongoing)
+            .setAutoCancel(!payload.ongoing)
             .setCategory(NotificationCompat.CATEGORY_EVENT)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setShowWhen(true)
             .setOnlyAlertOnce(true)
+            .setRequestPromotedOngoing(requestsPromotion)
 
-        // Apply style-specific settings
+        val primaryValue = LiveUpdateTextFormatter.primaryValue(payload)
+        if (!primaryValue.isNullOrBlank()) builder.setContentInfo(primaryValue)
+        val subText = subText(payload)
+        if (!subText.isNullOrBlank()) builder.setSubText(subText)
+        if (!payload.shortCriticalText.isNullOrBlank()) {
+            builder.setShortCriticalText(payload.shortCriticalText)
+        }
+
+        val timeoutMillis = LiveUpdateTextFormatter.timeoutMillis(
+            payload.endTimeMillis,
+            System.currentTimeMillis(),
+        )
+        if (timeoutMillis > 0L) builder.setTimeoutAfter(timeoutMillis)
+
         when (style) {
             "timer" -> {
-                builder.setStyle(
-                    NotificationCompat.BigTextStyle()
-                        .bigText(body)
-                )
-                if (endTimeMillis > 0) {
-                    builder.setWhen(endTimeMillis)
+                builder.setStyle(NotificationCompat.BigTextStyle().bigText(detailText))
+                if (payload.endTimeMillis > 0L) {
+                    builder.setWhen(payload.endTimeMillis)
                     builder.setUsesChronometer(true)
-                    // Set chronometer to count down via extras before build()
-                    builder.addExtras(Bundle().apply {
-                        putBoolean("android.chronometerCountDown", true)
-                    })
+                    builder.setChronometerCountDown(true)
                 }
-            }
-            "metric" -> {
-                builder.setStyle(
-                    NotificationCompat.BigTextStyle()
-                        .bigText(body)
-                )
             }
             "progress" -> {
-                builder.setStyle(
-                    NotificationCompat.BigTextStyle()
-                        .bigText(body)
-                )
-                if (showProgress) {
-                    builder.setProgress(safeProgressMax, safeProgressCurrent, false)
+                if (Build.VERSION.SDK_INT >= 36 && showProgress) {
+                    builder.setStyle(
+                        NotificationCompat.ProgressStyle()
+                            .setProgress(safeProgressCurrent)
+                            .setStyledByProgress(true),
+                    )
+                } else {
+                    builder.setStyle(NotificationCompat.BigTextStyle().bigText(detailText))
+                    if (showProgress) {
+                        builder.setProgress(safeProgressMax, safeProgressCurrent, false)
+                    }
                 }
             }
-            else -> {
-                builder.setStyle(
-                    NotificationCompat.BigTextStyle()
-                        .bigText(body)
-                )
-            }
+            "metric" -> builder.setStyle(NotificationCompat.BigTextStyle().bigText(detailText))
+            else -> builder.setStyle(NotificationCompat.BigTextStyle().bigText(detailText))
         }
 
-        var notification = builder.build()
-
-        notification = XiaomiLiveUpdateAdapter(context).decorate(
-            notification = notification,
-            title = title,
-            body = body,
-            type = eventType,
+        val notification = XiaomiLiveUpdateAdapter(context).decorate(
+            notification = builder.build(),
+            title = payload.title,
+            body = detailText,
+            type = payload.type,
             style = style,
-            shortText = shortCriticalText,
+            shortText = payload.shortCriticalText,
             progressMax = if (showProgress) safeProgressMax else 0,
             progressCurrent = if (showProgress) safeProgressCurrent else 0,
-            endTimeMillis = endTimeMillis,
+            endTimeMillis = payload.endTimeMillis,
         )
 
-        // Apply setShortCriticalText on API 35+ via reflection on the built Notification
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM
-            && !shortCriticalText.isNullOrBlank()
-        ) {
-            try {
-                // setShortCriticalText is a method on Notification.Builder that must be
-                // called before build(). Since NotificationCompat.Builder doesn't expose it,
-                // we rebuild using the native Notification.Builder on API 35+.
-                val nativeBuilder = Notification.Builder(context, CHANNEL_ID)
-                    .setContentTitle(title)
-                    .setContentText(body)
-                    .setSmallIcon(android.R.drawable.ic_dialog_info)
-                    .setColor(accentColor)
-                    .setContentIntent(pendingIntent)
-                    .setOngoing(ongoing)
-                    .setAutoCancel(!ongoing)
-                    .setCategory(Notification.CATEGORY_EVENT)
-                    .setShowWhen(true)
-                    .setOnlyAlertOnce(true)
-
-                // Apply style-specific settings on native builder
-                when (style) {
-                    "timer" -> {
-                        nativeBuilder.setStyle(Notification.BigTextStyle().bigText(body))
-                    }
-                    "progress" -> {
-                        nativeBuilder.setStyle(Notification.BigTextStyle().bigText(body))
-                        if (showProgress) {
-                            nativeBuilder.setProgress(safeProgressMax, safeProgressCurrent, false)
-                        }
-                    }
-                    else -> {
-                        nativeBuilder.setStyle(Notification.BigTextStyle().bigText(body))
-                    }
-                }
-
-                if (endTimeMillis > 0) {
-                    nativeBuilder.setWhen(endTimeMillis)
-                    nativeBuilder.setUsesChronometer(true)
-                    nativeBuilder.setChronometerCountDown(true)
-                }
-
-                // setShortCriticalText - available on API 35+
-                val setShortCriticalTextMethod = Notification.Builder::class.java.getMethod(
-                    "setShortCriticalText", CharSequence::class.java
-                )
-                setShortCriticalTextMethod.invoke(nativeBuilder, shortCriticalText)
-
-                // setRequestPromotedOngoing - available on API 35+ via native builder
-                if (canPromote) {
-                    val setRequestPromotedOngoingMethod = Notification.Builder::class.java.getMethod(
-                        "setRequestPromotedOngoing", Boolean::class.javaPrimitiveType
-                    )
-                    setRequestPromotedOngoingMethod.invoke(nativeBuilder, true)
-                }
-
-                val rebuiltNotification = XiaomiLiveUpdateAdapter(context).decorate(
-                    notification = nativeBuilder.build(),
-                    title = title,
-                    body = body,
-                    type = eventType,
-                    style = style,
-                    shortText = shortCriticalText,
-                    progressMax = if (showProgress) safeProgressMax else 0,
-                    progressCurrent = if (showProgress) safeProgressCurrent else 0,
-                    endTimeMillis = endTimeMillis,
-                )
-                try {
-                    manager.notify(id, rebuiltNotification)
-                    return true
-                } catch (_: SecurityException) {
-                    return false
-                }
-            } catch (_: Exception) {
-                // Fall through to post the compat-built notification
-            }
-        }
-
-        try {
-            manager.notify(id, notification)
-            return true
+        return try {
+            manager.notify(payload.id, notification)
+            true
         } catch (_: SecurityException) {
-            return false
+            false
         }
     }
 
-    /**
-     * Cancel a previously posted live update notification.
-     */
     fun cancelLiveUpdate(id: Int) {
         val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         manager.cancel(id)
     }
 
-    private fun typeFromExtras(extrasJson: String?): String {
-        if (extrasJson.isNullOrBlank()) return ""
-        return try {
-            JSONObject(extrasJson).optString("type", "")
-        } catch (_: Exception) {
-            ""
+    private fun pendingIntent(payload: LiveUpdatePayload): PendingIntent {
+        val intent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            putExtra(BackgroundService.EXTRA_PUSH_EXTRAS, payload.extrasJson)
+        }
+        return PendingIntent.getActivity(
+            context,
+            payload.id,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+    }
+
+    private fun subText(payload: LiveUpdatePayload): String? {
+        return when (payload.type) {
+            "course_reminder", "exam_reminder" -> payload.location
+            "grade_update" -> payload.courseName
+            "ecard_reminder" -> payload.utilityPrimaryLabel
+            else -> null
         }
     }
 
@@ -275,7 +168,25 @@ class LiveUpdateNotificationHelper(private val context: Context) {
             "exam_reminder", "attendance_update" -> Color.rgb(234, 88, 12)
             "ecard_reminder" -> Color.rgb(14, 165, 233)
             "grade_update" -> Color.rgb(5, 150, 105)
+            "business_reminder", "business_update" -> Color.rgb(124, 58, 237)
             else -> Color.rgb(37, 99, 235)
         }
+    }
+
+    private fun iconForType(type: String): Int {
+        return when (type) {
+            "course_reminder" -> R.drawable.ic_stat_course
+            "exam_reminder" -> R.drawable.ic_stat_exam
+            "grade_update" -> R.drawable.ic_stat_grade
+            "ecard_reminder" -> R.drawable.ic_stat_ecard
+            "attendance_update" -> R.drawable.ic_stat_attendance
+            "business_reminder", "business_update" -> R.drawable.ic_stat_business
+            "new_notice" -> R.drawable.ic_stat_notice
+            else -> R.drawable.ic_stat_live_update
+        }
+    }
+
+    private fun isLiveUpdateStyle(style: String): Boolean {
+        return style == "timer" || style == "metric" || style == "progress"
     }
 }

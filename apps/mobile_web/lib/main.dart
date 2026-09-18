@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'api_client.dart';
@@ -19,6 +20,8 @@ import 'background_guide_page.dart';
 import 'browser_redirect.dart';
 import 'first_run_onboarding_page.dart';
 import 'live_activity_service.dart';
+import 'local_background_storage.dart';
+import 'onboarding_preferences.dart';
 
 import 'persistent_cache.dart' deferred as persistent_cache;
 import 'ws_service.dart' deferred as ws_service;
@@ -30,6 +33,7 @@ import 'push_service.dart' deferred as push_service;
 import 'reminder_service.dart' deferred as reminder_service;
 
 import 'models/nav_config.dart';
+import 'models/custom_background.dart';
 import 'models/schedule_settings.dart';
 import 'pages/ftp/ftp_upload_page.dart';
 import 'pages/grades/grades_page.dart';
@@ -127,6 +131,9 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
   ThemeMode themeMode = ThemeMode.system;
   Color seedColor = GzusColors.blue;
   double fontScale = 1;
+  CustomBackgroundSettings? _customBackground;
+  final LocalBackgroundStore _backgroundStore = const LocalBackgroundStore();
+  Future<void> _customBackgroundWriteQueue = Future<void>.value();
   bool _systemDark = false;
   bool loggedIn = false;
   bool _scheduleOnlyMode = false;
@@ -135,8 +142,14 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
   String? loginError;
   bool _backgroundGuideCompleted = false;
   bool _scheduleOnboardingCompleted = false;
+  int _firstRunOnboardingStep = 1;
   DataSourceInfo _globalDataSource = const DataSourceInfo();
   bool get isOfflineMode => _globalDataSource.isStale;
+
+  bool get _supportsCustomBackground =>
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.android ||
+          defaultTargetPlatform == TargetPlatform.iOS);
 
   /// 云端课表偏好（登录后拉取；登出时清空，避免多账号串数据）。
   ScheduleSettings? _cloudScheduleSettings;
@@ -175,6 +188,7 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
     _loadThemePreference();
     _loadSeedColorPreference();
     _loadFontScalePreference();
+    _loadCustomBackgroundPreference();
     api.startWarmup();
     _bootstrapLoginState();
     if (kIsWeb) {
@@ -389,6 +403,90 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
     await prefs.setDouble('theme.fontScale', scale);
   }
 
+  Future<void> _loadCustomBackgroundPreference() async {
+    if (!_supportsCustomBackground) return;
+    try {
+      final saved = await _backgroundStore.load();
+      if (!mounted) return;
+      setState(() => _customBackground = saved);
+    } on StateError catch (error, stackTrace) {
+      AppLogger.error('加载本地自定义背景失败', error, stackTrace);
+    } on ArgumentError catch (error, stackTrace) {
+      AppLogger.error('本地自定义背景设置无效', error, stackTrace);
+    }
+  }
+
+  Future<void> _pickCustomBackground() async {
+    final image = await ImagePicker().pickImage(
+      source: ImageSource.gallery,
+      maxWidth: 2560,
+      maxHeight: 2560,
+      imageQuality: 88,
+    );
+    if (image == null) return;
+    await _customBackgroundWriteQueue;
+    final next = await _backgroundStore.replaceImage(
+      image: image,
+      previous: _customBackground,
+    );
+    if (!mounted) return;
+    setState(() => _customBackground = next);
+  }
+
+  Future<void> _clearCustomBackground() async {
+    final current = _customBackground;
+    if (current == null) return;
+    await _customBackgroundWriteQueue;
+    await _backgroundStore.clear(current);
+    if (!mounted) return;
+    setState(() => _customBackground = null);
+  }
+
+  Future<void> _setCustomBackgroundBlur(double value) async {
+    CustomBackgroundSettings.validateBlurSigma(value);
+    final current = _customBackground;
+    if (current == null) return;
+    final next = current.withBlurSigma(value);
+    setState(() => _customBackground = next);
+    try {
+      await _enqueueCustomBackgroundSave(next);
+    } catch (error) {
+      if (mounted && _customBackground == next) {
+        setState(() => _customBackground = current);
+      }
+      rethrow;
+    }
+  }
+
+  Future<void> _setCustomBackgroundDarkness(double value) async {
+    CustomBackgroundSettings.validateDarkness(value);
+    final current = _customBackground;
+    if (current == null) return;
+    final next = current.withDarkness(value);
+    setState(() => _customBackground = next);
+    try {
+      await _enqueueCustomBackgroundSave(next);
+    } catch (error) {
+      if (mounted && _customBackground == next) {
+        setState(() => _customBackground = current);
+      }
+      rethrow;
+    }
+  }
+
+  Future<void> _enqueueCustomBackgroundSave(
+    CustomBackgroundSettings settings,
+  ) {
+    final save = _customBackgroundWriteQueue.then<void>(
+      (_) => _backgroundStore.saveSettings(settings),
+    );
+    _customBackgroundWriteQueue = save.then<void>(
+      (_) {},
+      onError: (Object error, StackTrace stackTrace) {},
+    );
+    return save;
+  }
+
   static Color? _colorFromHex(String hex) {
     final buffer = StringBuffer();
     if (hex.length == 6) buffer.write('FF');
@@ -454,17 +552,7 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
                       },
                     )
                   : !_scheduleOnboardingCompleted
-                      ? FirstRunOnboardingPage(
-                          api: api,
-                          studentName: studentName,
-                          onComplete: () {
-                            if (!mounted) return;
-                            setState(() {
-                              _scheduleOnboardingCompleted = true;
-                              _backgroundGuideCompleted = true;
-                            });
-                          },
-                        )
+                      ? _buildFirstRunOnboarding()
                       : _buildDashboardShell(),
       routes: {
         '/dashboard': (context) {
@@ -475,7 +563,9 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
             });
             return const LoadingPage();
           }
-          return _buildDashboardShell();
+          return _scheduleOnboardingCompleted
+              ? _buildDashboardShell()
+              : _buildFirstRunOnboarding();
         },
         '/background-guide': (context) {
           if (!loggedIn) {
@@ -524,6 +614,15 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
     try {
       final result = await api.completeLySso(ssoCode);
       await _persistLogin(result);
+      final cloud = await _fetchCloudScheduleSettings();
+      final prefs = await SharedPreferences.getInstance();
+      final localCompleted = prefs.getBool(
+            onboardingPreferenceKey(api.namespace, 'completed'),
+          ) ??
+          false;
+      final localStep = onboardingStepFromStoredValue(
+        prefs.getInt(onboardingPreferenceKey(api.namespace, 'firstRunStep')),
+      );
       replaceBrowserUrl(_withoutSsoParams(uri).toString());
       if (!mounted) return;
       setState(() {
@@ -531,7 +630,17 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
         loggedIn = true;
         studentName = result.studentName;
         loginError = null;
-        _backgroundGuideCompleted = false;
+        _backgroundGuideCompleted = prefs.getBool(
+              onboardingPreferenceKey(
+                api.namespace,
+                'backgroundGuideCompleted',
+              ),
+            ) ??
+            false;
+        _firstRunOnboardingStep = localStep;
+        _scheduleOnboardingCompleted =
+            localCompleted || cloud?.onboardingCompleted == true;
+        _cloudScheduleSettings = cloud;
       });
       widget.onAuthenticationChanged?.call(true);
       _initPushServices();
@@ -565,9 +674,17 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
         sessionNamespace: savedSession,
       );
     }
-    final guideCompleted = prefs.getBool('background_guide_completed') ?? false;
-    final localOnboardingCompleted =
-        prefs.getBool('schedule_onboarding_completed') ?? false;
+    final guideCompleted = prefs.getBool(
+          onboardingPreferenceKey(api.namespace, 'backgroundGuideCompleted'),
+        ) ??
+        false;
+    final localOnboardingCompleted = prefs.getBool(
+          onboardingPreferenceKey(api.namespace, 'completed'),
+        ) ??
+        false;
+    final localOnboardingStep = onboardingStepFromStoredValue(
+      prefs.getInt(onboardingPreferenceKey(api.namespace, 'firstRunStep')),
+    );
     // 优先使用云端完成标记（换设备/清缓存后不重复引导），失败回退本地
     final cloud = await _fetchCloudScheduleSettings();
     if (!mounted) return;
@@ -578,7 +695,8 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
       _backgroundGuideCompleted = guideCompleted;
       _cloudScheduleSettings = cloud;
       _scheduleOnboardingCompleted =
-          cloud?.onboardingCompleted ?? localOnboardingCompleted;
+          localOnboardingCompleted || cloud?.onboardingCompleted == true;
+      _firstRunOnboardingStep = localOnboardingStep;
       _globalDataSource = const DataSourceInfo(fromLocalCache: true);
     });
     widget.onAuthenticationChanged?.call(true);
@@ -741,18 +859,28 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
     // （拉取失败时回退本地标记，保证离线可用）。
     final cloud = await _fetchCloudScheduleSettings();
     final prefs = await SharedPreferences.getInstance();
-    final localCompleted =
-        prefs.getBool('schedule_onboarding_completed') ?? false;
+    final localCompleted = prefs.getBool(
+          onboardingPreferenceKey(api.namespace, 'completed'),
+        ) ??
+        false;
+    final guideCompleted = prefs.getBool(
+          onboardingPreferenceKey(api.namespace, 'backgroundGuideCompleted'),
+        ) ??
+        false;
+    final localStep = onboardingStepFromStoredValue(
+      prefs.getInt(onboardingPreferenceKey(api.namespace, 'firstRunStep')),
+    );
     if (!mounted) return;
     setState(() {
       loggedIn = true;
       _scheduleOnlyMode = false;
       studentName = result.studentName;
       loginError = null;
-      _backgroundGuideCompleted = false;
+      _backgroundGuideCompleted = guideCompleted;
       _cloudScheduleSettings = cloud;
       _scheduleOnboardingCompleted =
-          cloud?.onboardingCompleted ?? localCompleted;
+          localCompleted || cloud?.onboardingCompleted == true;
+      _firstRunOnboardingStep = localStep;
     });
     widget.onAuthenticationChanged?.call(true);
 
@@ -865,6 +993,7 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
       studentName = null;
       _backgroundGuideCompleted = false;
       _scheduleOnboardingCompleted = false;
+      _firstRunOnboardingStep = 1;
       _cloudScheduleSettings = null; // 清空云端偏好，防止多账号串数据
       _globalDataSource = const DataSourceInfo();
       loginError = null;
@@ -992,7 +1121,9 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
   Future<void> _clearSavedSession() async {
     final prefs = await SharedPreferences.getInstance();
     await api.clearSavedAuthState();
+    // 清理旧版本的无作用域键；新版本按账号保存，不在登出时删除。
     await prefs.remove('background_guide_completed');
+    await prefs.remove('schedule_onboarding_completed');
     try {
       await web_pwa_cache.loadLibrary();
       web_pwa_cache.clearPwaApiCache();
@@ -1000,6 +1131,28 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
       debugPrint('清除 PWA API 缓存失败: error=${error.runtimeType}');
     }
     api.useSession(null);
+  }
+
+  void _markFirstRunOnboardingComplete() {
+    if (!mounted) return;
+    setState(() {
+      _scheduleOnboardingCompleted = true;
+      _backgroundGuideCompleted = true;
+      _firstRunOnboardingStep = 1;
+    });
+  }
+
+  FirstRunOnboardingPage _buildFirstRunOnboarding() {
+    return FirstRunOnboardingPage(
+      api: api,
+      studentName: studentName,
+      initialStep: _firstRunOnboardingStep,
+      onStepChanged: (step) {
+        if (!mounted) return;
+        setState(() => _firstRunOnboardingStep = step);
+      },
+      onComplete: _markFirstRunOnboardingComplete,
+    );
   }
 
   DashboardShell _buildDashboardShell() {
@@ -1010,6 +1163,15 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
       onThemeChanged: _setThemeMode,
       seedColor: seedColor,
       onSeedColorChanged: _setSeedColor,
+      customBackground: _customBackground,
+      onPickCustomBackground:
+          _supportsCustomBackground ? _pickCustomBackground : null,
+      onClearCustomBackground:
+          _supportsCustomBackground ? _clearCustomBackground : null,
+      onCustomBackgroundBlurChanged:
+          _supportsCustomBackground ? _setCustomBackgroundBlur : null,
+      onCustomBackgroundDarknessChanged:
+          _supportsCustomBackground ? _setCustomBackgroundDarkness : null,
       fontScale: fontScale,
       onFontScaleChanged: _setFontScale,
       onLogout: () {

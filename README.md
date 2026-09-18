@@ -1,161 +1,149 @@
-# 软帮手
+# 软帮手（OneGZUS）
 
-<p align="center">
-  <img src="website/assets/widget_final_today_schedule.png" alt="软帮手" width="260">
-</p>
+软帮手是广州软件学院学生开发的教务与校园生活助手，把课表、成绩、考勤、考试、通知、请假和生活缴费等常用信息集中到一个界面中。
 
-<p align="center">
-  <b>OneGZUS</b>
-</p>
+> 本项目是非官方、非营利的开源工具，仅供学习交流和个人校园生活辅助使用。学校官方系统是相关数据和业务结果的最终依据。
 
-<p align="center">
-  课表、成绩、考勤、水电费、请假、考试提醒 — 一个 App 搞定全部教务事务。
-</p>
+[![License](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)](./LICENSE)
+[![Flutter](https://img.shields.io/badge/Flutter-3.44%2B-02569B?style=flat-square&logo=flutter&logoColor=white)](https://flutter.dev/)
+[![Backend](https://img.shields.io/badge/Backend-FastAPI-009688?style=flat-square)](https://fastapi.tiangolo.com/)
 
-<p align="center">
-  <a href="#features"><img src="https://img.shields.io/badge/功能介绍-2563EB?style=flat-square" alt="功能介绍"></a>
-  <img src="https://img.shields.io/badge/腾讯云自托管-059669?style=flat-square&logo=tencentcloud&logoColor=white" alt="腾讯云自托管">
-  <img src="https://img.shields.io/badge/License-MIT-yellow?style=flat-square" alt="License">
-</p>
+## 使用入口
 
----
+- Web：<https://onegzus.onrein.top>
+- 源码：<https://github.com/ONTHEREIN/GZUS-PRO>
+- [隐私政策](./docs/privacy-policy.md)
+- [用户服务协议](./docs/terms-of-service.md)
+- [开源组件与致谢](./docs/acknowledgements.md)
+- [文档索引](./docs/README.md)
 
-## 这个 App 能帮你做什么？
+## 功能
 
-每天打开四五个系统查信息，真的累了。软帮手把你在学校需要的教务功能全部放在一起：
+| 模块 | 能力 |
+| --- | --- |
+| 首页与课表 | 今日课程、周课表、课程详情、天气、ICS 日历导出、按学期设置第一周 |
+| 成绩与学分 | 成绩查询、绩点与学分统计、成绩变化提醒 |
+| 考勤与考试 | 考勤记录和统计、考试时间地点、倒计时与提醒 |
+| 通知中心 | 教务通知、办事大厅通知、公众号文章、已读状态和历史记录 |
+| 请假与办事 | 请假申请、审批进度、教师查找、附件上传和常用办事入口 |
+| 一卡通与生活缴费 | 一卡通余额/消费记录，电费、冷水、热水余额和低余额提醒 |
+| 提醒 | 应用内通知、Web Push、Android 本地/后台提醒、iOS APNs 与实况活动（需系统授权） |
+| 桌面组件 | Android 与 iOS 的下一节课、今日/周课表、考试、成绩、生活缴费和业务进度组件 |
+| 个性化 | 深色模式、主题色、字体大小、首页模块和导航栏自定义、课表本地调课 |
+| 其他 | 作业文件上传、反馈工单、离线缓存和登录状态恢复 |
 
-- **早上醒来** — 看一眼今日课表，知道今天在哪上课
-- **考完试** — 成绩推送直接通知你，不用每隔一小时刷新教务系统
-- **月底查账** — 水电费余额实时显示，不怕突然停水停电
-- **考前一周** — 考试安排自动提醒，不怕记错时间
-- **需要请假** — 手机填写申请，查看审批进度，不用打印纸质单子
-
-## 功能特性
-
-| 功能 | 描述 | 使用场景 |
-|------|------|----------|
-| **智能课表** | 今日课程时间线、周视图课表、ICS 日历导出 | 每天查看上课地点 |
-| **成绩查询** | 实时成绩推送、绩点计算、学分统计 | 期末查成绩 |
-| **考勤管理** | 出勤记录查询、缺勤提醒、考勤统计 | 学期中自查考勤 |
-| **考试提醒** | 考试安排同步、考前推送、倒计时 | 考前确认时间地点 |
-| **水电费查询** | 实时余额、用量统计、缴费提醒 | 月底查水电费 |
-| **校园通知** | 教务通知推送、已读标记、历史归档 | 关注选课/学籍通知 |
-| **请假系统** | 在线申请、进度追踪、附件上传 | 事假/病假/公假 |
-| **一卡通** | 余额查询、消费记录、充值提醒 | 查消费明细 |
-| **Android 桌面组件** | 下一节课、今日课表、生活缴费、业务进度 | 不打开 App 也能看关键信息 |
-| **深色模式** | 自动跟随系统主题 | 夜间使用 |
-
-## 界面预览
-
-<p align="center">
-  <img src="website/assets/widget_final_today_schedule.png" width="200" alt="首页">
-  <img src="website/assets/widget_final_schedule_warm_fixed.png" width="200" alt="课表">
-  <img src="website/assets/widget_final_utilities.png" width="200" alt="工具">
-  <img src="website/assets/widget_final_business_progress.png" width="200" alt="请假">
-</p>
+不同平台和不同学校系统权限会影响可用功能；通知、定位、相册/相机、日历等能力均按需申请并可在系统设置中关闭。
 
 ## 快速开始
 
-### Web 版（推荐）
+### 直接使用
 
-无需下载，浏览器打开即用：
+浏览器打开 <https://onegzus.onrein.top> 即可使用 Web 版。手机浏览器可以将页面添加到主屏幕，获得接近原生应用的体验。
 
-```
-https://onegzus.onrein.top
-```
+### Android
 
-支持手机浏览器，可添加到主屏幕获得类似原生 App 的体验。
-
-### Android 版
-
-下载 APK 安装包安装即可：
-
-1. 下载最新版本 APK
-2. 允许安装未知来源应用
-3. 使用学校统一身份认证登录
-
-> 首次登录后，App 会自动记住会话，之后无需重复登录。
-
-#### 桌面组件示例
-
-Android 版支持 4 类桌面组件：
-
-- **下一节课**：显示课程名、时间、教室、老师
-- **今日课表**：显示当天课程列表
-- **生活缴费**：显示电费、冷水、热水余额
-- **业务进度**：显示请假/办事大厅审批状态
-
-添加方法：在 Android 桌面长按空白处，进入"小组件/Widget"，找到软帮手后拖到桌面。打开 App 并刷新首页后，组件会同步最新数据。
+项目提供 Android 构建配置和桌面组件。安装经过签名的 APK 后，使用广州软件学院统一身份认证登录；通知、后台提醒和桌面组件需要在系统中授予相应权限。
 
 ### iOS
 
-由于 Apple 开发者账号费用较高，暂未上架 App Store。iOS 用户建议使用 Web 版，可添加到主屏幕作为快捷方式使用。
+仓库包含 iOS 原生工程、WidgetKit 桌面组件和 Live Activities 实况活动。当前是否能直接安装取决于开发者签名和分发方式；没有可用签名时，建议使用 Web 版并添加到主屏幕。
 
 ## 常见问题
 
-**Q: 使用这个 App 安全吗？**
+### 应用会保存我的密码吗？
 
-A: 完全安全。App 使用学校官方统一身份认证登录，不会存储你的教务密码。所有数据均从学校官方系统实时获取。
+账号密码登录时，密码通过 HTTPS 发送到后端完成学校认证。默认勾选“记住密码并自动登录”时，密码和自动登录凭据会保存在本机的安全存储中，用于下次填充和恢复登录；取消勾选后不会保存这两项内容。后端不保存明文密码，但用户主动开启后台持续通知后，服务端会保存经过加密的自动登录凭据，用于按授权轮询学校系统。
 
-**Q: 数据是实时的吗？**
+### 数据是实时的吗？
 
-A: 是的。课表、成绩、考勤等数据均实时从学校教务系统获取。网络不佳时会自动展示缓存数据，恢复后自动刷新。
+应用优先从学校官方系统获取数据；网络或上游系统暂时不可用时，部分页面会展示带时间标记的缓存数据。成绩、考勤、考试、通知和缴费等内容请以学校系统最终结果为准。
 
-**Q: 这个 App 收费吗？**
+### 为什么没有收到通知？
 
-A: 完全免费。这是学生自发开发的开源项目，没有任何广告或内购。
+请检查应用或浏览器的通知权限、系统电池策略和网络状态。后台持续通知需要单独完成授权，并依赖学校系统、推送服务和设备系统均可用；课程提醒也可以只使用设备本地提醒。
 
-**Q: 发现 Bug 怎么办？**
+### 如何反馈问题？
 
-A: 欢迎通过 GitHub Issues 提交反馈，或直接联系开发者。
+登录后进入“更多 → 反馈问题”，或在 [GitHub Issues](https://github.com/ONTHEREIN/GZUS-PRO/issues) 提交反馈。应用内反馈可附带你主动选择的文件，以及最近的客户端诊断日志；请勿在描述或附件中提交密码、验证码、Cookie 等敏感信息。
 
-## 开发相关
+## 本地开发
 
-如果你对这个项目的技术实现感兴趣，或者想参与开发：
+环境要求：Flutter 3.44.0、Dart 3.4+、Python 3.11+ 和 [uv](https://docs.astral.sh/uv/)。
 
-- **前端**: Flutter 3.x，一套代码构建 Web + Android + iOS
-- **后端**: FastAPI + Python，高性能异步 API 服务
-- **部署**: 腾讯云自托管，Nginx 提供 Web 服务并反向代理 FastAPI
+### 前端
 
-生产环境由 GitHub Actions 在测试通过后通过 SSH 和 rsync 自动部署。
+```bash
+cd apps/mobile_web
+flutter pub get
+flutter test
+flutter analyze
+flutter run -d chrome --dart-define=API_BASE_URL=http://127.0.0.1:8000/api
+```
+
+构建 Web：
+
+```bash
+flutter build web --release \
+  --dart-define=API_BASE_URL=https://onegzus.onrein.top/api \
+  --no-web-resources-cdn
+```
+
+### 后端
+
+```bash
+cd services/api
+uv sync --extra dev
+PYTHONPATH=. uv run pytest
+uv run ruff check .
+PYTHONPATH=. uv run uvicorn app.main:app --reload \
+  --reload-dir app --reload-exclude .venv \
+  --host 0.0.0.0
+```
+
+本地环境变量参考 [`services/api/.env.example`](./services/api/.env.example)。测试会自动使用内存 SQLite；生产环境必须使用 PostgreSQL，并设置凭据加密密钥。Windows 开发者也可以使用仓库根目录的 `restart.ps1` 启动本地 API 和 Flutter Web。
+
+### 编译时配置
+
+前端通过 `API_BASE_URL` 指定后端地址，默认值为生产 API。Android/iOS 的推送、Shiply 资源和签名配置使用对应的 `--dart-define` 或原生工程配置；不要把生产密钥、真实账号或密码提交到仓库。
 
 ## 项目结构
 
-```
+```text
 GZUS-PRO/
-├── apps/mobile_web/          # Flutter 前端
-├── services/api/             # FastAPI 后端
-├── docs/                     # 文档与隐私政策
-├── website/                  # 项目介绍网站
-└── .github/workflows/        # CI/CD 部署配置
+├── apps/mobile_web/       # Flutter Web、Android、iOS 客户端
+├── services/api/          # FastAPI 后端、学校系统连接器和后台任务
+├── docs/                  # 用户协议、隐私政策、API 和开发文档
+├── deploy/tencent/        # 腾讯云生产部署脚本与说明
+├── third_party/           # 经审查后纳入仓库的第三方代码
+└── .github/workflows/     # 测试、构建和生产部署流程
 ```
 
-## 部署架构
+## 运行架构
 
-| 服务 | 平台 | 项目名 | 说明 |
-|------|------|--------|------|
-| Web 应用 | 腾讯云 | `onegzus.onrein.top` | Nginx 托管 Flutter Web 静态资源 |
-| API 服务 | 腾讯云 | `onegzus-api` | FastAPI 常驻进程，由 systemd 管理 |
-| 数据库 | 自托管 PostgreSQL | `DATABASE_URL` | 持久化会话和业务数据，不依赖 Neon |
+```text
+Flutter Web / Android / iOS
+            │ HTTPS
+            ▼
+腾讯云 Nginx ── /api ──► FastAPI（onegzus-api）
+                              │
+                              ├── 广州软件学院教务/办事大厅/一卡通系统
+                              └── 自托管 PostgreSQL
+```
 
-客户端通过 `https://onegzus.onrein.top/api` 访问后端，不再经过 Cloudflare Worker 或
-Vercel。推送至 `master` 分支后，GitHub Actions 会先运行测试，再通过 SSH 和 rsync
-部署到腾讯云；前端部署后重载 Nginx，后端部署后重启 `onegzus-api` 服务。
+生产环境只使用腾讯云上的 Nginx、FastAPI、PostgreSQL 和学校系统连接器，不依赖 Vercel、Cloudflare Worker 或其他替代生产入口。推送、天气和 Shiply 等外部服务仅在对应功能启用且满足权限/配置条件时使用。
 
-## 免责声明
+## 文档与隐私
 
-本项目为广州软件学院学生自发开发的开源工具，仅供学习交流使用。
-
-- 使用本工具产生的所有数据归学校教务系统所有
-- 请遵守学校相关规定，合理使用教务系统接口
-- 开发者不对因使用本工具产生的任何问题负责
+- [隐私政策](./docs/privacy-policy.md)：面向用户的数据收集、使用、存储和权利说明。
+- [内部隐私规范](./docs/privacy.md)：登录凭据、Cookie、日志和测试数据的技术约束。
+- [用户服务协议](./docs/terms-of-service.md)：服务范围、使用规范和免责声明。
+- [API 文档](./docs/api.md)：认证、教务、通知、反馈等接口概览。
+- [开源组件与致谢](./docs/acknowledgements.md)：直接依赖、内置 SDK 和致谢信息。
 
 ## 许可证
 
-[MIT License](./LICENSE)
+本项目源代码按 [MIT License](./LICENSE) 发布。学校系统数据、学校名称和相关业务内容不属于本项目的开源授权范围；第三方依赖按各自许可证使用，详见[致谢清单](./docs/acknowledgements.md)。
 
 ---
 
-<p align="center">
-  Made with &#10084; by GZUS students
-</p>
+Made with ❤️ by GZUS students

@@ -126,6 +126,36 @@ void main() {
                   'cachedAt': '2026-06-03T08:00:00+08:00',
                 }
               ],
+              'coldWaterMonths': [
+                {
+                  'month': '2026-06',
+                  'recordedDays': 3,
+                  'openingBalance': 6,
+                  'closingBalance': 4,
+                  'estimatedUsage': 2,
+                  'estimatedRecharge': 0,
+                  'averageDailyUsage': 0.67,
+                  'peakDate': '2026-06-03',
+                  'peakUsage': 1.5,
+                  'unit': '吨',
+                  'cachedAt': '2026-06-03T08:00:00+08:00',
+                }
+              ],
+              'hotWaterMonths': [
+                {
+                  'month': '2026-06',
+                  'recordedDays': 3,
+                  'openingBalance': 15,
+                  'closingBalance': 12,
+                  'estimatedUsage': 3,
+                  'estimatedRecharge': 0,
+                  'averageDailyUsage': 1,
+                  'peakDate': '2026-06-02',
+                  'peakUsage': 2,
+                  'unit': '元',
+                  'cachedAt': '2026-06-03T08:00:00+08:00',
+                }
+              ],
             }),
             200,
             headers: {'content-type': 'application/json'},
@@ -141,6 +171,8 @@ void main() {
     expect(requestedMonth, '2026-06');
     expect(consumption.items.single.usage, 2.5);
     expect(overview.months.single.peakDate, '2026-06-03');
+    expect(overview.coldWaterMonths.single.closingBalance, 4);
+    expect(overview.hotWaterMonths.single.estimatedUsage, 3);
   });
 
   test('electricity consumption supports every requested sort order', () {
@@ -1209,6 +1241,27 @@ void main() {
     );
   });
 
+  test('api stores remembered password in secure storage', () async {
+    SharedPreferences.setMockInitialValues({});
+    final api = ApiClient(httpClient: MockClient((request) async {
+      return http.Response('not found', 404);
+    }));
+
+    await api.saveRememberedPassword('secure-password');
+    final prefs = await SharedPreferences.getInstance();
+    const secureStorage = FlutterSecureStorage();
+
+    expect(prefs.getString('auth.password'), isNull);
+    expect(
+      await secureStorage.read(key: 'auth.password'),
+      'secure-password',
+    );
+    expect(await api.loadRememberedPassword(), 'secure-password');
+
+    await api.clearRememberedPassword();
+    expect(await secureStorage.read(key: 'auth.password'), isNull);
+  });
+
   test('loadSavedCredentials restores school cookies', () async {
     FlutterSecureStorage.setMockInitialValues({
       'auth.jwxtCookies': 'jwxt-cookie',
@@ -1364,6 +1417,10 @@ void main() {
     expect(find.text('一键登录'), findsNothing);
     expect(find.text('办事大厅一键登录'), findsNothing);
     expect(find.text('账号密码登录'), findsOneWidget);
+    expect(find.byKey(const ValueKey('login-forgot-password')), findsOneWidget);
+    expect(find.byKey(const ValueKey('login-freshman-password-change')),
+        findsOneWidget);
+    expect(find.text('新生首次登录请先在学校官网登录并修改默认密码。'), findsOneWidget);
   });
 
   testWidgets('account password login requires an account', (tester) async {
@@ -1445,6 +1502,32 @@ void main() {
     expect(tester.widget<TextField>(passwordField).obscureText, isFalse);
   });
 
+  testWidgets('login page restores the remembered password', (tester) async {
+    SharedPreferences.setMockInitialValues({
+      'auth.account': '2024000000',
+      'auth.rememberPassword': true,
+    });
+    FlutterSecureStorage.setMockInitialValues({
+      'auth.password': 'remembered-password',
+    });
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: LoginPage(
+          api: _loginPageApi(),
+          onLoggedIn: (_) {},
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final passwordField = find.byType(TextField).at(1);
+    expect(
+      tester.widget<TextField>(passwordField).controller?.text,
+      'remembered-password',
+    );
+  });
+
   testWidgets('login carousel automatically advances and supports swiping',
       (tester) async {
     SharedPreferences.setMockInitialValues({});
@@ -1505,6 +1588,26 @@ void main() {
       tester.widget<LiquidGlassSurface>(surface).material,
       LiquidGlassMaterial.dock,
     );
+  });
+
+  testWidgets('mobile bottom nav is removed while a modal route is open',
+      (tester) async {
+    await _pumpDashboard(tester, const Size(390, 844));
+    final contentContext =
+        tester.element(find.byKey(const ValueKey('mobile-dashboard-content')));
+    final navigator = Navigator.of(contentContext);
+
+    showModalBottomSheet<void>(
+      context: contentContext,
+      builder: (_) => const SizedBox(height: 120),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('mobile-bottom-nav')), findsNothing);
+
+    navigator.pop();
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('mobile-bottom-nav')), findsOneWidget);
   });
 
   testWidgets('dashboard opens home by default', (tester) async {
@@ -1770,9 +1873,11 @@ void main() {
     final now = DateTime.now();
     final period = academicPeriodOf(now);
     final startText = dateText(mondayOf(now));
+    final api = _mockApi();
     SharedPreferences.setMockInitialValues({
-      'schedule.${period.$1}.${period.$2}.firstWeekStart': startText,
-      'schedule.autoWeek': true,
+      'schedule.${api.namespace}.${period.$1}.${period.$2}.firstWeekStart':
+          startText,
+      'schedule.${api.namespace}.autoWeek': true,
       // 旧版本保存的周视图应自动迁移到新的周课表日历视图。
       'schedule.viewMode': 'week',
     });
@@ -1783,7 +1888,7 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         home: DashboardShell(
-          api: _mockApi(),
+          api: api,
           studentName: '测试学生',
           themeMode: ThemeMode.light,
           onThemeChanged: (_) {},
@@ -1884,6 +1989,62 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('schedule zoom relayout keeps width fit without shrinking canvas',
+      (tester) async {
+    SharedPreferences.setMockInitialValues({
+      'schedule.2025.2.firstWeekStart': '2026-02-16',
+      'schedule.autoWeek': true,
+    });
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: DashboardShell(
+          api: _mockApi(),
+          studentName: '测试学生',
+          themeMode: ThemeMode.light,
+          onThemeChanged: (_) {},
+          fontScale: 1,
+          onFontScaleChanged: (_) {},
+          onLogout: () {},
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('课表').last);
+    await tester.pumpAndSettle();
+
+    final grid = find.byKey(const ValueKey('schedule-week-grid'));
+    double gridWidth() => grid
+        .evaluate()
+        .map((element) => element.renderObject as RenderBox)
+        .map((renderBox) => renderBox.size.width)
+        .reduce(
+            (current, candidate) => current > candidate ? current : candidate);
+
+    final fitWidth = gridWidth();
+    expect(fitWidth, greaterThan(300));
+
+    final pinchOrigin = tester.getTopLeft(grid.first) + const Offset(120, 96);
+    final firstFinger = await tester.startGesture(pinchOrigin, pointer: 11);
+    final secondFinger = await tester.startGesture(
+      pinchOrigin + const Offset(40, 0),
+      pointer: 12,
+    );
+    await tester.pump();
+    await firstFinger.moveBy(const Offset(-20, 0));
+    await secondFinger.moveBy(const Offset(20, 0));
+    await tester.pumpAndSettle();
+    expect(gridWidth(), greaterThan(fitWidth));
+    await firstFinger.up();
+    await secondFinger.up();
+
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('auto leave page keeps materials and invalidates stale preview',
       (tester) async {
     final previousPicker = ImagePickerPlatform.instance;
@@ -1945,6 +2106,11 @@ void main() {
     expect(find.text('9 度'), findsOneWidget);
     expect(find.text('冷水'), findsOneWidget);
     expect(find.text('热水'), findsOneWidget);
+    await tester.drag(find.byType(ListView).last, const Offset(0, -700));
+    await tester.pumpAndSettle();
+    expect(find.text('冷水余额趋势'), findsOneWidget);
+    expect(find.text('热水余额趋势'), findsOneWidget);
+    expect(find.textContaining('基于余额缓存估算'), findsNWidgets(2));
     expect(tester.takeException(), isNull);
   });
 
@@ -2388,6 +2554,36 @@ ApiClient _mockApi({
                 'peakDate': '2026-06-03',
                 'peakUsage': 4.0,
                 'unit': '度',
+                'cachedAt': '2026-06-03T08:00:00+08:00',
+              }
+            ],
+            'coldWaterMonths': [
+              {
+                'month': '2026-06',
+                'recordedDays': 3,
+                'openingBalance': 6,
+                'closingBalance': 4,
+                'estimatedUsage': 2,
+                'estimatedRecharge': 0,
+                'averageDailyUsage': 0.67,
+                'peakDate': '2026-06-03',
+                'peakUsage': 1.5,
+                'unit': '吨',
+                'cachedAt': '2026-06-03T08:00:00+08:00',
+              }
+            ],
+            'hotWaterMonths': [
+              {
+                'month': '2026-06',
+                'recordedDays': 3,
+                'openingBalance': 15,
+                'closingBalance': 12,
+                'estimatedUsage': 3,
+                'estimatedRecharge': 0,
+                'averageDailyUsage': 1,
+                'peakDate': '2026-06-02',
+                'peakUsage': 2,
+                'unit': '元',
                 'cachedAt': '2026-06-03T08:00:00+08:00',
               }
             ],

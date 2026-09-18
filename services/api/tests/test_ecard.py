@@ -5,8 +5,14 @@ from fastapi.testclient import TestClient
 
 from app.academic_period import now_shanghai
 from app.config import get_settings
-from app.database import EcardBinding, EcardPowerConsumption, get_sync_session_factory
+from app.database import (
+    EcardBinding,
+    EcardPowerConsumption,
+    EcardWaterBalanceSnapshot,
+    get_sync_session_factory,
+)
 from app.ecard_client import EcardClient, EcardConfigurationError, EcardRoomRef, calc_sign
+from app.ecard_history import monthly_water_overviews, record_water_balance_snapshots
 from app.jobs import (
     ecard_reminder_time_enabled,
     ecard_reminder_message,
@@ -472,6 +478,17 @@ def test_update_summary_cache_only_updates_balance_snapshot(monkeypatch):
     assert data["roomDisplay"] == "校本部 A2 A2-932"
     assert data["powerBalance"] == 9
     assert data["powerText"] == "9 度"
+    with factory() as db:
+        snapshots = (
+            db.query(EcardWaterBalanceSnapshot)
+            .filter(
+                EcardWaterBalanceSnapshot.room_id == "CGCOMMON1111|1|A2|932",
+                EcardWaterBalanceSnapshot.utility_type == "cold_water",
+            )
+            .all()
+        )
+    assert len(snapshots) == 1
+    assert snapshots[0].balance == 2
     assert data["coldWaterBalance"] == 2
     assert data["reminderEnabled"] is False
     assert data["lowPowerThreshold"] == 15
@@ -719,6 +736,109 @@ def test_consumption_overview_aggregates_all_cached_months(monkeypatch):
         "unit": "度",
         "cachedAt": months[1]["cachedAt"],
     }
+
+
+def test_water_snapshot_upserts_daily_and_aggregates_changes():
+    factory = get_sync_session_factory()
+    first = datetime(2026, 6, 1, 16, tzinfo=timezone.utc)
+    second = datetime(2026, 6, 2, 16, tzinfo=timezone.utc)
+    third = datetime(2026, 7, 1, 16, tzinfo=timezone.utc)
+    with factory() as db:
+        record_water_balance_snapshots(
+            db,
+            "room-water",
+            {"coldWaterBalance": 10, "hotWaterBalance": 30},
+            first,
+        )
+        record_water_balance_snapshots(
+            db,
+            "room-water",
+            {"coldWaterBalance": 9, "hotWaterBalance": 35},
+            first.replace(hour=20),
+        )
+        record_water_balance_snapshots(
+            db,
+            "room-water",
+            {"coldWaterBalance": 7, "hotWaterBalance": 32},
+            second,
+        )
+        record_water_balance_snapshots(
+            db,
+            "room-water",
+            {"coldWaterBalance": 8, "hotWaterBalance": 31},
+            third,
+        )
+        record_water_balance_snapshots(
+            db,
+            "room-other",
+            {"coldWaterBalance": 100},
+            first,
+        )
+        db.commit()
+        snapshots = (
+            db.query(EcardWaterBalanceSnapshot)
+            .filter(
+                EcardWaterBalanceSnapshot.room_id == "room-water",
+                EcardWaterBalanceSnapshot.utility_type == "cold_water",
+            )
+            .order_by(EcardWaterBalanceSnapshot.snapshot_date)
+            .all()
+        )
+        assert len(snapshots) == 3
+        assert snapshots[0].balance == 9
+        assert (
+            db.query(EcardWaterBalanceSnapshot)
+            .filter(EcardWaterBalanceSnapshot.room_id == "room-other")
+            .count()
+            == 1
+        )
+        overviews = monthly_water_overviews(snapshots)
+
+    assert [item["month"] for item in overviews] == ["2026-07", "2026-06"]
+    assert overviews[1]["estimatedUsage"] == 2
+    assert overviews[1]["estimatedRecharge"] == 0
+    assert overviews[0]["estimatedUsage"] == 0
+    assert overviews[0]["estimatedRecharge"] == 1
+
+
+def test_consumption_overview_includes_cached_water_history(monkeypatch):
+    session = AppSession(id="water-overview", client=FakeSchoolClient(), student_name="测试用户")
+    monkeypatch.setattr(app.state.sessions, "get", lambda session_id, touch=True: session)
+    monkeypatch.setattr(app.state.sessions, "touch", lambda session_id: None)
+    factory = get_sync_session_factory()
+    with factory() as db:
+        db.add(
+            EcardBinding(
+                student_id="20240001",
+                room_id="water-room",
+                room_display="水房",
+            )
+        )
+        record_water_balance_snapshots(
+            db,
+            "water-room",
+            {"coldWaterBalance": 5, "hotWaterBalance": 20},
+            datetime(2026, 6, 1, 16, tzinfo=timezone.utc),
+        )
+        record_water_balance_snapshots(
+            db,
+            "water-room",
+            {"coldWaterBalance": 4, "hotWaterBalance": 18},
+            datetime(2026, 6, 2, 16, tzinfo=timezone.utc),
+        )
+        db.commit()
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/ecard/consumption/overview",
+            headers={"X-Session-Id": session.id},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["months"] == []
+    assert body["coldWaterMonths"][0]["estimatedUsage"] == 1
+    assert body["hotWaterMonths"][0]["estimatedUsage"] == 2
 
 
 def test_ecard_reminder_message_levels():

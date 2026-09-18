@@ -1,9 +1,14 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 import '../../api_client.dart';
+import '../../app_logger.dart';
 import '../../gzus_design.dart';
+import '../../local_background_image.dart';
+import '../../models/custom_background.dart';
 import '../../models/nav_config.dart';
 import '../../responsive/breakpoints.dart';
 import '../../responsive/spacing.dart';
@@ -31,6 +36,11 @@ class MorePage extends StatefulWidget {
     this.onThemeChanged,
     this.seedColor = GzusColors.blue,
     this.onSeedColorChanged,
+    this.customBackground,
+    this.onPickCustomBackground,
+    this.onClearCustomBackground,
+    this.onCustomBackgroundBlurChanged,
+    this.onCustomBackgroundDarknessChanged,
     required this.fontScale,
     required this.onFontScaleChanged,
     this.onLogout,
@@ -55,6 +65,11 @@ class MorePage extends StatefulWidget {
   final ValueChanged<ThemeMode>? onThemeChanged;
   final Color seedColor;
   final ValueChanged<Color>? onSeedColorChanged;
+  final CustomBackgroundSettings? customBackground;
+  final Future<void> Function()? onPickCustomBackground;
+  final Future<void> Function()? onClearCustomBackground;
+  final Future<void> Function(double value)? onCustomBackgroundBlurChanged;
+  final Future<void> Function(double value)? onCustomBackgroundDarknessChanged;
   final double fontScale;
   final ValueChanged<double> onFontScaleChanged;
   final VoidCallback? onLogout;
@@ -77,6 +92,7 @@ class MorePage extends StatefulWidget {
 
 class _MorePageState extends State<MorePage> {
   bool _editing = false;
+  bool _backgroundActionInProgress = false;
   late List<NavTabConfig> _barTabs;
   late List<NavTabConfig> _moreTabs;
 
@@ -423,6 +439,8 @@ class _MorePageState extends State<MorePage> {
                           ],
                         ),
                       ),
+                    if (widget.onPickCustomBackground != null)
+                      _buildCustomBackgroundBlock(context),
                     if (widget.onAutoHideNavBarChanged != null)
                       SwitchListTile(
                         value: widget.autoHideNavBar,
@@ -785,6 +803,8 @@ class _MorePageState extends State<MorePage> {
                 ),
               ),
             ),
+          if (widget.onPickCustomBackground != null)
+            _buildCustomBackgroundBlock(context),
           _settingBlock(
             context: context,
             icon: Icons.format_size_outlined,
@@ -890,6 +910,178 @@ class _MorePageState extends State<MorePage> {
         ],
       ),
     );
+  }
+
+  Widget _buildCustomBackgroundBlock(BuildContext context) {
+    final settings = widget.customBackground;
+    final canAdjust = settings != null;
+    return _settingBlock(
+      context: context,
+      icon: Icons.wallpaper_outlined,
+      title: '自定义背景',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (settings != null) ...[
+            ClipRRect(
+              borderRadius: BorderRadius.circular(GzusRadii.md),
+              child: Image(
+                image: localBackgroundImageProvider(settings.imagePath),
+                height: 132,
+                fit: BoxFit.cover,
+                errorBuilder: (context, error, stackTrace) => Container(
+                  height: 132,
+                  alignment: Alignment.center,
+                  color: Theme.of(context).colorScheme.errorContainer,
+                  child: Text(
+                    '背景图片无法读取，请重新选择',
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.onErrorContainer,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: GzusSpacing.s),
+          ],
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  canAdjust ? '图片仅保存在本机' : '尚未设置背景图片',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
+              FilledButton.tonalIcon(
+                key: const ValueKey('custom-background-pick-button'),
+                onPressed: _backgroundActionInProgress
+                    ? null
+                    : () => unawaited(_runBackgroundAction(
+                          widget.onPickCustomBackground!,
+                        )),
+                icon:
+                    Icon(canAdjust ? Icons.refresh : Icons.add_photo_alternate),
+                label: Text(canAdjust ? '更换图片' : '选择图片'),
+              ),
+            ],
+          ),
+          if (settings != null) ...[
+            const SizedBox(height: GzusSpacing.s),
+            _buildBackgroundSlider(
+              context: context,
+              key: const ValueKey('custom-background-blur-slider'),
+              label: '模糊',
+              value: settings.blurSigma,
+              min: CustomBackgroundSettings.minBlurSigma,
+              max: CustomBackgroundSettings.maxBlurSigma,
+              divisions: 24,
+              valueText: settings.blurSigma.round().toString(),
+              onChanged: _backgroundActionInProgress
+                  ? null
+                  : widget.onCustomBackgroundBlurChanged,
+            ),
+            _buildBackgroundSlider(
+              context: context,
+              key: const ValueKey('custom-background-darkness-slider'),
+              label: '暗度',
+              value: settings.darkness,
+              min: CustomBackgroundSettings.minDarkness,
+              max: CustomBackgroundSettings.maxDarkness,
+              divisions: 80,
+              valueText: '${(settings.darkness * 100).round()}%',
+              onChanged: _backgroundActionInProgress
+                  ? null
+                  : widget.onCustomBackgroundDarknessChanged,
+            ),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton.icon(
+                key: const ValueKey('custom-background-remove-button'),
+                onPressed: _backgroundActionInProgress
+                    ? null
+                    : () => unawaited(_runBackgroundAction(
+                          widget.onClearCustomBackground!,
+                        )),
+                icon: const Icon(Icons.delete_outline),
+                label: const Text('移除背景'),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBackgroundSlider({
+    required BuildContext context,
+    required Key key,
+    required String label,
+    required double value,
+    required double min,
+    required double max,
+    required int divisions,
+    required String valueText,
+    required Future<void> Function(double value)? onChanged,
+  }) {
+    return Column(
+      key: key,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Text(label),
+            const Spacer(),
+            Text(valueText, style: Theme.of(context).textTheme.bodySmall),
+          ],
+        ),
+        Slider(
+          value: value,
+          min: min,
+          max: max,
+          divisions: divisions,
+          label: valueText,
+          onChanged: onChanged == null
+              ? null
+              : (next) => unawaited(_runBackgroundValueUpdate(
+                    onChanged,
+                    next,
+                  )),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _runBackgroundAction(Future<void> Function() action) async {
+    if (_backgroundActionInProgress) return;
+    setState(() => _backgroundActionInProgress = true);
+    try {
+      await action();
+    } catch (error, stackTrace) {
+      AppLogger.error('自定义背景操作失败', error, stackTrace);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('自定义背景操作失败：$error')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _backgroundActionInProgress = false);
+    }
+  }
+
+  Future<void> _runBackgroundValueUpdate(
+    Future<void> Function(double value) onChanged,
+    double value,
+  ) async {
+    try {
+      await onChanged(value);
+    } catch (error, stackTrace) {
+      AppLogger.error('保存自定义背景设置失败', error, stackTrace);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('保存背景设置失败：$error')),
+        );
+      }
+    }
   }
 
   Widget? _buildAccountSection(BuildContext context) {
@@ -1528,21 +1720,36 @@ class OpenSourceAcknowledgementsPage extends StatelessWidget {
                     description: '跨平台应用框架与运行时。',
                   ),
                   _AboutLibraryTile(
-                    name: 'http、web_socket_channel',
-                    description: '网络请求与实时连接能力。',
+                    name: 'flutter_riverpod',
+                    description: '应用状态管理与依赖注入。',
                   ),
                   _AboutLibraryTile(
-                    name: 'shared_preferences、package_info_plus',
-                    description: '本地偏好存储与应用版本信息读取。',
+                    name: 'http、web_socket_channel、web',
+                    description: 'HTTP、WebSocket 和 Web 平台 API。',
+                  ),
+                  _AboutLibraryTile(
+                    name: 'shared_preferences、flutter_secure_storage',
+                    description: '本地偏好、缓存与敏感凭据安全存储。',
                   ),
                   _AboutLibraryTile(
                     name: 'webview_flutter、url_launcher、share_plus',
                     description: '网页承载、外部链接打开与系统分享。',
                   ),
                   _AboutLibraryTile(
-                    name:
-                        'flutter_local_notifications、file_picker、image_picker',
-                    description: '本地通知、文件选择与图片选择。',
+                    name: 'flutter_local_notifications、timezone',
+                    description: '本地通知和定时提醒。',
+                  ),
+                  _AboutLibraryTile(
+                    name: 'file_picker、image_picker、path_provider',
+                    description: '文件/图片选择与本地路径处理。',
+                  ),
+                  _AboutLibraryTile(
+                    name: 'flutter_web_auth_2、package_info_plus',
+                    description: '移动端认证回调与版本信息读取。',
+                  ),
+                  _AboutLibraryTile(
+                    name: 'encrypt、pointycastle、gbk_codec',
+                    description: '加密、编码和平台数据处理。',
                   ),
                   _AboutLibraryTile(
                     name: 'FastAPI、Uvicorn、SQLAlchemy、Pydantic',
@@ -1559,6 +1766,10 @@ class OpenSourceAcknowledgementsPage extends StatelessWidget {
                   _AboutLibraryTile(
                     name: 'New School SDK',
                     description: '教务系统数据接口与课表解析能力。',
+                  ),
+                  _AboutLibraryTile(
+                    name: 'WidgetKit、ActivityKit、Android SDK',
+                    description: '桌面组件、iOS 实况活动和原生系统能力。',
                   ),
                 ],
               ),
@@ -1581,7 +1792,7 @@ class OpenSourceAcknowledgementsPage extends StatelessWidget {
                   ),
                   SizedBox(height: 12),
                   Text(
-                    '软帮手（OneGZUS）的开发受益于 Flutter、Dart、Python、Android、iOS 生态及各开源项目维护者的持续贡献。感谢上述第三方库、开源组件和相关工具链为本程序提供稳定的基础能力。',
+                    '软帮手（OneGZUS）的开发受益于 Flutter、Dart、Python、Android、iOS 生态及各开源项目维护者的持续贡献。感谢上述第三方库、开源组件、学校系统和相关工具链为本程序提供稳定的基础能力。完整依赖与许可证说明请查看项目仓库 docs/acknowledgements.md。',
                   ),
                 ],
               ),

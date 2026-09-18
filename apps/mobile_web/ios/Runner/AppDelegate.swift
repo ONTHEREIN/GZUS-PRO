@@ -1237,6 +1237,7 @@ private final class NativeLiquidTabBarView: NSObject, FlutterPlatformView, UITab
 
     rootView.backgroundColor = .clear
     rootView.isOpaque = false
+    rootView.clipsToBounds = true
     let tabBarItems = items.map { item in
       UITabBarItem(
         title: item.title,

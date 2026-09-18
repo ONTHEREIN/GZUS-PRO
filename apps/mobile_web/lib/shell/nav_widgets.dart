@@ -30,8 +30,8 @@ class _CenteredPage extends StatelessWidget {
   }
 }
 
-String _settingsKey(int year, int term, String name) =>
-    'schedule.$year.$term.$name';
+String _settingsKey(String namespace, int year, int term, String name) =>
+    scheduleAcademicPreferenceKey(namespace, year, term, name);
 
 class AppSidebar extends StatelessWidget {
   const AppSidebar({
@@ -324,6 +324,11 @@ class _MobileNavBarState extends State<MobileNavBar>
 
   @override
   Widget build(BuildContext context) {
+    final route = ModalRoute.of(context);
+    if (route != null && !route.isCurrent) {
+      // Platform View 无法可靠地被 Flutter 弹层覆盖，弹层打开时必须真正移除底栏。
+      return const SizedBox.shrink();
+    }
     final bottomPadding = MediaQuery.paddingOf(context).bottom;
     final colorScheme = Theme.of(context).colorScheme;
     return ValueListenableBuilder<LiquidGlassCapabilities>(

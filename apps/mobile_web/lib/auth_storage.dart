@@ -4,12 +4,14 @@ import 'package:shared_preferences/shared_preferences.dart';
 class SensitiveAuthState {
   const SensitiveAuthState({
     required this.credentialToken,
+    required this.password,
     required this.jwxtCookies,
     required this.ehallCookies,
     required this.ehallAuthToken,
   });
 
   final String? credentialToken;
+  final String? password;
   final String? jwxtCookies;
   final String? ehallCookies;
   final String? ehallAuthToken;
@@ -20,6 +22,7 @@ class AuthStorage {
 
   static const FlutterSecureStorage _secureStorage = FlutterSecureStorage();
   static const String _credentialTokenKey = 'auth.credentialToken';
+  static const String _passwordKey = 'auth.password';
   static const String _jwxtCookiesKey = 'auth.jwxtCookies';
   static const String _ehallCookiesKey = 'auth.ehallCookies';
   static const String _ehallAuthTokenKey = 'auth.ehallAuthToken';
@@ -44,6 +47,19 @@ class AuthStorage {
     await _removeLegacyValues([_credentialTokenKey]);
   }
 
+  Future<void> savePassword(String password) async {
+    if (password.isEmpty) {
+      throw ArgumentError.value(password, 'password', '登录密码不能为空');
+    }
+    await _secureStorage.write(key: _passwordKey, value: password);
+    await _removeLegacyValues([_passwordKey]);
+  }
+
+  Future<void> clearPassword() async {
+    await _secureStorage.delete(key: _passwordKey);
+    await _removeLegacyValues([_passwordKey]);
+  }
+
   Future<void> saveSchoolAuth(
     String? jwxtCookies,
     String? ehallCookies,
@@ -65,6 +81,7 @@ class AuthStorage {
       prefs,
       _credentialTokenKey,
     );
+    final password = await _readAndMigrate(prefs, _passwordKey);
     final jwxtCookies = await _readAndMigrate(prefs, _jwxtCookiesKey);
     final ehallCookies = await _readAndMigrate(prefs, _ehallCookiesKey);
     final ehallAuthToken = await _readAndMigrate(
@@ -73,6 +90,7 @@ class AuthStorage {
     );
     return SensitiveAuthState(
       credentialToken: credentialToken,
+      password: password,
       jwxtCookies: jwxtCookies,
       ehallCookies: ehallCookies,
       ehallAuthToken: ehallAuthToken,
@@ -82,6 +100,7 @@ class AuthStorage {
   Future<void> clear() async {
     for (final key in [
       _credentialTokenKey,
+      _passwordKey,
       _jwxtCookiesKey,
       _ehallCookiesKey,
       _ehallAuthTokenKey,
@@ -90,10 +109,16 @@ class AuthStorage {
     }
     await _removeLegacyValues([
       _credentialTokenKey,
+      _passwordKey,
       _jwxtCookiesKey,
       _ehallCookiesKey,
       _ehallAuthTokenKey,
     ]);
+  }
+
+  Future<String?> loadPassword() async {
+    final prefs = await SharedPreferences.getInstance();
+    return _readAndMigrate(prefs, _passwordKey);
   }
 
   Future<void> _writeOptional(String key, String? value) async {

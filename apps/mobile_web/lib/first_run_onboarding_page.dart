@@ -1,8 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'api_client.dart';
 import 'background_guide_page.dart';
 import 'gzus_design.dart';
+import 'onboarding_preferences.dart';
 import 'pages/schedule/schedule_page.dart';
 import 'responsive/spacing.dart';
 import 'widgets/empty_state.dart';
@@ -13,11 +17,15 @@ class FirstRunOnboardingPage extends StatefulWidget {
     super.key,
     required this.api,
     required this.studentName,
+    required this.initialStep,
+    required this.onStepChanged,
     required this.onComplete,
   });
 
   final ApiClient api;
   final String? studentName;
+  final int initialStep;
+  final ValueChanged<int> onStepChanged;
   final VoidCallback onComplete;
 
   @override
@@ -26,9 +34,73 @@ class FirstRunOnboardingPage extends StatefulWidget {
 
 class _FirstRunOnboardingPageState extends State<FirstRunOnboardingPage> {
   int _step = 1;
+  bool _finishing = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _step = onboardingStepFromStoredValue(widget.initialStep);
+  }
 
   void _nextStep() {
-    setState(() => _step += 1);
+    final nextStep = _step + 1;
+    setState(() => _step = nextStep);
+    widget.onStepChanged(nextStep);
+    unawaited(_persistStep(nextStep));
+  }
+
+  void _previousStep() {
+    if (_step <= 1) return;
+    final previousStep = _step - 1;
+    setState(() => _step = previousStep);
+    widget.onStepChanged(previousStep);
+    unawaited(_persistStep(previousStep));
+  }
+
+  Future<void> _persistStep(int step) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt(
+        onboardingPreferenceKey(widget.api.namespace, 'firstRunStep'),
+        step,
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        SnackBar(content: Text('保存引导进度失败，请稍后重试：$error')),
+      );
+    }
+  }
+
+  void _finish() {
+    if (_finishing) return;
+    _finishing = true;
+    unawaited(_completeOnboarding());
+  }
+
+  Future<void> _completeOnboarding() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(
+      onboardingPreferenceKey(widget.api.namespace, 'completed'),
+      true,
+    );
+    await prefs.remove(
+      onboardingPreferenceKey(widget.api.namespace, 'firstRunStep'),
+    );
+
+    String? cloudError;
+    try {
+      await widget.api.saveScheduleSettings(onboardingCompleted: true);
+    } catch (error) {
+      cloudError = error.toString();
+    }
+    if (!mounted) return;
+    if (cloudError != null) {
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        SnackBar(content: Text('同步引导完成状态失败，下次换设备可能再次显示：$cloudError')),
+      );
+    }
+    widget.onComplete();
   }
 
   @override
@@ -41,15 +113,23 @@ class _FirstRunOnboardingPageState extends State<FirstRunOnboardingPage> {
           onComplete: _nextStep,
         );
       case 2:
-        return DormOnboardingPage(api: widget.api, onNext: _nextStep);
+        return DormOnboardingPage(
+          api: widget.api,
+          onNext: _nextStep,
+          onBack: _previousStep,
+        );
       case 3:
-        return FeatureIntroductionPage(onNext: _nextStep);
+        return FeatureIntroductionPage(
+          onNext: _nextStep,
+          onBack: _previousStep,
+        );
       case 4:
         return BackgroundGuidePage(
           api: widget.api,
           currentStep: 4,
           totalSteps: 4,
-          onComplete: widget.onComplete,
+          onBack: _previousStep,
+          onComplete: _finish,
         );
       default:
         throw StateError('无效的首次引导步骤：$_step');
@@ -62,10 +142,12 @@ class DormOnboardingPage extends StatefulWidget {
     super.key,
     required this.api,
     required this.onNext,
+    required this.onBack,
   });
 
   final ApiClient api;
   final VoidCallback onNext;
+  final VoidCallback onBack;
 
   @override
   State<DormOnboardingPage> createState() => _DormOnboardingPageState();
@@ -93,6 +175,10 @@ class _DormOnboardingPageState extends State<DormOnboardingPage> {
   Future<EcardSummary> _loadSummary() async {
     final result = await widget.api.ecardSummary();
     return result.data;
+  }
+
+  void _retrySummary() {
+    setState(() => _summaryFuture = _loadSummary());
   }
 
   void _searchRooms() {
@@ -143,6 +229,7 @@ class _DormOnboardingPageState extends State<DormOnboardingPage> {
   Widget build(BuildContext context) {
     return _OnboardingScaffold(
       step: 2,
+      onBack: widget.onBack,
       title: '绑定宿舍',
       description: '绑定后可查看电费、冷水和热水余额，也能收到低余额提醒。',
       body: FutureBuilder<EcardSummary>(
@@ -156,9 +243,22 @@ class _DormOnboardingPageState extends State<DormOnboardingPage> {
               children: [
                 const EmptyState(message: '宿舍信息加载失败，请稍后在生活缴费页绑定。'),
                 const SizedBox(height: GzusSpacing.l),
-                FilledButton(
-                  onPressed: widget.onNext,
-                  child: const Text('跳过，继续'),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: _retrySummary,
+                        child: const Text('重试'),
+                      ),
+                    ),
+                    const SizedBox(width: GzusSpacing.m),
+                    Expanded(
+                      child: FilledButton(
+                        onPressed: widget.onNext,
+                        child: const Text('跳过，继续'),
+                      ),
+                    ),
+                  ],
                 ),
               ],
             );
@@ -186,9 +286,14 @@ class _DormOnboardingPageState extends State<DormOnboardingPage> {
 }
 
 class FeatureIntroductionPage extends StatelessWidget {
-  const FeatureIntroductionPage({super.key, required this.onNext});
+  const FeatureIntroductionPage({
+    super.key,
+    required this.onNext,
+    required this.onBack,
+  });
 
   final VoidCallback onNext;
+  final VoidCallback onBack;
 
   @override
   Widget build(BuildContext context) {
@@ -200,6 +305,7 @@ class FeatureIntroductionPage extends StatelessWidget {
     ];
     return _OnboardingScaffold(
       step: 3,
+      onBack: onBack,
       title: '软帮手能为你做什么？',
       description: '把学习和校园生活的重要信息放在同一个地方。',
       body: Column(
@@ -231,12 +337,14 @@ class FeatureIntroductionPage extends StatelessWidget {
 class _OnboardingScaffold extends StatelessWidget {
   const _OnboardingScaffold({
     required this.step,
+    this.onBack,
     required this.title,
     required this.description,
     required this.body,
   });
 
   final int step;
+  final VoidCallback? onBack;
   final String title;
   final String description;
   final Widget body;
@@ -245,7 +353,16 @@ class _OnboardingScaffold extends StatelessWidget {
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     return Scaffold(
-      appBar: AppBar(automaticallyImplyLeading: false),
+      appBar: AppBar(
+        automaticallyImplyLeading: onBack != null,
+        leading: onBack == null
+            ? null
+            : IconButton(
+                tooltip: '返回上一步',
+                onPressed: onBack,
+                icon: const Icon(Icons.arrow_back),
+              ),
+      ),
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(

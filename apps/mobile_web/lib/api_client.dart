@@ -772,6 +772,16 @@ class ApiClient {
     await _authStorage.clearCredentialToken();
   }
 
+  Future<void> saveRememberedPassword(String password) async {
+    await _authStorage.savePassword(password);
+  }
+
+  Future<String?> loadRememberedPassword() => _authStorage.loadPassword();
+
+  Future<void> clearRememberedPassword() async {
+    await _authStorage.clearPassword();
+  }
+
   Future<void> rememberAccount(String account) async {
     _account = account;
     final prefs = await SharedPreferences.getInstance();
@@ -782,6 +792,7 @@ class ApiClient {
 
   Future<void> forgetRememberedAccount() async {
     _account = null;
+    await clearRememberedPassword();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('auth.rememberPassword', false);
     await prefs.remove('auth.account');

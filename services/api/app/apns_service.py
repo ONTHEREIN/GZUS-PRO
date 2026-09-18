@@ -214,9 +214,11 @@ def build_live_activity_payload(
         }
     if action == "end" and not bool(extras.get("dismissImmediately", False)):
         aps["dismissal-date"] = int(time.time()) + 30 * 60
-    payload: dict[str, object] = {"aps": aps}
     if action == "start":
-        payload["input-push-token"] = 1
+        # ActivityKit 的启动控制字段属于 aps；放在顶层会被 APNs 接受，
+        # 但系统不会把它当作启动 Live Activity 的输入令牌请求。
+        aps["input-push-token"] = 1
+    payload: dict[str, object] = {"aps": aps}
     encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     if len(encoded) > _APNS_MAX_PAYLOAD_BYTES:
         raise ApnsDeliveryError("ActivityKit APNs payload 超过 4 KB 限制")

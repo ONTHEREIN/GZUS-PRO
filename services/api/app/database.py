@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from sqlalchemy import (
     Boolean,
     Column,
+    Date,
     DateTime,
     Float,
     Integer,
@@ -146,6 +147,28 @@ class EcardPowerConsumption(Base):
     month = Column(String(7), nullable=False, index=True)
     items_json = Column(Text, nullable=False)
     cached_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+
+
+class EcardWaterBalanceSnapshot(Base):
+    """按宿舍、类型与上海自然日保存的冷热水余额快照。"""
+
+    __tablename__ = "ecard_water_balance_snapshots"
+    __table_args__ = (
+        UniqueConstraint(
+            "room_id",
+            "utility_type",
+            "snapshot_date",
+            name="uq_ecard_water_balance_snapshots_day",
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    room_id = Column(String(200), nullable=False, index=True)
+    utility_type = Column(String(20), nullable=False, index=True)
+    snapshot_date = Column(Date, nullable=False, index=True)
+    balance = Column(Float, nullable=False)
+    unit = Column(String(20), nullable=False)
+    captured_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
 
 
 class StaffMember(Base):

@@ -11,16 +11,17 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../api_client.dart';
 import '../../calendar_import.dart';
+import '../../course_reminder_sync.dart';
 import '../../gzus_design.dart';
 import '../../models/schedule_override.dart';
 import '../../models/schedule_settings.dart';
+import '../../onboarding_preferences.dart';
 import '../../schedule_adjustment_sync.dart';
 import '../../responsive/spacing.dart';
 import '../../schedule_utils.dart';
 import '../../background_service.dart' deferred as background_service;
 import '../../ics_download.dart' deferred as ics_download;
 import '../../reminder_service.dart' deferred as reminder_service;
-import '../../push_service.dart' deferred as push_service;
 import '../../responsive/breakpoints.dart';
 import '../../widgets/async_panel.dart';
 import '../../widgets/empty_state.dart';
@@ -68,12 +69,27 @@ class _ScheduleOnboardingPageState extends State<ScheduleOnboardingPage> {
     final prefs = await SharedPreferences.getInstance();
     if (!mounted) return;
     setState(() {
-      _courseRemindersEnabled =
-          prefs.getBool('schedule.courseRemindersEnabled') ?? false;
-      _courseStartReminderMinutes =
-          prefs.getInt('schedule.courseStartReminderMinutes') ?? 10;
-      _courseEndReminderMinutes =
-          prefs.getInt('schedule.courseEndReminderMinutes') ?? 5;
+      _courseRemindersEnabled = prefs.getBool(
+            schedulePreferenceKey(
+              widget.api.namespace,
+              'courseRemindersEnabled',
+            ),
+          ) ??
+          false;
+      _courseStartReminderMinutes = prefs.getInt(
+            schedulePreferenceKey(
+              widget.api.namespace,
+              'courseStartReminderMinutes',
+            ),
+          ) ??
+          10;
+      _courseEndReminderMinutes = prefs.getInt(
+            schedulePreferenceKey(
+              widget.api.namespace,
+              'courseEndReminderMinutes',
+            ),
+          ) ??
+          5;
       _reminderSettingsLoading = false;
     });
   }
@@ -126,40 +142,77 @@ class _ScheduleOnboardingPageState extends State<ScheduleOnboardingPage> {
   Future<void> _complete() async {
     setState(() => _loading = true);
     try {
-      // 保存到 SharedPreferences，键名与 _DashboardShellState 一致
+      // 保存到 SharedPreferences，键名与 DashboardShell 一致且按账号隔离。
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(
-        'schedule.$_year.$_term.firstWeekStart',
+        scheduleAcademicPreferenceKey(
+          widget.api.namespace,
+          _year,
+          _term,
+          'firstWeekStart',
+        ),
         dateText(_selected),
       );
       await prefs.setInt(
-        'schedule.$_year.$_term.week',
+        scheduleAcademicPreferenceKey(
+          widget.api.namespace,
+          _year,
+          _term,
+          'week',
+        ),
         weekFromDate(_selected, DateTime.now(), clampToTerm: true),
       );
       await prefs.setBool(
-        'schedule.courseRemindersEnabled',
+        schedulePreferenceKey(
+          widget.api.namespace,
+          'courseRemindersEnabled',
+        ),
         _courseRemindersEnabled,
       );
       await prefs.setInt(
-        'schedule.courseStartReminderMinutes',
+        schedulePreferenceKey(
+          widget.api.namespace,
+          'courseStartReminderMinutes',
+        ),
         _courseStartReminderMinutes,
       );
       await prefs.setInt(
-        'schedule.courseEndReminderMinutes',
+        schedulePreferenceKey(
+          widget.api.namespace,
+          'courseEndReminderMinutes',
+        ),
         _courseEndReminderMinutes,
       );
-      await prefs.setBool('schedule_onboarding_completed', true);
-      // 云端持久化（按学号绑定）：换设备/清缓存后自动恢复，不再重复引导
+      // 云端只保存课表日期；整个首次引导要到最后一步才算完成。
       try {
         await widget.api.saveScheduleSettings(
           firstWeeks: {'$_year-$_term': dateText(_selected)},
-          onboardingCompleted: true,
         );
       } catch (error) {
         debugPrint('同步开学日期到云端失败: error=${error.runtimeType}');
       }
+      if (_courseRemindersEnabled) {
+        final result = await widget.api.schedule(year: _year, term: _term);
+        await configureCourseReminders(
+          api: widget.api,
+          courses: result.data.items,
+          firstWeekStart: _selected,
+          enabled: _courseRemindersEnabled,
+          beforeStartMinutes: _courseStartReminderMinutes,
+          beforeEndMinutes: _courseEndReminderMinutes,
+          adjustments: const [],
+          overrides: const [],
+          nativeReminderSignature: null,
+        );
+      }
       if (!mounted) return;
       widget.onComplete();
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          SnackBar(content: Text('课表或提醒配置失败，请重试：$error')),
+        );
+      }
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -708,9 +761,9 @@ class _SchedulePageState extends State<SchedulePage> {
   int courseEndReminderMinutes = 5;
   bool _exporting = false;
   String? manageError;
-  String? _lastNativeReminderSignature;
   String? _reminderSyncError;
   bool _reminderSettingsLoaded = false;
+  String? _lastNativeReminderSignature;
   bool showTime = true;
   bool showClassroom = true;
   bool showTeacher = true;
@@ -800,70 +853,18 @@ class _SchedulePageState extends State<SchedulePage> {
   Future<void> _applyCourseReminders(List<ScheduleCourse> courses) async {
     if (!_reminderSettingsLoaded) return;
     try {
-      final effectiveOccurrences = expandEffectiveSchedule(
+      _lastNativeReminderSignature = await configureCourseReminders(
+        api: widget.api,
         courses: courses,
         firstWeekStart: widget.firstWeekStart,
+        enabled: courseRemindersEnabled,
+        beforeStartMinutes: courseStartReminderMinutes,
+        beforeEndMinutes: courseEndReminderMinutes,
         adjustments: _adjustments,
         overrides: _overrides,
-        startDate: DateTime.now(),
-        endDate: DateTime.now().add(const Duration(days: 30)),
+        nativeReminderSignature: _lastNativeReminderSignature,
       );
-      await reminder_service.loadLibrary();
-      await reminder_service.ReminderService.configureCourseReminders(
-        courses: courses,
-        firstWeekStart: widget.firstWeekStart,
-        settings: reminder_service.CourseReminderSettings(
-          enabled: courseRemindersEnabled,
-          beforeStartMinutes: courseStartReminderMinutes,
-          beforeEndMinutes: courseEndReminderMinutes,
-        ),
-        effectiveOccurrences: effectiveOccurrences,
-      );
-      final cloudStatus = await widget.api.fetchBackgroundNotificationStatus();
-      if (cloudStatus?.enabled == true) {
-        await widget.api.syncCloudCourseReminders(
-          enabled: courseRemindersEnabled,
-          beforeStartMinutes: courseStartReminderMinutes,
-          beforeEndMinutes: courseEndReminderMinutes,
-          firstWeekStart: widget.firstWeekStart,
-          courses: _courseReminderPayload(courses),
-          effectiveOccurrences: [
-            for (final occurrence in effectiveOccurrences)
-              {
-                'date': dateText(occurrence.date),
-                'name': occurrence.course.name,
-                'startSection': occurrence.course.startSection,
-                'endSection': occurrence.course.endSection,
-                'classroom': occurrence.course.classroom ?? '',
-                'teacher': occurrence.course.teacher ?? '',
-              },
-          ],
-        );
-        if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
-          await push_service.loadLibrary();
-          await push_service.PushService.syncIosCourseSchedule(
-            api: widget.api,
-            eventKeys: reminder_service.ReminderService.localCourseEventKeys,
-            validUntil:
-                reminder_service.ReminderService.localCourseValidUntil ??
-                    DateTime.now(),
-          );
-        } else {
-          await background_service.loadLibrary();
-          await background_service.BackgroundService.cancelCourseReminders();
-        }
-        if (mounted) setState(() => _reminderSyncError = null);
-        return;
-      }
-      if (kIsWeb || defaultTargetPlatform != TargetPlatform.iOS) {
-        await _syncCourseRemindersToNative(
-          courses,
-          courseStartReminderMinutes,
-          courseEndReminderMinutes,
-          widget.firstWeekStart,
-          effectiveOccurrences,
-        );
-      }
+      if (mounted) setState(() => _reminderSyncError = null);
     } catch (e) {
       if (mounted) setState(() => _reminderSyncError = e.toString());
       debugPrint('课程提醒配置失败: $e');
@@ -1092,73 +1093,6 @@ class _SchedulePageState extends State<SchedulePage> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setDouble('schedule.floatingMenu.x', position.dx);
     await prefs.setDouble('schedule.floatingMenu.y', position.dy);
-  }
-
-  Future<void> _syncCourseRemindersToNative(
-    List<ScheduleCourse> courses,
-    int beforeStartMinutes,
-    int beforeEndMinutes,
-    DateTime firstWeekStart,
-    List<ScheduleOccurrence> effectiveOccurrences,
-  ) async {
-    final coursesJson = jsonEncode(_courseReminderPayload(courses));
-    final effectiveOccurrencesJson = jsonEncode([
-      for (final occurrence in effectiveOccurrences)
-        {
-          'date': dateText(occurrence.date),
-          'name': occurrence.course.name,
-          'startSection': occurrence.course.startSection,
-          'endSection': occurrence.course.endSection,
-          'classroom': occurrence.course.classroom ?? '',
-          'teacher': occurrence.course.teacher ?? '',
-          'occurrenceKey': occurrence.occurrenceKey,
-        },
-    ]);
-    final firstWeekStr =
-        '${firstWeekStart.year.toString().padLeft(4, '0')}-${firstWeekStart.month.toString().padLeft(2, '0')}-${firstWeekStart.day.toString().padLeft(2, '0')}';
-    // 签名守卫：内容未变化时不重复向原生层全量推送
-    final signature =
-        '$coursesJson|$effectiveOccurrencesJson|$beforeStartMinutes|$beforeEndMinutes|$firstWeekStr';
-    if (signature == _lastNativeReminderSignature) return;
-    await background_service.loadLibrary();
-    await background_service.BackgroundService.updateCourseReminders(
-      coursesJson: coursesJson,
-      effectiveOccurrencesJson: effectiveOccurrencesJson,
-      beforeStartMinutes: beforeStartMinutes,
-      beforeEndMinutes: beforeEndMinutes,
-      firstWeekStart: firstWeekStr,
-    );
-    _lastNativeReminderSignature = signature;
-  }
-
-  List<Map<String, dynamic>> _courseReminderPayload(
-    List<ScheduleCourse> courses,
-  ) {
-    return courses.where((c) {
-      return c.weekday != null &&
-          c.weekday! >= 1 &&
-          c.weekday! <= 7 &&
-          c.startSection != null &&
-          c.startSection! >= 1 &&
-          c.startSection! <= 16 &&
-          c.endSection != null &&
-          c.endSection! >= 1 &&
-          c.endSection! <= 16;
-    }).map((c) {
-      final weeksList = <int>[];
-      for (var w = 1; w <= 30; w++) {
-        if (c.occursInWeek(w)) weeksList.add(w);
-      }
-      return {
-        'name': c.name,
-        'weekday': c.weekday ?? 0,
-        'startSection': c.startSection ?? 0,
-        'endSection': c.endSection ?? 0,
-        'classroom': c.classroom ?? '',
-        'teacher': c.teacher ?? '',
-        'weeks': weeksList,
-      };
-    }).toList();
   }
 
   @override
@@ -1909,12 +1843,27 @@ class _SchedulePageState extends State<SchedulePage> {
     final prefs = await SharedPreferences.getInstance();
     if (!mounted) return;
     setState(() {
-      courseRemindersEnabled =
-          prefs.getBool('schedule.courseRemindersEnabled') ?? false;
-      courseStartReminderMinutes =
-          prefs.getInt('schedule.courseStartReminderMinutes') ?? 10;
-      courseEndReminderMinutes =
-          prefs.getInt('schedule.courseEndReminderMinutes') ?? 5;
+      courseRemindersEnabled = prefs.getBool(
+            schedulePreferenceKey(
+              widget.api.namespace,
+              'courseRemindersEnabled',
+            ),
+          ) ??
+          false;
+      courseStartReminderMinutes = prefs.getInt(
+            schedulePreferenceKey(
+              widget.api.namespace,
+              'courseStartReminderMinutes',
+            ),
+          ) ??
+          10;
+      courseEndReminderMinutes = prefs.getInt(
+            schedulePreferenceKey(
+              widget.api.namespace,
+              'courseEndReminderMinutes',
+            ),
+          ) ??
+          5;
       _reminderSettingsLoaded = true;
     });
     // 设置加载完成后按最新配置应用一次提醒
@@ -1924,7 +1873,10 @@ class _SchedulePageState extends State<SchedulePage> {
   Future<void> _setCourseRemindersEnabled(bool value) async {
     setState(() => courseRemindersEnabled = value);
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('schedule.courseRemindersEnabled', value);
+    await prefs.setBool(
+      schedulePreferenceKey(widget.api.namespace, 'courseRemindersEnabled'),
+      value,
+    );
     if (!value) {
       reminder_service.loadLibrary().then((_) {
         reminder_service.ReminderService.cancelCourseReminders();
@@ -2002,9 +1954,18 @@ class _SchedulePageState extends State<SchedulePage> {
       courseEndReminderMinutes = newEnd;
     });
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('schedule.courseRemindersEnabled', newEnabled);
-    await prefs.setInt('schedule.courseStartReminderMinutes', newStart);
-    await prefs.setInt('schedule.courseEndReminderMinutes', newEnd);
+    await prefs.setBool(
+      schedulePreferenceKey(widget.api.namespace, 'courseRemindersEnabled'),
+      newEnabled,
+    );
+    await prefs.setInt(
+      schedulePreferenceKey(widget.api.namespace, 'courseStartReminderMinutes'),
+      newStart,
+    );
+    await prefs.setInt(
+      schedulePreferenceKey(widget.api.namespace, 'courseEndReminderMinutes'),
+      newEnd,
+    );
     unawaited(_scheduleFuture.then((r) => _applyCourseReminders(r.items)));
   }
 }
@@ -2186,26 +2147,23 @@ class _ScheduleFloatingMenu extends StatefulWidget {
 }
 
 class _ScheduleFloatingMenuState extends State<_ScheduleFloatingMenu> {
-  static const _buttonSize = 52.0;
+  // 入口贴近拾光的右上角交换图标，不再遮挡课程网格。
+  static const _buttonSize = 36.0;
   static const _panelWidth = 244.0;
   static const _panelHeight = 224.0;
   bool _isOpen = false;
 
   Offset _positionFor(Size size, EdgeInsets viewPadding) {
     final maxX = (size.width - _buttonSize).clamp(0.0, double.infinity);
-    final navigationClearance = 86.0 + viewPadding.bottom;
-    final maxY = (size.height - navigationClearance - _buttonSize)
-        .clamp(0.0, double.infinity);
+    final maxY = (size.height - _buttonSize).clamp(0.0, double.infinity);
     final saved = widget.position;
-    if (saved == null) return Offset(0, maxY);
+    if (saved == null) return Offset(maxX, viewPadding.top + 4);
     return Offset(maxX * saved.dx, maxY * saved.dy);
   }
 
   Offset _fractionFor(Offset position, Size size, EdgeInsets viewPadding) {
     final maxX = (size.width - _buttonSize).clamp(0.0, double.infinity);
-    final navigationClearance = 86.0 + viewPadding.bottom;
-    final maxY = (size.height - navigationClearance - _buttonSize)
-        .clamp(0.0, double.infinity);
+    final maxY = (size.height - _buttonSize).clamp(0.0, double.infinity);
     return Offset(
       maxX == 0 ? 0 : (position.dx / maxX).clamp(0.0, 1.0),
       maxY == 0 ? 0 : (position.dy / maxY).clamp(0.0, 1.0),
@@ -2214,9 +2172,7 @@ class _ScheduleFloatingMenuState extends State<_ScheduleFloatingMenu> {
 
   Offset _clampPosition(Offset position, Size size, EdgeInsets viewPadding) {
     final maxX = (size.width - _buttonSize).clamp(0.0, double.infinity);
-    final navigationClearance = 86.0 + viewPadding.bottom;
-    final maxY = (size.height - navigationClearance - _buttonSize)
-        .clamp(0.0, double.infinity);
+    final maxY = (size.height - _buttonSize).clamp(0.0, double.infinity);
     return Offset(
       position.dx.clamp(0.0, maxX).toDouble(),
       position.dy.clamp(0.0, maxY).toDouble(),
@@ -2227,9 +2183,7 @@ class _ScheduleFloatingMenuState extends State<_ScheduleFloatingMenu> {
       Offset position, Size size, EdgeInsets viewPadding) {
     final clamped = _clampPosition(position, size, viewPadding);
     final maxX = (size.width - _buttonSize).clamp(0.0, double.infinity);
-    final navigationClearance = 86.0 + viewPadding.bottom;
-    final maxY = (size.height - navigationClearance - _buttonSize)
-        .clamp(0.0, double.infinity);
+    final maxY = (size.height - _buttonSize).clamp(0.0, double.infinity);
     final distances = [
       (clamped.dx, 'left'),
       (maxX - clamped.dx, 'right'),
@@ -2614,23 +2568,26 @@ class _CalendarScheduleView extends StatefulWidget {
 
 class _CalendarScheduleViewState extends State<_CalendarScheduleView> {
   late final PageController _pageController;
-  late final TransformationController _transformationController;
   late int _weekIndex;
   double _zoomScale = 1;
-  double _fitScale = 1;
+  double _gestureStartZoom = 1;
+  final Map<int, Offset> _activePointers = <int, Offset>{};
+  double? _initialPinchDistance;
+
+  // 首屏已经是完整七天的最小宽度；再缩小只会制造无意义的右侧留白。
+  static const _minZoomScale = 1.0;
+  static const _maxZoomScale = 2.4;
 
   @override
   void initState() {
     super.initState();
     _weekIndex = widget.currentWeek;
     _pageController = PageController(initialPage: widget.currentWeek);
-    _transformationController = TransformationController();
   }
 
   @override
   void dispose() {
     _pageController.dispose();
-    _transformationController.dispose();
     super.dispose();
   }
 
@@ -2652,12 +2609,45 @@ class _CalendarScheduleViewState extends State<_CalendarScheduleView> {
   }
 
   void _setZoom(double value) {
-    final next = value.clamp(_fitScale, 2.4).toDouble();
-    _transformationController.value = Matrix4.identity();
+    final next = value.clamp(_minZoomScale, _maxZoomScale).toDouble();
     setState(() => _zoomScale = next);
   }
 
-  void _resetZoom() => _setZoom(_fitScale);
+  void _resetZoom() => _setZoom(1);
+
+  void _onPointerDown(PointerDownEvent event) {
+    _activePointers[event.pointer] = event.localPosition;
+    _beginPinchIfReady();
+  }
+
+  void _onPointerMove(PointerMoveEvent event) {
+    if (!_activePointers.containsKey(event.pointer)) return;
+    _activePointers[event.pointer] = event.localPosition;
+    final initialDistance = _initialPinchDistance;
+    if (initialDistance == null || initialDistance <= 0) return;
+    final distance = _pinchDistance();
+    if (distance == null) return;
+    _setZoom(_gestureStartZoom * distance / initialDistance);
+  }
+
+  void _onPointerEnd(PointerEvent event) {
+    _activePointers.remove(event.pointer);
+    _initialPinchDistance = null;
+    _beginPinchIfReady();
+  }
+
+  void _beginPinchIfReady() {
+    final distance = _pinchDistance();
+    if (distance == null || distance <= 0) return;
+    _gestureStartZoom = _zoomScale;
+    _initialPinchDistance = distance;
+  }
+
+  double? _pinchDistance() {
+    if (_activePointers.length < 2) return null;
+    final points = _activePointers.values.take(2).toList(growable: false);
+    return (points.first - points.last).distance;
+  }
 
   void _showAdjustDateSheet(DateTime sourceDate) {
     widget.onAdjustDate == null
@@ -2747,29 +2737,6 @@ class _CalendarScheduleViewState extends State<_CalendarScheduleView> {
       if (end > max) max = end;
     }
     return max.clamp(8, 16);
-  }
-
-  ScheduleCourse? _nextTodayCourse(
-    List<ScheduleCourse> courses,
-    DateTime now,
-  ) {
-    for (final course in courses) {
-      final section = course.startSection;
-      if (section == null || section < 1 || section > scheduleTimes.length) {
-        continue;
-      }
-      final parts = scheduleTimes[section - 1].$1.split(':');
-      if (parts.length != 2) continue;
-      final start = DateTime(
-        now.year,
-        now.month,
-        now.day,
-        int.tryParse(parts[0]) ?? 0,
-        int.tryParse(parts[1]) ?? 0,
-      );
-      if (!start.isBefore(now)) return course;
-    }
-    return null;
   }
 
   void _showDayCourses(BuildContext context, DateTime date) {
@@ -2944,13 +2911,12 @@ class _CalendarScheduleViewState extends State<_CalendarScheduleView> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
+    final today = DateUtils.dateOnly(DateTime.now());
 
     return LayoutBuilder(
       builder: (context, constraints) {
         final compact = MediaQuery.sizeOf(context).width < 600;
-        final topControlsHeight = compact ? 112.0 : 68.0;
+        final topControlsHeight = compact ? 62.0 : 66.0;
         const minPageHeight = 240.0;
         final pageViewHeight = constraints.hasBoundedHeight
             ? (constraints.maxHeight - topControlsHeight - 4)
@@ -2962,154 +2928,36 @@ class _CalendarScheduleViewState extends State<_CalendarScheduleView> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Padding(
-                padding: const EdgeInsets.only(bottom: 4),
-                child: Column(
-                  children: [
-                    Row(
-                      children: [
-                        IconButton(
-                          tooltip: '上一周',
-                          onPressed: _weekIndex <= 1
-                              ? null
-                              : () => _pageController.previousPage(
-                                    duration: const Duration(milliseconds: 220),
-                                    curve: Curves.easeOutCubic,
-                                  ),
-                          icon: const Icon(Icons.chevron_left),
-                        ),
-                        Expanded(
-                          child: Center(
-                            child: InkWell(
-                              onTap: () => _showWeekPicker(context),
-                              borderRadius: BorderRadius.circular(10),
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 8, vertical: 4),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Flexible(
-                                      child: Text(
-                                        _weekTitle(_weekIndex),
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: theme.textTheme.titleLarge
-                                            ?.copyWith(
-                                                fontWeight: FontWeight.w900),
-                                      ),
-                                    ),
-                                    const SizedBox(width: 4),
-                                    Icon(Icons.expand_more,
-                                        size: 20,
-                                        color: colorScheme.onSurfaceVariant),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                        IconButton(
-                          tooltip: '下一周',
-                          onPressed: _weekIndex >= 30
-                              ? null
-                              : () => _pageController.nextPage(
-                                    duration: const Duration(milliseconds: 220),
-                                    curve: Curves.easeOutCubic,
-                                  ),
-                          icon: const Icon(Icons.chevron_right),
-                        ),
-                        if (widget.onShowTools != null)
-                          IconButton(
-                            tooltip: '课表工具',
-                            onPressed: widget.onShowTools,
-                            icon: const Icon(Icons.tune),
-                          ),
-                      ],
-                    ),
-                    if (compact)
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.end,
+              SizedBox(
+                height: compact ? 56 : 60,
+                child: Center(
+                  child: InkWell(
+                    onTap: () => _showWeekPicker(context),
+                    borderRadius: BorderRadius.circular(10),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 6),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
                         children: [
-                          TextButton(
-                            onPressed: () => _goToWeek(widget.currentWeek),
-                            child: const Text('本周'),
-                          ),
-                          IconButton(
-                            tooltip: '缩小',
-                            onPressed: () => _setZoom(_zoomScale - 0.1),
-                            icon: const Icon(Icons.remove),
-                          ),
-                          IconButton(
-                            tooltip: '整周适配',
-                            onPressed: _resetZoom,
-                            icon: const Icon(Icons.fit_screen),
-                          ),
-                          IconButton(
-                            tooltip: '放大',
-                            onPressed: () => _setZoom(_zoomScale + 0.1),
-                            icon: const Icon(Icons.add),
-                          ),
-                        ],
-                      ),
-                    if (!compact)
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          TextButton(
-                            onPressed: () => _goToWeek(widget.currentWeek),
-                            child: const Text('本周'),
-                          ),
-                          IconButton(
-                            tooltip: '缩小',
-                            onPressed: () => _setZoom(_zoomScale - 0.1),
-                            icon: const Icon(Icons.remove),
-                          ),
-                          IconButton(
-                            tooltip: '整周适配',
-                            onPressed: _resetZoom,
-                            icon: const Icon(Icons.fit_screen),
-                          ),
-                          IconButton(
-                            tooltip: '放大',
-                            onPressed: () => _setZoom(_zoomScale + 0.1),
-                            icon: const Icon(Icons.add),
-                          ),
-                        ],
-                      ),
-                  ],
-                ),
-              ),
-              Builder(
-                builder: (context) {
-                  final todayCourses = _coursesOn(today);
-                  final next = _nextTodayCourse(todayCourses, now);
-                  final summary = next == null
-                      ? (todayCourses.isEmpty ? '今天暂无课程' : '今日课程已结束')
-                      : '下一节：${next.name} · ${_scheduleTimeText(next)}';
-                  return Padding(
-                    padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
-                    child: Row(
-                      children: [
-                        Icon(Icons.today, size: 16, color: colorScheme.primary),
-                        const SizedBox(width: 6),
-                        Expanded(
-                          child: Text(
-                            '今天 ${today.month}月${today.day}日 · $summary',
+                          Text(
+                            _weekTitle(_weekIndex),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              color: colorScheme.onSurfaceVariant,
-                              fontWeight: FontWeight.w600,
+                            style: theme.textTheme.headlineSmall?.copyWith(
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: -0.4,
                             ),
                           ),
-                        ),
-                      ],
+                          const SizedBox(width: 5),
+                          Icon(Icons.expand_more,
+                              size: 18, color: colorScheme.onSurfaceVariant),
+                        ],
+                      ),
                     ),
-                  );
-                },
+                  ),
+                ),
               ),
-              const SizedBox(height: 4),
               SizedBox(
                 key: const ValueKey('schedule-calendar-view'),
                 height: pageViewHeight,
@@ -3123,128 +2971,129 @@ class _CalendarScheduleViewState extends State<_CalendarScheduleView> {
                     final inTerm = week >= 1 && week <= 30;
                     final weekItems =
                         inTerm ? _weekCourses(week) : const <ScheduleCourse>[];
-                    final timeColWidth = compact ? 46.0 : 54.0;
-                    final viewportWidth = constraints.maxWidth;
-                    final gridWidth = viewportWidth;
-                    final dayWidth = (gridWidth - timeColWidth) / 7;
-                    final rowHeight =
-                        _rowHeightFor(weekItems, dayWidth, compact)
+                    // 参照拾光的排版：节次轴只保留阅读时间所需的宽度，
+                    // 剩余空间完整分给 7 个等宽日期列，避免右侧出现小缝。
+                    final baseTimeColWidth = compact ? 36.0 : 46.0;
+                    final availableGridWidth = constraints.maxWidth;
+                    final baseDayWidth =
+                        (availableGridWidth - baseTimeColWidth) / 7;
+                    final baseRowHeight =
+                        _rowHeightFor(weekItems, baseDayWidth, compact)
                             .clamp(34.0, 74.0)
                             .toDouble();
+                    // 缩放直接参与列宽、行高和课程块排版；不再缩放整张
+                    // 画布，因此「按宽度适配」始终铺满视口，不会留下右侧空白。
+                    final timeColWidth = baseTimeColWidth * _zoomScale;
+                    final dayWidth = baseDayWidth * _zoomScale;
+                    final gridWidth = availableGridWidth * _zoomScale;
+                    final rowHeight = baseRowHeight * _zoomScale;
                     final maxSection = _maxSectionFor(weekItems);
-                    final horizontalFit =
-                        (constraints.maxWidth / (timeColWidth + dayWidth * 7))
-                            .clamp(0.25, 1.0)
-                            .toDouble();
-                    final verticalFit =
-                        ((pageViewHeight - 58) / (maxSection * rowHeight + 48))
-                            .clamp(0.25, 1.0)
-                            .toDouble();
-                    _fitScale = verticalFit < horizontalFit
-                        ? verticalFit
-                        : horizontalFit;
-                    if (_zoomScale < _fitScale) _zoomScale = _fitScale;
                     if (!inTerm) {
                       return Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 3),
                         child: _OutOfTermCell(week: week),
                       );
                     }
-                    return GestureDetector(
-                      onDoubleTap: _resetZoom,
-                      child: InteractiveViewer(
-                        transformationController: _transformationController,
-                        minScale: _fitScale,
-                        maxScale: 2.4,
-                        scaleEnabled: true,
-                        panEnabled: _zoomScale > _fitScale,
-                        constrained: true,
-                        child: Transform.scale(
-                          scale: _zoomScale,
-                          alignment: Alignment.topLeft,
-                          child: SizedBox(
-                            width: gridWidth,
-                            child: SingleChildScrollView(
-                              physics: const AlwaysScrollableScrollPhysics(),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  // 星期 + 日期表头（左侧时间列宽占位，与网格列对齐）。
-                                  Row(
-                                    children: [
-                                      SizedBox(width: timeColWidth),
-                                      for (final day in days)
-                                        SizedBox(
-                                          width: dayWidth,
-                                          child: GestureDetector(
-                                            onLongPress: () =>
-                                                _showAdjustDateSheet(day),
-                                            child: Column(
-                                              children: [
-                                                Text(
-                                                  _scheduleWeekdayText(
-                                                      day.weekday),
-                                                  style: theme
-                                                      .textTheme.bodyMedium
-                                                      ?.copyWith(
-                                                          fontWeight:
-                                                              FontWeight.w800),
-                                                ),
-                                                const SizedBox(height: 2),
-                                                Container(
-                                                  width: 36,
-                                                  height: 36,
-                                                  alignment: Alignment.center,
-                                                  decoration: day == today
-                                                      ? BoxDecoration(
-                                                          color: colorScheme
-                                                              .primary,
-                                                          shape:
-                                                              BoxShape.circle)
-                                                      : null,
-                                                  child: Text(
-                                                    '${day.day}',
-                                                    style: TextStyle(
-                                                      fontSize: 15,
-                                                      fontWeight: day == today
-                                                          ? FontWeight.w800
-                                                          : FontWeight.w600,
-                                                      color: day == today
-                                                          ? colorScheme
-                                                              .onPrimary
-                                                          : colorScheme
-                                                              .onSurface,
+                    return Listener(
+                      onPointerDown: _onPointerDown,
+                      onPointerMove: _onPointerMove,
+                      onPointerUp: _onPointerEnd,
+                      onPointerCancel: _onPointerEnd,
+                      child: GestureDetector(
+                        onDoubleTap: _resetZoom,
+                        child: ClipRect(
+                          child: SingleChildScrollView(
+                            scrollDirection: Axis.horizontal,
+                            physics: gridWidth > constraints.maxWidth
+                                ? const ClampingScrollPhysics()
+                                : const NeverScrollableScrollPhysics(),
+                            child: SizedBox(
+                              key: const ValueKey('schedule-week-grid'),
+                              width: gridWidth,
+                              child: SingleChildScrollView(
+                                physics: const AlwaysScrollableScrollPhysics(),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    // 星期 + 日期表头（左侧时间列宽占位，与网格列对齐）。
+                                    Row(
+                                      children: [
+                                        SizedBox(width: timeColWidth),
+                                        for (final day in days)
+                                          SizedBox(
+                                            width: dayWidth,
+                                            child: GestureDetector(
+                                              onLongPress: () =>
+                                                  _showAdjustDateSheet(day),
+                                              child: Column(
+                                                children: [
+                                                  Text(
+                                                    _scheduleWeekdayText(
+                                                        day.weekday),
+                                                    style: theme
+                                                        .textTheme.bodyMedium
+                                                        ?.copyWith(
+                                                            fontWeight:
+                                                                FontWeight
+                                                                    .w800),
+                                                  ),
+                                                  const SizedBox(height: 2),
+                                                  Container(
+                                                    width: 36,
+                                                    height: 36,
+                                                    alignment: Alignment.center,
+                                                    decoration: day == today
+                                                        ? BoxDecoration(
+                                                            color: colorScheme
+                                                                .primary,
+                                                            shape:
+                                                                BoxShape.circle)
+                                                        : null,
+                                                    child: Text(
+                                                      '${day.day}',
+                                                      style: TextStyle(
+                                                        fontSize: 15,
+                                                        fontWeight: day == today
+                                                            ? FontWeight.w800
+                                                            : FontWeight.w600,
+                                                        color: day == today
+                                                            ? colorScheme
+                                                                .onPrimary
+                                                            : colorScheme
+                                                                .onSurface,
+                                                      ),
                                                     ),
                                                   ),
-                                                ),
-                                              ],
+                                                ],
+                                              ),
                                             ),
                                           ),
-                                        ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 6),
-                                  SizedBox(
-                                    height: maxSection * rowHeight,
-                                    child: _WeekTimeGrid(
-                                      days: days,
-                                      items: weekItems,
-                                      maxSection: maxSection,
-                                      timeColWidth: timeColWidth,
-                                      dayWidth: dayWidth,
-                                      gridWidth: gridWidth,
-                                      rowHeight: rowHeight,
-                                      today: today,
-                                      onEmptyDayTap: (day) =>
-                                          _showDayCourses(context, day),
-                                      onAdjustCourse: widget.onAdjustCourse,
-                                      onMoveToDay: widget.onMoveToDay,
-                                      showTime: widget.showTime,
-                                      showClassroom: widget.showClassroom,
-                                      showTeacher: widget.showTeacher,
+                                      ],
                                     ),
-                                  ),
-                                ],
+                                    const SizedBox(height: 6),
+                                    SizedBox(
+                                      height: maxSection * rowHeight,
+                                      child: _WeekTimeGrid(
+                                        days: days,
+                                        items: weekItems,
+                                        maxSection: maxSection,
+                                        timeColWidth: timeColWidth,
+                                        dayWidth: dayWidth,
+                                        gridWidth: gridWidth,
+                                        rowHeight: rowHeight,
+                                        today: today,
+                                        onEmptyDayTap: (day) =>
+                                            _showDayCourses(context, day),
+                                        onAdjustCourse: widget.onAdjustCourse,
+                                        onMoveToDay: widget.onMoveToDay,
+                                        showTime: widget.showTime,
+                                        showClassroom: widget.showClassroom,
+                                        showTeacher: widget.showTeacher,
+                                        contentScale: _zoomScale,
+                                      ),
+                                    ),
+                                  ],
+                                ),
                               ),
                             ),
                           ),
@@ -3396,6 +3245,7 @@ class _WeekTimeGrid extends StatelessWidget {
     required this.showTime,
     required this.showClassroom,
     required this.showTeacher,
+    required this.contentScale,
     required this.onEmptyDayTap,
     this.onAdjustCourse,
     this.onMoveToDay,
@@ -3412,6 +3262,7 @@ class _WeekTimeGrid extends StatelessWidget {
   final bool showTime;
   final bool showClassroom;
   final bool showTeacher;
+  final double contentScale;
   final void Function(DateTime day) onEmptyDayTap;
   final void Function(ScheduleCourse course)? onAdjustCourse;
   final void Function(ScheduleCourse course)? onMoveToDay;
@@ -3438,8 +3289,8 @@ class _WeekTimeGrid extends StatelessWidget {
               child: Container(
                 decoration: BoxDecoration(
                   color: days[day] == today
-                      ? colorScheme.primaryContainer.withValues(alpha: 0.25)
-                      : colorScheme.surfaceContainerLow,
+                      ? colorScheme.primaryContainer.withValues(alpha: 0.16)
+                      : colorScheme.surface,
                   border: Border(
                     left: BorderSide(color: lineColor),
                     right: BorderSide(color: lineColor),
@@ -3465,17 +3316,41 @@ class _WeekTimeGrid extends StatelessWidget {
             width: timeColWidth,
             height: rowHeight,
             child: Center(
-              child: Text(
-                row < scheduleTimes.length
-                    ? '第${row + 1}节\n${scheduleTimes[row].$1}–${scheduleTimes[row].$2}'
-                    : '',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontSize: 9,
-                  fontWeight: FontWeight.w600,
-                  color: colorScheme.onSurfaceVariant,
-                ),
-              ),
+              child: row < scheduleTimes.length
+                  ? FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Text(
+                            '${row + 1}',
+                            style: TextStyle(
+                              fontSize: (16 * contentScale).clamp(13.0, 22.0),
+                              fontWeight: FontWeight.w700,
+                              color: colorScheme.onSurface,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            scheduleTimes[row].$1,
+                            style: TextStyle(
+                              fontSize: (8.5 * contentScale).clamp(8.0, 13.0),
+                              fontWeight: FontWeight.w500,
+                              color: colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                          Text(
+                            scheduleTimes[row].$2,
+                            style: TextStyle(
+                              fontSize: (8.5 * contentScale).clamp(8.0, 13.0),
+                              fontWeight: FontWeight.w500,
+                              color: colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
+                  : const SizedBox.shrink(),
             ),
           ),
         // 课程块（按节次定位，块高 = 节数跨度）
@@ -3503,6 +3378,7 @@ class _WeekTimeGrid extends StatelessWidget {
         showTime: showTime,
         showClassroom: showClassroom,
         showTeacher: showTeacher,
+        contentScale: contentScale,
         onTap: () => _showReadableScheduleDetails(
             context, course, onAdjustCourse, onMoveToDay),
       ),
@@ -3510,8 +3386,7 @@ class _WeekTimeGrid extends StatelessWidget {
   }
 }
 
-/// 周网格中的课程块（拾光风格）：按节次定位，块内自上而下为
-/// 时间 → 课程名 → 教室；调色板色底 + 白字，本地课程加白边。
+/// 周网格中的课程块（拾光风格）：浅色调色板、深色文字和紧凑圆角。
 class _CalendarCourseChip extends StatelessWidget {
   const _CalendarCourseChip({
     required this.course,
@@ -3519,6 +3394,7 @@ class _CalendarCourseChip extends StatelessWidget {
     required this.showTime,
     required this.showClassroom,
     required this.showTeacher,
+    required this.contentScale,
   });
 
   final ScheduleCourse course;
@@ -3526,6 +3402,7 @@ class _CalendarCourseChip extends StatelessWidget {
   final bool showTime;
   final bool showClassroom;
   final bool showTeacher;
+  final double contentScale;
 
   @override
   Widget build(BuildContext context) {
@@ -3538,69 +3415,103 @@ class _CalendarCourseChip extends StatelessWidget {
         : '时间待定';
     return GestureDetector(
       onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 4),
-        decoration: BoxDecoration(
-          color: _scheduleCourseColor(course.name),
-          borderRadius: BorderRadius.circular(8),
-          border: course.isLocal
-              ? Border.all(color: Colors.white, width: 1.2)
-              : Border.all(color: Colors.white.withValues(alpha: 0.35)),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (showTime) ...[
-              Text(
-                startTime,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.9),
-                  fontSize: 11,
-                  height: 1.2,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const SizedBox(height: 2),
-            ],
-            Expanded(
-              child: Text(
-                course.name,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 14,
-                  height: 1.2,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final paddingX = (4 * contentScale).clamp(2.0, 8.0);
+          final paddingY = (3 * contentScale).clamp(2.0, 7.0);
+          final titleFontSize = (14 * contentScale).clamp(14.0, 20.0);
+          final detailFontSize = (11 * contentScale).clamp(11.0, 16.0);
+          final teacherFontSize = (10 * contentScale).clamp(8.0, 16.0);
+          final contentHeight = constraints.maxHeight - paddingY * 2;
+          // 课程名永远显示；用户开启的可选字段仅在格子确有空间时显示。
+          final showTimeInCell =
+              showTime && contentHeight >= titleFontSize * 2.4 + detailFontSize;
+          final showClassroomInCell = showClassroom &&
+              classroom != null &&
+              contentHeight >= titleFontSize * 2.8 + detailFontSize;
+          final teacher = _cleanScheduleText(course.teacher);
+          final showTeacherInCell = showTeacher &&
+              teacher != null &&
+              contentHeight >=
+                  titleFontSize * 3.3 + detailFontSize + teacherFontSize;
+          final reservedHeight =
+              (showTimeInCell ? detailFontSize * 1.2 + 2 : 0) +
+                  (showClassroomInCell ? detailFontSize * 1.2 + 1 : 0) +
+                  (showTeacherInCell ? teacherFontSize * 1.1 : 0);
+          final titleLines =
+              ((contentHeight - reservedHeight) / (titleFontSize * 1.2))
+                  .floor()
+                  .clamp(1, 8)
+                  .toInt();
+          return Container(
+            padding:
+                EdgeInsets.symmetric(horizontal: paddingX, vertical: paddingY),
+            decoration: BoxDecoration(
+              color: _scheduleCourseColor(course.name),
+              borderRadius:
+                  BorderRadius.circular((5 * contentScale).clamp(4.0, 9.0)),
+              border: course.isLocal
+                  ? Border.all(color: const Color(0xFF1976D2), width: 1.4)
+                  : null,
             ),
-            if (showClassroom && classroom != null) ...[
-              const SizedBox(height: 1),
-              Text(
-                classroom,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.85),
-                  fontSize: 11,
-                  height: 1.2,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (showTimeInCell) ...[
+                  Text(
+                    startTime,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: Colors.black.withValues(alpha: 0.72),
+                      fontSize: detailFontSize,
+                      height: 1.2,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                ],
+                Expanded(
+                  child: Text(
+                    course.name,
+                    maxLines: titleLines,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: Colors.black.withValues(alpha: 0.88),
+                      fontSize: titleFontSize,
+                      height: 1.2,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
                 ),
-              ),
-            ],
-            if (showTeacher && _cleanScheduleText(course.teacher) != null)
-              Text(
-                _cleanScheduleText(course.teacher)!,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.85),
-                  fontSize: 10,
-                  height: 1.1,
-                ),
-              ),
-          ],
-        ),
+                if (showClassroomInCell) ...[
+                  const SizedBox(height: 1),
+                  Text(
+                    classroom,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: Colors.black.withValues(alpha: 0.72),
+                      fontSize: detailFontSize,
+                      height: 1.2,
+                    ),
+                  ),
+                ],
+                if (showTeacherInCell)
+                  Text(
+                    teacher,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: Colors.black.withValues(alpha: 0.72),
+                      fontSize: teacherFontSize,
+                      height: 1.1,
+                    ),
+                  ),
+              ],
+            ),
+          );
+        },
       ),
     );
   }
@@ -4480,15 +4391,15 @@ String? _cleanScheduleText(String? value) {
 
 Color _scheduleCourseColor(String name) {
   const palette = [
-    Color(0xFF8E2F43),
-    Color(0xFF006C67),
-    Color(0xFF1E5A85),
-    Color(0xFF8B4D00),
-    Color(0xFF654597),
-    Color(0xFF9D1734),
-    Color(0xFF0E3F63),
-    Color(0xFF9B3D2D),
-    Color(0xFF1F4E94),
+    Color(0xFFFF9CCB),
+    Color(0xFFFFE38B),
+    Color(0xFFB9FF8A),
+    Color(0xFF8EDDF3),
+    Color(0xFFF3A6E7),
+    Color(0xFFA9EFAF),
+    Color(0xFFB8D7FF),
+    Color(0xFFFFB9A8),
+    Color(0xFFD7C5FF),
   ];
   var hash = 0;
   for (final unit in name.codeUnits) {

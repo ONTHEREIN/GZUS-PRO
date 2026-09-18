@@ -222,6 +222,44 @@ void main() {
     expect(event.priority, 3);
   });
 
+  test('Android payload preserves aliases, routing and structured summaries', () {
+    final start = DateTime(2026, 9, 18, 8);
+    final end = start.add(const Duration(hours: 2));
+    final event = LiveActivityEvent.fromMessage({
+      'id': 'exam:payload',
+      'type': 'exam_reminder',
+      'title': '考试提醒',
+      'body': '请提前入场',
+      'style': 'progress',
+      'progressStartTime': start.millisecondsSinceEpoch,
+      'endTimeMillis': end.millisecondsSinceEpoch,
+      'targetTab': 'exams',
+      'deepLink': 'cn.gzus.pro://activity?tab=exams',
+      'courseName': '英语',
+      'location': 'B202',
+      'seat': '12号',
+      'score': '88',
+      'gradeStatus': '合格',
+      'gradePassed': true,
+      'utilityMetrics': [
+        {'label': '电费', 'value': '20 元', 'isAlert': false},
+      ],
+      'utilityPrimaryLabel': '电费',
+      'utilityPrimaryValue': '20 元',
+    });
+
+    final payload = event.toAndroidPayload();
+    expect(event.startTime, start);
+    expect(event.endTime, end);
+    expect(event.targetTab, 'exams');
+    expect(payload['shortCriticalText'], '考试');
+    expect(payload['deepLink'], 'cn.gzus.pro://activity?tab=exams');
+    expect(payload['courseName'], '英语');
+    expect(payload['seat'], '12号');
+    expect(payload['utilityPrimaryValue'], '20 元');
+    expect((payload['utilityMetrics'] as List).single['label'], '电费');
+  });
+
   test('活动优先级保持课程和考试倒计时优先', () {
     final course = LiveActivityEvent.courseReminder(
       id: 1,

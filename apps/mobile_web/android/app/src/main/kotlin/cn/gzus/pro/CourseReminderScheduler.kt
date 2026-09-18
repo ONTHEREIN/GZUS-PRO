@@ -125,6 +125,7 @@ class CourseReminderScheduler(private val context: Context) {
                         shortText,
                         notificationId,
                         name,
+                        classroom,
                     )
                 }
 
@@ -144,6 +145,7 @@ class CourseReminderScheduler(private val context: Context) {
                         shortText,
                         notificationId,
                         name,
+                        classroom,
                     )
                 }
             }
@@ -196,6 +198,7 @@ class CourseReminderScheduler(private val context: Context) {
                     "${beforeStart}min",
                     hashId(occurrenceKey, dayCal.get(Calendar.DAY_OF_WEEK), startSection, startReminderTime.timeInMillis, "start"),
                     name,
+                    classroom,
                 )
             }
             val endReminderTime = dateTime(dayCal, endTime).apply {
@@ -211,6 +214,7 @@ class CourseReminderScheduler(private val context: Context) {
                     "${beforeEnd}min",
                     hashId(occurrenceKey, dayCal.get(Calendar.DAY_OF_WEEK), startSection, endReminderTime.timeInMillis, "end"),
                     name,
+                    classroom,
                 )
             }
         }
@@ -244,6 +248,7 @@ class CourseReminderScheduler(private val context: Context) {
         shortCriticalText: String,
         notificationId: Int,
         courseName: String,
+        location: String,
     ) {
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
         val intent = Intent(context, CourseReminderReceiver::class.java).apply {
@@ -254,6 +259,7 @@ class CourseReminderScheduler(private val context: Context) {
             putExtra(CourseReminderReceiver.EXTRA_SHORT_CRITICAL_TEXT, shortCriticalText)
             putExtra(CourseReminderReceiver.EXTRA_NOTIFICATION_ID, notificationId)
             putExtra(CourseReminderReceiver.EXTRA_COURSE_NAME, courseName)
+            putExtra(CourseReminderReceiver.EXTRA_LOCATION, location)
         }
         val pendingIntent = PendingIntent.getBroadcast(
             context, notificationId, intent,

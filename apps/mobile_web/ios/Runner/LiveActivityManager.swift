@@ -346,6 +346,22 @@ final class LiveActivityManager {
                   (200..<300).contains(response.statusCode) else {
                 let status = (response as? HTTPURLResponse)?.statusCode ?? 0
                 NSLog("live_activity_token_sync_failed: status=%ld", status)
+                if status == 401 {
+                    var retryArguments: [String: String] = [
+                        "token": token,
+                        "tokenType": tokenType,
+                    ]
+                    if let activityId, !activityId.isEmpty {
+                        retryArguments["activityId"] = activityId
+                    }
+                    if let activityType, !activityType.isEmpty {
+                        retryArguments["activityType"] = activityType
+                    }
+                    if let expiresAt {
+                        retryArguments["expiresAt"] = self.iso8601(expiresAt)
+                    }
+                    self.send(method: "tokenSyncRequiresSession", arguments: retryArguments)
+                }
                 return
             }
             NSLog("live_activity_token_sync_succeeded: token_type=%@ status=%ld", tokenType, response.statusCode)

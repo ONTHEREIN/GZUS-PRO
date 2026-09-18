@@ -13,6 +13,7 @@ class CourseReminderReceiver : BroadcastReceiver() {
         const val EXTRA_SHORT_CRITICAL_TEXT = "shortCriticalText"
         const val EXTRA_NOTIFICATION_ID = "notificationId"
         const val EXTRA_COURSE_NAME = "courseName"
+        const val EXTRA_LOCATION = "location"
     }
 
     override fun onReceive(context: Context, intent: Intent) {
@@ -20,9 +21,10 @@ class CourseReminderReceiver : BroadcastReceiver() {
         val body = intent.getStringExtra(EXTRA_BODY) ?: ""
         val startTimeMs = intent.getLongExtra(EXTRA_START_TIME_MS, System.currentTimeMillis())
         val endTimeMs = intent.getLongExtra(EXTRA_END_TIME_MS, 0L)
-        val shortCriticalText = intent.getStringExtra(EXTRA_SHORT_CRITICAL_TEXT)
+        val shortCriticalText = intent.getStringExtra(EXTRA_SHORT_CRITICAL_TEXT) ?: "课程"
         val notificationId = intent.getIntExtra(EXTRA_NOTIFICATION_ID, 0)
         val courseName = intent.getStringExtra(EXTRA_COURSE_NAME) ?: ""
+        val location = intent.getStringExtra(EXTRA_LOCATION) ?: ""
 
         val extrasJson = org.json.JSONObject().apply {
             put("type", "course_reminder")
@@ -33,40 +35,41 @@ class CourseReminderReceiver : BroadcastReceiver() {
             put("progressCurrent", timeProgress(startTimeMs, endTimeMs))
         }.toString()
 
-        val helper = LiveUpdateNotificationHelper(context)
-        val posted = helper.postLiveUpdate(
+        val payload = LiveUpdatePayload.fromCourseReminder(
             id = notificationId,
             title = title,
             body = body,
-            style = "progress",
+            courseName = courseName,
+            location = location,
+            startTimeMillis = startTimeMs,
             endTimeMillis = endTimeMs,
-            shortCriticalText = "上课",
-            extrasJson = extrasJson,
-            ongoing = true,
-            progressMax = 100,
+            shortCriticalText = shortCriticalText,
             progressCurrent = timeProgress(startTimeMs, endTimeMs),
+            extrasJson = extrasJson,
         )
+        val helper = LiveUpdateNotificationHelper(context)
+        val posted = helper.postLiveUpdate(payload)
         if (!posted) {
             // Fallback to regular notification
             val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
             val clickIntent = Intent(context, MainActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-                putExtra(BackgroundService.EXTRA_PUSH_EXTRAS, extrasJson)
+                putExtra(BackgroundService.EXTRA_PUSH_EXTRAS, payload.extrasJson)
             }
             val pendingIntent = android.app.PendingIntent.getActivity(
-                context, notificationId, clickIntent,
+                context, payload.id, clickIntent,
                 android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
             )
             val notification = androidx.core.app.NotificationCompat.Builder(context, BackgroundService.NOTIFICATION_CHANNEL_ID)
                 .setContentTitle(title)
                 .setContentText(body)
-                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setSmallIcon(R.drawable.ic_stat_live_update)
                 .setContentIntent(pendingIntent)
                 .setAutoCancel(true)
                 .setPriority(androidx.core.app.NotificationCompat.PRIORITY_HIGH)
                 .build()
             try {
-                manager.notify(notificationId, notification)
+                manager.notify(payload.id, notification)
             } catch (_: SecurityException) {}
         }
 
@@ -77,22 +80,15 @@ class CourseReminderReceiver : BroadcastReceiver() {
             fun updateProgress() {
                 if (endTimeMs <= System.currentTimeMillis()) return
                 helper.postLiveUpdate(
-                    id = notificationId,
-                    title = title,
-                    body = body,
-                    style = "progress",
-                    endTimeMillis = endTimeMs,
-                    shortCriticalText = "上课",
-                    extrasJson = extrasJson,
-                    ongoing = true,
-                    progressMax = 100,
-                    progressCurrent = timeProgress(startTimeMs, endTimeMs),
+                    payload.copy(
+                        progressCurrent = timeProgress(startTimeMs, endTimeMs),
+                    ),
                 )
                 handler.postDelayed({ updateProgress() }, 60_000L)
             }
             handler.postDelayed({ updateProgress() }, 60_000L)
             handler.postDelayed({
-                helper.cancelLiveUpdate(notificationId)
+                helper.cancelLiveUpdate(payload.id)
             }, cancelDelay)
         }
     }

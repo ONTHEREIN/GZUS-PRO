@@ -3,10 +3,79 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
+import 'live_activity_service.dart';
+
+enum AndroidPromotedNotificationStatus {
+  available('available'),
+  authorizationRequired('authorization_required'),
+  unsupported('unsupported');
+
+  const AndroidPromotedNotificationStatus(this.nativeValue);
+
+  final String nativeValue;
+
+  static AndroidPromotedNotificationStatus fromNativeValue(String? value) {
+    return switch (value) {
+      'available' => AndroidPromotedNotificationStatus.available,
+      'authorization_required' =>
+        AndroidPromotedNotificationStatus.authorizationRequired,
+      _ => AndroidPromotedNotificationStatus.unsupported,
+    };
+  }
+}
+
 class LiveUpdateService {
   static const _channel = MethodChannel('cn.gzus.pro/live_update');
   static final Map<int, Future<void>> _cancelTasks = {};
   static final Map<int, Timer> _progressTimers = {};
+
+  /// 将 iOS/Android 共用的活动事件归一化后投递到 Android 原生通知。
+  ///
+  /// 课程和考试只要带有有效时间窗口，就沿用进度更新计时器；原生层会
+  /// 将这类事件优先渲染为 chronometer。其它进度事件保持普通进度条，
+  /// 成绩、水电和其它摘要事件则直接走可取消的标准通知。
+  static Future<bool> postEvent({required LiveActivityEvent event}) async {
+    final payload = event.toAndroidPayload();
+    final startTimeMillis = payload['startTimeMillis'] as int? ?? 0;
+    final endTimeMillis = payload['endTimeMillis'] as int? ?? 0;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final isTimed = event.isCountdown && endTimeMillis > now;
+    if (isTimed) {
+      return postTimedProgressLiveUpdate(
+        id: notificationIdForEventId(event.id),
+        title: event.title,
+        body: event.body,
+        startTimeMillis: startTimeMillis > 0 ? startTimeMillis : now,
+        endTimeMillis: endTimeMillis,
+        shortCriticalText: payload['shortCriticalText'] as String,
+        extras: payload,
+        ongoing: event.ongoing,
+      );
+    }
+    return postLiveUpdate(
+      id: notificationIdForEventId(event.id),
+      title: event.title,
+      body: event.body,
+      style: event.style,
+      endTimeMillis: endTimeMillis,
+      shortCriticalText: payload['shortCriticalText'] as String,
+      extras: payload,
+      ongoing: event.ongoing,
+      progressMax: payload['progressMax'] as int? ?? 0,
+      progressCurrent: payload['progressCurrent'] as int? ?? 0,
+    );
+  }
+
+  /// 使用与 Android `String.hashCode` 相同的 UTF-16/31 倍乘算法生成稳定 ID。
+  static int notificationIdForEventId(String eventId) {
+    var hash = 0;
+    for (final codeUnit in eventId.codeUnits) {
+      hash = (hash * 31 + codeUnit) & 0xFFFFFFFF;
+    }
+    if (hash >= 0x80000000) hash -= 0x100000000;
+    if (hash == -0x80000000) return 1;
+    return hash.abs();
+  }
 
   /// Post a live update notification (Android only).
   /// [id] - unique notification id
@@ -32,7 +101,8 @@ class LiveUpdateService {
       return false;
     }
     try {
-      debugPrint('[LiveUpdateService] Invoking postLiveUpdate on native channel: id=$id, title=$title, style=$style');
+      debugPrint(
+          '[LiveUpdateService] Invoking postLiveUpdate on native channel: id=$id, title=$title, style=$style');
       final posted = await _channel.invokeMethod<bool>('postLiveUpdate', {
         'id': id,
         'title': title,
@@ -98,6 +168,8 @@ class LiveUpdateService {
         extras: {
           if (extras != null) ...extras,
           'style': 'progress',
+          'startTimeMillis': startTimeMillis,
+          'endTimeMillis': endTimeMillis,
           'progressMax': 100,
           'progressCurrent': progress,
         },
@@ -135,13 +207,36 @@ class LiveUpdateService {
     }
   }
 
-  /// Check if the device supports promoted notifications.
-  static Future<bool> canPostPromotedNotifications() async {
-    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return false;
+  /// 检查 Android 实况通知的推广资格，并区分授权不足与设备不支持。
+  static Future<AndroidPromotedNotificationStatus>
+      checkPromotedNotificationStatus() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
+      return AndroidPromotedNotificationStatus.unsupported;
+    }
     try {
-      final result =
-          await _channel.invokeMethod<bool>('canPostPromotedNotifications');
+      final result = await _channel.invokeMethod<String>(
+        'getPromotedNotificationStatus',
+      );
+      return AndroidPromotedNotificationStatus.fromNativeValue(result);
+    } on MissingPluginException {
+      return AndroidPromotedNotificationStatus.unsupported;
+    } on PlatformException {
+      return AndroidPromotedNotificationStatus.unsupported;
+    }
+  }
+
+  /// 打开当前应用的 Android 通知设置，供用户开启实况通知推广资格。
+  static Future<bool> openPromotedNotificationSettings() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) {
+      return false;
+    }
+    try {
+      final result = await _channel.invokeMethod<bool>(
+        'openPromotedNotificationSettings',
+      );
       return result ?? false;
+    } on MissingPluginException {
+      return false;
     } on PlatformException {
       return false;
     }

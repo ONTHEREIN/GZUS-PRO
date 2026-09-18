@@ -418,58 +418,51 @@ class BackgroundService : Service() {
     }
 
     private fun showPushNotification(message: JSONObject) {
-        val title = message.optString("title", "软帮手通知")
-        val body = message.optString("body", "")
-        val extras = message.optJSONObject("extras") ?: JSONObject().apply {
-            put("type", message.optString("type", ""))
-            put("url", message.optString("url", ""))
-        }
-        val liveUpdate = message.optBoolean("liveUpdate", false)
-        val style = message.optString("style", "metric")
-        val endTime = message.optLong("endTime", 0L)
-        val progressStartTime = message.optLong("progressStartTime", System.currentTimeMillis())
-        val progressMax = message.optInt("progressMax", 0)
-        val progressCurrent = message.optInt("progressCurrent", 0)
-        val ongoing = message.optBoolean("ongoing", style != "metric")
-        val shortCriticalText = message.optString("shortCriticalText", "").ifBlank { null }
+        val payload = LiveUpdatePayload.fromMessage(message)
+        val title = payload.title
+        val body = payload.body
+        val extras = JSONObject(payload.extrasJson)
+        val liveUpdate = message.optBoolean("liveUpdate", false) ||
+            extras.optBoolean("liveUpdate", false)
 
         // Try live update notification first
         if (liveUpdate) {
             try {
                 val helper = LiveUpdateNotificationHelper(this)
-                val notificationKey = message.optString("id").ifBlank { "${System.currentTimeMillis()}" }
-                val posted = helper.postLiveUpdate(
-                    id = notificationKey.hashCode(),
-                    title = title,
-                    body = body,
-                    style = style,
-                    endTimeMillis = endTime,
-                    shortCriticalText = shortCriticalText,
-                    extrasJson = extras.toString(),
-                    ongoing = ongoing,
-                    progressMax = if (style == "progress" && endTime > 0L) 100 else progressMax,
-                    progressCurrent = if (style == "progress" && endTime > 0L) {
-                        timeProgress(progressStartTime, endTime)
-                    } else {
-                        progressCurrent
-                    },
-                )
+                val progressPayload = if (payload.style == "progress" && payload.endTimeMillis > 0L) {
+                    payload.copy(
+                        progressMax = 100,
+                        progressCurrent = timeProgress(
+                            payload.startTimeMillis,
+                            payload.endTimeMillis,
+                        ),
+                    )
+                } else {
+                    payload
+                }
+                val postPayload = if (
+                    !progressPayload.ongoing &&
+                    progressPayload.style == "metric" &&
+                    progressPayload.endTimeMillis <= System.currentTimeMillis()
+                ) {
+                    progressPayload.copy(
+                        endTimeMillis = System.currentTimeMillis() + 30 * 60 * 1000L,
+                    )
+                } else {
+                    progressPayload
+                }
+                val posted = helper.postLiveUpdate(postPayload)
                 if (posted) {
-                    val cancelTime = if (style == "metric") System.currentTimeMillis() + 30 * 60 * 1000L else endTime
-                    if (ongoing && style == "progress" && endTime > System.currentTimeMillis()) {
+                    if (postPayload.ongoing && postPayload.style == "progress" &&
+                        postPayload.endTimeMillis > System.currentTimeMillis()
+                    ) {
                         scheduleProgressUpdates(
                             helper = helper,
-                            notificationId = notificationKey.hashCode(),
-                            title = title,
-                            body = body,
-                            endTimeMillis = endTime,
-                            startTimeMillis = progressStartTime,
-                            shortCriticalText = shortCriticalText,
-                            extrasJson = extras.toString(),
+                            payload = postPayload,
                         )
                     }
-                    scheduleLiveUpdateCancel(notificationKey.hashCode(), cancelTime)
-                    markNotificationPresented(message.optString("eventKey").ifBlank { notificationKey })
+                    scheduleLiveUpdateCancel(postPayload.id, postPayload.endTimeMillis)
+                    markNotificationPresented(postPayload.eventKey)
                     return
                 }
             } catch (_: Exception) {
@@ -482,17 +475,16 @@ class BackgroundService : Service() {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
             putExtra(EXTRA_PUSH_EXTRAS, extras.toString())
         }
-        val notificationKey = message.optString("id").ifBlank { "${System.currentTimeMillis()}" }
         val pendingIntent = PendingIntent.getActivity(
             this,
-            notificationKey.hashCode(),
+            payload.id,
             intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         val notification = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
             .setContentTitle(title)
             .setContentText(body)
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setSmallIcon(R.drawable.ic_stat_live_update)
             .setContentIntent(pendingIntent)
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
@@ -500,8 +492,8 @@ class BackgroundService : Service() {
             .build()
         try {
             val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            manager.notify(notificationKey.hashCode(), notification)
-            markNotificationPresented(message.optString("eventKey").ifBlank { notificationKey })
+            manager.notify(payload.id, notification)
+            markNotificationPresented(payload.eventKey)
         } catch (_: SecurityException) {
         }
     }
@@ -539,28 +531,19 @@ class BackgroundService : Service() {
 
     private fun scheduleProgressUpdates(
         helper: LiveUpdateNotificationHelper,
-        notificationId: Int,
-        title: String,
-        body: String,
-        startTimeMillis: Long,
-        endTimeMillis: Long,
-        shortCriticalText: String?,
-        extrasJson: String,
+        payload: LiveUpdatePayload,
     ) {
         val handler = Handler(Looper.getMainLooper())
         fun postNext() {
-            if (endTimeMillis <= System.currentTimeMillis()) return
+            if (payload.endTimeMillis <= System.currentTimeMillis()) return
             helper.postLiveUpdate(
-                id = notificationId,
-                title = title,
-                body = body,
-                style = "progress",
-                endTimeMillis = endTimeMillis,
-                shortCriticalText = shortCriticalText,
-                extrasJson = extrasJson,
-                ongoing = true,
-                progressMax = 100,
-                progressCurrent = timeProgress(startTimeMillis, endTimeMillis),
+                payload.copy(
+                    progressMax = 100,
+                    progressCurrent = timeProgress(
+                        payload.startTimeMillis,
+                        payload.endTimeMillis,
+                    ),
+                ),
             )
             handler.postDelayed({ postNext() }, 60_000L)
         }

@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../api_client.dart';
+import '../../live_update_service.dart';
 import '../../live_activity_service.dart';
 import '../../models/background_notification_status.dart';
 import '../home/home_page.dart';
@@ -37,7 +38,8 @@ class NotificationSettingsPage extends StatefulWidget {
       _NotificationSettingsPageState();
 }
 
-class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
+class _NotificationSettingsPageState extends State<NotificationSettingsPage>
+    with WidgetsBindingObserver {
   BackgroundNotificationStatus? _background;
   EcardSummary? _ecard;
   String? _error;
@@ -45,13 +47,44 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
   bool _liveActivityEnabled = true;
   String? _savingKey;
   bool? _iosNotificationReady;
+  AndroidPromotedNotificationStatus? _androidPromotedNotificationStatus;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     unawaited(_load());
     unawaited(_loadLiveActivityPreference());
     unawaited(_loadIosNotificationStatus());
+    unawaited(_loadAndroidPromotedNotificationStatus());
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_loadAndroidPromotedNotificationStatus());
+    }
+  }
+
+  Future<void> _loadAndroidPromotedNotificationStatus() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
+    final status = await LiveUpdateService.checkPromotedNotificationStatus();
+    if (mounted) setState(() => _androidPromotedNotificationStatus = status);
+  }
+
+  Future<void> _openAndroidPromotedNotificationSettings() async {
+    final opened = await LiveUpdateService.openPromotedNotificationSettings();
+    if (!opened && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('无法打开系统通知设置，请手动进入应用通知设置')),
+      );
+    }
   }
 
   Future<void> _loadIosNotificationStatus() async {
@@ -185,6 +218,13 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
                     lastCheckedAt: _background?.lastCheckedAt,
                     onTap: widget.onOpenBackgroundGuide,
                   ),
+                  if (_androidPromotedNotificationStatus != null) ...[
+                    const SizedBox(height: 14),
+                    _AndroidPromotedNotificationTile(
+                      status: _androidPromotedNotificationStatus!,
+                      onOpenSettings: _openAndroidPromotedNotificationSettings,
+                    ),
+                  ],
                   const SizedBox(height: 14),
                   _NotificationHistory(api: widget.api),
                   if (_iosNotificationReady != null) ...[
@@ -349,6 +389,57 @@ class _NotificationSettingsPageState extends State<NotificationSettingsPage> {
   }
 }
 
+class _AndroidPromotedNotificationTile extends StatelessWidget {
+  const _AndroidPromotedNotificationTile({
+    required this.status,
+    required this.onOpenSettings,
+  });
+
+  final AndroidPromotedNotificationStatus status;
+  final VoidCallback onOpenSettings;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final (title, subtitle, icon, color, actionable) = switch (status) {
+      AndroidPromotedNotificationStatus.available => (
+          'Android 实况通知推广资格：当前可用',
+          '符合条件的常驻通知可以显示为系统实况通知',
+          Icons.check_circle_outline,
+          colors.primary,
+          false,
+        ),
+      AndroidPromotedNotificationStatus.authorizationRequired => (
+          'Android 实况通知推广资格：系统未授权',
+          '请在系统通知设置中允许实况更新，点击此处打开设置',
+          Icons.notifications_paused_outlined,
+          colors.error,
+          true,
+        ),
+      AndroidPromotedNotificationStatus.unsupported => (
+          'Android 实况通知推广资格：设备不支持',
+          '需要 Android 16 或更高版本，并且设备支持实况通知推广',
+          Icons.devices_other_outlined,
+          colors.onSurfaceVariant,
+          false,
+        ),
+    };
+    return Card(
+      elevation: 0,
+      color: status == AndroidPromotedNotificationStatus.authorizationRequired
+          ? colors.errorContainer
+          : colors.surfaceContainerLow,
+      child: ListTile(
+        leading: Icon(icon, color: color),
+        title: Text(title),
+        subtitle: Text(subtitle),
+        trailing: actionable ? const Icon(Icons.open_in_new) : null,
+        onTap: actionable ? onOpenSettings : null,
+      ),
+    );
+  }
+}
+
 class _NotificationHistory extends StatefulWidget {
   const _NotificationHistory({required this.api});
 
@@ -441,9 +532,8 @@ class _NotificationHistoryState extends State<_NotificationHistory> {
                     trailing: event['readAt'] == null
                         ? const Icon(Icons.chevron_right)
                         : null,
-                    onTap: event['readAt'] == null
-                        ? () => _markRead(event)
-                        : null,
+                    onTap:
+                        event['readAt'] == null ? () => _markRead(event) : null,
                   ),
               ],
             );
@@ -480,10 +570,10 @@ class _BackgroundSummary extends StatelessWidget {
     final detail = suspended
         ? '后台监测已暂停：${suspensionReason ?? '校方设备或会话数达到上限'}${retryText.isEmpty ? '' : ' · $retryText'}'
         : enabled
-        ? lastCheckedAt == null
-            ? '后台持续通知已开启'
-            : '后台持续通知已开启 · 最近检查 ${lastCheckedAt!.hour.toString().padLeft(2, '0')}:${lastCheckedAt!.minute.toString().padLeft(2, '0')}'
-        : '未开启后台持续通知，类别设置将在开启后生效';
+            ? lastCheckedAt == null
+                ? '后台持续通知已开启'
+                : '后台持续通知已开启 · 最近检查 ${lastCheckedAt!.hour.toString().padLeft(2, '0')}:${lastCheckedAt!.minute.toString().padLeft(2, '0')}'
+            : '未开启后台持续通知，类别设置将在开启后生效';
     return Card(
       elevation: 0,
       color: suspended
@@ -492,12 +582,11 @@ class _BackgroundSummary extends StatelessWidget {
               ? colors.primaryContainer
               : colors.surfaceContainerLow,
       child: ListTile(
-        leading: Icon(
-          suspended
-              ? Icons.pause_circle_outline
-              : enabled
-                  ? Icons.notifications_active
-                  : Icons.notifications_off),
+        leading: Icon(suspended
+            ? Icons.pause_circle_outline
+            : enabled
+                ? Icons.notifications_active
+                : Icons.notifications_off),
         title: const Text('后台通知'),
         subtitle: Text(detail),
         trailing: const Icon(Icons.chevron_right),

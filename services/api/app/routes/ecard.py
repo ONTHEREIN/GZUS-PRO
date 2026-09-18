@@ -8,9 +8,17 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy.orm import Session
 
 from app.academic_period import now_shanghai
-from app.database import DataCache, EcardBinding, EcardPowerConsumption, get_sync_session_factory
+from app.database import (
+    DataCache,
+    EcardBinding,
+    EcardPowerConsumption,
+    EcardWaterBalanceSnapshot,
+    get_sync_session_factory,
+)
+from app.ecard_history import monthly_water_overviews, record_water_balance_snapshots
 from app.ecard_client import EcardApiError, EcardClient, EcardConfigurationError, EcardRoomRef
 from app.routes.deps import require_session
 from app.schemas import (
@@ -262,7 +270,10 @@ def summary_for_student(student_id: str) -> dict[str, Any]:
 
 
 def refresh_binding(
-    binding: EcardBinding, student_id: str, client: EcardClient | None = None
+    binding: EcardBinding,
+    student_id: str,
+    db: Session,
+    client: EcardClient | None = None,
 ) -> tuple[dict[str, Any], bool, str | None]:
     """刷新宿舍水电余额。
 
@@ -325,6 +336,10 @@ def refresh_binding(
     if hot_balance is not None:
         binding.hot_water_balance_cache = float(hot_balance)
         binding.hot_water_cache_at = datetime.now(timezone.utc)
+
+    if not stale:
+        # 仅记录真实上游余额，缓存兜底不得污染趋势数据。
+        record_water_balance_snapshots(db, binding.room_id, summary, datetime.now(timezone.utc))
 
     binding.last_summary_json = json.dumps(summary, ensure_ascii=False)
     # 仅在真正拿到学校新数据时刷新"更新时间"；缓存兜底时保留原时间戳，
@@ -389,7 +404,7 @@ def bind_room(
             binding.room_display = payload.room_display
         db.flush()
         try:
-            refresh_binding(binding, student_id)
+            refresh_binding(binding, student_id, db)
         except EcardConfigurationError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         except EcardApiError as exc:
@@ -423,7 +438,7 @@ def refresh(session: AppSession = Depends(require_session)) -> dict[str, Any]:
             logger.info("ecard: refresh skipped, no binding for student=%s", student_id)
             return {"status": "not_bound"}
         try:
-            summary, stale, stale_reason = refresh_binding(binding, student_id)
+            summary, stale, stale_reason = refresh_binding(binding, student_id, db)
             db.commit()
             db.refresh(binding)
             result = _summary_from_binding(binding, student_id)
@@ -470,6 +485,8 @@ def update_summary_cache(
         update = payload.model_dump(by_alias=True, exclude_unset=True)
         existing.update({key: value for key, value in update.items() if value is not None})
         binding.last_summary_json = json.dumps(existing, ensure_ascii=False)
+        # 只记录本次客户端实际回传的实时余额，避免旧缓存字段被重复记为新快照。
+        record_water_balance_snapshots(db, binding.room_id, update, datetime.now(timezone.utc))
         binding.last_checked_at = datetime.now(timezone.utc)
         binding.updated_at = datetime.now(timezone.utc)
         db.commit()
@@ -561,7 +578,29 @@ def consumption_overview(
             .order_by(EcardPowerConsumption.month.desc())
             .all()
         )
-        return {"status": "ok", "months": [_monthly_overview(record) for record in records]}
+        water = {}
+        for utility_type, response_key in (
+            ("cold_water", "coldWaterMonths"),
+            ("hot_water", "hotWaterMonths"),
+        ):
+            snapshots = (
+                db.query(EcardWaterBalanceSnapshot)
+                .filter(
+                    EcardWaterBalanceSnapshot.room_id == binding.room_id,
+                    EcardWaterBalanceSnapshot.utility_type == utility_type,
+                )
+                .order_by(
+                    EcardWaterBalanceSnapshot.snapshot_date,
+                    EcardWaterBalanceSnapshot.captured_at,
+                )
+                .all()
+            )
+            water[response_key] = monthly_water_overviews(snapshots)
+        return {
+            "status": "ok",
+            "months": [_monthly_overview(record) for record in records],
+            **water,
+        }
 
 
 def _power_consumption_for(room_id: str, month: str) -> EcardPowerConsumption | None:

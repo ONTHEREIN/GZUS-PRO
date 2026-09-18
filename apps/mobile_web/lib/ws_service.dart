@@ -179,38 +179,9 @@ class WsService {
       return;
     }
 
-    final style = (msg['style'] ?? extras['style'] ?? 'metric').toString();
-    final endTimeMillis = _intValue(msg['endTime'] ?? extras['endTime']);
-    final startTimeMillis = _intValue(
-      msg['progressStartTime'] ??
-          extras['progressStartTime'] ??
-          DateTime.now().millisecondsSinceEpoch,
-    );
     debugPrint(
-        '[WsService] Posting LiveUpdate: style=$style, endTimeMillis=$endTimeMillis');
-    final posted = style == 'progress' && endTimeMillis > 0
-        ? await LiveUpdateService.postTimedProgressLiveUpdate(
-            id: notificationId,
-            title: title,
-            body: body,
-            startTimeMillis: startTimeMillis,
-            endTimeMillis: endTimeMillis,
-            shortCriticalText: msg['shortCriticalText'] as String? ?? '动态',
-            extras: extras,
-            ongoing: msg['ongoing'] as bool? ?? true,
-          )
-        : await LiveUpdateService.postLiveUpdate(
-            id: notificationId,
-            title: title,
-            body: body,
-            style: style,
-            endTimeMillis: endTimeMillis,
-            shortCriticalText: msg['shortCriticalText'] as String?,
-            extras: extras,
-            ongoing: msg['ongoing'] as bool? ?? style != 'metric',
-            progressMax: _intValue(msg['progressMax']),
-            progressCurrent: _intValue(msg['progressCurrent']),
-          );
+        '[WsService] Posting LiveUpdate: style=${event.style}, type=${event.type}');
+    final posted = await LiveUpdateService.postEvent(event: event);
     debugPrint('[WsService] LiveUpdate post result: posted=$posted');
     if (!posted) {
       await LocalNotificationService.show(
@@ -228,7 +199,8 @@ class WsService {
     final callback = _onPresented;
     if (eventId == null || eventId.isEmpty || callback == null) return;
     unawaited(callback(eventId).catchError((error) {
-      debugPrint('[WsService] Failed to record notification presentation: $error');
+      debugPrint(
+          '[WsService] Failed to record notification presentation: $error');
     }));
   }
 
@@ -250,13 +222,34 @@ class WsService {
         : <String, dynamic>{};
     for (final key in const [
       'type',
+      'eventKey',
       'url',
+      'deepLink',
       'courseName',
+      'name',
+      'location',
+      'examLocation',
+      'seat',
+      'examSeat',
+      'score',
+      'gradeStatus',
+      'gradePassed',
+      'passed',
+      'grade',
+      'utilityMetrics',
+      'utilityPrimaryLabel',
+      'utilityPrimaryValue',
       'studentId',
       'liveUpdate',
       'style',
+      'startTime',
+      'startTimeMillis',
       'endTime',
+      'endTimeMillis',
+      'ongoing',
       'id',
+      'targetTab',
+      'shortText',
       'shortCriticalText',
       'progressStartTime',
       'progressMax',
@@ -266,13 +259,6 @@ class WsService {
       if (msg[key] != null) extras[key] = msg[key];
     }
     return extras;
-  }
-
-  static int _intValue(Object? value) {
-    if (value is int) return value;
-    if (value is num) return value.toInt();
-    if (value is String) return int.tryParse(value) ?? 0;
-    return 0;
   }
 
   static void _onError(dynamic error) {

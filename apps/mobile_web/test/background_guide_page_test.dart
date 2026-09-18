@@ -46,4 +46,26 @@ void main() {
     expect(completeButton.onPressed, isNotNull);
     debugDefaultTargetPlatformOverride = null;
   });
+
+  testWidgets('iOS 引导在窄屏大字号下不溢出', (tester) async {
+    tester.view.physicalSize = const Size(320, 568);
+    tester.view.devicePixelRatio = 1;
+    tester.platformDispatcher.textScaleFactorTestValue = 1.5;
+    addTearDown(tester.view.reset);
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+
+    try {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: BackgroundGuidePage(
+            api: ApiClient(baseUrl: 'https://api.example.test'),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
 }

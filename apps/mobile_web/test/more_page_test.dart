@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gzus_pro_mobile_web/api_client.dart';
 import 'package:gzus_pro_mobile_web/gzus_design.dart';
+import 'package:gzus_pro_mobile_web/models/custom_background.dart';
 import 'package:gzus_pro_mobile_web/models/nav_config.dart';
 import 'package:gzus_pro_mobile_web/pages/more/more_page.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -163,6 +164,61 @@ void main() {
 
     expect(selectedScale, 1.15);
   });
+
+  testWidgets('未启用移动端背景能力时隐藏自定义背景设置', (tester) async {
+    await tester.pumpWidget(_morePage(
+      onConfigChanged: () {},
+      onNavigate: (_) {},
+      onFontScaleChanged: (_) {},
+    ));
+
+    expect(find.text('自定义背景'), findsNothing);
+    expect(find.byKey(const ValueKey('custom-background-pick-button')),
+        findsNothing);
+  });
+
+  testWidgets('自定义背景设置显示预览、滑块和移除入口', (tester) async {
+    var pickCount = 0;
+    var clearCount = 0;
+    await tester.pumpWidget(_morePage(
+      onConfigChanged: () {},
+      onNavigate: (_) {},
+      onFontScaleChanged: (_) {},
+      customBackground: const CustomBackgroundSettings(
+        imagePath: '/tmp/gzus-test-background.img',
+        blurSigma: 12,
+        darkness: 0.35,
+      ),
+      onPickCustomBackground: () async => pickCount++,
+      onClearCustomBackground: () async => clearCount++,
+      onCustomBackgroundBlurChanged: (_) async {},
+      onCustomBackgroundDarknessChanged: (_) async {},
+    ));
+    await tester.pumpAndSettle();
+
+    expect(find.text('自定义背景'), findsOneWidget);
+    expect(find.byKey(const ValueKey('custom-background-blur-slider')),
+        findsOneWidget);
+    expect(find.byKey(const ValueKey('custom-background-darkness-slider')),
+        findsOneWidget);
+    expect(find.byKey(const ValueKey('custom-background-remove-button')),
+        findsOneWidget);
+
+    final pickButton =
+        find.byKey(const ValueKey('custom-background-pick-button'));
+    await tester.ensureVisible(pickButton);
+    await tester.tap(pickButton);
+    await tester.pumpAndSettle();
+    final removeButton =
+        find.byKey(const ValueKey('custom-background-remove-button'));
+    await tester.ensureVisible(removeButton);
+    await tester.tap(removeButton);
+    await tester.pumpAndSettle();
+
+    expect(pickCount, 1);
+    expect(clearCount, 1);
+    expect(tester.takeException(), isNull);
+  });
 }
 
 Future<void> _setViewport({
@@ -180,6 +236,11 @@ Widget _morePage({
   required ValueChanged<double> onFontScaleChanged,
   int year = 2026,
   int term = 1,
+  CustomBackgroundSettings? customBackground,
+  Future<void> Function()? onPickCustomBackground,
+  Future<void> Function()? onClearCustomBackground,
+  Future<void> Function(double value)? onCustomBackgroundBlurChanged,
+  Future<void> Function(double value)? onCustomBackgroundDarknessChanged,
 }) {
   return MaterialApp(
     theme: gzusTheme(Brightness.light),
@@ -203,6 +264,11 @@ Widget _morePage({
         onTermChanged: (_) {},
         onThemeChanged: (_) {},
         onSeedColorChanged: (_) {},
+        customBackground: customBackground,
+        onPickCustomBackground: onPickCustomBackground,
+        onClearCustomBackground: onClearCustomBackground,
+        onCustomBackgroundBlurChanged: onCustomBackgroundBlurChanged,
+        onCustomBackgroundDarknessChanged: onCustomBackgroundDarknessChanged,
         fontScale: 1,
         onFontScaleChanged: onFontScaleChanged,
         onAutoHideNavBarChanged: (_) {},
