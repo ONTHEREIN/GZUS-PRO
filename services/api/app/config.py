@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     course_reminder_dispatch_interval_seconds: int = 60
     ws_heartbeat_seconds: int = 30
     debug: bool = False
+    demo_account_enabled: bool = False
+    demo_account: str = "demo_screenshot_2026"
+    demo_password: str = ""
+    demo_student_id: str = "DEMO-2026-001"
     database_url: str = ""
     db_pool_size: int = 3
     db_max_overflow: int = 5
@@ -70,11 +74,16 @@ class Settings(BaseSettings):
     # 微信公众号「合集」链接（含 __biz 与 album_id）；空=该通道关闭。
     # 通过公开合集接口匿名拉取文章列表（标题/封面/链接/发布时间），无需 AppID/Secret。
     wechat_album_url: str = ""
+    # 多个合集链接，使用英文逗号分隔，最多支持 10 个；配置后优先于 WECHAT_ALBUM_URL。
+    wechat_album_urls: str = ""
     # wechatrss（第三方 RSS 服务）订阅源完整 URL（含 token）。
     # 配置后优先于合集通道；token 为私人密钥，禁止写入日志/响应（见 routes/admin.py 脱敏）。
     wechat_rss_url: str = ""
     # 公众号文章自动同步间隔（小时）；cron 定时 + 读通知时的惰性兜底都遵循此间隔
     wechat_sync_interval_hours: int = 6
+    # 微信小程序登录配置。密钥只从部署环境读取，不进入仓库或响应。
+    wechat_miniprogram_app_id: str = ""
+    wechat_miniprogram_app_secret: str = ""
 
     model_config = SettingsConfigDict(env_file=ENV_FILE, env_file_encoding="utf-8")
 
@@ -106,6 +115,13 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     settings = Settings()
+    if settings.demo_account_enabled:
+        if not settings.debug:
+            raise RuntimeError("DEMO_ACCOUNT_ENABLED requires DEBUG=true")
+        if not settings.demo_password:
+            raise RuntimeError("DEMO_PASSWORD must be set when DEMO_ACCOUNT_ENABLED=true")
+        if not settings.demo_account or not settings.demo_student_id:
+            raise RuntimeError("DEMO_ACCOUNT and DEMO_STUDENT_ID must be set for the demo account")
     if not settings.debug:
         if not settings.credential_encryption_key:
             raise RuntimeError(

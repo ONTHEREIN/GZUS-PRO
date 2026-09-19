@@ -1,0 +1,10 @@
+.profile-head { display: flex; align-items: center; }
+.avatar { display: flex; align-items: center; justify-content: center; width: 90rpx; height: 90rpx; margin-right: 22rpx; border-radius: 45rpx; background: #2176e8; color: #ffffff; font-size: 40rpx; font-weight: 700; }
+.profile-name { margin-bottom: 8rpx; color: #1d2b42; font-size: 34rpx; font-weight: 700; }
+.field { display: flex; justify-content: space-between; padding: 22rpx 0; border-bottom: 1rpx solid #edf0f5; }
+.field:last-child { border-bottom: none; }
+.logout { margin-top: 36rpx; border: 1rpx solid #f3b5b5; border-radius: 16rpx; background: #ffffff; color: #c62828; }
+.error { color: #c62828; }
+.wechat-card { margin-top: 24rpx; }
+.bind-button { margin-top: 18rpx; color: #16813b; background: #e8f7ed; }
+.unbind-button { margin-top: 18rpx; color: #c62828; background: #fff0f0; }

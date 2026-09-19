@@ -18,6 +18,12 @@ from app.database import (
     EcardWaterBalanceSnapshot,
     get_sync_session_factory,
 )
+from app.demo_data import (
+    demo_ecard_consumption,
+    demo_ecard_overview,
+    demo_ecard_summary,
+    is_demo_student,
+)
 from app.ecard_history import monthly_water_overviews, record_water_balance_snapshots
 from app.ecard_client import EcardApiError, EcardClient, EcardConfigurationError, EcardRoomRef
 from app.routes.deps import require_session
@@ -263,6 +269,8 @@ def _summary_from_binding(binding: EcardBinding, student_id: str | None = None) 
 
 def summary_for_student(student_id: str) -> dict[str, Any]:
     """读取已绑定宿舍的缓存摘要，不请求一卡通上游。"""
+    if is_demo_student(student_id):
+        return demo_ecard_summary()
     binding = _binding_for(student_id)
     if binding is None:
         return {"status": "not_bound"}
@@ -357,6 +365,17 @@ def rooms(
     limit: int = Query(default=100, ge=1, le=500, description="最大返回数量"),
     session: AppSession = Depends(require_session),
 ) -> list[dict[str, str]]:
+    if session.is_demo:
+        demo_room = {
+            "id": "DEMO|A1|A1|101",
+            "schoolArea": "演示校区",
+            "building": "A1",
+            "room": "101",
+            "displayName": "演示宿舍 A1-101",
+        }
+        if not q or q.strip().lower() in demo_room["displayName"].lower():
+            return [demo_room][:limit]
+        return []
     try:
         all_rooms = _get_rooms_cached()
     except EcardConfigurationError as exc:
@@ -431,6 +450,8 @@ def summary(session: AppSession = Depends(require_session)) -> dict[str, Any]:
 @router.post("/refresh", response_model=EcardSummary)
 def refresh(session: AppSession = Depends(require_session)) -> dict[str, Any]:
     student_id, _ = _student_info(session)
+    if session.is_demo:
+        return demo_ecard_summary()
     factory = get_sync_session_factory()
     with factory() as db:
         binding = db.query(EcardBinding).filter(EcardBinding.student_id == student_id).first()
@@ -533,6 +554,8 @@ def consumption(
     session: AppSession = Depends(require_session),
 ) -> dict[str, Any]:
     student_id, _ = _student_info(session)
+    if session.is_demo:
+        return demo_ecard_consumption()
     binding = _binding_for(student_id)
     if binding is None:
         return {"status": "limited", "message": "请先绑定宿舍。", "items": []}
@@ -567,6 +590,8 @@ def consumption_overview(
     session: AppSession = Depends(require_session),
 ) -> dict[str, Any]:
     student_id, _ = _student_info(session)
+    if session.is_demo:
+        return demo_ecard_overview()
     binding = _binding_for(student_id)
     if binding is None:
         return {"status": "limited", "message": "请先绑定宿舍。", "months": []}

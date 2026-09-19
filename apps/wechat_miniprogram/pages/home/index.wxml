@@ -1,0 +1,64 @@
+<view class="page" id="home-page">
+  <view class="greeting">
+    <view class="muted" id="home-greeting">你好，{{info.name || '同学'}}</view>
+    <view class="page-title">今天想看点什么？</view>
+    <view wx:if="{{periodLabel}}" class="period-chip" id="home-period">{{periodLabel}}</view>
+  </view>
+
+  <view wx:if="{{error}}" id="home-error" class="card error-card">{{error}}</view>
+  <view wx:if="{{loading}}" id="home-loading" class="empty">正在同步教务数据…</view>
+
+  <view wx:if="{{!loading}}" id="home-quick-grid" class="quick-grid">
+    <view id="home-open-schedule" class="quick-card" bindtap="openSchedule"><view class="quick-icon">课</view><view>我的课表</view></view>
+    <view id="home-open-grades" class="quick-card" bindtap="openGrades"><view class="quick-icon">绩</view><view>课程成绩</view></view>
+    <view id="home-open-exams" class="quick-card" bindtap="openExams"><view class="quick-icon">考</view><view>考试安排</view></view>
+    <view id="home-open-ecard" class="quick-card" bindtap="openEcard"><view class="quick-icon">卡</view><view>生活缴费</view></view>
+  </view>
+
+  <!-- 冷/热/电 余额模块。接口失败只影响本卡片，不影响首页其它模块。 -->
+  <view wx:if="{{!loading}}" id="home-ecard" class="card">
+    <view class="section-head">
+      <view class="section-title">水电余额</view>
+      <view id="home-ecard-more" class="section-more" bindtap="openEcard">生活缴费 ›</view>
+    </view>
+
+    <view wx:if="{{ecardLoading}}" id="home-ecard-loading" class="muted section-empty">正在加载水电余额…</view>
+    <view wx:elif="{{ecardError}}" id="home-ecard-error" class="muted section-empty ecard-error-text">{{ecardError}}</view>
+    <view wx:elif="{{ecard && ecard.status === 'not_bound'}}" id="home-ecard-not-bound" class="muted section-empty">暂未绑定宿舍，去「生活缴费」绑定后即可查看。</view>
+    <block wx:elif="{{ecard}}">
+      <view class="muted" id="home-ecard-room">{{ecard.roomDisplay || '已绑定宿舍'}}</view>
+      <view class="metric-grid">
+        <view class="metric" id="home-ecard-power">
+          <view class="metric-label">电费</view>
+          <view class="metric-value">{{ecard.powerText || '-'}}</view>
+        </view>
+        <view class="metric" id="home-ecard-cold-water">
+          <view class="metric-label">冷水</view>
+          <view class="metric-value">{{ecard.coldWaterText || '-'}}</view>
+        </view>
+        <view class="metric" id="home-ecard-hot-water">
+          <view class="metric-label">热水</view>
+          <view class="metric-value">{{ecard.hotWaterText || '-'}}</view>
+        </view>
+      </view>
+      <view wx:if="{{ecard.stale}}" class="muted ecard-stale-text">当前展示的是最近一次缓存数据</view>
+    </block>
+  </view>
+
+  <view wx:if="{{!loading}}" id="home-recent-courses" class="card">
+    <view class="section-title">近期课程</view>
+    <view wx:if="{{courses.length === 0}}" id="home-courses-empty" class="muted section-empty">暂无课程数据</view>
+    <view wx:for="{{courses}}" wx:key="index" class="row home-course-row">
+      <view><view class="row-title">{{item.name}}</view><view class="muted">{{item.teacher || '任课教师待定'}} · {{item.classroom || '地点待定'}}</view></view>
+      <view class="badge">周{{item.weekday || '-'}}</view>
+    </view>
+  </view>
+
+  <view wx:if="{{!loading}}" id="home-exam-reminders" class="card">
+    <view class="section-title">考试提醒</view>
+    <view wx:if="{{exams.length === 0}}" id="home-exams-empty" class="muted section-empty">暂无考试安排</view>
+    <view wx:for="{{exams}}" wx:key="index" class="row home-exam-row">
+      <view><view class="row-title">{{item.courseName}}</view><view class="muted">{{item.date}} {{item.time || ''}} · {{item.location || '地点待定'}}</view></view>
+    </view>
+  </view>
+</view>

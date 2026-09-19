@@ -79,6 +79,8 @@ class AppSession:
     # 管理后台标记：登录时查 admin_users 表写入（sessions.create 参数），
     # 与 DB 列 AppSessionModel.is_admin 保持一致。
     is_admin: bool = False
+    # 本地演示会话不保存或恢复任何学校 Cookie。
+    is_demo: bool = False
     # 账号级学校会话版本；None 表示旧会话尚未迁移。
     school_session_version: int | None = None
 
@@ -299,6 +301,7 @@ class SessionStore:
         ehall_client: Any | None = None,
         student_account: str | None = None,
         is_admin: bool | None = None,
+        is_demo: bool = False,
         credential_fingerprint: str | None = None,
         school_session_version: int | None = None,
     ) -> AppSession:
@@ -321,7 +324,7 @@ class SessionStore:
                     pass
 
         # 登录统一通过 /auth/*，这里按 admin_users 白名单解析管理员身份。
-        if is_admin is None and resolved_student_account:
+        if is_admin is None and resolved_student_account and not is_demo:
             try:
                 from app.routes.admin import admin_role_of
 
@@ -334,7 +337,7 @@ class SessionStore:
                 )
                 is_admin = False
 
-        if school_session_version is None and resolved_student_account:
+        if school_session_version is None and resolved_student_account and not is_demo:
             try:
                 from app.school_session_service import get_school_account_session
 
@@ -368,7 +371,8 @@ class SessionStore:
             ehall_client=ehall_client,
             student_account=resolved_student_account,
             credential_fingerprint=credential_fingerprint,
-            is_admin=is_admin,
+            is_admin=False if is_demo else bool(is_admin),
+            is_demo=is_demo,
             school_session_version=school_session_version,
         )
 
@@ -380,7 +384,8 @@ class SessionStore:
                 id=session.id,
                 student_name=student_name,
                 student_account=resolved_student_account,
-                is_admin=is_admin,
+                is_admin=False if is_demo else bool(is_admin),
+                is_demo=is_demo,
                 created_at=session.created_at.replace(tzinfo=timezone.utc) if session.created_at.tzinfo is None else session.created_at,
                 last_active_at=session.last_active_at.replace(tzinfo=timezone.utc) if session.last_active_at.tzinfo is None else session.last_active_at,
                 jwxt_cookies=jwxt_cookies or None,
@@ -552,6 +557,7 @@ class SessionStore:
                     student_account=row.student_account,
                     credential_fingerprint=row.credential_fingerprint,
                     is_admin=bool(getattr(row, "is_admin", False)),
+                    is_demo=bool(getattr(row, "is_demo", False)),
                     school_session_version=getattr(row, "school_session_version", None),
                 )
 
@@ -572,6 +578,7 @@ class SessionStore:
                 cached.student_account = row.student_account
                 cached.credential_fingerprint = row.credential_fingerprint
                 cached.is_admin = bool(getattr(row, "is_admin", False))
+                cached.is_demo = bool(getattr(row, "is_demo", False))
                 cached.school_session_version = getattr(row, "school_session_version", None)
                 self._sync_shared_school_session(cached)
                 if cached.school_session_version != getattr(row, "school_session_version", None):
@@ -585,7 +592,12 @@ class SessionStore:
             # 从持久化 cookie 重建客户端；失效 cookie 会在业务请求中明确失败。
             client = None
             ehall_client = None
-            if row.jwxt_cookies:
+            if getattr(row, "is_demo", False):
+                from app.demo_data import DemoAcademicClient, DemoEhallClient
+
+                client = DemoAcademicClient()
+                ehall_client = DemoEhallClient()
+            elif row.jwxt_cookies:
                 try:
                     client = _rebuild_school_client(
                         row.jwxt_cookies,
@@ -621,6 +633,7 @@ class SessionStore:
                 student_account=row.student_account,
                 credential_fingerprint=row.credential_fingerprint,
                 is_admin=bool(getattr(row, "is_admin", False)),
+                is_demo=bool(getattr(row, "is_demo", False)),
                 school_session_version=getattr(row, "school_session_version", None),
             )
 
@@ -650,7 +663,7 @@ class SessionStore:
     def _sync_shared_school_session(session: AppSession) -> None:
         """按账号共享会话版本刷新前台客户端；旧会话没有共享记录时保持兼容。"""
         account = (session.student_account or "").strip()
-        if not account:
+        if not account or session.is_demo:
             return
         from app.school_session_service import (
             SchoolSessionUnavailableError,

@@ -1,0 +1,22 @@
+<view class="page" id="profile-page">
+  <view class="page-title">我的</view>
+  <view wx:if="{{loading}}" id="profile-loading" class="empty">正在加载个人信息…</view>
+  <view wx:if="{{error}}" id="profile-error" class="card error">{{error}}</view>
+  <view wx:if="{{info}}" id="profile-info" class="card profile-head">
+    <view class="avatar">{{avatarText}}</view>
+    <view><view class="profile-name" id="profile-name">{{info.name}}</view><view class="muted" id="profile-student-id">{{info.studentId}}</view></view>
+  </view>
+  <view wx:if="{{info}}" id="profile-fields" class="card">
+    <view class="field"><text>学院</text><text class="muted">{{info.college || '-'}}</text></view>
+    <view class="field"><text>专业</text><text class="muted">{{info.major || '-'}}</text></view>
+    <view class="field"><text>班级</text><text class="muted">{{info.className || '-'}}</text></view>
+    <view class="field"><text>年级</text><text class="muted">{{info.grade || '-'}}</text></view>
+    <view class="field"><text>邮箱</text><text class="muted">{{info.email || '-'}}</text></view>
+  </view>
+  <view wx:if="{{info}}" id="profile-wechat-binding" class="card wechat-card">
+    <view class="field"><text>微信登录</text><text class="muted">{{bindingLoading ? '正在查询…' : (wechatBound ? '已绑定' : '未绑定')}}</text></view>
+    <button wx:if="{{!wechatBound && !bindingLoading}}" id="profile-wechat-bind" class="bind-button" loading="{{bindingAction}}" bindtap="bindWechat">绑定当前微信</button>
+    <button wx:if="{{wechatBound}}" id="profile-wechat-unbind" class="unbind-button" loading="{{bindingAction}}" bindtap="unbindWechat">解除微信绑定</button>
+  </view>
+  <button id="profile-logout" class="logout" bindtap="logout">退出登录</button>
+</view>

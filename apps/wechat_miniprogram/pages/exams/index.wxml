@@ -1,0 +1,12 @@
+<view class="page" id="exams-page">
+  <view class="page-title">考试</view>
+  <view wx:if="{{periodLabel}}" class="period-chip" id="exams-period">{{periodLabel}}</view>
+  <view wx:if="{{loading}}" id="exams-loading" class="empty">正在加载考试安排…</view>
+  <view wx:if="{{error}}" id="exams-error" class="card error">{{error}}</view>
+  <view wx:for="{{exams}}" wx:key="index" class="card exam-card">
+    <view class="exam-name">{{item.courseName}}</view>
+    <view class="exam-time">{{item.date}} {{item.time || ''}}</view>
+    <view class="muted">{{item.location || '地点待定'}}<text wx:if="{{item.seat}}"> · 座位 {{item.seat}}</text></view>
+  </view>
+  <view wx:if="{{!loading && exams.length === 0}}" id="exams-empty" class="empty">暂无考试安排</view>
+</view>

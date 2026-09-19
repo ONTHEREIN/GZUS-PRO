@@ -1,0 +1,13 @@
+.grade-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14rpx; }
+.grade-name { max-width: 500rpx; color: #1d2b42; font-size: 31rpx; font-weight: 700; }
+.score { color: #2176e8; font-size: 40rpx; font-weight: 700; }
+.error { color: #c62828; }
+.period-chip {
+  display: inline-block;
+  margin: 0 0 20rpx;
+  padding: 9rpx 16rpx;
+  border-radius: 999rpx;
+  background: #e7f0ff;
+  color: #2176e8;
+  font-size: 23rpx;
+}

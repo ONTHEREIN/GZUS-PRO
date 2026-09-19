@@ -23,6 +23,7 @@ from app.routes import (
     ecard,
     ehall,
     feedback,
+    mini_program,
     notifications,
     push,
     schedule_adjustments,
@@ -60,8 +61,10 @@ async def lifespan(app: FastAPI):
         run_background_notification_poller,
         run_course_reminder_dispatcher,
     )
+    from app.shiply_export_jobs import reconcile_shiply_export_jobs
 
     init_db()
+    reconcile_shiply_export_jobs()
     poller_tasks = [
         asyncio.create_task(run_notice_poller(app)),
         asyncio.create_task(run_ecard_reminder_poller(app)),
@@ -77,6 +80,16 @@ async def lifespan(app: FastAPI):
         for task in poller_tasks:
             task.cancel()
         await asyncio.gather(*poller_tasks, return_exceptions=True)
+        current_loop = asyncio.get_running_loop()
+        shiply_tasks = [
+            task
+            for task in app.state.shiply_export_tasks.values()
+            if task.get_loop() is current_loop
+        ]
+        app.state.shiply_export_tasks.clear()
+        for task in shiply_tasks:
+            task.cancel()
+        await asyncio.gather(*shiply_tasks, return_exceptions=True)
         await app.state.sessions.stop_cleanup_task()
 
 
@@ -92,6 +105,8 @@ def create_app() -> FastAPI:
     app.state.exam_reminder_cache = ExamReminderCache()
     app.state.grade_update_cache = GradeUpdateCache()
     app.state.rsa_key_manager = rsa_key_manager
+    app.state.shiply_export_tasks = {}
+    app.state.shiply_export_create_lock = asyncio.Lock()
 
     security_headers = _security_headers(cfg)
 
@@ -102,8 +117,23 @@ def create_app() -> FastAPI:
             trace_id = uuid.uuid4().hex
         request.state.trace_id = trace_id
         started_at = time.perf_counter()
+        blocked_demo_write = False
+        if request.method in {"POST", "PUT", "PATCH", "DELETE"} and request.url.path != "/auth/logout":
+            session_id = request.headers.get("X-Session-Id")
+            if session_id:
+                try:
+                    session = app.state.sessions.get(session_id, touch=False, fresh=True)
+                except TypeError:
+                    session = app.state.sessions.get(session_id, touch=False)
+                if session is not None and session.is_demo:
+                    blocked_demo_write = True
         content_length = request.headers.get("content-length")
-        if content_length:
+        if blocked_demo_write:
+            response = JSONResponse(
+                status_code=status.HTTP_403_FORBIDDEN,
+                content={"detail": "演示账号仅支持查看"},
+            )
+        elif content_length:
             try:
                 size = int(content_length)
             except ValueError:
@@ -196,6 +226,7 @@ def create_app() -> FastAPI:
         )
 
     app.include_router(auth.router)
+    app.include_router(mini_program.router)
     app.include_router(content.router)
     app.include_router(academic.router)
     app.include_router(admin.router)

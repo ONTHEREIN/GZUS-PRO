@@ -1,0 +1,11 @@
+# 逻辑单测的 tsc 产物
+.test-build/
+
+node_modules/
+
+# 说明：页面回归的截图/日志与自动预览信息默认写在项目目录**之外**
+# （<project>/../onegzus-miniprogram-test-artifacts），因为开发者工具会监听项目目录，
+# 往项目里写文件会触发重新编译并冲掉注入的 wx.request mock，导致回归假失败。
+# 仅当用 WECHAT_TEST_ARTIFACT_DIR 把产物指回项目内时，才需要下面两条忽略：
+test-artifacts/
+preview-info.json

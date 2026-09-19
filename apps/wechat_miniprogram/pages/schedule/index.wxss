@@ -1,0 +1,47 @@
+.schedule-title-row { display: flex; align-items: center; justify-content: space-between; gap: 16rpx; }
+.period-chip { flex-shrink: 0; margin-bottom: 28rpx; padding: 9rpx 16rpx; border-radius: 999rpx; background: #e7f0ff; color: #2176e8; font-size: 22rpx; }
+.schedule-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16rpx; margin-bottom: 18rpx; }
+.mode-tabs { display: flex; padding: 6rpx; border-radius: 16rpx; background: #e8edf5; }
+.mode-tab { padding: 12rpx 18rpx; border-radius: 12rpx; color: #748094; font-size: 24rpx; }
+.mode-tab.active { background: #ffffff; color: #2176e8; font-weight: 700; box-shadow: 0 4rpx 12rpx rgba(47, 76, 128, 0.08); }
+.first-week-picker { color: #2176e8; font-size: 22rpx; white-space: nowrap; }
+.week-controls { display: flex; align-items: center; justify-content: space-between; gap: 16rpx; margin: 12rpx 0 6rpx; }
+.week-controls button { min-width: 130rpx; margin: 0; color: #2176e8; background: #e7f0ff; border-radius: 14rpx; font-size: 23rpx; }
+.week-controls .week-title-button { min-width: 170rpx; background: #ffffff; color: #17243b; font-weight: 700; }
+.week-subtitle { display: flex; justify-content: space-between; margin: 8rpx 4rpx 18rpx; color: #748094; font-size: 22rpx; }
+.week-subtitle text:last-child { color: #2176e8; }
+.schedule-scroll { width: 100%; padding-bottom: 12rpx; }
+.week-table { width: 1190rpx; border: 1rpx solid #dfe6f0; border-radius: 18rpx; overflow: hidden; background: #ffffff; }
+.week-header, .week-row { display: flex; width: 1190rpx; }
+.week-header { height: 86rpx; background: #f1f5fb; }
+.time-column { flex: 0 0 120rpx; box-sizing: border-box; border-right: 1rpx solid #dfe6f0; text-align: center; }
+.header-time { padding-top: 28rpx; color: #748094; font-size: 22rpx; }
+.day-header { flex: 0 0 152rpx; box-sizing: border-box; padding-top: 16rpx; border-right: 1rpx solid #dfe6f0; color: #43516a; text-align: center; font-size: 24rpx; font-weight: 700; }
+.day-header.today { color: #2176e8; background: #e7f0ff; }
+.day-date { margin-top: 5rpx; color: #748094; font-size: 19rpx; font-weight: 400; }
+.week-row { height: 92rpx; position: relative; }
+.period-cell { height: 92rpx; padding-top: 12rpx; color: #43516a; font-size: 23rpx; }
+.period-time { margin-top: 4rpx; color: #9aa5b5; font-size: 16rpx; line-height: 1; }
+.day-cell { flex: 0 0 152rpx; height: 92rpx; position: relative; box-sizing: border-box; border-right: 1rpx solid #e5eaf2; border-bottom: 1rpx solid #e5eaf2; overflow: visible; }
+.course-block { position: absolute; top: 4rpx; z-index: 2; box-sizing: border-box; padding: 8rpx 7rpx; border-radius: 10rpx; color: #20304a; overflow: hidden; border: 1rpx solid rgba(54, 92, 145, 0.12); }
+.block-name { overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; font-size: 21rpx; line-height: 1.25; font-weight: 700; }
+.block-room { margin-top: 5rpx; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #52627d; font-size: 17rpx; }
+.week-hint { display: block; margin: 12rpx 4rpx 0; line-height: 1.5; }
+.course-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14rpx; }
+.course-name { color: #1d2b42; font-size: 32rpx; font-weight: 700; }
+.weekday { padding: 7rpx 13rpx; border-radius: 12rpx; background: #e7f0ff; color: #2176e8; font-size: 23rpx; }
+.course-detail { margin-top: 10rpx; }
+.error { color: #c62828; }
+.modal-mask { position: fixed; z-index: 20; top: 0; right: 0; bottom: 0; left: 0; display: flex; align-items: flex-end; background: rgba(19, 31, 52, 0.42); }
+.week-modal, .course-modal { width: 100%; box-sizing: border-box; max-height: 78vh; padding: 28rpx 28rpx 42rpx; border-radius: 28rpx 28rpx 0 0; background: #ffffff; }
+.course-modal { padding-bottom: 54rpx; }
+.modal-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24rpx; }
+.modal-title { color: #17243b; font-size: 34rpx; font-weight: 700; }
+.modal-link { color: #2176e8; font-size: 25rpx; }
+.week-options { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14rpx; max-height: 60vh; overflow-y: auto; }
+.week-option { padding: 16rpx 4rpx; border: 1rpx solid #e0e7f1; border-radius: 14rpx; color: #43516a; text-align: center; font-size: 23rpx; }
+.week-option.selected { border-color: #2176e8; background: #e7f0ff; color: #2176e8; font-weight: 700; }
+.week-option.current::after { display: block; margin-top: 4rpx; color: #4b9b67; content: "本周"; font-size: 17rpx; font-weight: 400; }
+.detail-name { margin: 4rpx 0 26rpx; color: #17243b; font-size: 38rpx; font-weight: 700; }
+.detail-row { display: flex; justify-content: space-between; gap: 24rpx; padding: 18rpx 0; border-bottom: 1rpx solid #edf0f5; color: #52627d; font-size: 26rpx; }
+.detail-row text:last-child { color: #1f2a3d; text-align: right; }

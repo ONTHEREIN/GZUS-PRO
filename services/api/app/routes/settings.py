@@ -9,7 +9,12 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.database import Base, UserSettings, get_sync_engine, get_sync_session_factory
 from app.routes.deps import require_session
-from app.schemas import ScheduleSettings, ScheduleSettingsUpdate
+from app.schemas import (
+    AcademicPeriodPreference,
+    AcademicPeriodUpdate,
+    ScheduleSettings,
+    ScheduleSettingsUpdate,
+)
 from app.sessions import AppSession, student_id_of
 
 logger = logging.getLogger(__name__)
@@ -110,3 +115,45 @@ def put_schedule_settings(
         db.commit()
         db.refresh(row)
         return _row_to_settings(row)
+
+
+def _period_from_row(row: UserSettings | None) -> dict[str, int | None]:
+    if row is None:
+        return {"year": None, "term": None}
+    return {
+        "year": row.selected_academic_year,
+        "term": row.selected_term,
+    }
+
+
+@router.get("/academic-period", response_model=AcademicPeriodPreference)
+def get_academic_period(
+    session: AppSession = Depends(require_session),
+) -> dict[str, int | None]:
+    """获取三端共享的当前学年学期偏好。"""
+    student_id = _require_student_id(session)
+    _ensure_table()
+    with get_sync_session_factory()() as db:
+        row = db.query(UserSettings).filter(UserSettings.student_id == student_id).first()
+        return _period_from_row(row)
+
+
+@router.put("/academic-period", response_model=AcademicPeriodPreference)
+def put_academic_period(
+    payload: AcademicPeriodUpdate,
+    session: AppSession = Depends(require_session),
+) -> dict[str, int | None]:
+    """保存三端共享的当前学年学期；最后成功提交者生效。"""
+    student_id = _require_student_id(session)
+    _ensure_table()
+    with get_sync_session_factory()() as db:
+        row = db.query(UserSettings).filter(UserSettings.student_id == student_id).first()
+        if row is None:
+            row = UserSettings(student_id=student_id)
+            db.add(row)
+        row.selected_academic_year = payload.year
+        row.selected_term = payload.term
+        row.updated_at = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(row)
+        return _period_from_row(row)

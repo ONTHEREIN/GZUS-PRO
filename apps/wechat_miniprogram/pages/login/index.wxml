@@ -1,0 +1,21 @@
+<view class="page login-page" id="login-page">
+  <view class="brand">
+    <view class="brand-mark">软</view>
+    <view>
+      <view class="brand-title">软帮手</view>
+      <view class="brand-subtitle">广州软件学院教务助手</view>
+    </view>
+  </view>
+
+  <view class="card form-card">
+    <view class="field-label">学号</view>
+    <input id="login-account" class="input" placeholder="请输入学号" value="{{account}}" bindinput="onAccountInput" />
+    <view class="field-label">统一认证密码</view>
+    <input id="login-password" class="input" password placeholder="请输入密码" value="{{password}}" bindinput="onPasswordInput" />
+    <view wx:if="{{error}}" id="login-error" class="error">{{error}}</view>
+    <button id="login-submit" class="login-button" loading="{{submitting}}" bindtap="submit">登录</button>
+    <button id="login-wechat" class="wechat-button" loading="{{wechatSubmitting}}" bindtap="wechatLogin">微信一键登录</button>
+  </view>
+
+  <view class="notice">账号密码仅用于服务端建立学校系统会话，不会在小程序中保存。</view>
+</view>

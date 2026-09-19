@@ -13,6 +13,7 @@ from app.wechat_service import (
     _rss_date_to_str,
     _rss_description_cover,
     _rss_description_text,
+    album_config_summary,
     active_channel,
     default_fetcher,
     delete_article,
@@ -25,6 +26,7 @@ from app.wechat_service import (
 )
 
 ALBUM_URL = "https://mp.weixin.qq.com/mp/appmsgalbum?__biz=Mzg5NDY3NzIwMA==&album_id=2038088622687469575"
+ALBUM_URL_2 = "https://mp.weixin.qq.com/mp/appmsgalbum?__biz=Mzg5NDY3NzIwMA==&action=getalbum&album_id=2038088622687469576"
 RSS_URL = "https://wechatrss.waytomaster.com/api/rss/all?token=eyJhbGciOiJIUzI1NiJ9.exampleToken"
 
 
@@ -49,6 +51,58 @@ def test_parse_album_config_rejects_article_link():
     assert _parse_album_config("https://mp.weixin.qq.com/s/abc") is None
     assert _parse_album_config("") is None
     assert _parse_album_config("https://example.com/x") is None
+
+
+def test_album_fetcher_reads_multiple_urls_and_legacy_fallback(monkeypatch):
+    monkeypatch.setenv("WECHAT_ALBUM_URLS", f" {ALBUM_URL}, {ALBUM_URL_2} ")
+    monkeypatch.setenv("WECHAT_ALBUM_URL", "")
+    get_settings.cache_clear()
+
+    fetcher = AlbumFetcher()
+
+    assert fetcher.configured_count == 2
+    assert len(fetcher.configs) == 2
+    assert fetcher.enabled is True
+
+    monkeypatch.setenv("WECHAT_ALBUM_URLS", "")
+    monkeypatch.setenv("WECHAT_ALBUM_URL", ALBUM_URL)
+    get_settings.cache_clear()
+    legacy_fetcher = AlbumFetcher()
+    assert legacy_fetcher.configured_count == 1
+    assert legacy_fetcher.enabled is True
+
+
+def test_album_fetcher_reports_invalid_and_excess_urls(monkeypatch):
+    urls = [ALBUM_URL] * 10 + ["https://example.com/not-an-album"]
+    monkeypatch.setenv("WECHAT_ALBUM_URLS", ",".join(urls))
+    get_settings.cache_clear()
+
+    def empty_fetch(_config, _limit):
+        return []
+
+    monkeypatch.setattr(AlbumFetcher, "_fetch_one", staticmethod(empty_fetch))
+
+    fetcher = AlbumFetcher()
+    fetcher.fetch_latest()
+
+    assert fetcher.configured_count == 11
+    assert len(fetcher.configs) == 10
+    assert len(fetcher.last_report["errors"]) == 1
+    assert fetcher.last_report["errors"][0]["index"] == 11
+
+
+def test_album_config_summary_returns_canonical_urls(monkeypatch):
+    monkeypatch.setenv("WECHAT_ALBUM_URLS", f"{ALBUM_URL}, {ALBUM_URL_2}")
+    get_settings.cache_clear()
+
+    summary = album_config_summary()
+
+    assert summary["configuredCount"] == 2
+    assert summary["validCount"] == 2
+    assert summary["urls"] == [
+        "https://mp.weixin.qq.com/mp/appmsgalbum?__biz=Mzg5NDY3NzIwMA==&action=getalbum&album_id=2038088622687469575",
+        "https://mp.weixin.qq.com/mp/appmsgalbum?__biz=Mzg5NDY3NzIwMA==&action=getalbum&album_id=2038088622687469576",
+    ]
 
 
 # ─── upsert / 列表 / 隐藏 ─────────────────────────────────
@@ -207,6 +261,54 @@ def test_fetch_article_meta_raises_without_title(monkeypatch):
         fetch_article_meta("https://mp.weixin.qq.com/s/abc")
 
 
+# ─── 多合集同步 ────────────────────────────────────────────
+
+def test_album_fetcher_fetches_each_album_with_per_album_limit(monkeypatch):
+    monkeypatch.setenv("WECHAT_ALBUM_URLS", f"{ALBUM_URL}, {ALBUM_URL_2}")
+    get_settings.cache_clear()
+    calls = []
+
+    def fake_fetch(config, limit):
+        calls.append((config["album_id"], limit))
+        return [
+            WechatArticle(
+                title=config["album_id"],
+                summary=None,
+                cover_url=None,
+                article_url=f"https://example.test/{config['album_id']}",
+            )
+        ]
+
+    monkeypatch.setattr(AlbumFetcher, "_fetch_one", staticmethod(fake_fetch))
+    fetcher = AlbumFetcher()
+
+    articles = fetcher.fetch_latest(limit=50)
+
+    assert len(articles) == 2
+    assert calls == [("2038088622687469575", 50), ("2038088622687469576", 50)]
+    assert fetcher.last_report == {"configured": 2, "succeeded": 2, "errors": []}
+
+
+def test_album_fetcher_continues_after_one_album_failure(monkeypatch):
+    monkeypatch.setenv("WECHAT_ALBUM_URLS", f"{ALBUM_URL}, {ALBUM_URL_2}")
+    get_settings.cache_clear()
+
+    def fake_fetch(config, _limit):
+        if config["album_id"] == "2038088622687469575":
+            raise RuntimeError("测试合集失败")
+        return [WechatArticle(title="成功合集", summary=None, cover_url=None, article_url="u2")]
+
+    monkeypatch.setattr(AlbumFetcher, "_fetch_one", staticmethod(fake_fetch))
+    fetcher = AlbumFetcher()
+
+    articles = fetcher.fetch_latest()
+
+    assert [article.article_url for article in articles] == ["u2"]
+    assert fetcher.last_report["configured"] == 2
+    assert fetcher.last_report["succeeded"] == 1
+    assert fetcher.last_report["errors"][0]["albumId"] == "2038088622687469575"
+
+
 # ─── 同步状态与惰性判断 ─────────────────────────────────
 
 class FakeFetcher:
@@ -248,6 +350,30 @@ def test_sync_articles_records_error(monkeypatch):
     with factory() as db:
         row = db.query(WechatSyncState).filter(WechatSyncState.key == "album").first()
         assert row.last_error == "boom"
+
+
+def test_sync_articles_records_partial_album_errors():
+    class PartialFetcher:
+        last_report = {
+            "configured": 2,
+            "succeeded": 1,
+            "errors": [{"index": 2, "albumId": "bad", "error": "请求失败"}],
+        }
+
+        def fetch_latest(self, limit=50):
+            return [WechatArticle(title="A", summary=None, cover_url=None, article_url="u1")]
+
+    result = sync_articles(fetcher=PartialFetcher())
+
+    assert result["added"] == 1
+    assert result["albumsConfigured"] == 2
+    assert result["albumsSucceeded"] == 1
+    assert result["albumErrors"]
+    assert result["error"] == "合集 bad: 请求失败"
+    factory = get_sync_session_factory()
+    with factory() as db:
+        row = db.query(WechatSyncState).filter(WechatSyncState.key == "album").first()
+        assert row.last_error == "合集 bad: 请求失败"
 
 
 def test_should_sync_requires_config(monkeypatch):

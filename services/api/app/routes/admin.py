@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import base64
+import asyncio
 import json
 import logging
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import Response
@@ -25,13 +26,21 @@ from app.database import (
     EcardBinding,
     FeedbackTicket,
     MaintenanceJobStatus,
+    ShiplyExportJob,
     WebPushSubscription,
     get_sync_engine,
     get_sync_session_factory,
 )
 from app.routes.deps import require_admin
 from app.sessions import AppSession, student_id_of
-from app.shiply_content import ShiplyContentExportError, build_public_content_bundle
+from app.shiply_export_jobs import (
+    SHIPLY_EXPORT_STATUS_SUCCEEDED,
+    create_or_get_shiply_export_job,
+    get_shiply_export_download,
+    get_shiply_export_job,
+    list_shiply_export_jobs,
+    run_shiply_export_job,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +66,7 @@ def ensure_admin_tables() -> None:
             FeedbackTicket.__table__,
             AdminNotice.__table__,
             LoginCarouselSlide.__table__,
+            ShiplyExportJob.__table__,
         ],
     )
     _seed_owner()
@@ -137,6 +147,10 @@ class AdminMeResponse(BaseModel):
     student_id: str
 
 
+class ShiplyExportCreatePayload(BaseModel):
+    resource: Literal["login", "home"]
+
+
 class AdminUserPayload(BaseModel):
     student_id: str = Field(min_length=1, max_length=100, alias="studentId")
     role: str = Field(default="admin", pattern="^(owner|admin)$")
@@ -154,42 +168,80 @@ def admin_me(
     return AdminMeResponse(role=_current_role(session), student_id=student_id)
 
 
-@router.post("/shiply/public-content/export")
-def admin_shiply_public_content_export(
+@router.post("/shiply/exports", status_code=status.HTTP_202_ACCEPTED)
+async def admin_shiply_export_create(
+    payload: ShiplyExportCreatePayload,
     request: Request,
     session: AppSession = Depends(require_admin),
-) -> Response:
-    """生成供管理员下载并手动上传到 Shiply 的公共资源 ZIP。"""
+) -> dict[str, object]:
+    """创建 Shiply 资源包任务；同一资源进行中任务会被复用。"""
     ensure_admin_tables()
-    try:
-        bundle = build_public_content_bundle()
-    except ShiplyContentExportError as exc:
-        logger.error("shiply public content export failed: %s", exc)
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-
     operator_id = student_id_of(session)
-    factory = get_sync_session_factory()
-    with factory() as db:
-        _log_audit(
-            db,
-            operator_id=operator_id,
-            action="export_shiply_public_content",
-            target_type="shiply_resource",
-            target_id="gzus_public_content",
-            detail=json.dumps(
-                {"sha256": bundle.sha256, "generatedAt": bundle.generated_at, "counts": bundle.counts},
-                ensure_ascii=False,
-                sort_keys=True,
-            ),
+    async with request.app.state.shiply_export_create_lock:
+        job, created = await asyncio.to_thread(
+            create_or_get_shiply_export_job,
+            payload.resource,
+            operator_id,
         )
-        db.commit()
+        if created:
+            task = asyncio.create_task(
+                run_shiply_export_job(request.app, job.id, payload.resource)
+            )
+            request.app.state.shiply_export_tasks[job.id] = task
+    return job.as_dict()
+
+
+@router.get("/shiply/exports")
+def admin_shiply_export_list(
+    resource: Literal["login", "home"] | None = Query(default=None),
+    session: AppSession = Depends(require_admin),
+) -> dict[str, object]:
+    """读取最近任务，供管理员返回页面后恢复下载与轮询。"""
+    del session
+    ensure_admin_tables()
+    return {"items": [item.as_dict() for item in list_shiply_export_jobs(resource)]}
+
+
+@router.get("/shiply/exports/{job_id}")
+def admin_shiply_export_get(
+    job_id: str,
+    session: AppSession = Depends(require_admin),
+) -> dict[str, object]:
+    """获取单个 Shiply 导出任务状态。"""
+    del session
+    ensure_admin_tables()
+    job = get_shiply_export_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Shiply 导出任务不存在或已过期")
+    return job.as_dict()
+
+
+@router.get("/shiply/exports/{job_id}/download")
+def admin_shiply_export_download(
+    job_id: str,
+    session: AppSession = Depends(require_admin),
+) -> Response:
+    """下载已经成功生成的 Shiply ZIP。"""
+    del session
+    ensure_admin_tables()
+    job = get_shiply_export_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Shiply 导出任务不存在或已过期")
+    if job.status != SHIPLY_EXPORT_STATUS_SUCCEEDED:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Shiply 资源包尚未生成完成")
+    artifact = get_shiply_export_download(job_id)
+    if artifact is None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Shiply 资源包尚未生成完成")
     headers = {
-        "Content-Disposition": 'attachment; filename="gzus_public_content.zip"',
-        "X-Shiply-Content-Sha256": bundle.sha256,
-        "X-Shiply-Generated-At": bundle.generated_at,
-        "X-Shiply-Content-Counts": json.dumps(bundle.counts, ensure_ascii=False, separators=(",", ":")),
+        "Content-Disposition": f'attachment; filename="{artifact.filename}"',
+        "X-Shiply-Content-Sha256": artifact.sha256,
+        "X-Shiply-Generated-At": artifact.generated_at,
+        "X-Shiply-Content-Counts": json.dumps(
+            artifact.counts, ensure_ascii=False, separators=(",", ":")
+        ),
+        "X-Shiply-Resource-Key": artifact.resource_key,
     }
-    return Response(content=bundle.archive, media_type="application/zip", headers=headers)
+    return Response(content=artifact.archive, media_type="application/zip", headers=headers)
 
 
 @router.get("/overview")
@@ -1208,19 +1260,32 @@ def wechat_status(
 ) -> dict[str, Any]:
     """公众号同步通道配置与最近同步状态（RSS 源的 token 一律脱敏，不写入响应）。"""
     settings = get_settings()
-    from app.wechat_service import _mask_url, active_channel, last_sync_at
+    from app.wechat_service import (
+        _mask_url,
+        active_channel,
+        album_config_summary,
+        last_sync_at,
+        last_sync_error,
+    )
 
     channel = active_channel()
     last = last_sync_at()
+    album_summary = album_config_summary()
+    album_urls = album_summary["urls"]
     return {
         "channel": channel,
         "configured": channel != "none",
         # 只回传脱敏后的 URL（query token 仅保留前 4/后 4 位），避免私人 token 泄露
         "rssUrl": _mask_url(settings.wechat_rss_url) if settings.wechat_rss_url else None,
-        "albumUrl": settings.wechat_album_url or None,
+        # albumUrl 保留给旧版前端；新前端使用 albumUrls。
+        "albumUrl": album_urls[0] if album_urls else None,
+        "albumUrls": album_urls,
+        "albumCount": album_summary["configuredCount"],
+        "albumValidCount": album_summary["validCount"],
+        "albumErrors": album_summary["errors"],
         "syncIntervalHours": settings.wechat_sync_interval_hours,
         "lastSyncedAt": last.isoformat() if last else None,
-        "lastError": None,
+        "lastError": last_sync_error(),
     }
 
 
@@ -1243,7 +1308,11 @@ def wechat_sync_now(
             action="wechat_sync",
             target_type="wechat",
             target_id=None,
-            detail=f"added={result['added']} error={result.get('error') or 'none'}",
+            detail=(
+                f"added={result['added']} total={result['total']} "
+                f"albums={result.get('albumsSucceeded')}/{result.get('albumsConfigured')} "
+                f"error={result.get('error') or 'none'}"
+            ),
         )
         db.commit()
     return result

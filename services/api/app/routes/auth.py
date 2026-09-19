@@ -11,6 +11,7 @@ import time
 
 from app.rsa_keys import rsa_key_manager
 from app.config import get_settings
+from app.demo_data import DemoAcademicClient, DemoEhallClient, DEMO_STUDENT_ID, DEMO_STUDENT_NAME
 from app.ehall_client import EhallClient
 from app.rate_limit import limiter
 from app.schemas import (
@@ -416,16 +417,38 @@ def relogin(payload: ReloginRequest, request: Request) -> dict:
 @router.post("/auto-login", response_model=AuthResponse)
 @limiter.limit("10/minute")
 def auto_login(payload: AutoLoginRequest, request: Request) -> dict:
-    from app.cas_auto_login import CasAutoLogin
-
     try:
         password = payload.resolve_password()
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
+    settings = get_settings()
+    if payload.account == settings.demo_account:
+        if not settings.debug or not settings.demo_account_enabled:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="演示账号仅可在本地调试环境使用")
+        if not compare_digest(password, settings.demo_password):
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="演示账号或密码错误")
+        session = request.app.state.sessions.create(
+            DemoAcademicClient(),
+            DEMO_STUDENT_NAME,
+            ehall_client=DemoEhallClient(),
+            student_account=DEMO_STUDENT_ID,
+            is_admin=False,
+            is_demo=True,
+        )
+        return {
+            "status": "ok",
+            "sessionId": session.id,
+            "studentName": DEMO_STUDENT_NAME,
+            "studentId": DEMO_STUDENT_ID,
+            "isAdmin": False,
+            "isDemo": True,
+        }
+
+    from app.cas_auto_login import CasAutoLogin
+
     t_total = time.time()
     sessions = request.app.state.sessions
-    settings = get_settings()
 
     cas_url = (
         f"{settings.cas_login_url}?service="

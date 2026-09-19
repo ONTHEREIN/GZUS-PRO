@@ -1,7 +1,10 @@
 import 'dart:convert';
 
-const shiplyPublicContentKey = 'gzus_public_content';
+const shiplyLoginContentKey = 'gzus_login_content';
+const shiplyHomeContentKey = 'gzus_public_content';
 const shiplyPublicContentSchemaVersion = 1;
+const shiplyLoginResourceKind = 'login';
+const shiplyHomeResourceKind = 'home';
 
 class ShiplyPublicContentException implements Exception {
   const ShiplyPublicContentException(this.message);
@@ -78,26 +81,86 @@ class ShiplyWechatArticle {
   final String source;
 }
 
-class ShiplyPublicContent {
-  const ShiplyPublicContent({
+class ShiplyLoginContent {
+  const ShiplyLoginContent({
+    required this.generatedAt,
+    required this.loginSlides,
+  });
+
+  final String generatedAt;
+  final List<ShiplyLoginSlide> loginSlides;
+}
+
+class ShiplyHomeContent {
+  const ShiplyHomeContent({
     required this.generatedAt,
     required this.notices,
-    required this.loginSlides,
     required this.wechatArticles,
   });
 
   final String generatedAt;
   final List<ShiplyPublicNotice> notices;
-  final List<ShiplyLoginSlide> loginSlides;
   final List<ShiplyWechatArticle> wechatArticles;
+}
+
+class _ShiplyManifest {
+  const _ShiplyManifest({required this.generatedAt, required this.files});
+
+  final String generatedAt;
+  final Map<String, Object?> files;
 }
 
 class ShiplyPublicContentParser {
   const ShiplyPublicContentParser._();
 
-  static ShiplyPublicContent parse({
+  static ShiplyLoginContent parseLogin({
     required String rootPath,
     required Map<String, String> files,
+  }) {
+    final manifest = _parseManifest(
+      files: files,
+      resourceKey: shiplyLoginContentKey,
+      resourceKind: shiplyLoginResourceKind,
+    );
+    final slidesFile = _requiredString(
+      manifest.files,
+      'loginSlides',
+      'manifest.files',
+    );
+    return ShiplyLoginContent(
+      generatedAt: manifest.generatedAt,
+      loginSlides: _parseSlides(_decodeList(files, slidesFile), rootPath),
+    );
+  }
+
+  static ShiplyHomeContent parseHome({
+    required String rootPath,
+    required Map<String, String> files,
+  }) {
+    final manifest = _parseManifest(
+      files: files,
+      resourceKey: shiplyHomeContentKey,
+      resourceKind: shiplyHomeResourceKind,
+    );
+    final noticesFile =
+        _requiredString(manifest.files, 'notices', 'manifest.files');
+    final articlesFile = _requiredString(
+      manifest.files,
+      'wechatArticles',
+      'manifest.files',
+    );
+    return ShiplyHomeContent(
+      generatedAt: manifest.generatedAt,
+      notices: _parseNotices(_decodeList(files, noticesFile), rootPath),
+      wechatArticles:
+          _parseArticles(_decodeList(files, articlesFile), rootPath),
+    );
+  }
+
+  static _ShiplyManifest _parseManifest({
+    required Map<String, String> files,
+    required String resourceKey,
+    required String resourceKind,
   }) {
     final manifest = _decodeObject(files, 'manifest.json');
     final schemaVersion =
@@ -107,29 +170,18 @@ class ShiplyPublicContentParser {
         'Shiply 公共资源 schemaVersion 不支持: $schemaVersion',
       );
     }
-    final resourceKey =
-        _requiredString(manifest, 'resourceKey', 'manifest.json');
-    if (resourceKey != shiplyPublicContentKey) {
-      throw ShiplyPublicContentException(
-        'Shiply 公共资源 key 不匹配: $resourceKey',
-      );
+    final actualKey = _requiredString(manifest, 'resourceKey', 'manifest.json');
+    if (actualKey != resourceKey) {
+      throw ShiplyPublicContentException('Shiply 公共资源 key 不匹配: $actualKey');
     }
-    final generatedAt =
-        _requiredString(manifest, 'generatedAt', 'manifest.json');
-    final fileMap = _requiredObject(manifest, 'files', 'manifest.json');
-    final noticesFile = _requiredString(fileMap, 'notices', 'manifest.files');
-    final slidesFile =
-        _requiredString(fileMap, 'loginSlides', 'manifest.files');
-    final articlesFile =
-        _requiredString(fileMap, 'wechatArticles', 'manifest.files');
-    final notices = _parseNotices(_decodeList(files, noticesFile), rootPath);
-    final slides = _parseSlides(_decodeList(files, slidesFile), rootPath);
-    final articles = _parseArticles(_decodeList(files, articlesFile), rootPath);
-    return ShiplyPublicContent(
-      generatedAt: generatedAt,
-      notices: notices,
-      loginSlides: slides,
-      wechatArticles: articles,
+    final actualKind =
+        _requiredString(manifest, 'resourceKind', 'manifest.json');
+    if (actualKind != resourceKind) {
+      throw ShiplyPublicContentException('Shiply 公共资源类型不匹配: $actualKind');
+    }
+    return _ShiplyManifest(
+      generatedAt: _requiredString(manifest, 'generatedAt', 'manifest.json'),
+      files: _requiredObject(manifest, 'files', 'manifest.json'),
     );
   }
 
@@ -152,16 +204,6 @@ class ShiplyPublicContentParser {
         isPinned: _optionalBool(item, 'isPinned', 'notices.json') ?? false,
       );
     }).toList(growable: false);
-  }
-
-  static Map<String, Object?> _requiredObject(
-    Map<String, Object?> value,
-    String key,
-    String label,
-  ) {
-    final result = value[key];
-    if (result is Map<String, dynamic>) return result.cast<String, Object?>();
-    throw ShiplyPublicContentException('$label.$key 必须是 JSON 对象');
   }
 
   static List<ShiplyLoginSlide> _parseSlides(
@@ -196,22 +238,26 @@ class ShiplyPublicContentParser {
         summary: _optionalString(item, 'summary', 'wechat_articles.json'),
         date: _optionalString(item, 'date', 'wechat_articles.json'),
         articleUrl: _requiredString(item, 'articleUrl', 'wechat_articles.json'),
-        localCoverPath: _assetPath(
-          item,
-          'coverPath',
-          rootPath,
-          'wechat_articles.json',
-        ),
+        localCoverPath:
+            _assetPath(item, 'coverPath', rootPath, 'wechat_articles.json'),
         coverMime: _optionalString(item, 'coverMime', 'wechat_articles.json'),
         source: _requiredString(item, 'source', 'wechat_articles.json'),
       );
     }).toList(growable: false);
   }
 
-  static Map<String, Object?> _decodeObject(
-    Map<String, String> files,
-    String name,
+  static Map<String, Object?> _requiredObject(
+    Map<String, Object?> value,
+    String key,
+    String label,
   ) {
+    final result = value[key];
+    if (result is Map<String, dynamic>) return result.cast<String, Object?>();
+    throw ShiplyPublicContentException('$label.$key 必须是 JSON 对象');
+  }
+
+  static Map<String, Object?> _decodeObject(
+      Map<String, String> files, String name) {
     final value = _decode(files, name);
     if (value is! Map<String, dynamic>) {
       throw ShiplyPublicContentException('$name 必须是 JSON 对象');
@@ -245,14 +291,20 @@ class ShiplyPublicContentParser {
   }
 
   static String _requiredString(
-      Map<String, Object?> value, String key, String label) {
+    Map<String, Object?> value,
+    String key,
+    String label,
+  ) {
     final result = value[key];
     if (result is String && result.trim().isNotEmpty) return result;
     throw ShiplyPublicContentException('$label.$key 必须是非空字符串');
   }
 
   static String? _optionalString(
-      Map<String, Object?> value, String key, String label) {
+    Map<String, Object?> value,
+    String key,
+    String label,
+  ) {
     final result = value[key];
     if (result == null) return null;
     if (result is String) return result;
@@ -275,7 +327,10 @@ class ShiplyPublicContentParser {
   }
 
   static bool? _optionalBool(
-      Map<String, Object?> value, String key, String label) {
+    Map<String, Object?> value,
+    String key,
+    String label,
+  ) {
     final result = value[key];
     if (result == null) return null;
     if (result is bool) return result;

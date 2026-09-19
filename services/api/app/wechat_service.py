@@ -3,7 +3,7 @@
 数据源（可插拔通道，按配置优先级选择）：
 1. wechatrss 第三方 RSS 服务（配置 WECHAT_RSS_URL 后启用，含订阅 token）：
    在 wechatrss 账号里订阅公众号后，RSS 源自动输出文章（标题/简介/封面/时间/链接）。
-2. 微信「合集/专辑」公开接口（appmsgalbum，配置 WECHAT_ALBUM_URL 后启用）：
+2. 微信「合集/专辑」公开接口（appmsgalbum，配置 WECHAT_ALBUM_URLS 后启用）：
    匿名、无需凭据，读取公开合集数据；需学校公众号建有合集。
 
 架构：WechatFetcher 为可插拔抽象；default_fetcher() 按配置选通道。
@@ -43,6 +43,8 @@ _ALBUM_API = "https://mp.weixin.qq.com/mp/appmsgalbum"
 _TIMEOUT = httpx.Timeout(15.0, connect=5.0)
 _PAGE_SIZE = 20
 _MAX_PAGES = 20  # 单次同步最多翻页数（防失控）
+_MAX_ALBUMS = 10
+_DEFAULT_ALBUM_LIMIT = 50
 
 # 惰性同步兜底：上次同步距今超过间隔才在读取通知时后台触发
 _table_ready = False
@@ -59,6 +61,17 @@ def _ensure_tables() -> None:
 
 
 # ─── 配置解析 ───────────────────────────────────────────────
+
+
+def _configured_album_urls() -> list[str]:
+    """读取多合集配置；新配置为空时兼容旧的单合集配置。"""
+    settings = get_settings()
+    if settings.wechat_album_urls.strip():
+        return [item.strip() for item in settings.wechat_album_urls.split(",") if item.strip()]
+    if settings.wechat_album_url.strip():
+        return [settings.wechat_album_url.strip()]
+    return []
+
 
 def _parse_album_config(url: str) -> dict | None:
     """从合集链接解析 __biz 与 album_id。
@@ -112,19 +125,71 @@ class WechatFetcher(Protocol):
 
 
 class AlbumFetcher:
-    """微信公开「合集」接口抓取器（匿名，无需凭据）。"""
+    """微信公开「合集」接口抓取器（匿名，无需凭据）。
+
+    一个实例可以抓取多个合集；单个合集失败不会阻塞其他合集。
+    """
 
     def __init__(self, album_url: str | None = None):
-        self.config = _parse_album_config(album_url or get_settings().wechat_album_url)
+        urls = _configured_album_urls() if album_url is None else [album_url.strip()]
+        self.configured_count = len(urls)
+        self.configuration_errors: list[dict[str, object]] = []
+        self._entries: list[tuple[int, dict[str, str]]] = []
+        if len(urls) > _MAX_ALBUMS:
+            for index in range(_MAX_ALBUMS + 1, len(urls) + 1):
+                self.configuration_errors.append(
+                    {
+                        "index": index,
+                        "albumId": None,
+                        "error": f"合集数量超过上限 {_MAX_ALBUMS}，该配置未参与同步",
+                    }
+                )
+            urls = urls[:_MAX_ALBUMS]
+        for index, url in enumerate(urls, start=1):
+            config = _parse_album_config(url)
+            if config is None:
+                self.configuration_errors.append(
+                    {"index": index, "albumId": None, "error": "合集链接格式无效"}
+                )
+                continue
+            self._entries.append((index, config))
+        self.configs = [config for _, config in self._entries]
+        # 保留单合集调用方可能使用的 config 属性。
+        self.config = self.configs[0] if len(self.configs) == 1 else None
+        self.last_report: dict[str, object] = {}
 
     @property
     def enabled(self) -> bool:
-        return self.config is not None
+        return bool(self.configs)
 
-    def fetch_latest(self, limit: int = 50) -> list[WechatArticle]:
-        if not self.enabled:
-            return []
-        cfg = self.config
+    def fetch_latest(self, limit: int = _DEFAULT_ALBUM_LIMIT) -> list[WechatArticle]:
+        collected: list[WechatArticle] = []
+        errors = list(self.configuration_errors)
+        succeeded = 0
+        for index, config in self._entries:
+            try:
+                collected.extend(self._fetch_one(config, limit))
+                succeeded += 1
+            except Exception as exc:
+                error = {
+                    "index": index,
+                    "albumId": config["album_id"],
+                    "error": str(exc)[:500],
+                }
+                errors.append(error)
+                logger.warning(
+                    "wechat_album_fetch_failed",
+                    extra={"album_id": config["album_id"], "error": str(exc)},
+                )
+        self.last_report = {
+            "configured": self.configured_count,
+            "succeeded": succeeded,
+            "errors": errors,
+        }
+        return collected
+
+    @staticmethod
+    def _fetch_one(config: dict[str, str], limit: int) -> list[WechatArticle]:
         page = 0
         begin_msgid = 0
         begin_itemidx = 0
@@ -133,8 +198,8 @@ class AlbumFetcher:
             while page < _MAX_PAGES and len(collected) < limit:
                 params = {
                     "action": "getalbum",
-                    "__biz": cfg["biz"],
-                    "album_id": cfg["album_id"],
+                    "__biz": config["biz"],
+                    "album_id": config["album_id"],
                     "count": _PAGE_SIZE,
                     "begin_msgid": begin_msgid,
                     "begin_itemidx": begin_itemidx,
@@ -145,12 +210,12 @@ class AlbumFetcher:
                     resp.raise_for_status()
                     data = resp.json()
                 except Exception as exc:
-                    logger.warning("wechat album fetch failed (page=%d): %s", page, exc)
-                    break
+                    raise RuntimeError(f"第 {page + 1} 页请求失败: {exc}") from exc
                 base = data.get("base_resp", {}) or {}
                 if base.get("ret") != 0:
-                    logger.warning("wechat album ret=%s: %s", base.get("ret"), base.get("err_msg"))
-                    break
+                    raise RuntimeError(
+                        f"微信接口返回错误 ret={base.get('ret')}: {base.get('err_msg')}"
+                    )
                 album = data.get("getalbum_resp", {}) or {}
                 article_list = album.get("article_list") or []
                 if not article_list:
@@ -317,8 +382,27 @@ def _mask_url(url: str | None) -> str | None:
     return f"{parsed._replace(query='&'.join(parts)).geturl()}"
 
 
+def _canonical_album_url(config: dict[str, str]) -> str:
+    """只保留合集抓取所需参数，避免把原始链接中的敏感附加参数带入响应。"""
+    return (
+        f"{_ALBUM_API}?__biz={config['biz']}&action=getalbum"
+        f"&album_id={config['album_id']}"
+    )
+
+
+def album_config_summary() -> dict[str, object]:
+    """返回合集配置摘要，不发起网络请求。"""
+    fetcher = AlbumFetcher()
+    return {
+        "configuredCount": fetcher.configured_count,
+        "validCount": len(fetcher.configs),
+        "urls": [_canonical_album_url(config) for config in fetcher.configs],
+        "errors": fetcher.configuration_errors,
+    }
+
+
 def default_fetcher() -> WechatFetcher:
-    """按配置优先级选择同步通道：RSS > 合集。"""
+    """按配置优先级选择同步通道：RSS > 多合集。"""
     settings = get_settings()
     if settings.wechat_rss_url.strip():
         return RssFetcher()
@@ -330,7 +414,7 @@ def active_channel() -> str:
     settings = get_settings()
     if settings.wechat_rss_url.strip():
         return "rss"
-    if _parse_album_config(settings.wechat_album_url):
+    if _configured_album_urls():
         return "album"
     return "none"
 
@@ -516,39 +600,80 @@ def upsert_articles(articles: list[WechatArticle], source: str = "album") -> int
     return added
 
 
-def sync_articles(fetcher: WechatFetcher | None = None, limit: int = 50) -> dict:
-    """执行一次同步并记录状态；返回 {added, total, lastSyncedAt}。"""
-    _ensure_tables()
-    fetcher = fetcher or default_fetcher()
+def _sync_state_update(last_synced_at: datetime | None, last_error: str | None) -> None:
+    """保存公众号同步状态；不改变现有表结构。"""
+    factory = get_sync_session_factory()
     now = datetime.now(UTC)
-    result = {"added": 0, "total": 0, "lastSyncedAt": None, "error": None}
+    with factory() as db:
+        row = db.query(WechatSyncState).filter(WechatSyncState.key == "album").first()
+        if row is None:
+            row = WechatSyncState(key="album")
+            db.add(row)
+        if last_synced_at is not None:
+            row.last_synced_at = last_synced_at
+        row.last_error = last_error[:500] if last_error else None
+        row.updated_at = now
+        db.commit()
+
+
+def _fetch_report(fetcher: WechatFetcher) -> dict[str, object]:
+    """读取多合集抓取器报告；兼容外部传入的简单抓取器。"""
+    report = getattr(fetcher, "last_report", None)
+    if isinstance(report, dict):
+        return report
+    return {"configured": 1, "succeeded": 1, "errors": []}
+
+
+def _format_fetch_errors(errors: list[object]) -> str | None:
+    if not errors:
+        return None
+    messages = []
+    for item in errors:
+        if not isinstance(item, dict):
+            messages.append(str(item))
+            continue
+        album_id = item.get("albumId") or f"第 {item.get('index', '?')} 个合集"
+        messages.append(f"合集 {album_id}: {item.get('error', '未知错误')}")
+    return "; ".join(messages)
+
+
+def sync_articles(
+    fetcher: WechatFetcher | None = None,
+    limit: int = _DEFAULT_ALBUM_LIMIT,
+) -> dict[str, object]:
+    """执行一次同步并记录状态；合集限制按每个合集计算。"""
+    _ensure_tables()
+    selected_fetcher = fetcher or default_fetcher()
+    now = datetime.now(UTC)
+    result: dict[str, object] = {
+        "added": 0,
+        "total": 0,
+        "lastSyncedAt": None,
+        "error": None,
+        "albumsConfigured": 0,
+        "albumsSucceeded": 0,
+        "albumErrors": [],
+    }
     try:
-        articles = fetcher.fetch_latest(limit=limit)
+        articles = selected_fetcher.fetch_latest(limit=limit)
+        report = _fetch_report(selected_fetcher)
+        errors = report.get("errors", [])
+        if not isinstance(errors, list):
+            errors = [errors]
+        error_message = _format_fetch_errors(errors)
         result["added"] = upsert_articles(articles)
-        result["total"] = articles and len(articles) or 0
-        factory = get_sync_session_factory()
-        with factory() as db:
-            row = db.query(WechatSyncState).filter(WechatSyncState.key == "album").first()
-            if row is None:
-                row = WechatSyncState(key="album")
-                db.add(row)
-            row.last_synced_at = now
-            row.last_error = None
-            row.updated_at = now
-            db.commit()
+        result["total"] = len(articles)
+        result["albumsConfigured"] = report.get("configured", 0)
+        result["albumsSucceeded"] = report.get("succeeded", 0)
+        result["albumErrors"] = errors
+        result["error"] = error_message
+        _sync_state_update(now, error_message)
         result["lastSyncedAt"] = now.isoformat()
     except Exception as exc:
         logger.warning("wechat sync failed: %s", exc, exc_info=True)
-        result["error"] = str(exc)
-        factory = get_sync_session_factory()
-        with factory() as db:
-            row = db.query(WechatSyncState).filter(WechatSyncState.key == "album").first()
-            if row is None:
-                row = WechatSyncState(key="album")
-                db.add(row)
-            row.last_error = str(exc)[:500]
-            row.updated_at = now
-            db.commit()
+        error_message = str(exc)
+        result["error"] = error_message
+        _sync_state_update(None, error_message)
     return result
 
 
@@ -558,6 +683,14 @@ def last_sync_at() -> datetime | None:
     with factory() as db:
         row = db.query(WechatSyncState).filter(WechatSyncState.key == "album").first()
         return row.last_synced_at if row else None
+
+
+def last_sync_error() -> str | None:
+    _ensure_tables()
+    factory = get_sync_session_factory()
+    with factory() as db:
+        row = db.query(WechatSyncState).filter(WechatSyncState.key == "album").first()
+        return row.last_error if row else None
 
 
 def should_sync() -> bool:

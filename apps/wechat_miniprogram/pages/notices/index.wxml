@@ -1,0 +1,11 @@
+<view class="page" id="notices-page">
+  <view class="page-title">通知</view>
+  <view wx:if="{{loading}}" id="notices-loading" class="empty">正在加载通知…</view>
+  <view wx:if="{{error}}" id="notices-error" class="card error">{{error}}</view>
+  <view wx:for="{{notices}}" wx:key="index" class="card notice-card">
+    <view class="notice-meta"><text class="source">{{item.category}}</text><text class="muted">{{item.date || ''}}</text></view>
+    <view class="notice-title">{{item.title}}</view>
+    <view wx:if="{{item.summary}}" class="notice-summary">{{item.summary}}</view>
+  </view>
+  <view wx:if="{{!loading && notices.length === 0}}" id="notices-empty" class="empty">暂无通知</view>
+</view>

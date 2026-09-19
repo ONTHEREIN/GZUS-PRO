@@ -129,6 +129,7 @@ class ApiClient {
   String? _jwxtCookies;
   String? _ehallCookies;
   String? _ehallAuthToken;
+  bool _isDemo = false;
   String? _rsaPublicKeyPem;
   String? _rsaKeyId;
   Future<void>? _publicKeyFuture;
@@ -163,6 +164,14 @@ class ApiClient {
   String? get jwxtCookies => _jwxtCookies;
   String? get ehallCookies => _ehallCookies;
   String? get ehallAuthToken => _ehallAuthToken;
+  // 会话恢复时旧版本未保存 isDemo，虚构学号可作为兼容性兜底。
+  bool get isDemo =>
+      _isDemo ||
+      _studentId == 'DEMO-2026-001' ||
+      _account == 'demo_screenshot_2026';
+
+  bool get _shouldUseShiplyPublicContent =>
+      shiplyPublicContentSupported && !isDemo && !baseUrl.startsWith('http://');
 
   void setJwxtCookies(String? value) {
     _jwxtCookies = value;
@@ -562,6 +571,7 @@ class ApiClient {
       Map<String, dynamic> response) async {
     final result = LoginResult.fromJson(response);
     sessionId = result.sessionId;
+    _isDemo = result.isDemo;
     await _adoptLoginIdentity(result);
     _captureTransientEhallAuth(result);
     _cache.clear();
@@ -651,6 +661,7 @@ class ApiClient {
     _jwxtCookies = null;
     _ehallCookies = null;
     _ehallAuthToken = null;
+    _isDemo = false;
     _cache.clear();
   }
 
@@ -681,6 +692,7 @@ class ApiClient {
     await prefs.remove('auth.account');
     await prefs.remove('auth.password');
     await prefs.remove('auth.rememberPassword');
+    await prefs.remove('auth.isDemo');
   }
 
   void _clearAuthenticationForReverification() {
@@ -691,6 +703,7 @@ class ApiClient {
     _jwxtCookies = null;
     _ehallCookies = null;
     _ehallAuthToken = null;
+    _isDemo = false;
     _cache.clear();
   }
 
@@ -701,6 +714,7 @@ class ApiClient {
     await prefs.remove('auth.studentId');
     await prefs.remove('auth.loginMethod');
     await prefs.remove('auth.password');
+    await prefs.remove('auth.isDemo');
   }
 
   Future<LoginResult> relogin() async {
@@ -804,6 +818,7 @@ class ApiClient {
     if (result.sessionId != null && result.sessionId!.isNotEmpty) {
       await prefs.setString('auth.sessionId', result.sessionId!);
     }
+    await prefs.setBool('auth.isDemo', result.isDemo);
     await _authStorage.saveSchoolAuth(
       result.jwxtCookies,
       result.ehallCookies,
@@ -815,6 +830,7 @@ class ApiClient {
     final prefs = await SharedPreferences.getInstance();
     final sensitiveAuth = await _authStorage.load();
     _account = prefs.getString('auth.account');
+    _isDemo = prefs.getBool('auth.isDemo') ?? false;
     _credentialToken = sensitiveAuth.credentialToken;
     if (_isSchoolDirectEnabled) {
       _jwxtCookies = sensitiveAuth.jwxtCookies;
@@ -970,6 +986,21 @@ class ApiClient {
     } catch (_) {
       return null;
     }
+  }
+
+  Future<AcademicPeriod?> fetchAcademicPeriod() async {
+    final json = await _get('/settings/academic-period');
+    return AcademicPeriodPreference.fromJson(json).period;
+  }
+
+  Future<AcademicPeriod> saveAcademicPeriod(AcademicPeriod period) async {
+    final json = await _put('/settings/academic-period', {
+      'year': period.year,
+      'term': period.term,
+    });
+    final saved = AcademicPeriodPreference.fromJson(json).period;
+    if (saved == null) throw ApiException('服务端未返回已保存的学期');
+    return saved;
   }
 
   /// 保存云端课表偏好。
@@ -1581,7 +1612,7 @@ class ApiClient {
 
   Future<DataResult<List<NoticeItem>>> notices(
       {bool forceRefresh = false}) async {
-    if (shiplyPublicContentSupported) {
+    if (_shouldUseShiplyPublicContent) {
       final result = await _cacheFirstList<NoticeItem>(
         cacheKey: 'notices',
         fetch: () => _plainList(
@@ -1595,7 +1626,7 @@ class ApiClient {
       );
       final personal = result.data.where(_isReadableNoticeItem).toList();
       final publicContent =
-          await ShiplyPublicContentStore.instance.loadLatest();
+          await ShiplyPublicContentStore.instance.loadHomeLatest();
       return DataResult<List<NoticeItem>>(
         data: _mergeMobilePublicNotices(publicContent, personal),
         source: result.source,
@@ -1623,14 +1654,16 @@ class ApiClient {
         .map(NoticeItem.fromJson)
         .where(_isReadableNoticeItem)
         .toList();
-    if (!shiplyPublicContentSupported || personal == null) return personal;
-    final publicContent = ShiplyPublicContentStore.instance.cached;
+    if (!_shouldUseShiplyPublicContent || personal == null) {
+      return personal;
+    }
+    final publicContent = ShiplyPublicContentStore.instance.cachedHome;
     if (publicContent == null) return personal;
     return _mergeMobilePublicNotices(publicContent, personal);
   }
 
   List<NoticeItem> _mergeMobilePublicNotices(
-    ShiplyPublicContent publicContent,
+    ShiplyHomeContent publicContent,
     List<NoticeItem> personal,
   ) {
     final publicNotices = publicContent.notices
@@ -2322,53 +2355,101 @@ class ApiClient {
   Future<Map<String, dynamic>> adminDeleteNotice(int noticeId) async =>
       _delete('/admin/notices/$noticeId');
 
-  Future<ShiplyContentExport> adminExportShiplyPublicContent() async {
-    return _withReloginRetry(() async {
-      final url = _requireBaseUrl();
+  Future<ShiplyExportJob> adminCreateShiplyExport(
+    ShiplyExportResource resource,
+  ) async {
+    final url = _requireBaseUrl();
+    try {
       final response = await _http
           .post(
-            Uri.parse('$url/admin/shiply/public-content/export'),
+            Uri.parse('$url/admin/shiply/exports'),
             headers: _headers(),
+            body: jsonEncode({'resource': resource.wireValue}),
           )
-          .timeout(_connectTimeout)
-          .timeout(_requestTimeout);
+          .timeout(const Duration(seconds: 15));
       if (response.statusCode >= 400) {
         _decode(response);
-        throw ApiException('Shiply 公共资源包生成失败', statusCode: response.statusCode);
+        throw ApiException('Shiply 资源包任务创建失败', statusCode: response.statusCode);
       }
-      final rawCounts = response.headers['x-shiply-content-counts'];
-      final decodedCounts = rawCounts == null ? null : jsonDecode(rawCounts);
-      if (decodedCounts is! Map<String, dynamic>) {
-        throw ApiException('Shiply 公共资源包响应缺少内容统计');
+      return ShiplyExportJob.fromJson(_decodeObject(response));
+    } on TimeoutException {
+      throw ApiException('Shiply 资源包任务创建超时，请稍后查看任务列表');
+    }
+  }
+
+  Future<List<ShiplyExportJob>> adminShiplyExports() async {
+    final response = await _adminShiplyJsonRequest('/admin/shiply/exports');
+    final rawItems = response['items'];
+    if (rawItems is! List<dynamic>) {
+      throw ApiException('Shiply 导出任务列表格式错误');
+    }
+    return rawItems
+        .whereType<Map<String, dynamic>>()
+        .map(ShiplyExportJob.fromJson)
+        .toList(growable: false);
+  }
+
+  Future<ShiplyExportJob> adminShiplyExport(String jobId) async {
+    final response =
+        await _adminShiplyJsonRequest('/admin/shiply/exports/$jobId');
+    return ShiplyExportJob.fromJson(response);
+  }
+
+  Future<ShiplyExportDownload> adminDownloadShiplyExport(
+    ShiplyExportJob job,
+  ) async {
+    if (!job.isSucceeded) {
+      throw ApiException('Shiply 资源包尚未生成完成');
+    }
+    final url = _requireBaseUrl();
+    try {
+      final response = await _http
+          .get(
+            Uri.parse('$url/admin/shiply/exports/${job.id}/download'),
+            headers: _headers(),
+          )
+          .timeout(const Duration(seconds: 120));
+      if (response.statusCode >= 400) {
+        _decode(response);
+        throw ApiException('Shiply 资源包下载失败', statusCode: response.statusCode);
       }
-      final counts = <String, int>{};
-      for (final entry in decodedCounts.entries) {
-        if (entry.value is! num) {
-          throw ApiException('Shiply 公共资源包内容统计格式错误: ${entry.key}');
-        }
-        counts[entry.key] = (entry.value as num).toInt();
-      }
-      final sha256 = response.headers['x-shiply-content-sha256'];
-      final generatedAt = response.headers['x-shiply-generated-at'];
-      if (sha256 == null ||
-          sha256.isEmpty ||
-          generatedAt == null ||
-          generatedAt.isEmpty) {
-        throw ApiException('Shiply 公共资源包响应缺少摘要或生成时间');
-      }
-      return ShiplyContentExport(
-        bytes: response.bodyBytes,
-        sha256: sha256,
-        generatedAt: generatedAt,
-        counts: counts,
+      final filename = _shiplyExportFilename(
+        response.headers['content-disposition'],
+        job.filename,
       );
-    });
+      return ShiplyExportDownload(
+          bytes: response.bodyBytes, filename: filename);
+    } on TimeoutException {
+      throw ApiException('Shiply 资源包下载超时，请重试下载');
+    }
+  }
+
+  Future<Map<String, dynamic>> _adminShiplyJsonRequest(String path) async {
+    final url = _requireBaseUrl();
+    try {
+      final response = await _http
+          .get(Uri.parse('$url$path'), headers: _headers())
+          .timeout(const Duration(seconds: 15));
+      return _decodeObject(response);
+    } on TimeoutException {
+      throw ApiException('Shiply 导出任务查询超时，请稍后重试');
+    }
+  }
+
+  String _shiplyExportFilename(String? disposition, String? fallback) {
+    final matched =
+        RegExp(r'filename="?([^";]+)').firstMatch(disposition ?? '');
+    final filename = matched?.group(1) ?? fallback;
+    if (filename == null || filename.isEmpty || !filename.endsWith('.zip')) {
+      throw ApiException('Shiply 资源包响应缺少有效文件名');
+    }
+    return filename;
   }
 
   /// 未登录状态可读取的登录页轮播内容。
   Future<List<LoginCarouselSlide>> loginCarouselSlides() async {
     if (shiplyPublicContentSupported) {
-      final content = await ShiplyPublicContentStore.instance.loadLatest();
+      final content = await ShiplyPublicContentStore.instance.loadLoginLatest();
       return content.loginSlides
           .map(LoginCarouselSlide.fromShiply)
           .toList(growable: false);

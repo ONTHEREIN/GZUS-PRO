@@ -1,0 +1,40 @@
+# 软帮手 OneGZUS — 测试环境 FastAPI systemd 服务单元
+#
+# 与生产的 onegzus-api.service 完全隔离：独立目录、独立端口、独立数据库。
+# 安装：
+#   sudo cp deploy/tencent/systemd/onegzus-test-api.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now onegzus-test-api
+#
+# 与生产的关键差异（务必保持）：
+#   - 端口 8001（生产 8000），只监听回环，由测试站点 nginx 反代。
+#   - 目录 /opt/onegzus-test，不复用 /opt/onegzus，避免误覆盖生产 release。
+#   - --workers 1 同样刻意为之：轮询器在 lifespan 中运行，多 worker 会重复推送。
+#     测试库是空的，轮询器没有可处理的数据，不会打扰真实用户。
+
+[Unit]
+Description=OneGZUS Test API (软帮手小程序测试环境)
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=onegzus
+Group=onegzus
+WorkingDirectory=/opt/onegzus-test/current/api
+EnvironmentFile=/opt/onegzus-test/shared/api.env
+ExecStart=/opt/onegzus-test/current/api/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8001 --workers 1
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/opt/onegzus-test/current/api /opt/onegzus-test/releases /opt/onegzus-test/shared /opt/onegzus-test/backups
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

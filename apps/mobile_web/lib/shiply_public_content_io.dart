@@ -28,62 +28,123 @@ const _iosResourceAppKey = String.fromEnvironment(
   defaultValue: '9ad9941e-fcbb-41d7-a2fa-9beb1491ca28',
 );
 
+typedef _ContentParser<T> = T Function(
+    String rootPath, Map<String, String> files);
+typedef _AssetPaths<T> = List<String?> Function(T content);
+
 class ShiplyPublicContentStore {
   static final ShiplyPublicContentStore instance = ShiplyPublicContentStore._();
 
   ShiplyPublicContentStore._();
 
   final ReshubFlutter _reshub = ReshubFlutter();
-  ShiplyPublicContent? _cached;
   Future<void>? _initialization;
+  ShiplyLoginContent? _loginCached;
+  ShiplyHomeContent? _homeCached;
 
-  ShiplyPublicContent? get cached => _cached;
+  ShiplyLoginContent? get cachedLogin => _loginCached;
+  ShiplyHomeContent? get cachedHome => _homeCached;
 
   Future<void> initialize() {
     return _initialization ??= _initialize();
   }
 
-  Future<ShiplyPublicContent> loadLatest() async {
+  Future<ShiplyLoginContent> loadLoginLatest() async {
+    final content = await _loadLatest<ShiplyLoginContent>(
+      resourceKey: shiplyLoginContentKey,
+      requiredJsonFiles: const ['manifest.json', 'login_slides.json'],
+      parser: (rootPath, files) => ShiplyPublicContentParser.parseLogin(
+          rootPath: rootPath, files: files),
+      assetPaths: (value) =>
+          value.loginSlides.map((item) => item.localImagePath).toList(),
+    );
+    _loginCached = content;
+    return content;
+  }
+
+  Future<ShiplyHomeContent> loadHomeLatest() async {
+    final content = await _loadLatest<ShiplyHomeContent>(
+      resourceKey: shiplyHomeContentKey,
+      requiredJsonFiles: const [
+        'manifest.json',
+        'notices.json',
+        'wechat_articles.json',
+      ],
+      parser: (rootPath, files) =>
+          ShiplyPublicContentParser.parseHome(rootPath: rootPath, files: files),
+      assetPaths: (value) => [
+        ...value.notices.map((item) => item.localCoverPath),
+        ...value.wechatArticles.map((item) => item.localCoverPath),
+      ],
+    );
+    _homeCached = content;
+    return content;
+  }
+
+  Future<T> _loadLatest<T>({
+    required String resourceKey,
+    required List<String> requiredJsonFiles,
+    required _ContentParser<T> parser,
+    required _AssetPaths<T> assetPaths,
+  }) async {
     await initialize();
     LoadResult? result;
-    var reason = 'Shiply 公共资源没有可用本地版本';
+    var reason = 'Shiply 资源没有可用本地版本';
     try {
-      result = await _reshub.loadLatest(shiplyPublicContentKey);
+      result = await _reshub.loadLatest(resourceKey);
     } on PlatformException catch (error) {
       reason = 'Shiply SDK 请求失败: ${error.message ?? error.code}';
     } on MissingPluginException catch (error) {
       reason = 'Shiply Flutter 插件未注册: $error';
     }
-    final loaded = await _tryReadModel(result?.resModel);
-    if (loaded != null) {
-      _cached = loaded;
-      return loaded;
-    }
+    final loaded = await _tryReadModel(
+      result?.resModel,
+      resourceKey,
+      requiredJsonFiles,
+      parser,
+      assetPaths,
+    );
+    if (loaded != null) return loaded;
     reason = result?.error?.msg ?? reason;
 
-    // loadLatest 失败时，显式读取 SDK 已落盘的最新版本；这仍是 Shiply
-    // 本地缓存，不会转向管理员公共内容 API。
     try {
-      final cachedModel = await _reshub.getLatest(shiplyPublicContentKey);
-      final cached = await _tryReadModel(cachedModel);
-      if (cached != null) {
-        _cached = cached;
-        return cached;
-      }
+      final cachedModel = await _reshub.getLatest(resourceKey);
+      final cached = await _tryReadModel(
+        cachedModel,
+        resourceKey,
+        requiredJsonFiles,
+        parser,
+        assetPaths,
+      );
+      if (cached != null) return cached;
     } on PlatformException catch (error) {
       reason = '$reason; 读取 Shiply 本地缓存失败: ${error.message ?? error.code}';
     } on MissingPluginException catch (error) {
       reason = '$reason; 读取 Shiply 本地缓存失败: $error';
     }
-    return _loadCachedAfterError(reason);
+    throw ShiplyPublicContentException(
+      'Shiply 资源 $resourceKey 暂不可用，且没有有效本地缓存: $reason',
+    );
   }
 
-  Future<ShiplyPublicContent?> _tryReadModel(ResModel? model) async {
+  Future<T?> _tryReadModel<T>(
+    ResModel? model,
+    String resourceKey,
+    List<String> requiredJsonFiles,
+    _ContentParser<T> parser,
+    _AssetPaths<T> assetPaths,
+  ) async {
     final localPath = model?.localPath;
     if (localPath == null && model?.originLocalPath == null) return null;
     try {
-      return await _readContent(
-          localPath ?? model!.originLocalPath!, model?.originLocalPath);
+      return await _readContent<T>(
+        localPath ?? model!.originLocalPath!,
+        model?.originLocalPath,
+        resourceKey,
+        requiredJsonFiles,
+        parser,
+        assetPaths,
+      );
     } on ShiplyPublicContentException {
       return null;
     }
@@ -109,11 +170,7 @@ class ShiplyPublicContentStore {
     await prefs.setString('shiply.deviceId', deviceId);
     final packageInfo = await PackageInfo.fromPlatform();
     ReshubFlutter.initReshubCenter(
-      deviceId,
-      packageInfo.version,
-      kDebugMode,
-      const <String, String>{},
-    );
+        deviceId, packageInfo.version, kDebugMode, const {});
     if (Platform.isIOS) {
       ReshubFlutter.initReshub(_iosResourceAppId, _iosResourceAppKey, 'online');
       return;
@@ -122,16 +179,14 @@ class ShiplyPublicContentStore {
         _androidResourceAppId, _androidResourceAppKey, 'online');
   }
 
-  Future<ShiplyPublicContent> _loadCachedAfterError(String reason) async {
-    final cached = _cached;
-    if (cached != null) return cached;
-    throw ShiplyPublicContentException(
-      'Shiply 公共资源暂不可用，且没有有效本地缓存: $reason',
-    );
-  }
-
-  Future<ShiplyPublicContent> _readContent(
-      String localPath, String? originLocalPath) async {
+  Future<T> _readContent<T>(
+    String localPath,
+    String? originLocalPath,
+    String resourceKey,
+    List<String> requiredJsonFiles,
+    _ContentParser<T> parser,
+    _AssetPaths<T> assetPaths,
+  ) async {
     final candidates = <String>[
       localPath,
       if (originLocalPath != null) originLocalPath
@@ -140,24 +195,20 @@ class ShiplyPublicContentStore {
       final root = await _findResourceRoot(candidate);
       if (root == null) continue;
       final files = <String, String>{};
-      for (final name in const [
-        'manifest.json',
-        'notices.json',
-        'login_slides.json',
-        'wechat_articles.json',
-      ]) {
+      for (final name in requiredJsonFiles) {
         final file = File('$root/$name');
         if (!await file.exists()) {
-          throw ShiplyPublicContentException('Shiply 公共资源缺少文件: $name');
+          throw ShiplyPublicContentException(
+              'Shiply 资源 $resourceKey 缺少文件: $name');
         }
         files[name] = await file.readAsString();
       }
-      final content =
-          ShiplyPublicContentParser.parse(rootPath: root, files: files);
-      await _validateAssets(content);
+      final content = parser(root, files);
+      await _validateAssets(resourceKey, assetPaths(content));
       return content;
     }
-    throw ShiplyPublicContentException('Shiply 本地资源路径无效: $localPath');
+    throw ShiplyPublicContentException(
+        'Shiply 资源 $resourceKey 本地路径无效: $localPath');
   }
 
   Future<String?> _findResourceRoot(String path) async {
@@ -171,15 +222,11 @@ class ShiplyPublicContentStore {
     return null;
   }
 
-  Future<void> _validateAssets(ShiplyPublicContent content) async {
-    final paths = <String?>[
-      ...content.notices.map((item) => item.localCoverPath),
-      ...content.loginSlides.map((item) => item.localImagePath),
-      ...content.wechatArticles.map((item) => item.localCoverPath),
-    ].whereType<String>();
-    for (final path in paths) {
+  Future<void> _validateAssets(String resourceKey, List<String?> paths) async {
+    for (final path in paths.whereType<String>()) {
       if (!await File(path).exists()) {
-        throw ShiplyPublicContentException('Shiply 公共资源媒体文件不存在: $path');
+        throw ShiplyPublicContentException(
+            'Shiply 资源 $resourceKey 媒体文件不存在: $path');
       }
     }
   }

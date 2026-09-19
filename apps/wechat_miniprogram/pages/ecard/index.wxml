@@ -1,0 +1,65 @@
+<view class="page" id="ecard-page">
+  <view class="page-title">生活缴费</view>
+  <view wx:if="{{loading}}" id="ecard-loading" class="empty">正在加载余额…</view>
+  <view wx:if="{{error}}" id="ecard-error" class="card error">{{error}}</view>
+
+  <!-- 未绑定：引导在小程序内直接绑定 -->
+  <view wx:if="{{summary && summary.status === 'not_bound'}}" id="ecard-not-bound" class="card empty">
+    <view>暂未绑定宿舍，绑定后即可查看水电余额。</view>
+    <button wx:if="{{!bindPanelVisible}}" id="ecard-bind-open" class="bind-open-button" bindtap="openBindPanel">绑定宿舍</button>
+  </view>
+
+  <!-- 已绑定：展示余额 -->
+  <view wx:if="{{summary && summary.status === 'ok'}}" id="ecard-summary" class="card">
+    <view class="muted" id="ecard-room">{{summary.roomDisplay || '已绑定宿舍'}}</view>
+    <view wx:if="{{summary.stale}}" id="ecard-stale" class="stale">当前展示的是最近一次缓存数据</view>
+    <view class="balance" id="ecard-power"><text>电费</text><text>{{summary.powerText || '-'}}</text></view>
+    <view class="balance" id="ecard-cold-water"><text>冷水</text><text>{{summary.coldWaterText || '-'}}</text></view>
+    <view class="balance" id="ecard-hot-water"><text>热水</text><text>{{summary.hotWaterText || '-'}}</text></view>
+  </view>
+
+  <view wx:if="{{summary && summary.status === 'ok' && !bindPanelVisible}}" class="card">
+    <button id="ecard-rebind" class="rebind-button" bindtap="openBindPanel">重新绑定宿舍</button>
+  </view>
+
+  <!-- 绑定面板 -->
+  <view wx:if="{{bindPanelVisible}}" id="ecard-bind-panel" class="card">
+    <view class="bind-title">绑定宿舍</view>
+    <view class="muted bind-hint">输入楼栋或房间号关键词搜索，如「A1」「101」。</view>
+
+    <view class="ecard-search">
+      <input
+        id="ecard-room-keyword"
+        class="ecard-input"
+        placeholder="楼栋 / 房间号"
+        value="{{keyword}}"
+        bindinput="onKeywordInput"
+        bindconfirm="searchRooms"
+        confirm-type="search"
+      />
+      <button id="ecard-room-search" class="ecard-search-button" size="mini" loading="{{searching}}" bindtap="searchRooms">搜索</button>
+    </view>
+
+    <view wx:if="{{searchError}}" id="ecard-search-error" class="ecard-error">{{searchError}}</view>
+    <view wx:if="{{bindError}}" id="ecard-bind-error" class="ecard-error">{{bindError}}</view>
+
+    <view wx:if="{{searchPerformed && rooms.length === 0 && !searchError}}" id="ecard-rooms-empty" class="muted bind-empty">没有匹配的宿舍，换个关键词试试。</view>
+
+    <view wx:for="{{rooms}}" wx:key="id" id="ecard-room-{{index}}" class="room-item">
+      <view class="room-text">
+        <view class="room-name">{{item.displayName}}</view>
+        <view class="muted">{{item.schoolArea}} {{item.building}}</view>
+      </view>
+      <button
+        id="ecard-room-bind-{{index}}"
+        class="room-bind"
+        size="mini"
+        data-index="{{index}}"
+        loading="{{bindingRoomId === item.id}}"
+        bindtap="bindRoom"
+      >绑定</button>
+    </view>
+
+    <button id="ecard-bind-cancel" class="bind-cancel" bindtap="closeBindPanel">取消</button>
+  </view>
+</view>

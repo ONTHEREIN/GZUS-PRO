@@ -10,6 +10,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
@@ -203,6 +204,8 @@ class AppSessionModel(Base):
     student_account = Column(String(100), nullable=True)
     # 管理后台标记：登录时查 admin_users 表写入，require_admin 依赖据此鉴权。
     is_admin = Column(Boolean, default=False, nullable=False)
+    # 本地宣传演示会话标记；演示会话不得按真实学校会话恢复。
+    is_demo = Column(Boolean, default=False, nullable=False)
     created_at = Column(
         DateTime, default=lambda: datetime.now(timezone.utc), nullable=False, index=True
     )
@@ -281,11 +284,37 @@ class UserSettings(Base):
     onboarding_completed = Column(Boolean, default=False, nullable=False)
     # 课表字段显示偏好，按账号同步；旧库为空时由客户端使用默认值。
     schedule_display_json = Column(Text, nullable=True)
+    # 三端共享的手动学年学期选择；NULL 表示账号尚未同步过偏好。
+    selected_academic_year = Column(Integer, nullable=True)
+    selected_term = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(
         DateTime,
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
+class WechatBinding(Base):
+    """小程序 OpenID 与学校账号的一对一绑定。"""
+
+    __tablename__ = "wechat_bindings"
+    __table_args__ = (
+        UniqueConstraint("student_id", name="uq_wechat_bindings_student"),
+        UniqueConstraint("openid_fingerprint", name="uq_wechat_bindings_openid"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    student_id = Column(String(100), nullable=False, unique=True, index=True)
+    openid_fingerprint = Column(String(64), nullable=False, unique=True, index=True)
+    encrypted_openid = Column(Text, nullable=False)
+    app_id = Column(String(64), nullable=False, index=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
     )
 
 
@@ -488,6 +517,28 @@ class WxArticle(Base):
     )
 
 
+class ShiplyExportJob(Base):
+    """管理员生成的 Shiply 资源包任务与短期下载产物。"""
+
+    __tablename__ = "shiply_export_jobs"
+
+    id = Column(String(36), primary_key=True)
+    resource_kind = Column(String(20), nullable=False, index=True)
+    resource_key = Column(String(100), nullable=False)
+    operator_id = Column(String(100), nullable=False, index=True)
+    status = Column(String(20), nullable=False, index=True)
+    archive = Column(LargeBinary, nullable=True)
+    filename = Column(String(160), nullable=True)
+    sha256 = Column(String(64), nullable=True)
+    generated_at = Column(DateTime, nullable=True)
+    counts_json = Column(Text, nullable=True)
+    error = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    expires_at = Column(DateTime, nullable=True, index=True)
+
+
 class WechatSyncState(Base):
     """公众号同步状态：记录最近一次同步时间，供惰性同步判断过期。"""
 
@@ -574,6 +625,7 @@ _db_initialized = False
 _APP_SESSION_COMPAT_COLUMNS: dict[str, str] = {
     "student_account": "VARCHAR(100)",
     "is_admin": "BOOLEAN NOT NULL DEFAULT FALSE",
+    "is_demo": "BOOLEAN NOT NULL DEFAULT FALSE",
     "push_registration_id": "VARCHAR(500)",
     "push_platform": "VARCHAR(20) NOT NULL DEFAULT 'legacy'",
     "jwxt_cookies": "TEXT",
@@ -787,6 +839,8 @@ def init_db():
         "user_settings",
         {
             "schedule_display_json": "TEXT",
+            "selected_academic_year": "INTEGER",
+            "selected_term": "INTEGER",
         },
     )
     _ensure_columns(

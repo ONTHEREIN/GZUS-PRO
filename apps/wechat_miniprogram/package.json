@@ -1,0 +1,19 @@
+{
+  "name": "onegzus-wechat-miniprogram",
+  "private": true,
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test:logic": "tsc -p tests/tsconfig.test.json && node --test \".test-build/tests/*.test.js\"",
+    "test": "npm run typecheck && npm run test:logic",
+    "test:pages": "node scripts/page-regression.js",
+    "test:live": "node scripts/live-api-check.js",
+    "test:all": "npm run test && npm run test:pages",
+    "auto-preview": "node scripts/auto-preview.js"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.2",
+    "miniprogram-api-typings": "^4.1.0",
+    "miniprogram-automator": "^0.12.1",
+    "typescript": "^5.8.3"
+  }
+}

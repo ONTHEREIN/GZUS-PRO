@@ -897,3 +897,163 @@ def test_ecard_reminder_has_no_daily_cap_and_respects_each_time():
     assert pending
     assert ecard_reminder_time_enabled(binding, "08:00") is True
     assert ecard_reminder_time_enabled(binding, "09:00") is False
+
+
+# ─── POST /ecard/binding（小程序内绑定宿舍）─────────────────────────────
+#
+# 小程序「生活缴费」页现在支持直接绑定宿舍，依赖这个接口。此前它没有路由级测试。
+# 绑定是本地操作：只写 EcardBinding，随后读上游余额；不向学校系统写入任何东西。
+
+BIND_ROOM_ID = "CGCOMMON1111|1|A2|932"
+BIND_ROOM_DISPLAY = "校本部 A2 A2-932"
+
+
+class FakeEcardBalanceClient:
+    """只实现绑定流程会用到的 balance()。"""
+
+    def __init__(self, error=None):
+        self._error = error
+        self.calls: list[tuple[str, str]] = []
+
+    def balance(self, room_ref, student_id):
+        self.calls.append((room_ref.id, student_id))
+        if self._error is not None:
+            raise self._error
+        return {
+            "powerBalance": 68.4,
+            "powerUnit": "度",
+            "powerText": "68.4 度",
+            "coldWaterBalance": 9.6,
+            "coldWaterUnit": "吨",
+            "coldWaterText": "9.6 吨",
+            "hotWaterBalance": 42.8,
+            "hotWaterUnit": "元",
+            "hotWaterText": "42.80元",
+        }
+
+
+def _bind_session(monkeypatch, session_id: str) -> AppSession:
+    session = AppSession(id=session_id, client=FakeSchoolClient(), student_name="测试用户")
+    monkeypatch.setattr(app.state.sessions, "get", lambda sid, touch=True: session)
+    monkeypatch.setattr(app.state.sessions, "touch", lambda sid: None)
+    return session
+
+
+def _binding_row(student_id: str = "20240001") -> EcardBinding | None:
+    factory = get_sync_session_factory()
+    with factory() as db:
+        return db.query(EcardBinding).filter(EcardBinding.student_id == student_id).first()
+
+
+def test_bind_room_creates_binding_and_returns_summary(monkeypatch):
+    session = _bind_session(monkeypatch, "bind-create")
+    fake = FakeEcardBalanceClient()
+    monkeypatch.setattr(ecard, "_client", lambda: fake)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/ecard/binding",
+            headers={"X-Session-Id": session.id},
+            json={"roomId": BIND_ROOM_ID, "roomDisplay": BIND_ROOM_DISPLAY},
+        )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "ok"
+    assert data["roomDisplay"] == BIND_ROOM_DISPLAY
+    assert data["powerText"] == "68.4 度"
+    # 余额必须按刚绑定的房间去读，否则会展示别人房间的读数。
+    assert fake.calls == [(BIND_ROOM_ID, "20240001")]
+
+    row = _binding_row()
+    assert row is not None
+    assert row.room_id == BIND_ROOM_ID
+    assert row.room_display == BIND_ROOM_DISPLAY
+
+
+def test_bind_room_rejects_invalid_room_id(monkeypatch):
+    session = _bind_session(monkeypatch, "bind-invalid")
+    monkeypatch.setattr(ecard, "_client", lambda: FakeEcardBalanceClient())
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/ecard/binding",
+            headers={"X-Session-Id": session.id},
+            json={"roomId": "缺少分隔符", "roomDisplay": "某宿舍"},
+        )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "无效宿舍标识"
+    assert _binding_row() is None
+
+
+def test_bind_room_replaces_existing_binding(monkeypatch):
+    session = _bind_session(monkeypatch, "bind-replace")
+    monkeypatch.setattr(ecard, "_client", lambda: FakeEcardBalanceClient())
+
+    with TestClient(app) as client:
+        first = client.post(
+            "/ecard/binding",
+            headers={"X-Session-Id": session.id},
+            json={"roomId": BIND_ROOM_ID, "roomDisplay": BIND_ROOM_DISPLAY},
+        )
+        second = client.post(
+            "/ecard/binding",
+            headers={"X-Session-Id": session.id},
+            json={"roomId": "CGCOMMON2222|2|B1|101", "roomDisplay": "江门校区 B1 B1-101"},
+        )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert second.json()["roomDisplay"] == "江门校区 B1 B1-101"
+
+    factory = get_sync_session_factory()
+    with factory() as db:
+        rows = db.query(EcardBinding).filter(EcardBinding.student_id == "20240001").all()
+    assert len(rows) == 1, "改绑应更新同一行，不能新增绑定"
+    assert rows[0].room_id == "CGCOMMON2222|2|B1|101"
+
+
+def test_bind_room_keeps_binding_when_balance_unavailable(monkeypatch):
+    """上游余额读不到时，绑定本身仍要落库（否则用户白绑一次）。"""
+    session = _bind_session(monkeypatch, "bind-balance-fail")
+    monkeypatch.setattr(
+        ecard, "_client", lambda: FakeEcardBalanceClient(error=ecard.EcardApiError("一卡通服务请求失败"))
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/ecard/binding",
+            headers={"X-Session-Id": session.id},
+            json={"roomId": BIND_ROOM_ID, "roomDisplay": BIND_ROOM_DISPLAY},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["roomDisplay"] == BIND_ROOM_DISPLAY
+
+    row = _binding_row()
+    assert row is not None
+    assert row.room_id == BIND_ROOM_ID
+
+
+def test_bind_room_blocked_for_demo_session():
+    """演示账号只能查看：写操作被中间件拦截，因此绑定流程不能用演示账号验收。"""
+    from app.demo_data import DEMO_STUDENT_ID, DEMO_STUDENT_NAME, DemoAcademicClient, DemoEhallClient
+
+    session = app.state.sessions.create(
+        DemoAcademicClient(),
+        DEMO_STUDENT_NAME,
+        ehall_client=DemoEhallClient(),
+        student_account=DEMO_STUDENT_ID,
+        is_demo=True,
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/ecard/binding",
+            headers={"X-Session-Id": session.id},
+            json={"roomId": BIND_ROOM_ID, "roomDisplay": BIND_ROOM_DISPLAY},
+        )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "演示账号仅支持查看"

@@ -159,6 +159,55 @@ def test_put_schedule_settings_rejects_unknown_fields(monkeypatch):
     assert response.status_code == 422
 
 
+def test_academic_period_defaults_to_null(monkeypatch):
+    session = _authed_session(monkeypatch)
+    with TestClient(app) as client:
+        response = client.get(
+            "/settings/academic-period",
+            headers={"X-Session-Id": session.id},
+        )
+    assert response.status_code == 200
+    assert response.json() == {"year": None, "term": None}
+
+
+def test_academic_period_is_saved_and_last_write_wins(monkeypatch):
+    session = _authed_session(monkeypatch)
+    headers = {"X-Session-Id": session.id}
+    with TestClient(app) as client:
+        first = client.put(
+            "/settings/academic-period",
+            headers=headers,
+            json={"year": 2026, "term": 1},
+        )
+        second = client.put(
+            "/settings/academic-period",
+            headers=headers,
+            json={"year": 2025, "term": 2},
+        )
+        current = client.get("/settings/academic-period", headers=headers)
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert current.status_code == 200
+    assert current.json() == {"year": 2025, "term": 2}
+
+
+def test_academic_period_rejects_invalid_year_and_term(monkeypatch):
+    session = _authed_session(monkeypatch)
+    with TestClient(app) as client:
+        invalid_year = client.put(
+            "/settings/academic-period",
+            headers={"X-Session-Id": session.id},
+            json={"year": 1999, "term": 1},
+        )
+        invalid_term = client.put(
+            "/settings/academic-period",
+            headers={"X-Session-Id": session.id},
+            json={"year": 2026, "term": 3},
+        )
+    assert invalid_year.status_code == 422
+    assert invalid_term.status_code == 422
+
+
 def test_ensure_table_keeps_user_settings_available(monkeypatch):
     """常驻服务的兜底建表 helper 保持幂等。"""
     database.reset_engine()

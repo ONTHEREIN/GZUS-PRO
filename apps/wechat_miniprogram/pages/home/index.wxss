@@ -1,0 +1,131 @@
+.greeting {
+  padding: 20rpx 8rpx 8rpx;
+}
+
+.quick-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 18rpx;
+  margin: 26rpx 0;
+}
+
+.quick-card {
+  padding: 26rpx 10rpx;
+  border-radius: 22rpx;
+  background: #ffffff;
+  color: #31415d;
+  font-size: 24rpx;
+  text-align: center;
+}
+
+.quick-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 58rpx;
+  height: 58rpx;
+  margin: 0 auto 13rpx;
+  border-radius: 18rpx;
+  background: #e7f0ff;
+  color: #2176e8;
+  font-size: 29rpx;
+  font-weight: 700;
+}
+
+.section-title {
+  margin-bottom: 14rpx;
+  color: #1d2b42;
+  font-size: 31rpx;
+  font-weight: 700;
+}
+
+/* ─── 冷/热/电 余额模块 ─────────────────────────────────────── */
+
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.section-head .section-title {
+  margin-bottom: 0;
+}
+
+.section-more {
+  color: #2176e8;
+  font-size: 25rpx;
+}
+
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16rpx;
+  margin-top: 20rpx;
+}
+
+.metric {
+  padding: 22rpx 12rpx;
+  border-radius: 18rpx;
+  background: #f6f9fd;
+  text-align: center;
+}
+
+.metric-label {
+  color: #748094;
+  font-size: 24rpx;
+}
+
+.metric-value {
+  margin-top: 10rpx;
+  color: #2176e8;
+  font-size: 30rpx;
+  font-weight: 700;
+}
+
+.ecard-error-text {
+  color: #c62828;
+}
+
+.ecard-stale-text {
+  margin-top: 16rpx;
+  color: #b26a00;
+}
+
+.section-empty {
+  padding: 22rpx 0;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 22rpx 0;
+  border-top: 1rpx solid #edf0f5;
+}
+
+.row-title {
+  margin-bottom: 7rpx;
+  color: #263650;
+  font-weight: 600;
+}
+
+.badge {
+  padding: 8rpx 14rpx;
+  border-radius: 12rpx;
+  background: #e7f0ff;
+  color: #2176e8;
+  font-size: 23rpx;
+}
+
+.error-card {
+  color: #c62828;
+}
+.period-chip {
+  display: inline-block;
+  margin: 0 0 20rpx;
+  padding: 9rpx 16rpx;
+  border-radius: 999rpx;
+  background: #e7f0ff;
+  color: #2176e8;
+  font-size: 23rpx;
+}

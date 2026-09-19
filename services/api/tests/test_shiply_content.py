@@ -1,7 +1,9 @@
 import base64
 import io
 import json
+import time
 import zipfile
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -10,16 +12,22 @@ from app.database import (
     AdminAuditLog,
     AdminNotice,
     LoginCarouselSlide,
+    ShiplyExportJob,
     WxArticle,
     get_sync_session_factory,
 )
 from app.main import app
 from app.sessions import AppSession
 from app.shiply_content import (
+    SHIPLY_HOME_RESOURCE_KIND,
+    SHIPLY_LOGIN_RESOURCE_KIND,
     DownloadedImage,
     ShiplyContentExportError,
-    build_public_content_bundle,
+    build_home_content_bundle,
+    build_login_content_bundle,
 )
+from app.shiply_export_jobs import reconcile_shiply_export_jobs
+from app.shiply_export_jobs import create_or_get_shiply_export_job
 
 
 class _FakeSchoolClient:
@@ -96,7 +104,31 @@ def _seed_public_content() -> None:
         db.commit()
 
 
-def test_public_content_bundle_filters_orders_and_persists_media(monkeypatch):
+def test_login_bundle_only_contains_published_slides(monkeypatch):
+    _seed_public_content()
+    monkeypatch.setattr(
+        "app.shiply_content.download_cover_image",
+        lambda url: (_ for _ in ()).throw(AssertionError(f"登录包不应下载封面: {url}")),
+    )
+
+    bundle = build_login_content_bundle()
+
+    with zipfile.ZipFile(io.BytesIO(bundle.archive)) as archive:
+        assert set(archive.namelist()) == {
+            "manifest.json",
+            "login_slides.json",
+            "media/login-slides/2.png",
+        }
+        manifest = json.loads(archive.read("manifest.json"))
+        assert manifest["resourceKey"] == "gzus_login_content"
+        assert manifest["resourceKind"] == SHIPLY_LOGIN_RESOURCE_KIND
+        assert manifest["files"] == {"loginSlides": "login_slides.json"}
+        assert [item["title"] for item in json.loads(archive.read("login_slides.json"))] == [
+            "已发布轮播"
+        ]
+
+
+def test_home_bundle_filters_orders_and_persists_media(monkeypatch):
     _seed_public_content()
 
     def fake_download(url: str) -> DownloadedImage:
@@ -104,49 +136,64 @@ def test_public_content_bundle_filters_orders_and_persists_media(monkeypatch):
         return DownloadedImage(data=b"cover", mime="image/jpeg")
 
     monkeypatch.setattr("app.shiply_content.download_cover_image", fake_download)
-    bundle = build_public_content_bundle()
+    bundle = build_home_content_bundle()
 
     with zipfile.ZipFile(io.BytesIO(bundle.archive)) as archive:
-        names = set(archive.namelist())
-        assert names == {
+        assert set(archive.namelist()) == {
             "manifest.json",
             "notices.json",
-            "login_slides.json",
             "wechat_articles.json",
             "media/notices/2.png",
             "media/wechat/1.jpg",
-            "media/login-slides/2.png",
         }
         manifest = json.loads(archive.read("manifest.json"))
         assert manifest["resourceKey"] == "gzus_public_content"
-        assert manifest["counts"] == {
-            "notices": 2,
-            "loginSlides": 1,
-            "wechatArticles": 1,
-            "media": 3,
-        }
+        assert manifest["resourceKind"] == SHIPLY_HOME_RESOURCE_KIND
+        assert manifest["counts"] == {"notices": 2, "wechatArticles": 1, "media": 2}
         assert [item["title"] for item in json.loads(archive.read("notices.json"))] == [
             "置顶校历",
             "普通校历",
         ]
-        assert json.loads(archive.read("wechat_articles.json"))[0]["coverPath"] == (
-            "media/wechat/1.jpg"
-        )
         assert archive.read("media/wechat/1.jpg") == b"cover"
 
 
-def test_public_content_bundle_cover_download_failure_is_explicit(monkeypatch):
+def test_home_bundle_cover_download_failure_is_explicit(monkeypatch):
     _seed_public_content()
+    monkeypatch.setattr(
+        "app.shiply_content.download_cover_image",
+        lambda url: (_ for _ in ()).throw(ShiplyContentExportError(f"封面下载失败: {url}")),
+    )
 
-    def fail_download(url: str) -> DownloadedImage:
-        raise ShiplyContentExportError(f"封面下载失败: {url}")
-
-    monkeypatch.setattr("app.shiply_content.download_cover_image", fail_download)
     with pytest.raises(ShiplyContentExportError, match="封面下载失败"):
-        build_public_content_bundle()
+        build_home_content_bundle()
 
 
-def test_shiply_export_endpoint_returns_zip_headers_and_audit(monkeypatch):
+def _wait_for_job(client: TestClient, headers: dict[str, str], job_id: str) -> dict:
+    for _ in range(100):
+        response = client.get(f"/admin/shiply/exports/{job_id}", headers=headers)
+        assert response.status_code == 200
+        body = response.json()
+        if body["status"] not in {"queued", "running"}:
+            return body
+        time.sleep(0.01)
+    raise AssertionError("Shiply 导出任务未在测试时限内结束")
+
+
+def test_shiply_export_creation_deduplicates_active_job(monkeypatch):
+    headers = _authed_session(monkeypatch)
+    with TestClient(app) as client:
+        initial, created = create_or_get_shiply_export_job("home", "20240001")
+        assert created is True
+        created = client.post("/admin/shiply/exports", headers=headers, json={"resource": "home"})
+        duplicate = client.post("/admin/shiply/exports", headers=headers, json={"resource": "home"})
+
+    assert created.status_code == 202
+    assert duplicate.status_code == 202
+    assert created.json()["id"] == initial.id
+    assert duplicate.json()["id"] == initial.id
+
+
+def test_shiply_export_job_succeeds_and_downloads(monkeypatch):
     headers = _authed_session(monkeypatch)
     _seed_public_content()
     monkeypatch.setattr(
@@ -155,19 +202,67 @@ def test_shiply_export_endpoint_returns_zip_headers_and_audit(monkeypatch):
     )
 
     with TestClient(app) as client:
-        response = client.post("/admin/shiply/public-content/export", headers=headers)
+        created = client.post("/admin/shiply/exports", headers=headers, json={"resource": "home"})
+        assert created.status_code == 202
+        finished = _wait_for_job(client, headers, created.json()["id"])
+        assert finished["status"] == "succeeded"
+        assert finished["resourceKey"] == "gzus_public_content"
+        download = client.get(f"/admin/shiply/exports/{finished['id']}/download", headers=headers)
 
-    assert response.status_code == 200
-    assert response.headers["content-type"] == "application/zip"
-    assert response.headers["x-shiply-content-sha256"]
-    assert json.loads(response.headers["x-shiply-content-counts"])["notices"] == 2
+    assert download.status_code == 200
+    assert download.headers["content-type"] == "application/zip"
+    assert download.headers["x-shiply-resource-key"] == "gzus_public_content"
     with get_sync_session_factory()() as db:
-        audit = (
-            db.query(AdminAuditLog)
-            .filter(AdminAuditLog.action == "export_shiply_public_content")
-            .one()
+        actions = {row.action for row in db.query(AdminAuditLog).all()}
+        assert "request_shiply_resource_export" in actions
+        assert "export_shiply_resource" in actions
+
+
+def test_shiply_export_job_failure_and_expired_job_cleanup(monkeypatch):
+    headers = _authed_session(monkeypatch)
+    monkeypatch.setattr(
+        "app.shiply_export_jobs.build_content_bundle",
+        lambda resource: (_ for _ in ()).throw(ShiplyContentExportError("封面不可用")),
+    )
+
+    with TestClient(app) as client:
+        created = client.post("/admin/shiply/exports", headers=headers, json={"resource": "home"})
+        finished = _wait_for_job(client, headers, created.json()["id"])
+        assert finished["status"] == "failed"
+        assert finished["error"] == "封面不可用"
+        download = client.get(f"/admin/shiply/exports/{finished['id']}/download", headers=headers)
+        assert download.status_code == 409
+
+    factory = get_sync_session_factory()
+    with factory() as db:
+        db.add_all(
+            [
+                ShiplyExportJob(
+                    id="expired-shiply-job",
+                    resource_kind="login",
+                    resource_key="gzus_login_content",
+                    operator_id="20240001",
+                    status="succeeded",
+                    expires_at=datetime.now(UTC) - timedelta(seconds=1),
+                ),
+                ShiplyExportJob(
+                    id="restarted-shiply-job",
+                    resource_kind="login",
+                    resource_key="gzus_login_content",
+                    operator_id="20240001",
+                    status="running",
+                    expires_at=datetime.now(UTC) + timedelta(hours=1),
+                ),
+            ]
         )
-        assert audit.target_id == "gzus_public_content"
+        db.commit()
+    reconcile_shiply_export_jobs()
+    with factory() as db:
+        assert db.get(ShiplyExportJob, "expired-shiply-job") is None
+        restarted = db.get(ShiplyExportJob, "restarted-shiply-job")
+        assert restarted is not None
+        assert restarted.status == "failed"
+        assert restarted.error == "服务器在资源包生成期间重启，请重新生成"
 
 
 def test_notices_include_public_false_only_returns_student_items(monkeypatch):

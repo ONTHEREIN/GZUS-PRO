@@ -17,6 +17,8 @@ class DashboardShell extends StatefulWidget {
   const DashboardShell({
     super.key,
     required this.api,
+    this.initialAcademicPeriod,
+    this.onAcademicPeriodChanged,
     required this.studentName,
     required this.themeMode,
     required this.onThemeChanged,
@@ -39,6 +41,8 @@ class DashboardShell extends StatefulWidget {
   });
 
   final ApiClient api;
+  final AcademicPeriod? initialAcademicPeriod;
+  final Future<void> Function(AcademicPeriod period)? onAcademicPeriodChanged;
   final String? studentName;
   final ThemeMode themeMode;
   final ValueChanged<ThemeMode> onThemeChanged;
@@ -168,9 +172,11 @@ class _DashboardShellState extends State<DashboardShell> {
   @override
   void initState() {
     super.initState();
-    final period = academicPeriodOf(DateTime.now());
-    year = period.$1;
-    term = period.$2;
+    final initialPeriod = widget.initialAcademicPeriod ??
+        AcademicPeriod(academicPeriodOf(DateTime.now()).$1,
+            academicPeriodOf(DateTime.now()).$2);
+    year = initialPeriod.year;
+    term = initialPeriod.term;
     firstWeekStart = defaultFirstWeekStart(year, term);
     currentWeek =
         weekFromDate(firstWeekStart, DateTime.now(), clampToTerm: true);
@@ -196,6 +202,30 @@ class _DashboardShellState extends State<DashboardShell> {
   @override
   void didUpdateWidget(covariant DashboardShell oldWidget) {
     super.didUpdateWidget(oldWidget);
+    final oldPeriod = oldWidget.initialAcademicPeriod;
+    final newPeriod = widget.initialAcademicPeriod;
+    if (oldPeriod != null &&
+        newPeriod != null &&
+        (oldPeriod.year != newPeriod.year ||
+            oldPeriod.term != newPeriod.term)) {
+      _userPinnedPeriod = true;
+      setState(() {
+        year = newPeriod.year;
+        term = newPeriod.term;
+        firstWeekStart = defaultFirstWeekStart(year, term);
+        currentWeek = weekFromDate(
+          firstWeekStart,
+          DateTime.now(),
+          clampToTerm: true,
+        );
+        _pageGeneration++;
+      });
+      unawaited(_loadScheduleSettings());
+    }
+    if (oldWidget.cloudFirstWeeks != widget.cloudFirstWeeks ||
+        oldWidget.cloudAutoWeek != widget.cloudAutoWeek) {
+      unawaited(_loadScheduleSettings());
+    }
     // 更多页位于保活页面栈中，外层主题/主题色变化时需要让缓存页重新接收最新参数。
     if (oldWidget.themeMode != widget.themeMode ||
         oldWidget.seedColor != widget.seedColor ||
@@ -743,8 +773,8 @@ class _DashboardShellState extends State<DashboardShell> {
             onCustomBackgroundDarknessChanged:
                 widget.onCustomBackgroundDarknessChanged,
             onLogout: widget.onLogout,
-            onYearChanged: (v) => _setAcademicPeriod(v, term),
-            onTermChanged: (v) => _setAcademicPeriod(year, v),
+            onYearChanged: (v) => unawaited(_setAcademicPeriod(v, term)),
+            onTermChanged: (v) => unawaited(_setAcademicPeriod(year, v)),
             autoHideNavBar: _autoHideNavBar,
             onAutoHideNavBarChanged: (v) async {
               await NavPreferences.saveAutoHideNavBar(v);
@@ -928,16 +958,14 @@ class _DashboardShellState extends State<DashboardShell> {
       ),
     );
     // 本地缺失时回退云端（按学期），最后才用默认推导值
-    final cloudText = firstWeekText == null
-        ? widget.cloudFirstWeeks['$loadYear-$loadTerm']
-        : null;
+    final cloudText = widget.cloudFirstWeeks['$loadYear-$loadTerm'];
     final savedAuto = prefs.getBool(
           schedulePreferenceKey(widget.api.namespace, 'autoWeek'),
         ) ??
         widget.cloudAutoWeek ??
         autoWeek;
     final defaultStart = defaultFirstWeekStart(loadYear, loadTerm);
-    final parsedStart = DateTime.tryParse(firstWeekText ?? cloudText ?? '');
+    final parsedStart = DateTime.tryParse(cloudText ?? firstWeekText ?? '');
     final start = parsedStart ?? defaultStart;
     final savedWeek = prefs.getInt(
       _settingsKey(widget.api.namespace, loadYear, loadTerm, 'week'),
@@ -1015,7 +1043,22 @@ class _DashboardShellState extends State<DashboardShell> {
     }
   }
 
-  void _setAcademicPeriod(int nextYear, int nextTerm) {
+  Future<void> _setAcademicPeriod(int nextYear, int nextTerm) async {
+    if (nextYear == year && nextTerm == term) return;
+    try {
+      final callback = widget.onAcademicPeriodChanged;
+      if (callback != null) {
+        await callback(AcademicPeriod(nextYear, nextTerm));
+      }
+    } on ApiException catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('学期同步失败：${error.message}')),
+        );
+      }
+      return;
+    }
+    if (!mounted) return;
     _userPinnedPeriod = true;
     setState(() {
       year = nextYear;
@@ -1023,9 +1066,12 @@ class _DashboardShellState extends State<DashboardShell> {
       firstWeekStart = defaultFirstWeekStart(nextYear, nextTerm);
       currentWeek =
           weekFromDate(firstWeekStart, DateTime.now(), clampToTerm: true);
+      final initialPeriod = widget.initialAcademicPeriod;
+      autoWeek = initialPeriod == null ||
+          (nextYear == initialPeriod.year && nextTerm == initialPeriod.term);
       _pageGeneration++;
     });
-    _loadScheduleSettings();
+    await _loadScheduleSettings();
   }
 
   void _setFirstWeekStart(DateTime value) {

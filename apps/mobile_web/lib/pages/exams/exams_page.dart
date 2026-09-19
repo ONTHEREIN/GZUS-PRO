@@ -37,16 +37,14 @@ class ExamsPage extends StatefulWidget {
 
 class _ExamsPageState extends State<ExamsPage>
     with PageSilentRefresh<ExamsPage> {
-  var sortMode = 'term';
-  bool sortAscending = false;
+  var sortMode = 'time';
+  bool sortAscending = true;
   bool _exporting = false;
   late Future<List<PeriodExam>> _examsFuture;
   late String _periodsSignature;
   final ScrollController _scrollController = ScrollController();
   bool _hasScrolledToHighlight = false;
   int _loadGeneration = 0;
-  bool _isLoadingHistory = false;
-  final Set<AcademicPeriod> _failedPeriods = {};
   DataSourceInfo? _staleSource;
 
   @override
@@ -199,10 +197,8 @@ class _ExamsPageState extends State<ExamsPage>
                                             ScaffoldMessenger.maybeOf(context);
                                         setState(() => _exporting = true);
                                         try {
-                                          final year =
-                                              widget.periods.first.year;
-                                          final term =
-                                              widget.periods.first.term;
+                                          final year = widget.year;
+                                          final term = widget.term;
                                           final ics = generateExamIcs(
                                               exams: items,
                                               year: year,
@@ -334,8 +330,8 @@ class _ExamsPageState extends State<ExamsPage>
                                         ScaffoldMessenger.maybeOf(context);
                                     setState(() => _exporting = true);
                                     try {
-                                      final year = widget.periods.first.year;
-                                      final term = widget.periods.first.term;
+                                      final year = widget.year;
+                                      final term = widget.term;
                                       final ics = generateExamIcs(
                                           exams: items, year: year, term: term);
                                       if (kIsWeb) {
@@ -425,36 +421,14 @@ class _ExamsPageState extends State<ExamsPage>
 
   Future<List<PeriodExam>> _loadExams({bool forceRefresh = false}) async {
     final generation = ++_loadGeneration;
-    _failedPeriods.clear();
     _staleSource = null;
-    _isLoadingHistory = false;
-    final periods = _prioritizedPeriods();
-    if (periods.isEmpty) return const [];
-    final current = await _loadPeriod(periods.first, forceRefresh);
+    final current = await _loadPeriod(
+      AcademicPeriod(widget.year, widget.term),
+      forceRefresh,
+    );
     if (!mounted || generation != _loadGeneration) return current.items;
     _recordSource(current.source);
-    final exams = _prepareExams(current.items);
-    if (periods.length > 1) {
-      _isLoadingHistory = true;
-      unawaited(_loadHistory(
-        periods: periods.skip(1).toList(growable: false),
-        initialExams: exams,
-        forceRefresh: forceRefresh,
-        generation: generation,
-      ));
-    }
-    return exams;
-  }
-
-  List<AcademicPeriod> _prioritizedPeriods() {
-    final current = AcademicPeriod(widget.year, widget.term);
-    final history = widget.periods
-        .where((period) =>
-            period.year != current.year || period.term != current.term)
-        .toList(growable: false)
-      ..sort((left, right) =>
-          periodSortValue(right).compareTo(periodSortValue(left)));
-    return [current, ...history];
+    return _prepareExams(current.items);
   }
 
   Future<_PeriodExamResult> _loadPeriod(
@@ -472,32 +446,6 @@ class _ExamsPageState extends State<ExamsPage>
     );
   }
 
-  Future<void> _loadHistory({
-    required List<AcademicPeriod> periods,
-    required List<PeriodExam> initialExams,
-    required bool forceRefresh,
-    required int generation,
-  }) async {
-    var exams = [...initialExams];
-    for (final period in periods) {
-      try {
-        final loaded = await _loadPeriod(period, forceRefresh);
-        if (!mounted || generation != _loadGeneration) return;
-        _recordSource(loaded.source);
-        exams = _prepareExams([...exams, ...loaded.items]);
-      } catch (_) {
-        if (!mounted || generation != _loadGeneration) return;
-        _failedPeriods.add(period);
-      }
-      if (!mounted || generation != _loadGeneration) return;
-      setState(() {
-        _examsFuture = Future.value(exams);
-      });
-    }
-    if (!mounted || generation != _loadGeneration) return;
-    setState(() => _isLoadingHistory = false);
-  }
-
   void _recordSource(DataSourceInfo source) {
     if (source.isStale) _staleSource = source;
   }
@@ -506,8 +454,6 @@ class _ExamsPageState extends State<ExamsPage>
     final source = _staleSource;
     final parts = <String>[
       if (source != null) source.displayText,
-      if (_isLoadingHistory) '正在加载历史学期',
-      if (_failedPeriods.isNotEmpty) '${_failedPeriods.length} 个学期暂未加载',
     ];
     return Container(
       width: double.infinity,
@@ -528,18 +474,12 @@ class _ExamsPageState extends State<ExamsPage>
               ),
             ),
           ),
-          if (_failedPeriods.isNotEmpty)
-            TextButton(
-              onPressed: _refreshExams,
-              child: const Text('重试'),
-            ),
         ],
       ),
     );
   }
 
-  bool get _hasLoadStatus =>
-      _isLoadingHistory || _failedPeriods.isNotEmpty || _staleSource != null;
+  bool get _hasLoadStatus => _staleSource != null;
 
   List<PeriodExam> _prepareExams(List<PeriodExam> exams) {
     final prepared = [...exams];

@@ -212,6 +212,55 @@ class AuthResponse(BaseModel):
     ehall_auth_token: str | None = Field(default=None, alias="ehallAuthToken")
     # 管理后台标记：学号在 admin_users 白名单中时为 True（由登录链路填充）
     is_admin: bool | None = Field(default=None, alias="isAdmin")
+    # 本地演示会话标记，供客户端跳过真实公共资源和自动登录逻辑。
+    is_demo: bool = Field(default=False, alias="isDemo")
+
+
+class MiniProgramAuthResponse(BaseModel):
+    """微信小程序登录后可安全返回的最小会话信息。
+
+    学校 Cookie、办事大厅 Token 和长期自动登录凭据只能保留在服务端，
+    不得下发给小程序存储。
+    """
+
+    status: Literal["ok"]
+    session_id: str = Field(alias="sessionId")
+    student_name: str = Field(alias="studentName")
+    student_id: str = Field(alias="studentId")
+
+
+class AcademicPeriodPreference(BaseModel):
+    """三端共享的当前学年学期；空值表示账号尚未初始化偏好。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    year: int | None = Field(default=None, ge=2000, le=3000)
+    term: int | None = Field(default=None, ge=1, le=2)
+
+
+class AcademicPeriodUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    year: int = Field(ge=2000, le=3000)
+    term: int = Field(ge=1, le=2)
+
+
+class WechatCodeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    code: str = Field(min_length=1, max_length=512)
+
+
+class WechatBindingStatus(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    is_bound: bool = Field(alias="isBound")
+
+
+class WechatBindingResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["ok"]
 
 
 class ReloginRequest(BaseModel):

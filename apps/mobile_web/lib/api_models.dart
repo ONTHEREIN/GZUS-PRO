@@ -41,18 +41,98 @@ class DataResult<T> {
   final DataSourceInfo source;
 }
 
-class ShiplyContentExport {
-  const ShiplyContentExport({
-    required this.bytes,
+enum ShiplyExportResource {
+  login('login', 'gzus_login_content'),
+  home('home', 'gzus_public_content');
+
+  const ShiplyExportResource(this.wireValue, this.resourceKey);
+
+  final String wireValue;
+  final String resourceKey;
+
+  static ShiplyExportResource fromWireValue(String value) {
+    for (final resource in values) {
+      if (resource.wireValue == value) return resource;
+    }
+    throw ApiException('Shiply 资源类型无效: $value');
+  }
+}
+
+class ShiplyExportJob {
+  const ShiplyExportJob({
+    required this.id,
+    required this.resource,
+    required this.status,
+    required this.createdAt,
+    required this.resourceKey,
+    required this.filename,
     required this.sha256,
     required this.generatedAt,
     required this.counts,
+    required this.error,
   });
 
+  factory ShiplyExportJob.fromJson(Map<String, dynamic> json) {
+    final id = json['id'];
+    final resource = json['resource'];
+    final status = json['status'];
+    final createdAt = json['createdAt'];
+    final resourceKey = json['resourceKey'];
+    if (id is! String ||
+        resource is! String ||
+        status is! String ||
+        createdAt is! String ||
+        resourceKey is! String) {
+      throw ApiException('Shiply 导出任务响应格式错误');
+    }
+    final rawCounts = json['counts'];
+    Map<String, int>? counts;
+    if (rawCounts != null) {
+      if (rawCounts is! Map<String, dynamic>) {
+        throw ApiException('Shiply 导出任务内容统计格式错误');
+      }
+      counts = <String, int>{};
+      for (final entry in rawCounts.entries) {
+        if (entry.value is! num) {
+          throw ApiException('Shiply 导出任务内容统计格式错误: ${entry.key}');
+        }
+        counts[entry.key] = (entry.value as num).toInt();
+      }
+    }
+    return ShiplyExportJob(
+      id: id,
+      resource: ShiplyExportResource.fromWireValue(resource),
+      status: status,
+      createdAt: createdAt,
+      resourceKey: resourceKey,
+      filename: json['filename'] as String?,
+      sha256: json['sha256'] as String?,
+      generatedAt: json['generatedAt'] as String?,
+      counts: counts,
+      error: json['error'] as String?,
+    );
+  }
+
+  final String id;
+  final ShiplyExportResource resource;
+  final String status;
+  final String createdAt;
+  final String resourceKey;
+  final String? filename;
+  final String? sha256;
+  final String? generatedAt;
+  final Map<String, int>? counts;
+  final String? error;
+
+  bool get isActive => status == 'queued' || status == 'running';
+  bool get isSucceeded => status == 'succeeded';
+}
+
+class ShiplyExportDownload {
+  const ShiplyExportDownload({required this.bytes, required this.filename});
+
   final Uint8List bytes;
-  final String sha256;
-  final String generatedAt;
-  final Map<String, int> counts;
+  final String filename;
 }
 
 class DashboardModule {
@@ -212,6 +292,7 @@ class LoginResult {
     this.ehallCookies,
     this.ehallAuthToken,
     this.isAdmin,
+    this.isDemo = false,
   });
 
   factory LoginResult.fromJson(Map<String, dynamic> json) => LoginResult(
@@ -225,6 +306,7 @@ class LoginResult {
         ehallCookies: json['ehallCookies'] as String?,
         ehallAuthToken: json['ehallAuthToken'] as String?,
         isAdmin: json['isAdmin'] as bool?,
+        isDemo: json['isDemo'] as bool? ?? false,
       );
 
   final String status;
@@ -244,6 +326,9 @@ class LoginResult {
 
   /// 管理后台标记：学号在 admin_users 白名单中时为 true。
   final bool? isAdmin;
+
+  /// 本地演示账号标记。
+  final bool isDemo;
 }
 
 class LoginCarouselSlide {
@@ -542,6 +627,29 @@ class AcademicPeriod {
   final int term;
 
   String get label => '$year-${year + 1}-$term';
+}
+
+class AcademicPeriodPreference {
+  const AcademicPeriodPreference(this.period);
+
+  final AcademicPeriod? period;
+
+  factory AcademicPeriodPreference.fromJson(Map<String, dynamic> json) {
+    final rawYear = json['year'];
+    final rawTerm = json['term'];
+    if (rawYear == null && rawTerm == null) {
+      return const AcademicPeriodPreference(null);
+    }
+    if (rawYear is! num || rawTerm is! num) {
+      throw ApiException('学年学期偏好响应格式错误');
+    }
+    final year = rawYear.toInt();
+    final term = rawTerm.toInt();
+    if (year < 2000 || year > 3000 || (term != 1 && term != 2)) {
+      throw ApiException('学年学期偏好取值无效');
+    }
+    return AcademicPeriodPreference(AcademicPeriod(year, term));
+  }
 }
 
 class PeriodExam {

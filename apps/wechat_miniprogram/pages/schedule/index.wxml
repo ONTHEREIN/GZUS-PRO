@@ -1,0 +1,78 @@
+<view class="page schedule-page" id="schedule-page">
+  <view class="schedule-title-row">
+    <view class="page-title">课表</view>
+    <picker mode="multiSelector" range="{{periodPickerRange}}" value="{{periodPickerValue}}" bindchange="changeAcademicPeriod">
+      <view wx:if="{{periodLabel}}" class="period-chip" id="schedule-period-picker">{{periodLabel}} ▾</view>
+    </picker>
+  </view>
+
+  <view wx:if="{{!loading && !error}}" class="schedule-toolbar" id="schedule-toolbar">
+    <view class="mode-tabs">
+      <view id="schedule-mode-week" class="mode-tab {{mode === 'week' ? 'active' : ''}}" data-mode="week" bindtap="setMode">周课表</view>
+      <view id="schedule-mode-all" class="mode-tab {{mode === 'all' ? 'active' : ''}}" data-mode="all" bindtap="setMode">全部课程</view>
+    </view>
+    <picker mode="date" value="{{firstWeekStart}}" bindchange="changeFirstWeek">
+      <view class="first-week-picker" id="schedule-first-week">第一周：{{firstWeekStart}}</view>
+    </picker>
+  </view>
+
+  <view wx:if="{{loading}}" id="schedule-loading" class="empty">正在加载课表…</view>
+  <view wx:if="{{error}}" id="schedule-error" class="card error">{{error}}</view>
+
+  <block wx:if="{{!loading && !error && mode === 'week'}}">
+    <view class="week-controls" id="schedule-week-controls">
+      <button id="schedule-prev-week" size="mini" bindtap="previousWeek">上一周</button>
+      <button id="schedule-week-picker" class="week-title-button" size="mini" bindtap="openWeekPicker">{{weekTitle}} ▾</button>
+      <button id="schedule-next-week" size="mini" bindtap="nextWeek">下一周</button>
+    </view>
+    <view class="week-subtitle"><text>第一周：{{firstWeekStart}}</text><text wx:if="{{week !== currentWeek}}" id="schedule-back-current" bindtap="backToCurrentWeek">回到本周</text></view>
+    <scroll-view scroll-x class="schedule-scroll" id="schedule-week-grid">
+      <view class="week-table">
+        <view class="week-header">
+          <view class="time-column header-time">节次</view>
+          <view wx:for="{{days}}" wx:key="index" class="day-header {{item.isToday ? 'today' : ''}}"><view>{{item.label}}</view><view class="day-date">{{item.date}}</view></view>
+        </view>
+        <view wx:for="{{rows}}" wx:key="period" class="week-row">
+          <view class="time-column period-cell"><view>{{item.period}}</view><view class="period-time">{{item.start}}</view><view class="period-time">{{item.end}}</view></view>
+          <view wx:for="{{item.cells}}" wx:key="index" class="day-cell">
+            <view wx:for="{{item.blocks}}" wx:key="key" class="course-block" style="height:{{item.height}}rpx;left:{{item.left}}%;width:{{item.width}}%;background:{{item.color}};" data-index="{{item.courseIndex}}" bindtap="showCourse">
+              <view class="block-name">{{item.name}}</view>
+              <view class="block-room">{{item.classroom || '地点待定'}}</view>
+            </view>
+          </view>
+        </view>
+      </view>
+    </scroll-view>
+    <view wx:if="{{rows.length > 0 && courses.length > 0 && rows[0].cells[0].blocks.length === 0}}" class="muted week-hint">空白格表示该周暂无定位到的课程，点击“全部课程”可查看完整学期列表。</view>
+    <view wx:if="{{courses.length === 0}}" id="schedule-empty" class="empty">{{periodLabel}}暂无课表数据</view>
+  </block>
+
+  <block wx:if="{{!loading && !error && mode === 'all'}}">
+    <view wx:if="{{courses.length === 0}}" id="schedule-empty-all" class="empty">{{periodLabel}}暂无课表数据</view>
+    <view wx:for="{{courses}}" wx:key="index" class="card course-card" data-index="{{index}}" bindtap="showCourse">
+      <view class="course-head"><view class="course-name">{{item.name}}</view><view class="weekday">周{{item.weekday || '-'}}</view></view>
+      <view class="muted">第 {{item.startSection || '-'}}–{{item.endSection || '-'}} 节 · {{item.weeks || '周次待定'}}</view>
+      <view class="muted course-detail">{{item.teacher || '任课教师待定'}} · {{item.classroom || '地点待定'}}</view>
+    </view>
+  </block>
+
+  <view wx:if="{{showWeekPicker}}" class="modal-mask" id="schedule-week-modal" bindtap="closeWeekPicker">
+    <view class="week-modal" catchtap="stopModalTap">
+      <view class="modal-head"><view class="modal-title">跳转周次</view><view id="schedule-modal-current" class="modal-link" bindtap="backToCurrentWeek">回到本周</view></view>
+      <view class="week-options">
+        <view wx:for="{{weekOptions}}" wx:key="week" class="week-option {{item.selected ? 'selected' : ''}} {{item.current ? 'current' : ''}}" data-week="{{item.week}}" bindtap="selectWeek"><view>第{{item.week}}周</view><view class="muted">{{item.range}}</view></view>
+      </view>
+    </view>
+  </view>
+
+  <view wx:if="{{selectedCourse}}" class="modal-mask" id="schedule-course-modal" bindtap="closeCourse">
+    <view class="course-modal" catchtap="stopModalTap">
+      <view class="modal-head"><view class="modal-title">课程详情</view><view id="schedule-course-close" class="modal-link" bindtap="closeCourse">关闭</view></view>
+      <view class="detail-name">{{selectedCourse.name}}</view>
+      <view class="detail-row"><text>教师</text><text>{{selectedCourse.teacher || '任课教师待定'}}</text></view>
+      <view class="detail-row"><text>地点</text><text>{{selectedCourse.classroom || '地点待定'}}</text></view>
+      <view class="detail-row"><text>节次</text><text>第 {{selectedCourse.startSection || '-'}}–{{selectedCourse.endSection || '-'}} 节</text></view>
+      <view class="detail-row"><text>周次</text><text>{{selectedCourse.weeks || '每周'}}</text></view>
+    </view>
+  </view>
+</view>

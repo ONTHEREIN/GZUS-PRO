@@ -154,6 +154,9 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
   /// 云端课表偏好（登录后拉取；登出时清空，避免多账号串数据）。
   ScheduleSettings? _cloudScheduleSettings;
 
+  /// 三端共享的当前学年学期；登录完成前不会创建学业页面。
+  AcademicPeriod? _academicPeriod;
+
   /// 防止 _logout() 被并发调用
   bool _logoutInProgress = false;
 
@@ -290,6 +293,23 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
 
   Future<void> _handleAppResume() async {
     final prefs = await SharedPreferences.getInstance();
+    try {
+      final remotePeriod = await api.fetchAcademicPeriod();
+      final remoteSchedule = await _fetchCloudScheduleSettings();
+      if (remotePeriod != null &&
+          mounted &&
+          (_academicPeriod?.year != remotePeriod.year ||
+              _academicPeriod?.term != remotePeriod.term)) {
+        setState(() {
+          _academicPeriod = remotePeriod;
+          _cloudScheduleSettings = remoteSchedule ?? _cloudScheduleSettings;
+        });
+      } else if (remoteSchedule != null && mounted) {
+        setState(() => _cloudScheduleSettings = remoteSchedule);
+      }
+    } on ApiException catch (error) {
+      debugPrint('同步云端学年学期失败: error=${error.runtimeType}');
+    }
     await _tryBackgroundRefresh(prefs);
     if (!mounted || !loggedIn) return;
     // 恢复前台时重试一次推送通道注册，避免首次启动的权限/网络时序失败导致本次会话永久无推送。
@@ -614,6 +634,8 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
     try {
       final result = await api.completeLySso(ssoCode);
       await _persistLogin(result);
+      final period = await _synchronizeAcademicPeriod();
+      if (period == null) return;
       final cloud = await _fetchCloudScheduleSettings();
       final prefs = await SharedPreferences.getInstance();
       final localCompleted = prefs.getBool(
@@ -641,6 +663,7 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
         _scheduleOnboardingCompleted =
             localCompleted || cloud?.onboardingCompleted == true;
         _cloudScheduleSettings = cloud;
+        _academicPeriod = period;
       });
       widget.onAuthenticationChanged?.call(true);
       _initPushServices();
@@ -685,6 +708,8 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
     final localOnboardingStep = onboardingStepFromStoredValue(
       prefs.getInt(onboardingPreferenceKey(api.namespace, 'firstRunStep')),
     );
+    final period = await _synchronizeAcademicPeriod();
+    if (period == null) return;
     // 优先使用云端完成标记（换设备/清缓存后不重复引导），失败回退本地
     final cloud = await _fetchCloudScheduleSettings();
     if (!mounted) return;
@@ -694,6 +719,7 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
       studentName = prefs.getString('auth.studentName') ?? '软帮手';
       _backgroundGuideCompleted = guideCompleted;
       _cloudScheduleSettings = cloud;
+      _academicPeriod = period;
       _scheduleOnboardingCompleted =
           localOnboardingCompleted || cloud?.onboardingCompleted == true;
       _firstRunOnboardingStep = localOnboardingStep;
@@ -855,6 +881,8 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
 
   Future<void> _finishLogin(LoginResult result) async {
     await _persistLogin(result);
+    final period = await _synchronizeAcademicPeriod();
+    if (period == null) return;
     // 开学日期已云端持久化：登录后不再强制重选，以云端完成标记为准
     // （拉取失败时回退本地标记，保证离线可用）。
     final cloud = await _fetchCloudScheduleSettings();
@@ -878,6 +906,7 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
       loginError = null;
       _backgroundGuideCompleted = guideCompleted;
       _cloudScheduleSettings = cloud;
+      _academicPeriod = period;
       _scheduleOnboardingCompleted =
           localCompleted || cloud?.onboardingCompleted == true;
       _firstRunOnboardingStep = localStep;
@@ -899,6 +928,26 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
           .fetchScheduleSettings()
           .timeout(const Duration(seconds: 4));
     } catch (_) {
+      return null;
+    }
+  }
+
+  Future<AcademicPeriod?> _synchronizeAcademicPeriod() async {
+    try {
+      final remote = await api.fetchAcademicPeriod();
+      final derived = academicPeriodOf(DateTime.now());
+      final local = AcademicPeriod(derived.$1, derived.$2);
+      final saved = remote ?? await api.saveAcademicPeriod(local);
+      if (mounted) setState(() => _academicPeriod = saved);
+      return saved;
+    } on ApiException catch (error) {
+      if (mounted) {
+        setState(() {
+          initializing = false;
+          loggedIn = false;
+          loginError = '学年学期同步失败，请重试：${error.message}';
+        });
+      }
       return null;
     }
   }
@@ -941,6 +990,7 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
     if (result.studentId != null) {
       await prefs.setString('auth.studentId', result.studentId!);
     }
+    await prefs.setBool('auth.isDemo', result.isDemo);
     await prefs.remove('auth.loginMethod');
     // 登录响应只带 isAdmin 布尔；角色（owner/admin）以 /admin/me 为准。
     // 必须在写入本次登录的新会话后请求，避免沿用已失效的旧会话。
@@ -1156,8 +1206,15 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
   }
 
   DashboardShell _buildDashboardShell() {
+    final period = _academicPeriod ??
+        AcademicPeriod(
+          academicPeriodOf(DateTime.now()).$1,
+          academicPeriodOf(DateTime.now()).$2,
+        );
     return DashboardShell(
       api: api,
+      initialAcademicPeriod: period,
+      onAcademicPeriodChanged: _saveAcademicPeriodFromShell,
       studentName: studentName,
       themeMode: themeMode,
       onThemeChanged: _setThemeMode,
@@ -1184,6 +1241,11 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
       isAdmin: _isAdmin,
       isOwner: _isOwner,
     );
+  }
+
+  Future<void> _saveAcademicPeriodFromShell(AcademicPeriod period) async {
+    final saved = await api.saveAcademicPeriod(period);
+    if (mounted) setState(() => _academicPeriod = saved);
   }
 
   void _showBackgroundGuide() {

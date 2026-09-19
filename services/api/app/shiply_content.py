@@ -1,8 +1,4 @@
-"""构建 Shiply 公共内容资源包。
-
-资源包由管理员在后台生成后手动上传到 Android/iOS 两个 Shiply 产品。
-这里不依赖 Shiply 服务端上传接口，输出完全确定的 JSON 与本地媒体文件。
-"""
+"""构建 Shiply 登录页与登录后首页的独立资源包。"""
 
 from __future__ import annotations
 
@@ -16,27 +12,26 @@ import mimetypes
 import posixpath
 import re
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Callable
 from urllib.parse import urlparse
 
 import httpx
 
-from app.database import (
-    AdminNotice,
-    LoginCarouselSlide,
-    WxArticle,
-    get_sync_session_factory,
-)
+from app.database import AdminNotice, LoginCarouselSlide, WxArticle, get_sync_session_factory
 
 logger = logging.getLogger(__name__)
 
+SHIPLY_LOGIN_CONTENT_KEY = "gzus_login_content"
 SHIPLY_PUBLIC_CONTENT_KEY = "gzus_public_content"
+SHIPLY_LOGIN_RESOURCE_KIND = "login"
+SHIPLY_HOME_RESOURCE_KIND = "home"
 SHIPLY_SCHEMA_VERSION = 1
 MAX_IMAGE_BYTES = 3 * 1024 * 1024
 DOWNLOAD_TIMEOUT = httpx.Timeout(20.0, connect=5.0)
 DOWNLOAD_RETRIES = 3
+MAX_PARALLEL_COVER_DOWNLOADS = 4
 
 
 class ShiplyContentExportError(RuntimeError):
@@ -52,18 +47,31 @@ class DownloadedImage:
 @dataclass(frozen=True)
 class ShiplyContentBundle:
     archive: bytes
-    sha256: str
+    filename: str
     generated_at: str
+    resource_key: str
+    sha256: str
     counts: dict[str, int]
 
 
+def resource_key_for_kind(resource_kind: str) -> str:
+    if resource_kind == SHIPLY_LOGIN_RESOURCE_KIND:
+        return SHIPLY_LOGIN_CONTENT_KEY
+    if resource_kind == SHIPLY_HOME_RESOURCE_KIND:
+        return SHIPLY_PUBLIC_CONTENT_KEY
+    raise ShiplyContentExportError(f"不支持的 Shiply 资源类型: {resource_kind}")
+
+
+def build_content_bundle(resource_kind: str) -> ShiplyContentBundle:
+    if resource_kind == SHIPLY_LOGIN_RESOURCE_KIND:
+        return build_login_content_bundle()
+    if resource_kind == SHIPLY_HOME_RESOURCE_KIND:
+        return build_home_content_bundle()
+    raise ShiplyContentExportError(f"不支持的 Shiply 资源类型: {resource_kind}")
+
+
 def _json_bytes(value: object) -> bytes:
-    return json.dumps(
-        value,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
 def _extension_for_mime(mime: str | None) -> str:
@@ -126,7 +134,7 @@ def download_cover_image(url: str) -> DownloadedImage:
                 raise ShiplyContentExportError(
                     f"公众号封面返回了非图片内容: url={url}, contentType={content_type or 'unknown'}"
                 )
-            if len(response.content) == 0:
+            if not response.content:
                 raise ShiplyContentExportError(f"公众号封面内容为空: {url}")
             if len(response.content) > MAX_IMAGE_BYTES:
                 raise ShiplyContentExportError(f"公众号封面超过 3MB 限制: {url}")
@@ -179,12 +187,11 @@ def _login_slide_payload(row: LoginCarouselSlide, media: dict[str, bytes]) -> di
 def _wechat_payload(
     row: WxArticle,
     media: dict[str, bytes],
-    download: Callable[[str], DownloadedImage],
+    downloaded: DownloadedImage | None,
 ) -> dict[str, object]:
     cover_path: str | None = None
     cover_mime: str | None = None
-    if row.cover_url:
-        downloaded = download(row.cover_url)
+    if downloaded is not None:
         cover_path = _cover_file_name(row.id, downloaded.mime)
         cover_mime = downloaded.mime
         media[cover_path] = downloaded.data
@@ -200,8 +207,82 @@ def _wechat_payload(
     }
 
 
-def build_public_content_bundle() -> ShiplyContentBundle:
-    """读取已发布公共内容并构建 ZIP。"""
+def _archive_bundle(
+    resource_kind: str,
+    generated_at: str,
+    counts: dict[str, int],
+    files: dict[str, bytes],
+    manifest_files: dict[str, str],
+) -> ShiplyContentBundle:
+    resource_key = resource_key_for_kind(resource_kind)
+    manifest = {
+        "schemaVersion": SHIPLY_SCHEMA_VERSION,
+        "resourceKey": resource_key,
+        "resourceKind": resource_kind,
+        "generatedAt": generated_at,
+        "counts": counts,
+        "files": manifest_files,
+    }
+    all_files = {"manifest.json": _json_bytes(manifest), **files}
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name in sorted(all_files):
+            info = zipfile.ZipInfo(
+                filename=posixpath.normpath(name), date_time=(1980, 1, 1, 0, 0, 0)
+            )
+            info.compress_type = zipfile.ZIP_DEFLATED
+            archive.writestr(info, all_files[name])
+    archive_bytes = output.getvalue()
+    return ShiplyContentBundle(
+        archive=archive_bytes,
+        filename=f"{resource_key}.zip",
+        generated_at=generated_at,
+        resource_key=resource_key,
+        sha256=hashlib.sha256(archive_bytes).hexdigest(),
+        counts=counts,
+    )
+
+
+def build_login_content_bundle() -> ShiplyContentBundle:
+    """构建仅供未登录页面使用的轮播资源包。"""
+    generated_at = datetime.now(UTC).isoformat()
+    media: dict[str, bytes] = {}
+    factory = get_sync_session_factory()
+    with factory() as db:
+        slides = (
+            db.query(LoginCarouselSlide)
+            .filter(LoginCarouselSlide.published.is_(True))
+            .order_by(LoginCarouselSlide.sort_order.asc(), LoginCarouselSlide.id.asc())
+            .all()
+        )
+        slide_payload = [_login_slide_payload(row, media) for row in slides]
+    counts = {"loginSlides": len(slide_payload), "media": len(media)}
+    return _archive_bundle(
+        SHIPLY_LOGIN_RESOURCE_KIND,
+        generated_at,
+        counts,
+        {"login_slides.json": _json_bytes(slide_payload), **media},
+        {"loginSlides": "login_slides.json"},
+    )
+
+
+def _download_home_covers(rows: list[WxArticle]) -> dict[int, DownloadedImage]:
+    with_covers = [row for row in rows if row.cover_url]
+    if not with_covers:
+        return {}
+    worker_count = min(MAX_PARALLEL_COVER_DOWNLOADS, len(with_covers))
+    with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="shiply-cover") as executor:
+        downloads = {
+            row.id: future
+            for row, future in (
+                (row, executor.submit(download_cover_image, row.cover_url)) for row in with_covers
+            )
+        }
+        return {row_id: future.result() for row_id, future in downloads.items()}
+
+
+def build_home_content_bundle() -> ShiplyContentBundle:
+    """构建仅供登录后首页与通知页使用的公共资源包。"""
     generated_at = datetime.now(UTC).isoformat()
     media: dict[str, bytes] = {}
     factory = get_sync_session_factory()
@@ -212,51 +293,26 @@ def build_public_content_bundle() -> ShiplyContentBundle:
             .order_by(AdminNotice.is_pinned.desc(), AdminNotice.id.desc())
             .all()
         )
-        slides = (
-            db.query(LoginCarouselSlide)
-            .filter(LoginCarouselSlide.published.is_(True))
-            .order_by(LoginCarouselSlide.sort_order.asc(), LoginCarouselSlide.id.asc())
-            .all()
-        )
         articles = db.query(WxArticle).filter(WxArticle.hidden.is_(False)).all()
         articles.sort(key=lambda row: (row.publish_time or "", row.id), reverse=True)
         notice_payload = [_public_notice_payload(row, media) for row in notices]
-        slide_payload = [_login_slide_payload(row, media) for row in slides]
-        article_payload = [_wechat_payload(row, media, download_cover_image) for row in articles]
-
-    manifest = {
-        "schemaVersion": SHIPLY_SCHEMA_VERSION,
-        "resourceKey": SHIPLY_PUBLIC_CONTENT_KEY,
-        "generatedAt": generated_at,
-        "counts": {
-            "notices": len(notice_payload),
-            "loginSlides": len(slide_payload),
-            "wechatArticles": len(article_payload),
-            "media": len(media),
-        },
-        "files": {
-            "notices": "notices.json",
-            "loginSlides": "login_slides.json",
-            "wechatArticles": "wechat_articles.json",
-        },
+        downloaded_covers = _download_home_covers(articles)
+        article_payload = [
+            _wechat_payload(row, media, downloaded_covers.get(row.id)) for row in articles
+        ]
+    counts = {
+        "notices": len(notice_payload),
+        "wechatArticles": len(article_payload),
+        "media": len(media),
     }
-    files = {
-        "manifest.json": _json_bytes(manifest),
-        "notices.json": _json_bytes(notice_payload),
-        "login_slides.json": _json_bytes(slide_payload),
-        "wechat_articles.json": _json_bytes(article_payload),
-        **media,
-    }
-    output = io.BytesIO()
-    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for name in sorted(files):
-            info = zipfile.ZipInfo(filename=posixpath.normpath(name), date_time=(1980, 1, 1, 0, 0, 0))
-            info.compress_type = zipfile.ZIP_DEFLATED
-            archive.writestr(info, files[name])
-    archive_bytes = output.getvalue()
-    return ShiplyContentBundle(
-        archive=archive_bytes,
-        sha256=hashlib.sha256(archive_bytes).hexdigest(),
-        generated_at=generated_at,
-        counts=manifest["counts"],
+    return _archive_bundle(
+        SHIPLY_HOME_RESOURCE_KIND,
+        generated_at,
+        counts,
+        {
+            "notices.json": _json_bytes(notice_payload),
+            "wechat_articles.json": _json_bytes(article_payload),
+            **media,
+        },
+        {"notices": "notices.json", "wechatArticles": "wechat_articles.json"},
     )

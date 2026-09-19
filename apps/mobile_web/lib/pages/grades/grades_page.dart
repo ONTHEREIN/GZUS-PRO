@@ -43,9 +43,7 @@ class _GradesPageState extends State<GradesPage>
     with PageSilentRefresh<GradesPage> {
   late Future<List<GradeGroup>> _gradesFuture;
   late String _periodsSignature;
-  final List<AcademicPeriod> _failedPeriods = [];
   int _loadGeneration = 0;
-  bool _isLoadingHistory = false;
 
   @override
   void initState() {
@@ -154,37 +152,15 @@ class _GradesPageState extends State<GradesPage>
 
   Future<List<GradeGroup>> _loadGrades({bool forceRefresh = false}) async {
     final generation = ++_loadGeneration;
-    _failedPeriods.clear();
-    _isLoadingHistory = false;
-    final periods = _prioritizedPeriods();
-    if (periods.isEmpty) return const [];
-    final current = await _loadPeriod(periods.first, forceRefresh);
+    final current = await _loadPeriod(
+      AcademicPeriod(widget.year, widget.term),
+      forceRefresh,
+    );
     final attempts = [...current];
     final groups = _groupAttempts(attempts);
     if (!mounted || generation != _loadGeneration) return groups;
-    if (periods.length > 1) {
-      _isLoadingHistory = true;
-      unawaited(_loadHistory(
-        periods: periods.skip(1).toList(growable: false),
-        attempts: attempts,
-        forceRefresh: forceRefresh,
-        generation: generation,
-      ));
-    } else {
-      unawaited(_notifyGradeUpdates(attempts));
-    }
+    unawaited(_notifyGradeUpdates(attempts));
     return groups;
-  }
-
-  List<AcademicPeriod> _prioritizedPeriods() {
-    final current = AcademicPeriod(widget.year, widget.term);
-    final history = widget.periods
-        .where((period) =>
-            period.year != current.year || period.term != current.term)
-        .toList(growable: false)
-      ..sort((left, right) =>
-          periodSortValue(right).compareTo(periodSortValue(left)));
-    return [current, ...history];
   }
 
   Future<List<GradeAttempt>> _loadPeriod(
@@ -197,32 +173,6 @@ class _GradesPageState extends State<GradesPage>
       forceRefresh: forceRefresh,
     );
     return [for (final item in result.data) GradeAttempt(period, item)];
-  }
-
-  Future<void> _loadHistory({
-    required List<AcademicPeriod> periods,
-    required List<GradeAttempt> attempts,
-    required bool forceRefresh,
-    required int generation,
-  }) async {
-    for (final period in periods) {
-      try {
-        attempts.addAll(await _loadPeriod(period, forceRefresh));
-      } catch (_) {
-        if (!mounted || generation != _loadGeneration) return;
-        _failedPeriods.add(period);
-      }
-      if (!mounted || generation != _loadGeneration) return;
-      setState(() {
-        _gradesFuture = Future.value(_groupAttempts(attempts));
-      });
-    }
-    if (!mounted || generation != _loadGeneration) return;
-    setState(() {
-      _isLoadingHistory = false;
-      _gradesFuture = Future.value(_groupAttempts(attempts));
-    });
-    unawaited(_notifyGradeUpdates(attempts));
   }
 
   List<GradeGroup> _groupAttempts(List<GradeAttempt> attempts) {
@@ -246,19 +196,6 @@ class _GradesPageState extends State<GradesPage>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (_isLoadingHistory)
-          const Padding(
-            padding: EdgeInsets.only(bottom: 12),
-            child: Text('正在补充历史学期成绩…'),
-          ),
-        if (_failedPeriods.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 12),
-            child: Text(
-              '部分学期暂时不可用，下拉刷新后可重试。',
-              style: TextStyle(color: Theme.of(context).colorScheme.error),
-            ),
-          ),
         GradeGroupList(groups: items, onExamTap: widget.onNavigateToExam),
       ],
     );

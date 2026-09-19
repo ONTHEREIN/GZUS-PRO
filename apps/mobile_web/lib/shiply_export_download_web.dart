@@ -3,7 +3,7 @@ import 'dart:js_interop';
 
 import 'package:web/web.dart' as web;
 
-Future<void> downloadShiplyExport(Uint8List bytes) async {
+Future<void> downloadShiplyExport(Uint8List bytes, String filename) async {
   final blob = web.Blob(
     [bytes.toJS].toJS,
     web.BlobPropertyBag()..type = 'application/zip',
@@ -11,7 +11,7 @@ Future<void> downloadShiplyExport(Uint8List bytes) async {
   final url = web.URL.createObjectURL(blob);
   final anchor = web.HTMLAnchorElement()
     ..href = url
-    ..download = 'gzus_public_content.zip'
+    ..download = filename
     ..style.display = 'none';
   web.document.body!.appendChild(anchor);
   anchor.click();

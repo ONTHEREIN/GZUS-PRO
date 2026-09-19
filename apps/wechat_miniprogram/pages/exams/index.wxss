@@ -1,0 +1,12 @@
+.exam-name { margin-bottom: 13rpx; color: #1d2b42; font-size: 32rpx; font-weight: 700; }
+.exam-time { margin-bottom: 10rpx; color: #2176e8; font-size: 28rpx; }
+.error { color: #c62828; }
+.period-chip {
+  display: inline-block;
+  margin: 0 0 20rpx;
+  padding: 9rpx 16rpx;
+  border-radius: 999rpx;
+  background: #e7f0ff;
+  color: #2176e8;
+  font-size: 23rpx;
+}

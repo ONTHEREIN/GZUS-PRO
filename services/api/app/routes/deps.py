@@ -43,3 +43,10 @@ def require_admin(session: AppSession = Depends(require_session)) -> AppSession:
         )
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无管理权限")
     return session
+
+
+def require_writable_session(session: AppSession = Depends(require_session)) -> AppSession:
+    """拒绝演示账号执行任何会改变服务端状态的操作。"""
+    if session.is_demo:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="演示账号仅支持查看")
+    return session

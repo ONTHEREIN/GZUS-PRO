@@ -75,9 +75,8 @@ class _WechatTabState extends State<WechatTab> {
       final result = await widget.api.adminWechatImport(url);
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(result['added'] == 1
-            ? '已导入「${result['title']}」'
-            : '该文章已在列表中'),
+        content:
+            Text(result['added'] == 1 ? '已导入「${result['title']}」' : '该文章已在列表中'),
       ));
       _importCtrl.clear();
       _refreshAll();
@@ -137,8 +136,21 @@ class _WechatTabState extends State<WechatTab> {
               final configured = status['configured'] as bool? ?? false;
               final channel = status['channel'] as String? ?? 'none';
               final lastSynced = status['lastSyncedAt'] as String?;
+              final lastError = status['lastError'] as String?;
               final rssUrl = status['rssUrl'] as String?;
-              final albumUrl = status['albumUrl'] as String?;
+              final configuredAlbumUrls =
+                  (status['albumUrls'] as List<dynamic>?)
+                          ?.whereType<String>()
+                          .toList() ??
+                      <String>[];
+              final legacyAlbumUrl = status['albumUrl'] as String?;
+              final albumUrls = configuredAlbumUrls.isNotEmpty
+                  ? configuredAlbumUrls
+                  : (legacyAlbumUrl == null ? <String>[] : [legacyAlbumUrl]);
+              final albumErrors = (status['albumErrors'] as List<dynamic>?)
+                      ?.whereType<Map<String, dynamic>>()
+                      .toList() ??
+                  <Map<String, dynamic>>[];
               // 通道中文名（后端已把 RSS 源 token 脱敏后才返回）
               final channelLabel = switch (channel) {
                 'rss' => 'RSS 订阅源（wechatrss）',
@@ -173,8 +185,10 @@ class _WechatTabState extends State<WechatTab> {
                           Expanded(
                             child: Text(
                               configured
-                                  ? '通道：$channelLabel（每 ${status['syncIntervalHours'] ?? 6} 小时自动同步）'
-                                  : '未配置同步通道（环境变量 WECHAT_RSS_URL 或 WECHAT_ALBUM_URL），自动同步未开启',
+                                  ? channel == 'album'
+                                      ? '通道：$channelLabel（${status['albumValidCount'] ?? albumUrls.length} 个合集，每 ${status['syncIntervalHours'] ?? 6} 小时自动同步）'
+                                      : '通道：$channelLabel（每 ${status['syncIntervalHours'] ?? 6} 小时自动同步）'
+                                  : '未配置同步通道（环境变量 WECHAT_RSS_URL 或 WECHAT_ALBUM_URLS），自动同步未开启',
                               style: const TextStyle(fontSize: 13),
                             ),
                           ),
@@ -182,13 +196,22 @@ class _WechatTabState extends State<WechatTab> {
                       ),
                       const SizedBox(height: 6),
                       Text(
-                        lastSynced != null
-                            ? '上次同步：$lastSynced'
-                            : '尚未同步过',
+                        lastSynced != null ? '上次同步：$lastSynced' : '尚未同步过',
                         style: TextStyle(
                             fontSize: 13,
-                            color: Theme.of(context).colorScheme.onSurfaceVariant),
+                            color:
+                                Theme.of(context).colorScheme.onSurfaceVariant),
                       ),
+                      if (lastError != null && lastError.isNotEmpty) ...[
+                        const SizedBox(height: 6),
+                        Text(
+                          '上次同步错误：$lastError',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Theme.of(context).colorScheme.error,
+                          ),
+                        ),
+                      ],
                       if (rssUrl != null) ...[
                         const SizedBox(height: 4),
                         Text(
@@ -197,18 +220,37 @@ class _WechatTabState extends State<WechatTab> {
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                               fontSize: 12,
-                              color: Theme.of(context).colorScheme.onSurfaceVariant),
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurfaceVariant),
                         ),
-                      ] else if (albumUrl != null) ...[
-                        const SizedBox(height: 4),
-                        Text(
-                          '合集：$albumUrl',
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
+                      ] else if (albumUrls.isNotEmpty) ...[
+                        for (var index = 0;
+                            index < albumUrls.length;
+                            index++) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            '合集 ${index + 1}：${albumUrls[index]}',
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                                fontSize: 12,
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .onSurfaceVariant),
+                          ),
+                        ],
+                      ],
+                      if (albumErrors.isNotEmpty) ...[
+                        const SizedBox(height: 8),
+                        for (final error in albumErrors)
+                          Text(
+                            '合集配置错误：${error['error'] ?? '未知错误'}',
+                            style: TextStyle(
                               fontSize: 12,
-                              color: Theme.of(context).colorScheme.onSurfaceVariant),
-                        ),
+                              color: Theme.of(context).colorScheme.error,
+                            ),
+                          ),
                       ],
                       const SizedBox(height: 12),
                       SizedBox(
@@ -219,8 +261,8 @@ class _WechatTabState extends State<WechatTab> {
                               ? const SizedBox(
                                   width: 18,
                                   height: 18,
-                                  child: CircularProgressIndicator(
-                                      strokeWidth: 2))
+                                  child:
+                                      CircularProgressIndicator(strokeWidth: 2))
                               : const Icon(Icons.sync),
                           label: Text(_syncing ? '同步中…' : '立即同步'),
                         ),

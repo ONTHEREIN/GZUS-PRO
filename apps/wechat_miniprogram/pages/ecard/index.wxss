@@ -1,0 +1,105 @@
+.balance { display: flex; align-items: center; justify-content: space-between; padding: 30rpx 0; border-bottom: 1rpx solid #edf0f5; color: #1d2b42; font-size: 31rpx; }
+.balance:last-child { border-bottom: none; }
+.balance text:last-child { color: #2176e8; font-size: 38rpx; font-weight: 700; }
+.stale { margin-top: 16rpx; color: #b26a00; font-size: 24rpx; }
+.error { color: #c62828; }
+
+/* ─── 绑定宿舍 ─────────────────────────────────────────────── */
+
+.bind-open-button {
+  margin-top: 30rpx;
+  border-radius: 16rpx;
+  background: #2176e8;
+  color: #ffffff;
+  font-size: 28rpx;
+}
+
+.rebind-button {
+  border-radius: 16rpx;
+  background: #eef3fb;
+  color: #2176e8;
+  font-size: 28rpx;
+}
+
+.bind-title {
+  color: #17243b;
+  font-size: 32rpx;
+  font-weight: 600;
+}
+
+.bind-hint {
+  margin-top: 10rpx;
+  line-height: 1.6;
+}
+
+.ecard-search {
+  display: flex;
+  align-items: center;
+  margin-top: 22rpx;
+}
+
+.ecard-input {
+  box-sizing: border-box;
+  flex: 1;
+  height: 80rpx;
+  padding: 0 22rpx;
+  border-radius: 16rpx;
+  background: #f3f6fa;
+  font-size: 28rpx;
+}
+
+.ecard-search-button {
+  margin-left: 16rpx;
+  border-radius: 14rpx;
+  background: #2176e8;
+  color: #ffffff;
+  font-size: 26rpx;
+}
+
+.ecard-error {
+  margin-top: 18rpx;
+  color: #d93025;
+  font-size: 25rpx;
+}
+
+.bind-empty {
+  margin-top: 28rpx;
+  text-align: center;
+}
+
+.room-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 22rpx;
+  padding: 22rpx 24rpx;
+  border-radius: 18rpx;
+  background: #f8fafd;
+}
+
+.room-text {
+  flex: 1;
+  min-width: 0;
+  margin-right: 18rpx;
+}
+
+.room-name {
+  color: #1d2b42;
+  font-size: 29rpx;
+}
+
+.room-bind {
+  margin: 0;
+  border-radius: 14rpx;
+  background: #2176e8;
+  color: #ffffff;
+  font-size: 25rpx;
+}
+
+.bind-cancel {
+  margin-top: 34rpx;
+  border-radius: 16rpx;
+  background: #f3f6fa;
+  color: #5b6b82;
+  font-size: 28rpx;
+}

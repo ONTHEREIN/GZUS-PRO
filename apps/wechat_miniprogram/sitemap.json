@@ -1,0 +1,9 @@
+{
+  "desc": "软帮手微信小程序 MVP",
+  "rules": [
+    {
+      "action": "allow",
+      "page": "*"
+    }
+  ]
+}
