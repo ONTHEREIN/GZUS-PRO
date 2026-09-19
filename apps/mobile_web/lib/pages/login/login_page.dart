@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../api_client.dart';
+import '../../app_logger.dart';
 import '../../gzus_design.dart';
 import '../../responsive/spacing.dart';
 import '../../shiply_image.dart';
@@ -1116,17 +1117,33 @@ class _LoginPageState extends State<LoginPage>
         password,
       );
       TextInput.finishAutofillContext(shouldSave: false);
-      if (rememberPassword) {
-        await widget.api.rememberAccount(account);
-        await widget.api.saveRememberedPassword(password);
-        if (result.credentialToken != null) {
-          await widget.api.saveCredentialToken(result.credentialToken);
+      // 服务端登录已经成功，本地凭据持久化失败不能把成功误报成网络失败。
+      // 例如浏览器禁用 WebCrypto 或本地存储空间异常时，仍应允许用户进入应用。
+      Object? localStorageError;
+      StackTrace? localStorageStackTrace;
+      try {
+        if (rememberPassword) {
+          await widget.api.rememberAccount(account);
+          await widget.api.saveRememberedPassword(password);
+          if (result.credentialToken != null) {
+            await widget.api.saveCredentialToken(result.credentialToken);
+          } else {
+            await widget.api.clearSavedCredentialToken();
+          }
         } else {
+          await widget.api.forgetRememberedAccount();
           await widget.api.clearSavedCredentialToken();
         }
-      } else {
-        await widget.api.forgetRememberedAccount();
-        await widget.api.clearSavedCredentialToken();
+      } catch (exception, stackTrace) {
+        localStorageError = exception;
+        localStorageStackTrace = stackTrace;
+      }
+      if (localStorageError != null) {
+        AppLogger.error(
+          '登录成功但本地登录信息保存失败',
+          localStorageError,
+          localStorageStackTrace!,
+        );
       }
       unawaited(_saveAgreementState());
       widget.onLoggedIn(LoginResult(
@@ -1138,6 +1155,11 @@ class _LoginPageState extends State<LoginPage>
         ehallCookies: result.ehallCookies,
         ehallAuthToken: result.ehallAuthToken,
       ));
+      if (localStorageError != null && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('登录成功，但本地记住登录信息失败，下次需重新输入密码')),
+        );
+      }
     } on ApiException catch (exc) {
       if (!mounted) return;
       setState(() {
@@ -1145,10 +1167,14 @@ class _LoginPageState extends State<LoginPage>
         passwordChangeUrl =
             exc.code == 'password_change_required' ? exc.actionUrl : null;
       });
-    } catch (exc) {
-      setState(() => error = '无法连接服务器，请检查网络或确认服务已启动');
+    } catch (_) {
+      if (mounted) {
+        setState(() => error = '无法连接服务器，请检查网络或确认服务已启动');
+      }
     } finally {
-      setState(() => loading = false);
+      if (mounted) {
+        setState(() => loading = false);
+      }
     }
   }
 
