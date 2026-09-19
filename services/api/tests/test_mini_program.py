@@ -482,6 +482,8 @@ def test_wechat_login_creates_a_new_short_session(monkeypatch) -> None:
 
 
 def test_wechat_login_reports_missing_configuration(monkeypatch) -> None:
+    monkeypatch.setenv("WECHAT_MINIPROGRAM_APP_ID", "")
+    monkeypatch.setenv("WECHAT_MINIPROGRAM_APP_SECRET", "")
     get_settings.cache_clear()
     application = create_app()
     with TestClient(application) as client:
