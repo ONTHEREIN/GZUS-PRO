@@ -1,6 +1,6 @@
 # 软帮手微信小程序 MVP
 
-原生微信小程序客户端，复用仓库中的 FastAPI 教务接口。当前 MVP 功能为：学校账号登录、微信一键登录与一对一绑定、三端共享学年学期、首页、周课表/全部课程、成绩、考试、通知、生活缴费查询与个人信息。
+原生微信小程序客户端，复用仓库中的 FastAPI 教务接口。当前 MVP 功能为：学校账号登录、微信一键登录与一对一绑定、三端共享学年学期、首页、周课表/全部课程、成绩、考勤、考试、通知、生活缴费查询与个人信息。
 
 ## 接口地址
 
@@ -13,7 +13,7 @@
 
 两个域名都必须加入微信公众平台的 **request 合法域名**，否则真机验收会直接报 `request:fail url not in domain list`。
 
-> 接口路径与后端真实路由一致：教务相关接口挂在**根路径**下（`/me`、`/schedule`、`/grades`、`/exams`、`/notices`），**没有 `/academic` 前缀**；请求按当前学年学期带 `year`、`term`；共享偏好为 `/settings/academic-period` 与 `/settings/schedule`；生活缴费为 `/ecard/summary`、`/ecard/rooms`、`/ecard/binding`；登录为 `/mini/auth/login`、`/mini/auth/wechat-login`，绑定为 `/mini/auth/wechat-binding`；退出为 `/auth/logout`。写成 `/academic/*` 会得到 404。
+> 接口路径与后端真实路由一致：教务相关接口挂在**根路径**下（`/me`、`/schedule`、`/grades`、`/attendance`、`/exams`、`/notices`），**没有 `/academic` 前缀**；请求按当前学年学期带 `year`、`term`；共享偏好为 `/settings/academic-period` 与 `/settings/schedule`；生活缴费为 `/ecard/summary`、`/ecard/rooms`、`/ecard/binding`；登录为 `/mini/auth/login`、`/mini/auth/wechat-login`，绑定为 `/mini/auth/wechat-binding`；退出为 `/auth/logout`。写成 `/academic/*` 会得到 404。
 
 ## 学期与周课表
 
@@ -65,7 +65,7 @@ npm run auto-preview  # CLI 自动预览，推送真机验收包
 ```
 
 - **逻辑单测**（`tests/`）：`utils/` 用 `tsc` 编译到 `.test-build/` 后用 Node 内置 `node:test` 运行，不引入测试框架依赖。覆盖解析器字段校验与凭据过滤、学期偏好、单双周/日期换算/冲突排版、`envVersion` 分流、请求层 401/结构化错误/网络失败、`requireSession`。
-- **页面回归**（`scripts/page-regression.js`）：通过 `miniprogram-automator` 连接开发者工具，全程 mock `wx.request`，因此不需要演示账号密码，日志里也不会出现真实凭据。覆盖空输入、错误密码、登录、六个页面加载、学期选择器、周课表/周次选择/课程详情、微信绑定/解绑、未绑定微信引导、401 清理会话、下拉刷新、退出登录、5xx 错误态、无会话跳转。
+- **页面回归**（`scripts/page-regression.js`）：通过 `miniprogram-automator` 连接开发者工具，全程 mock `wx.request`，因此不需要演示账号密码，日志里也不会出现真实凭据。覆盖空输入、错误密码、登录、七个页面加载、学期选择器、周课表/周次选择/课程详情、微信绑定/解绑、未绑定微信引导、401 清理会话、下拉刷新、退出登录、5xx 错误态、无会话跳转。
 - **真实链路**（`scripts/live-api-check.js`）：**不 mock** 任何请求，用真实账号打测试域名真实接口，验证「开发者工具 → test-api.onrein.top → nginx → FastAPI → 学校 CAS」整条链路。它是 **request 合法域名白名单** 的第一道验证：白名单没配好会直接报 `url not in domain list`，脚本会识别并给出提示。
   两种断言档位（`MINI_EXPECT`）：
   - `demo`（默认）——数据是固定 fixture，可断言具体数值（7 门课、5 条成绩…）；

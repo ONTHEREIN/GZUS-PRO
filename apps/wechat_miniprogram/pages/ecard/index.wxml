@@ -18,6 +18,49 @@
     <view class="balance" id="ecard-hot-water"><text>热水</text><text>{{summary.hotWaterText || '-'}}</text></view>
   </view>
 
+  <view wx:if="{{summary && summary.status === 'ok'}}" id="ecard-history" class="card">
+    <view class="section-head">
+      <view class="section-title">水电费历史查询</view>
+      <button id="ecard-history-toggle" class="history-toggle" size="mini" bindtap="toggleHistory">{{historyVisible ? '收起' : '查询历史'}}</button>
+    </view>
+    <view wx:if="{{historyVisible}}" id="ecard-history-content">
+      <picker mode="date" fields="month" value="{{historyMonth}}" bindchange="onHistoryMonthChange">
+        <view id="ecard-history-month" class="history-month-picker">查询月份：{{historyMonth}} <text>⌄</text></view>
+      </picker>
+      <view class="muted history-hint">电费为消费明细；水费按每日余额快照估算。</view>
+      <view wx:if="{{historyLoading}}" id="ecard-history-loading" class="muted section-empty">正在查询历史记录…</view>
+      <view wx:elif="{{historyError}}" id="ecard-history-error" class="card error history-error">{{historyError}}</view>
+      <block wx:elif="{{historyOverview}}">
+        <view class="history-section-title">电费明细</view>
+        <view wx:if="{{historyItems.length === 0}}" id="ecard-history-empty" class="muted section-empty">{{historyOverview.message || '该月份暂无电费记录'}}</view>
+        <view wx:for="{{historyItems}}" wx:key="index" class="history-row">
+          <view class="history-row-main">
+            <view class="row-title">{{item.title}}</view>
+            <view class="muted">{{item.date}} {{item.time}}</view>
+          </view>
+          <view class="history-row-value">
+            <view>{{item.amount || '-'}}</view>
+            <view wx:if="{{item.usage !== null}}" class="muted">{{item.usage}} {{item.unit}}</view>
+          </view>
+        </view>
+
+        <view class="history-section-title">冷水月度记录</view>
+        <view wx:if="{{historyOverview.coldWaterMonths.length === 0}}" class="muted section-empty">暂无冷水历史记录</view>
+        <view wx:for="{{historyOverview.coldWaterMonths}}" wx:key="month" class="history-summary-row">
+          <view><view class="row-title">{{item.month}}</view><view class="muted">记录 {{item.recordedDays}} 天 · 期末 {{item.closingBalance}} {{item.unit}}</view></view>
+          <view class="history-row-value"><view>消耗 {{item.estimatedUsage}}</view><view class="muted">充值 {{item.estimatedRecharge}}</view></view>
+        </view>
+
+        <view class="history-section-title">热水月度记录</view>
+        <view wx:if="{{historyOverview.hotWaterMonths.length === 0}}" class="muted section-empty">暂无热水历史记录</view>
+        <view wx:for="{{historyOverview.hotWaterMonths}}" wx:key="month" class="history-summary-row">
+          <view><view class="row-title">{{item.month}}</view><view class="muted">记录 {{item.recordedDays}} 天 · 期末 {{item.closingBalance}} {{item.unit}}</view></view>
+          <view class="history-row-value"><view>消耗 {{item.estimatedUsage}}</view><view class="muted">充值 {{item.estimatedRecharge}}</view></view>
+        </view>
+      </block>
+    </view>
+  </view>
+
   <view wx:if="{{summary && summary.status === 'ok' && !bindPanelVisible}}" class="card">
     <button id="ecard-rebind" class="rebind-button" bindtap="openBindPanel">重新绑定宿舍</button>
   </view>

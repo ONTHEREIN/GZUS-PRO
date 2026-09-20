@@ -87,6 +87,15 @@ export function dateForWeek(firstWeekStart: Date, week: number, dayIndex: number
   return date
 }
 
+export function courseTimeText(course: ScheduleCourse): string {
+  const startSection = course.startSection
+  if (startSection === null || startSection < 1 || startSection > SECTION_TIMES.length) return "时间待定"
+  const endSection = course.endSection === null
+    ? startSection
+    : Math.min(SECTION_TIMES.length, Math.max(startSection, course.endSection))
+  return `${SECTION_TIMES[startSection - 1][0]}-${SECTION_TIMES[endSection - 1][1]}`
+}
+
 function weekRange(firstWeekStart: Date, week: number): string {
   const start = dateForWeek(firstWeekStart, week, 0)
   const end = dateForWeek(firstWeekStart, week, 6)

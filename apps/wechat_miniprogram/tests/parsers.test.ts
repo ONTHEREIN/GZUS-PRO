@@ -3,7 +3,10 @@ import { test } from "node:test"
 
 import {
   parseAcademicPeriod,
+  parseAttendance,
   parseEcardRooms,
+  parseEcardConsumption,
+  parseEcardConsumptionOverview,
   parseEcardSummary,
   parseEmpty,
   parseExams,
@@ -142,6 +145,30 @@ test("parseExams 要求课程名与日期", () => {
   assert.throws(() => parseExams([{ courseName: "高等数学" }]), /考试日期字段无效/)
 })
 
+test("parseAttendance 解析学期汇总与点名记录", () => {
+  const parsed = parseAttendance({
+    status: "ok",
+    items: [{
+      courseId: "course-1",
+      courseName: "高等数学",
+      courseCode: "MATH-101",
+      normal: 10,
+      late: 1,
+      leaveEarly: 0,
+      absent: 1,
+      leave: 2,
+      total: 14,
+      records: [{ date: "2026-03-01", status: "late", count: 1 }]
+    }]
+  })
+
+  assert.equal(parsed.items[0].courseName, "高等数学")
+  assert.equal(parsed.items[0].late, 1)
+  assert.equal(parsed.items[0].records[0].statusLabel, "迟到")
+  assert.throws(() => parseAttendance({ status: "ok", items: [{ courseName: "高数", late: -1 }] }), /迟到次数字段无效/)
+  assert.throws(() => parseAttendance({ status: "failed", items: [] }), /考勤响应状态无效/)
+})
+
 test("parseNotices 只接受四种已知来源", () => {
   const parsed = parseNotices([{ category: "教务", title: "选课通知", source: "jwxt" }])
   assert.equal(parsed[0].source, "jwxt")
@@ -162,6 +189,36 @@ test("parseEcardSummary 区分未绑定与正常状态", () => {
 
   assert.throws(() => parseEcardSummary({ status: "error" }), /生活缴费状态无效/)
   assert.throws(() => parseEcardSummary("not_bound"), /生活缴费响应格式无效/)
+})
+
+test("parseEcardConsumption 解析月份明细并保留空字段", () => {
+  const parsed = parseEcardConsumption({
+    status: "ok",
+    cachedAt: "2026-09-19T08:00:00+08:00",
+    items: [{ title: "宿舍电费", date: "2026-09-18", usage: 4.2 }]
+  })
+
+  assert.equal(parsed.status, "ok")
+  assert.equal(parsed.items[0].usage, 4.2)
+  assert.equal(parsed.items[0].unit, "度")
+  assert.equal(parsed.items[0].amount, "")
+  assert.throws(() => parseEcardConsumption({ status: "ok", items: {} }), /电费消费记录响应格式无效/)
+})
+
+test("parseEcardConsumptionOverview 支持无水费历史的总览", () => {
+  const parsed = parseEcardConsumptionOverview({
+    status: "limited",
+    message: "请先绑定宿舍。",
+    months: [],
+  })
+
+  assert.equal(parsed.message, "请先绑定宿舍。")
+  assert.deepEqual(parsed.coldWaterMonths, [])
+  assert.deepEqual(parsed.hotWaterMonths, [])
+  assert.throws(
+    () => parseEcardConsumptionOverview({ status: "invalid", months: [] }),
+    /水电费历史总览状态无效/
+  )
 })
 
 test("parseEcardRooms 解析宿舍列表并保留绑定所需字段", () => {

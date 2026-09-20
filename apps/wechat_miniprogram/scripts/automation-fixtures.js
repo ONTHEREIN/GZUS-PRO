@@ -150,6 +150,38 @@ const BASE_RESPONSES = {
       }
     ]
   },
+  "GET /attendance": {
+    statusCode: 200,
+    data: {
+      status: "ok",
+      items: [
+        {
+          courseId: "course-1",
+          courseName: "高等数学",
+          courseCode: "MATH-101",
+          normal: 10,
+          late: 1,
+          leaveEarly: 0,
+          absent: 0,
+          leave: 1,
+          total: 12,
+          records: [{ date: "2026-03-01", status: "late", statusLabel: "迟到", count: 1 }]
+        },
+        {
+          courseId: "course-2",
+          courseName: "大学英语",
+          courseCode: "ENGLISH-101",
+          normal: 8,
+          late: 0,
+          leaveEarly: 0,
+          absent: 0,
+          leave: 0,
+          total: 8,
+          records: []
+        }
+      ]
+    }
+  },
   "GET /notices": {
     statusCode: 200,
     data: [
@@ -178,6 +210,25 @@ const BASE_RESPONSES = {
       coldWaterText: "12.5 元",
       hotWaterText: "30.2 元",
       stale: false
+    }
+  },
+  "GET /ecard/consumption": {
+    statusCode: 200,
+    data: {
+      status: "ok",
+      cachedAt: "2026-09-19T08:00:00+08:00",
+      items: [
+        { title: "宿舍电费", amount: "-12.40", date: "2026-09-18", time: "08:12", usage: 4.2, unit: "度" }
+      ]
+    }
+  },
+  "GET /ecard/consumption/overview": {
+    statusCode: 200,
+    data: {
+      status: "ok",
+      months: [{ month: "2026-09", recordedDays: 1, totalUsage: 4.2, averageDailyUsage: 4.2, peakDate: "2026-09-18", peakUsage: 4.2, unit: "度", cachedAt: "2026-09-19T08:00:00+08:00" }],
+      coldWaterMonths: [],
+      hotWaterMonths: []
     }
   },
   "GET /ecard/rooms": {

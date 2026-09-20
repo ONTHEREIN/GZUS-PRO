@@ -4,6 +4,17 @@
 .stale { margin-top: 16rpx; color: #b26a00; font-size: 24rpx; }
 .error { color: #c62828; }
 
+.section-head { display: flex; align-items: center; justify-content: space-between; }
+.history-toggle { margin: 0; border-radius: 14rpx; background: #eef3fb; color: #2176e8; font-size: 25rpx; }
+.history-month-picker { margin-top: 24rpx; padding: 22rpx 24rpx; border-radius: 16rpx; background: #f3f6fa; color: #2176e8; font-size: 28rpx; }
+.history-month-picker text { float: right; color: #748094; }
+.history-hint { margin-top: 14rpx; line-height: 1.5; }
+.history-error { margin-top: 22rpx; }
+.history-section-title { margin-top: 28rpx; color: #17243b; font-size: 28rpx; font-weight: 600; }
+.history-row, .history-summary-row { display: flex; align-items: center; justify-content: space-between; gap: 20rpx; padding: 22rpx 0; border-bottom: 1rpx solid #edf0f5; }
+.history-row-main, .history-summary-row > view:first-child { min-width: 0; flex: 1; }
+.history-row-value { flex-shrink: 0; color: #2176e8; text-align: right; font-size: 27rpx; }
+
 /* ─── 绑定宿舍 ─────────────────────────────────────────────── */
 
 .bind-open-button {

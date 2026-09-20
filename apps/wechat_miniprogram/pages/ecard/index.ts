@@ -1,6 +1,16 @@
 import { get, post, requireSession } from "../../utils/api"
-import { EcardRoom, EcardSummary } from "../../utils/models"
-import { parseEcardRooms, parseEcardSummary } from "../../utils/parsers"
+import {
+  EcardConsumptionItem,
+  EcardConsumptionOverviewResponse,
+  EcardRoom,
+  EcardSummary
+} from "../../utils/models"
+import {
+  parseEcardConsumption,
+  parseEcardConsumptionOverview,
+  parseEcardRooms,
+  parseEcardSummary
+} from "../../utils/parsers"
 
 /**
  * 宿舍搜索一次最多返回多少条。
@@ -14,6 +24,14 @@ Page({
     error: "",
     summary: null as EcardSummary | null,
 
+    // 历史查询按需加载，避免进入生活缴费页面时额外请求历史接口。
+    historyVisible: false,
+    historyLoading: false,
+    historyError: "",
+    historyMonth: currentMonth(),
+    historyItems: [] as EcardConsumptionItem[],
+    historyOverview: null as EcardConsumptionOverviewResponse | null,
+
     // 绑定面板
     bindPanelVisible: false,
     keyword: "",
@@ -25,12 +43,15 @@ Page({
     bindError: ""
   },
 
-  onShow() {
+  onLoad() {
     if (requireSession()) this.loadSummary()
   },
 
   async onPullDownRefresh() {
     await this.loadSummary()
+    if (this.data.historyVisible && this.data.summary?.status === "ok") {
+      await this.loadHistory()
+    }
     wx.stopPullDownRefresh()
   },
 
@@ -43,6 +64,56 @@ Page({
       this.setData({ error: error instanceof Error ? error.message : "生活缴费加载失败" })
     } finally {
       this.setData({ loading: false })
+    }
+  },
+
+  async toggleHistory() {
+    if (this.data.historyVisible) {
+      this.setData({ historyVisible: false })
+      return
+    }
+    this.setData({ historyVisible: true })
+    await this.loadHistory()
+  },
+
+  async loadHistory() {
+    this.setData({ historyLoading: true, historyError: "" })
+    try {
+      const [consumption, overview] = await Promise.all([
+        get(`/ecard/consumption?month=${this.data.historyMonth}`, parseEcardConsumption),
+        get("/ecard/consumption/overview", parseEcardConsumptionOverview)
+      ])
+      this.setData({ historyItems: consumption.items, historyOverview: overview })
+    } catch (error) {
+      this.setData({
+        historyItems: [],
+        historyError: error instanceof Error ? error.message : "水电费历史加载失败"
+      })
+    } finally {
+      this.setData({ historyLoading: false })
+    }
+  },
+
+  async onHistoryMonthChange(event: WechatMiniprogram.PickerChange) {
+    const month = event.detail.value
+    if (typeof month !== "string" || !/^\d{4}-\d{2}$/.test(month)) {
+      this.setData({ historyError: "查询月份格式无效" })
+      return
+    }
+    this.setData({ historyMonth: month, historyLoading: true, historyError: "" })
+    try {
+      const consumption = await get(
+        `/ecard/consumption?month=${month}`,
+        parseEcardConsumption
+      )
+      this.setData({ historyItems: consumption.items })
+    } catch (error) {
+      this.setData({
+        historyItems: [],
+        historyError: error instanceof Error ? error.message : "电费历史加载失败"
+      })
+    } finally {
+      this.setData({ historyLoading: false })
     }
   },
 
@@ -109,6 +180,8 @@ Page({
       )
       this.setData({
         summary,
+        historyItems: [],
+        historyOverview: null,
         bindPanelVisible: false,
         keyword: "",
         rooms: [],
@@ -125,3 +198,8 @@ Page({
     }
   }
 })
+
+function currentMonth(): string {
+  const now = new Date()
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`
+}

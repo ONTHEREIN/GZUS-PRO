@@ -15,7 +15,7 @@ Page({
     bindingAction: false
   },
 
-  onShow() {
+  onLoad() {
     if (requireSession()) this.loadProfile()
   },
 

@@ -56,6 +56,35 @@ export interface ExamItem {
   seat: string | null
 }
 
+export interface AttendanceRecord {
+  date: string | null
+  status: string
+  statusLabel: string | null
+  count: number
+  time: string | null
+  remark: string | null
+}
+
+export interface AttendanceItem {
+  courseId: string
+  courseName: string
+  courseCode: string | null
+  academicYear: string | null
+  term: string | null
+  normal: number
+  late: number
+  leaveEarly: number
+  absent: number
+  leave: number
+  total: number
+  records: AttendanceRecord[]
+}
+
+export interface AttendanceResponse {
+  status: "not_implemented" | "ok"
+  items: AttendanceItem[]
+}
+
 export interface NoticeItem {
   category: string
   title: string
@@ -71,6 +100,55 @@ export interface EcardSummary {
   coldWaterText: string | null
   hotWaterText: string | null
   stale: boolean
+}
+
+export interface EcardConsumptionItem {
+  title: string
+  amount: string
+  time: string
+  date: string
+  usage: number | null
+  unit: string
+}
+
+export interface EcardConsumptionResponse {
+  status: "ok" | "limited"
+  message: string | null
+  cachedAt: string | null
+  items: EcardConsumptionItem[]
+}
+
+export interface EcardConsumptionMonthOverview {
+  month: string
+  recordedDays: number
+  totalUsage: number
+  averageDailyUsage: number
+  peakDate: string
+  peakUsage: number
+  unit: string
+  cachedAt: string
+}
+
+export interface EcardWaterMonthOverview {
+  month: string
+  recordedDays: number
+  openingBalance: number
+  closingBalance: number
+  estimatedUsage: number
+  estimatedRecharge: number
+  averageDailyUsage: number
+  peakDate: string | null
+  peakUsage: number
+  unit: string
+  cachedAt: string
+}
+
+export interface EcardConsumptionOverviewResponse {
+  status: "ok" | "limited"
+  message: string | null
+  months: EcardConsumptionMonthOverview[]
+  coldWaterMonths: EcardWaterMonthOverview[]
+  hotWaterMonths: EcardWaterMonthOverview[]
 }
 
 /** 可绑定的宿舍条目（来自 /ecard/rooms）。 */

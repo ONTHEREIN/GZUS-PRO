@@ -44,7 +44,7 @@ Page({
     period: null as AcademicPeriod | null
   },
 
-  onShow() {
+  onLoad() {
     if (requireSession()) this.loadCourses(false)
   },
 
@@ -59,34 +59,44 @@ Page({
     try {
       const period = await syncAcademicPeriod()
       const fallback = defaultFirstWeekStart(period)
-      let firstWeekStart = fallback
-      try {
-        const settings = await get<ScheduleSettings>("/settings/schedule", parseScheduleSettings)
-        const configured = settings.firstWeeks[`${period.year}-${period.term}`]
-        firstWeekStart = mondayOf(parseScheduleDate(configured || "") || fallback)
-      } catch {
-        firstWeekStart = fallback
-      }
       const path = `/schedule${periodQuery(period)}${refresh ? "&refresh=true" : ""}`
-      const courses = await get<ScheduleCourse[]>(path, parseScheduleCourses)
-      if (this.data.requestVersion !== requestVersion) return
-      const currentWeek = weekFromDate(firstWeekStart, new Date())
-      const isCurrentPeriod = period.year === academicPeriodNow().year && period.term === academicPeriodNow().term
-      const initialWeek = isCurrentPeriod ? currentWeek : 1
-      this.setData({
-        period,
-        periodLabel: academicPeriodLabel(period),
-        courses,
-        firstWeekStart: dateText(firstWeekStart),
-        currentWeek,
-        week: initialWeek,
-        weekTitle: `第${initialWeek}周`,
-        periodPickerRange: this.periodPickerRange(period),
-        periodPickerValue: this.periodPickerValue(period),
-        rows: buildWeekRows(courses, initialWeek),
-        days: buildWeekDays(firstWeekStart, initialWeek),
-        weekOptions: this.makeWeekOptions(firstWeekStart, initialWeek, currentWeek)
-      })
+      // 学期设置只影响周次显示，不能阻塞核心课表请求。首页和 App 前台同步也可能
+      // 同时触发设置请求，课表先发起自己的请求，避免首屏被非关键请求拖住。
+      const coursesPromise = get<ScheduleCourse[]>(path, parseScheduleCourses)
+      const settingsPromise = get<ScheduleSettings>("/settings/schedule", parseScheduleSettings)
+        .catch(() => null)
+      const courses = await coursesPromise
+
+      const applySchedule = (firstWeekStart: Date): boolean => {
+        if (this.data.requestVersion !== requestVersion) return false
+        const currentWeek = weekFromDate(firstWeekStart, new Date())
+        const isCurrentPeriod = period.year === academicPeriodNow().year && period.term === academicPeriodNow().term
+        const initialWeek = isCurrentPeriod ? currentWeek : 1
+        this.setData({
+          period,
+          periodLabel: academicPeriodLabel(period),
+          courses,
+          firstWeekStart: dateText(firstWeekStart),
+          currentWeek,
+          week: initialWeek,
+          weekTitle: `第${initialWeek}周`,
+          periodPickerRange: this.periodPickerRange(period),
+          periodPickerValue: this.periodPickerValue(period),
+          rows: buildWeekRows(courses, initialWeek),
+          days: buildWeekDays(firstWeekStart, initialWeek),
+          weekOptions: this.makeWeekOptions(firstWeekStart, initialWeek, currentWeek),
+          loading: false
+        })
+        return true
+      }
+
+      // 课程接口返回后立即结束加载态；第一周配置只负责调整周次，不应挡住课表首屏。
+      if (!applySchedule(fallback)) return
+      const settings = await settingsPromise
+      if (settings === null) return
+      const configured = settings.firstWeeks[`${period.year}-${period.term}`]
+      const firstWeekStart = mondayOf(parseScheduleDate(configured || "") || fallback)
+      if (dateText(firstWeekStart) !== dateText(fallback)) applySchedule(firstWeekStart)
     } catch (error) {
       if (this.data.requestVersion !== requestVersion) return
       this.setData({ error: error instanceof Error ? error.message : "课表加载失败" })

@@ -6,7 +6,7 @@ import { parseExams } from "../../utils/parsers"
 Page({
   data: { loading: true, error: "", exams: [] as ExamItem[], periodLabel: "", requestVersion: 0 },
 
-  onShow() {
+  onLoad() {
     if (requireSession()) this.loadExams()
   },
 

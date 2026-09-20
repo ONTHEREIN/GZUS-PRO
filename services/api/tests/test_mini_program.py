@@ -464,6 +464,7 @@ def test_wechat_login_creates_a_new_short_session(monkeypatch) -> None:
         with get_sync_session_factory()() as db:
             db.add(
                 WechatBinding(
+                    id=1,
                     student_id="20260004",
                     openid_fingerprint=openid_fingerprint(identity),
                     encrypted_openid="encrypted-openid",

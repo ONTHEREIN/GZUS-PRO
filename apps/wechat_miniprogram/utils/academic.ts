@@ -4,6 +4,8 @@ import { parseAcademicPeriod } from "./parsers"
 
 const PERIOD_KEY = "academic.period"
 
+let syncingAcademicPeriod: Promise<AcademicPeriod> | null = null
+
 export function academicPeriodNow(): AcademicPeriod {
   const now = new Date()
   const year = now.getMonth() >= 7 ? now.getFullYear() : now.getFullYear() - 1
@@ -19,7 +21,23 @@ export function periodQuery(period: AcademicPeriod): string {
   return `?year=${period.year}&term=${period.term}`
 }
 
-export async function syncAcademicPeriod(): Promise<AcademicPeriod> {
+export function syncAcademicPeriod(): Promise<AcademicPeriod> {
+  if (syncingAcademicPeriod !== null) return syncingAcademicPeriod
+
+  const promise = syncAcademicPeriodOnce()
+  syncingAcademicPeriod = promise
+  void promise.then(
+    () => {
+      if (syncingAcademicPeriod === promise) syncingAcademicPeriod = null
+    },
+    () => {
+      if (syncingAcademicPeriod === promise) syncingAcademicPeriod = null
+    }
+  )
+  return promise
+}
+
+async function syncAcademicPeriodOnce(): Promise<AcademicPeriod> {
   const remote = await get<AcademicPeriod | null>("/settings/academic-period", parseAcademicPeriod)
   if (remote !== null) {
     wx.setStorageSync(PERIOD_KEY, remote)

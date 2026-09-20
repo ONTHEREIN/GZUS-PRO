@@ -5,7 +5,7 @@ import { parseNotices } from "../../utils/parsers"
 Page({
   data: { loading: true, error: "", notices: [] as NoticeItem[] },
 
-  onShow() {
+  onLoad() {
     if (requireSession()) this.loadNotices()
   },
 

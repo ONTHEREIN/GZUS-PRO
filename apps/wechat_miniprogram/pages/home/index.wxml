@@ -11,6 +11,7 @@
   <view wx:if="{{!loading}}" id="home-quick-grid" class="quick-grid">
     <view id="home-open-schedule" class="quick-card" bindtap="openSchedule"><view class="quick-icon">课</view><view>我的课表</view></view>
     <view id="home-open-grades" class="quick-card" bindtap="openGrades"><view class="quick-icon">绩</view><view>课程成绩</view></view>
+    <view id="home-open-attendance" class="quick-card" bindtap="openAttendance"><view class="quick-icon">勤</view><view>考勤查询</view></view>
     <view id="home-open-exams" class="quick-card" bindtap="openExams"><view class="quick-icon">考</view><view>考试安排</view></view>
     <view id="home-open-ecard" class="quick-card" bindtap="openEcard"><view class="quick-icon">卡</view><view>生活缴费</view></view>
   </view>
@@ -49,7 +50,7 @@
     <view class="section-title">近期课程</view>
     <view wx:if="{{courses.length === 0}}" id="home-courses-empty" class="muted section-empty">暂无课程数据</view>
     <view wx:for="{{courses}}" wx:key="index" class="row home-course-row">
-      <view><view class="row-title">{{item.name}}</view><view class="muted">{{item.teacher || '任课教师待定'}} · {{item.classroom || '地点待定'}}</view></view>
+      <view><view class="row-title">{{item.name}}</view><view class="muted">{{item.time}} · {{item.teacher || '任课教师待定'}} · {{item.classroom || '地点待定'}}</view></view>
       <view class="badge">周{{item.weekday || '-'}}</view>
     </view>
   </view>

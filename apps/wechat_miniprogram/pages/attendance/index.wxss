@@ -1,0 +1,42 @@
+.period-chip {
+  display: inline-block;
+  margin: 0 0 20rpx;
+  padding: 9rpx 16rpx;
+  border-radius: 999rpx;
+  background: #e7f0ff;
+  color: #2176e8;
+  font-size: 23rpx;
+}
+
+.error { color: #c62828; }
+
+.attendance-metrics {
+  grid-template-columns: repeat(3, 1fr);
+  margin-top: 20rpx;
+}
+
+.metric-value.normal { color: #16813b; }
+.metric-value.warning { color: #b26a00; }
+.metric-value.danger { color: #c62828; }
+.metric-value.leave { color: #7a4bb3; }
+
+.attendance-card { padding-bottom: 22rpx; }
+.attendance-head { display: flex; align-items: center; justify-content: space-between; gap: 18rpx; }
+.attendance-course { color: #1d2b42; font-size: 32rpx; font-weight: 700; }
+.attendance-status { flex-shrink: 0; padding: 7rpx 14rpx; border-radius: 999rpx; font-size: 22rpx; }
+.normal-badge { background: #e8f7ed; color: #16813b; }
+.danger-badge { background: #fff0f0; color: #c62828; }
+
+.attendance-counts { display: flex; flex-wrap: wrap; gap: 12rpx; margin-top: 20rpx; }
+.count { padding: 7rpx 12rpx; border-radius: 10rpx; background: #f6f9fd; font-size: 23rpx; }
+.count.normal { color: #16813b; }
+.count.warning { color: #b26a00; }
+.count.danger { color: #c62828; }
+.count.leave { color: #7a4bb3; }
+.count.total { color: #53627a; }
+
+.record-list { margin-top: 22rpx; padding-top: 18rpx; border-top: 1rpx solid #edf0f5; }
+.record-title { margin-bottom: 6rpx; color: #53627a; font-size: 24rpx; }
+.record-row { display: flex; align-items: center; justify-content: space-between; gap: 18rpx; padding: 16rpx 0; border-top: 1rpx solid #f1f3f7; }
+.record-status { color: #263650; font-size: 26rpx; }
+.record-time { text-align: right; }

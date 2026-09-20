@@ -356,6 +356,14 @@ async function runCases(account, password, profile) {
       empty: ["#grades-empty"]
     },
     {
+      name: "考勤",
+      path: "/pages/attendance/index",
+      prefix: "attendance",
+      items: ".attendance-card",
+      count: null,
+      empty: ["#attendance-empty"]
+    },
+    {
       name: "考试",
       path: "/pages/exams/index",
       prefix: "exams",

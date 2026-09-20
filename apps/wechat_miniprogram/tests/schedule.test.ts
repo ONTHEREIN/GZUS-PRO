@@ -4,6 +4,7 @@ import { test } from "node:test"
 import { ScheduleCourse } from "../utils/models"
 import {
   buildWeekRows,
+  courseTimeText,
   dateForWeek,
   mondayOf,
   occursInWeek,
@@ -46,6 +47,12 @@ test("课表周次解析支持单周、双周、区间和中文标点", () => {
   assert.equal(occursInWeek("1、3、5", 3), true)
   assert.equal(occursInWeek("1、3、5", 2), false)
   assert.equal(occursInWeek(null, 20), true)
+})
+
+test("课程节次转换为首页展示时间", () => {
+  assert.equal(courseTimeText(course({ startSection: 1, endSection: 2 })), "09:00-10:20")
+  assert.equal(courseTimeText(course({ startSection: 13, endSection: null })), "19:00-19:40")
+  assert.equal(courseTimeText(course({ startSection: null })), "时间待定")
 })
 
 test("重叠课程并排，缺少定位信息的课程不进入周网格", () => {

@@ -2,7 +2,7 @@
 /**
  * 微信开发者工具页面回归（miniprogram-automator）。
  *
- * 覆盖：空输入校验、错误密码、登录成功、首页/课表/成绩/考试/通知/生活缴费/个人信息
+ * 覆盖：空输入校验、错误密码、登录成功、首页/课表/成绩/考勤/考试/通知/生活缴费/个人信息
  * 加载、401 清理本地会话、下拉刷新、退出登录、网络错误态、无会话跳转登录页。
  *
  * 设计取舍：
@@ -397,6 +397,8 @@ async function runCases() {
 
     const courses = await waitForSelectorCount(home, ".home-course-row", 3)
     assert(courses.length === 3, "首页应展示 3 条近期课程")
+    const firstCourseText = await courses[0].text()
+    assert(firstCourseText.indexOf("09:00-10:20") !== -1, `近期课程应展示上课时间，实际：${firstCourseText}`)
 
     const exams = await waitForSelectorCount(home, ".home-exam-row", 2)
     assert(exams.length === 2, "首页应展示 2 条考试提醒")
@@ -405,10 +407,11 @@ async function runCases() {
     assert(!error, "首页不应出现错误态")
   })
 
-  await runCase("课表、成绩、考试、通知、生活缴费、个人信息均完成加载", async () => {
+  await runCase("课表、成绩、考勤、考试、通知、生活缴费、个人信息均完成加载", async () => {
     const targets = [
       { path: "/pages/schedule/index", items: ".course-block", count: 3, error: "#schedule-error", label: "课表" },
       { path: "/pages/grades/index", items: ".grade-card", count: 2, error: "#grades-error", label: "成绩" },
+      { path: "/pages/attendance/index", items: ".attendance-card", count: 2, error: "#attendance-error", label: "考勤" },
       { path: "/pages/exams/index", items: ".exam-card", count: 2, error: "#exams-error", label: "考试" },
       { path: "/pages/notices/index", items: ".notice-card", count: 2, error: "#notices-error", label: "通知" },
       { path: "/pages/ecard/index", items: "#ecard-summary", count: 1, error: "#ecard-error", label: "生活缴费" },
@@ -554,6 +557,9 @@ async function runCases() {
 
     const page = await miniProgram.reLaunch("/pages/ecard/index")
     await waitForSelector(page, "#ecard-summary")
+    await (await waitForSelector(page, "#ecard-history-toggle")).tap()
+    await waitForSelector(page, "#ecard-history-content")
+    await waitForSelector(page, ".history-row")
     await (await waitForSelector(page, "#ecard-rebind")).tap()
     await waitForSelector(page, "#ecard-bind-panel")
   })

@@ -1,0 +1,47 @@
+<view class="page" id="attendance-page">
+  <view class="page-title">考勤查询</view>
+  <view wx:if="{{periodLabel}}" class="period-chip" id="attendance-period">{{periodLabel}}</view>
+  <view wx:if="{{loading}}" id="attendance-loading" class="empty">正在加载考勤…</view>
+  <view wx:if="{{error}}" id="attendance-error" class="card error">{{error}}</view>
+
+  <view wx:if="{{!loading && !error && items.length > 0}}" id="attendance-summary" class="card">
+    <view class="section-title">本学期汇总</view>
+    <view class="metric-grid attendance-metrics">
+      <view class="metric"><view class="metric-label">正常</view><view class="metric-value normal">{{totals.normal}}</view></view>
+      <view class="metric"><view class="metric-label">迟到</view><view class="metric-value warning">{{totals.late}}</view></view>
+      <view class="metric"><view class="metric-label">早退</view><view class="metric-value warning">{{totals.leaveEarly}}</view></view>
+      <view class="metric"><view class="metric-label">旷课</view><view class="metric-value danger">{{totals.absent}}</view></view>
+      <view class="metric"><view class="metric-label">请假</view><view class="metric-value leave">{{totals.leave}}</view></view>
+      <view class="metric"><view class="metric-label">合计</view><view class="metric-value">{{totals.total}}</view></view>
+    </view>
+  </view>
+
+  <view wx:for="{{items}}" wx:key="courseId" class="card attendance-card">
+    <view class="attendance-head">
+      <view class="attendance-course">{{item.courseName}}</view>
+      <view class="attendance-status {{item.late + item.leaveEarly + item.absent > 0 ? 'danger-badge' : 'normal-badge'}}">
+        {{item.late + item.leaveEarly + item.absent > 0 ? '有异常' : '正常'}}
+      </view>
+    </view>
+    <view class="attendance-counts">
+      <text class="count normal">正常 {{item.normal}}</text>
+      <text class="count warning">迟到 {{item.late}}</text>
+      <text class="count warning">早退 {{item.leaveEarly}}</text>
+      <text class="count danger">旷课 {{item.absent}}</text>
+      <text class="count leave">请假 {{item.leave}}</text>
+      <text class="count total">合计 {{item.total}}</text>
+    </view>
+    <view wx:if="{{item.records.length > 0}}" class="record-list">
+      <view class="record-title">点名记录</view>
+      <view wx:for="{{item.records}}" wx:for-item="record" wx:key="index" class="record-row">
+        <view>
+          <view class="record-status">{{record.statusLabel || record.status}}</view>
+          <view wx:if="{{record.remark}}" class="muted">{{record.remark}}</view>
+        </view>
+        <view class="record-time muted">{{record.date || ''}} {{record.time || ''}}<text wx:if="{{record.count > 1}}"> · {{record.count}}次</text></view>
+      </view>
+    </view>
+  </view>
+
+  <view wx:if="{{!loading && !error && items.length === 0}}" id="attendance-empty" class="empty">暂无考勤记录</view>
+</view>

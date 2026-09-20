@@ -7,13 +7,16 @@ import {
   parseScheduleCourses,
   parseStudentInfo
 } from "../../utils/parsers"
+import { courseTimeText } from "../../utils/schedule"
+
+type HomeCourse = ScheduleCourse & { time: string }
 
 Page({
   data: {
     loading: true,
     error: "",
     info: null as StudentInfo | null,
-    courses: [] as ScheduleCourse[],
+    courses: [] as HomeCourse[],
     exams: [] as ExamItem[],
     periodLabel: "",
     requestVersion: 0,
@@ -25,7 +28,7 @@ Page({
     ecardError: ""
   },
 
-  onShow() {
+  onLoad() {
     if (requireSession()) this.loadPage()
   },
 
@@ -49,7 +52,11 @@ Page({
         get<ExamItem[]>(`/exams${periodQuery(period)}`, parseExams)
       ])
       if (this.data.requestVersion !== requestVersion) return
-      this.setData({ info, courses: courses.slice(0, 3), exams: exams.slice(0, 2), periodLabel: academicPeriodLabel(period) })
+      const homeCourses = courses.slice(0, 3).map((course) => ({
+        ...course,
+        time: courseTimeText(course)
+      }))
+      this.setData({ info, courses: homeCourses, exams: exams.slice(0, 2), periodLabel: academicPeriodLabel(period) })
     } catch (error) {
       if (this.data.requestVersion !== requestVersion) return
       this.setData({ error: error instanceof Error ? error.message : "首页加载失败" })
@@ -82,6 +89,10 @@ Page({
 
   openGrades() {
     wx.navigateTo({ url: "/pages/grades/index" })
+  },
+
+  openAttendance() {
+    wx.navigateTo({ url: "/pages/attendance/index" })
   },
 
   openExams() {

@@ -6,7 +6,7 @@ import { parseGrades } from "../../utils/parsers"
 Page({
   data: { loading: true, error: "", grades: [] as GradeItem[], periodLabel: "", requestVersion: 0 },
 
-  onShow() {
+  onLoad() {
     if (requireSession()) this.loadGrades()
   },
 

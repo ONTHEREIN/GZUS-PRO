@@ -4,6 +4,7 @@
     "pages/home/index",
     "pages/schedule/index",
     "pages/grades/index",
+    "pages/attendance/index",
     "pages/exams/index",
     "pages/ecard/index",
     "pages/notices/index",

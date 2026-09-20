@@ -1,7 +1,15 @@
 import {
   EcardRoom,
+  EcardConsumptionResponse,
   EcardSummary,
+  EcardConsumptionItem,
+  EcardConsumptionMonthOverview,
+  EcardConsumptionOverviewResponse,
+  EcardWaterMonthOverview,
   AcademicPeriod,
+  AttendanceItem,
+  AttendanceRecord,
+  AttendanceResponse,
   ScheduleSettings,
   ExamItem,
   GradeItem,
@@ -37,9 +45,20 @@ function nullableBoolean(value: unknown): boolean | null {
   return typeof value === "boolean" ? value : null
 }
 
+function nonNegativeInteger(value: unknown, label: string): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+    throw new Error(`${label}字段无效`)
+  }
+  return value
+}
+
 function list(value: unknown, label: string): unknown[] {
   if (!Array.isArray(value)) throw new Error(`${label}响应格式无效`)
   return value
+}
+
+function optionalList(value: unknown, label: string): unknown[] {
+  return value === undefined ? [] : list(value, label)
 }
 
 export function parseLogin(value: unknown): LoginResponse {
@@ -144,6 +163,60 @@ export function parseExams(value: unknown): ExamItem[] {
   })
 }
 
+function attendanceStatusLabel(status: string): string | null {
+  const labels: Record<string, string> = {
+    normal: "正常",
+    late: "迟到",
+    leaveEarly: "早退",
+    absent: "旷课",
+    leave: "请假"
+  }
+  return labels[status] || null
+}
+
+function parseAttendanceRecord(value: unknown): AttendanceRecord {
+  const item = record(value, "考勤记录")
+  const status = typeof item.status === "string" && item.status ? item.status : "normal"
+  return {
+    date: nullableString(item.date),
+    status,
+    statusLabel: nullableString(item.statusLabel) || attendanceStatusLabel(status),
+    count: item.count === undefined ? 1 : nonNegativeInteger(item.count, "考勤次数"),
+    time: nullableString(item.time),
+    remark: nullableString(item.remark)
+  }
+}
+
+function parseAttendanceItem(value: unknown): AttendanceItem {
+  const item = record(value, "考勤课程")
+  const records = item.records === undefined ? [] : list(item.records, "考勤记录")
+  return {
+    courseId: typeof item.courseId === "string" ? item.courseId : "",
+    courseName: stringValue(item.courseName, "课程名称"),
+    courseCode: nullableString(item.courseCode),
+    academicYear: nullableString(item.academicYear),
+    term: nullableString(item.term),
+    normal: item.normal === undefined ? 0 : nonNegativeInteger(item.normal, "正常次数"),
+    late: item.late === undefined ? 0 : nonNegativeInteger(item.late, "迟到次数"),
+    leaveEarly: item.leaveEarly === undefined ? 0 : nonNegativeInteger(item.leaveEarly, "早退次数"),
+    absent: item.absent === undefined ? 0 : nonNegativeInteger(item.absent, "旷课次数"),
+    leave: item.leave === undefined ? 0 : nonNegativeInteger(item.leave, "请假次数"),
+    total: item.total === undefined ? 0 : nonNegativeInteger(item.total, "考勤总次数"),
+    records: records.map(parseAttendanceRecord)
+  }
+}
+
+export function parseAttendance(value: unknown): AttendanceResponse {
+  const item = record(value, "考勤")
+  if (item.status !== "ok" && item.status !== "not_implemented") {
+    throw new Error("考勤响应状态无效")
+  }
+  return {
+    status: item.status,
+    items: list(item.items, "考勤").map(parseAttendanceItem)
+  }
+}
+
 export function parseNotices(value: unknown): NoticeItem[] {
   return list(value, "通知").map((entry) => {
     const item = record(entry, "通知")
@@ -173,6 +246,76 @@ export function parseEcardSummary(value: unknown): EcardSummary {
     coldWaterText: nullableString(item.coldWaterText),
     hotWaterText: nullableString(item.hotWaterText),
     stale: item.stale === true
+  }
+}
+
+function parseEcardConsumptionItem(value: unknown): EcardConsumptionItem {
+  const item = record(value, "电费消费记录")
+  return {
+    title: nullableString(item.title) || "电费消费",
+    amount: nullableString(item.amount) || "",
+    time: nullableString(item.time) || "",
+    date: nullableString(item.date) || "",
+    usage: nullableNumber(item.usage),
+    unit: nullableString(item.unit) || "度"
+  }
+}
+
+export function parseEcardConsumption(value: unknown): EcardConsumptionResponse {
+  const item = record(value, "电费历史")
+  if (item.status !== "ok" && item.status !== "limited") {
+    throw new Error("电费历史状态无效")
+  }
+  return {
+    status: item.status,
+    message: nullableString(item.message),
+    cachedAt: nullableString(item.cachedAt),
+    items: list(item.items, "电费消费记录").map(parseEcardConsumptionItem)
+  }
+}
+
+function parseEcardConsumptionMonthOverview(value: unknown): EcardConsumptionMonthOverview {
+  const item = record(value, "电费月度概览")
+  return {
+    month: stringValue(item.month, "概览月份"),
+    recordedDays: nullableNumber(item.recordedDays) || 0,
+    totalUsage: nullableNumber(item.totalUsage) || 0,
+    averageDailyUsage: nullableNumber(item.averageDailyUsage) || 0,
+    peakDate: nullableString(item.peakDate) || "",
+    peakUsage: nullableNumber(item.peakUsage) || 0,
+    unit: nullableString(item.unit) || "度",
+    cachedAt: nullableString(item.cachedAt) || ""
+  }
+}
+
+function parseEcardWaterMonthOverview(value: unknown): EcardWaterMonthOverview {
+  const item = record(value, "水费月度概览")
+  return {
+    month: stringValue(item.month, "概览月份"),
+    recordedDays: nullableNumber(item.recordedDays) || 0,
+    openingBalance: nullableNumber(item.openingBalance) || 0,
+    closingBalance: nullableNumber(item.closingBalance) || 0,
+    estimatedUsage: nullableNumber(item.estimatedUsage) || 0,
+    estimatedRecharge: nullableNumber(item.estimatedRecharge) || 0,
+    averageDailyUsage: nullableNumber(item.averageDailyUsage) || 0,
+    peakDate: nullableString(item.peakDate),
+    peakUsage: nullableNumber(item.peakUsage) || 0,
+    unit: stringValue(item.unit, "水费单位"),
+    cachedAt: nullableString(item.cachedAt) || ""
+  }
+}
+
+export function parseEcardConsumptionOverview(value: unknown): EcardConsumptionOverviewResponse {
+  const item = record(value, "水电费历史总览")
+  if (item.status !== "ok" && item.status !== "limited") {
+    throw new Error("水电费历史总览状态无效")
+  }
+  return {
+    status: item.status,
+    message: nullableString(item.message),
+    months: list(item.months, "电费月度概览").map(parseEcardConsumptionMonthOverview),
+    coldWaterMonths: optionalList(item.coldWaterMonths, "冷水月度概览").map(parseEcardWaterMonthOverview),
+    hotWaterMonths: optionalList(item.hotWaterMonths, "热水月度概览").map(parseEcardWaterMonthOverview)
   }
 }
 
