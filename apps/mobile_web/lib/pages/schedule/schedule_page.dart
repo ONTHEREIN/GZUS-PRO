@@ -183,30 +183,15 @@ class _ScheduleOnboardingPageState extends State<ScheduleOnboardingPage> {
         ),
         _courseEndReminderMinutes,
       );
-      // 云端只保存课表日期；整个首次引导要到最后一步才算完成。
-      try {
-        await widget.api.saveScheduleSettings(
-          firstWeeks: {'$_year-$_term': dateText(_selected)},
-        );
-      } catch (error) {
-        debugPrint('同步开学日期到云端失败: error=${error.runtimeType}');
-      }
-      if (_courseRemindersEnabled) {
-        final result = await widget.api.schedule(year: _year, term: _term);
-        await configureCourseReminders(
-          api: widget.api,
-          courses: result.data.items,
-          firstWeekStart: _selected,
-          enabled: _courseRemindersEnabled,
-          beforeStartMinutes: _courseStartReminderMinutes,
-          beforeEndMinutes: _courseEndReminderMinutes,
-          adjustments: const [],
-          overrides: const [],
-          nativeReminderSignature: null,
-        );
-      }
+
+      // 本地配置已经保存，进入下一步不应再等待云端请求或提醒服务。
+      // 网络同步和提醒初始化放到后台，避免首次引导因网络/登录态切换卡在加载中。
       if (!mounted) return;
       widget.onComplete();
+      unawaited(_syncScheduleSettingsToCloud());
+      if (_courseRemindersEnabled) {
+        unawaited(_configureCourseRemindersInBackground());
+      }
     } catch (error) {
       if (mounted) {
         ScaffoldMessenger.maybeOf(context)?.showSnackBar(
@@ -215,6 +200,35 @@ class _ScheduleOnboardingPageState extends State<ScheduleOnboardingPage> {
       }
     } finally {
       if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _syncScheduleSettingsToCloud() async {
+    try {
+      await widget.api.saveScheduleSettings(
+        firstWeeks: {'$_year-$_term': dateText(_selected)},
+      );
+    } catch (error) {
+      debugPrint('同步开学日期到云端失败: error=${error.runtimeType}');
+    }
+  }
+
+  Future<void> _configureCourseRemindersInBackground() async {
+    try {
+      final result = await widget.api.schedule(year: _year, term: _term);
+      await configureCourseReminders(
+        api: widget.api,
+        courses: result.data.items,
+        firstWeekStart: _selected,
+        enabled: _courseRemindersEnabled,
+        beforeStartMinutes: _courseStartReminderMinutes,
+        beforeEndMinutes: _courseEndReminderMinutes,
+        adjustments: const [],
+        overrides: const [],
+        nativeReminderSignature: null,
+      );
+    } catch (error) {
+      debugPrint('后台初始化课程提醒失败: error=${error.runtimeType}');
     }
   }
 

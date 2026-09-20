@@ -88,19 +88,17 @@ class _FirstRunOnboardingPageState extends State<FirstRunOnboardingPage> {
       onboardingPreferenceKey(widget.api.namespace, 'firstRunStep'),
     );
 
-    String? cloudError;
+    if (!mounted) return;
+    widget.onComplete();
+    unawaited(_syncCompletionToCloud());
+  }
+
+  Future<void> _syncCompletionToCloud() async {
     try {
       await widget.api.saveScheduleSettings(onboardingCompleted: true);
     } catch (error) {
-      cloudError = error.toString();
+      debugPrint('同步引导完成状态失败: error=${error.runtimeType}');
     }
-    if (!mounted) return;
-    if (cloudError != null) {
-      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-        SnackBar(content: Text('同步引导完成状态失败，下次换设备可能再次显示：$cloudError')),
-      );
-    }
-    widget.onComplete();
   }
 
   @override
