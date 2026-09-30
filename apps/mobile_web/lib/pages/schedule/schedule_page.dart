@@ -17,6 +17,7 @@ import '../../models/schedule_override.dart';
 import '../../models/schedule_settings.dart';
 import '../../onboarding_preferences.dart';
 import '../../schedule_adjustment_sync.dart';
+import '../../widget_schedule_bridge.dart';
 import '../../responsive/spacing.dart';
 import '../../schedule_utils.dart';
 import '../../background_service.dart' deferred as background_service;
@@ -183,15 +184,41 @@ class _ScheduleOnboardingPageState extends State<ScheduleOnboardingPage> {
         ),
         _courseEndReminderMinutes,
       );
-
-      // 本地配置已经保存，进入下一步不应再等待云端请求或提醒服务。
-      // 网络同步和提醒初始化放到后台，避免首次引导因网络/登录态切换卡在加载中。
+      // 云端只保存课表日期；整个首次引导要到最后一步才算完成。
+      try {
+        await widget.api.saveScheduleSettings(
+          firstWeeks: {'$_year-$_term': dateText(_selected)},
+        );
+      } catch (error) {
+        debugPrint('同步开学日期到云端失败: error=${error.runtimeType}');
+      }
+      if (_courseRemindersEnabled) {
+        final namespace = widget.api.namespace;
+        final result = await widget.api.schedule(year: _year, term: _term);
+        final adjustments = await ScheduleAdjustmentSync.loadCurrent(
+          api: widget.api,
+          year: _year,
+          term: _term,
+        );
+        final overrides =
+            await ScheduleOverrideStore.load(namespace, _year, _term);
+        if (widget.api.namespace != namespace) {
+          throw StateError('账号已切换，请重新配置课程提醒');
+        }
+        await configureCourseReminders(
+          api: widget.api,
+          courses: result.data.items,
+          firstWeekStart: _selected,
+          enabled: _courseRemindersEnabled,
+          beforeStartMinutes: _courseStartReminderMinutes,
+          beforeEndMinutes: _courseEndReminderMinutes,
+          adjustments: adjustments,
+          overrides: overrides,
+          nativeReminderSignature: null,
+        );
+      }
       if (!mounted) return;
       widget.onComplete();
-      unawaited(_syncScheduleSettingsToCloud());
-      if (_courseRemindersEnabled) {
-        unawaited(_configureCourseRemindersInBackground());
-      }
     } catch (error) {
       if (mounted) {
         ScaffoldMessenger.maybeOf(context)?.showSnackBar(
@@ -200,35 +227,6 @@ class _ScheduleOnboardingPageState extends State<ScheduleOnboardingPage> {
       }
     } finally {
       if (mounted) setState(() => _loading = false);
-    }
-  }
-
-  Future<void> _syncScheduleSettingsToCloud() async {
-    try {
-      await widget.api.saveScheduleSettings(
-        firstWeeks: {'$_year-$_term': dateText(_selected)},
-      );
-    } catch (error) {
-      debugPrint('同步开学日期到云端失败: error=${error.runtimeType}');
-    }
-  }
-
-  Future<void> _configureCourseRemindersInBackground() async {
-    try {
-      final result = await widget.api.schedule(year: _year, term: _term);
-      await configureCourseReminders(
-        api: widget.api,
-        courses: result.data.items,
-        firstWeekStart: _selected,
-        enabled: _courseRemindersEnabled,
-        beforeStartMinutes: _courseStartReminderMinutes,
-        beforeEndMinutes: _courseEndReminderMinutes,
-        adjustments: const [],
-        overrides: const [],
-        nativeReminderSignature: null,
-      );
-    } catch (error) {
-      debugPrint('后台初始化课程提醒失败: error=${error.runtimeType}');
     }
   }
 
@@ -776,6 +774,14 @@ class _SchedulePageState extends State<SchedulePage> {
   bool _exporting = false;
   String? manageError;
   String? _reminderSyncError;
+  String? _widgetSyncError;
+  int _widgetScheduleRevision = 0;
+  String? _adjustmentSyncError;
+  ScheduleAdjustmentConflict? _adjustmentConflict;
+  late String _scheduleNamespace;
+  bool _hasLegacyAdjustments = false;
+  bool _importingLegacyAdjustments = false;
+  int _adjustmentLoadRevision = 0;
   bool _reminderSettingsLoaded = false;
   String? _lastNativeReminderSignature;
   bool showTime = true;
@@ -792,10 +798,12 @@ class _SchedulePageState extends State<SchedulePage> {
   @override
   void initState() {
     super.initState();
+    _scheduleNamespace = widget.api.namespace;
     _scheduleFuture = _loadSchedule();
     _loadReminderSettings();
     _loadOverrides();
     _loadAdjustments();
+    _loadLegacyAdjustmentAvailability();
     _loadViewPreferences();
   }
 
@@ -803,37 +811,213 @@ class _SchedulePageState extends State<SchedulePage> {
   void didUpdateWidget(covariant SchedulePage oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.api != widget.api ||
+        _scheduleNamespace != widget.api.namespace ||
         oldWidget.year != widget.year ||
         oldWidget.term != widget.term) {
+      _overrides = const [];
+      _adjustments = const [];
+      _adjustmentSyncError = null;
+      _adjustmentConflict = null;
+      _hasLegacyAdjustments = false;
+      _scheduleNamespace = widget.api.namespace;
       _scheduleFuture = _loadSchedule();
       _loadOverrides();
       _loadAdjustments();
+      _loadLegacyAdjustmentAvailability();
     }
   }
 
   Future<void> _loadAdjustments() async {
+    final requestRevision = ++_adjustmentLoadRevision;
+    final api = widget.api;
+    final namespace = api.namespace;
+    final year = widget.year;
+    final term = widget.term;
     try {
+      final cached =
+          await ScheduleAdjustmentSync.loadSnapshot(namespace, year, term);
+      final pending =
+          await ScheduleAdjustmentSync.loadQueue(namespace, year, term);
+      if (!_isCurrentScheduleScope(api, namespace, year, term) ||
+          requestRevision != _adjustmentLoadRevision) {
+        return;
+      }
+      setState(() {
+        _adjustments = mergePendingScheduleAdjustments(cached, pending);
+        _scheduleFuture = _loadSchedule();
+      });
       await ScheduleAdjustmentSync.flush(
-        api: widget.api,
-        year: widget.year,
-        term: widget.term,
+        api: api,
+        year: year,
+        term: term,
       );
-      final records = await widget.api.fetchScheduleAdjustments(
-        year: widget.year,
-        term: widget.term,
+      if (!_isCurrentScheduleScope(api, namespace, year, term) ||
+          requestRevision != _adjustmentLoadRevision) {
+        return;
+      }
+      final records = await api.fetchScheduleAdjustments(
+        year: year,
+        term: term,
       );
-      if (!mounted) return;
-      setState(() => _adjustments = records);
-      _scheduleFuture = _loadSchedule();
+      if (!_isCurrentScheduleScope(api, namespace, year, term) ||
+          requestRevision != _adjustmentLoadRevision) {
+        return;
+      }
+      await ScheduleAdjustmentSync.saveSnapshot(namespace, year, term, records);
+      final remaining =
+          await ScheduleAdjustmentSync.loadQueue(namespace, year, term);
+      if (!_isCurrentScheduleScope(api, namespace, year, term) ||
+          requestRevision != _adjustmentLoadRevision) {
+        return;
+      }
+      setState(() {
+        _adjustments = mergePendingScheduleAdjustments(records, remaining);
+        _adjustmentSyncError = null;
+        _adjustmentConflict = null;
+        _scheduleFuture = _loadSchedule();
+      });
     } catch (error) {
+      if (!_isCurrentScheduleScope(api, namespace, year, term) ||
+          requestRevision != _adjustmentLoadRevision) {
+        return;
+      }
+      setState(() {
+        _adjustmentSyncError =
+            error is ApiException ? error.message : error.toString();
+        _adjustmentConflict =
+            error is ScheduleAdjustmentConflict ? error : null;
+      });
       debugPrint('同步日期调课失败: $error');
+    }
+  }
+
+  bool _isCurrentScheduleScope(
+          ApiClient api, String namespace, int year, int term) =>
+      mounted &&
+      widget.api == api &&
+      widget.api.namespace == namespace &&
+      widget.year == year &&
+      widget.term == term;
+
+  Future<void> _loadLegacyAdjustmentAvailability() async {
+    final api = widget.api;
+    final namespace = api.namespace;
+    final year = widget.year;
+    final term = widget.term;
+    final hasQueue = await ScheduleAdjustmentSync.hasLegacyQueue(year, term);
+    final hasOverrides =
+        await ScheduleOverrideStore.hasLegacyOverrides(year, term);
+    if (!_isCurrentScheduleScope(api, namespace, year, term)) return;
+    setState(() => _hasLegacyAdjustments = hasQueue || hasOverrides);
+  }
+
+  Future<void> _importLegacyAdjustments() async {
+    if (_importingLegacyAdjustments) return;
+    final api = widget.api;
+    final namespace = api.namespace;
+    final year = widget.year;
+    final term = widget.term;
+    setState(() => _importingLegacyAdjustments = true);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('确认旧版调课归属'),
+        content: Text('旧版本机记录没有保存归属账号。仅当这些记录属于你时，'
+            '才导入当前账号 $namespace；日期调课将随后同步到该账号的云端。'),
+        actions: [
+          TextButton(
+            key: const ValueKey('schedule-legacy-import-cancel'),
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            key: const ValueKey('schedule-legacy-import-confirm'),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('属于我，导入'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true ||
+        !_isCurrentScheduleScope(api, namespace, year, term)) {
+      if (mounted) setState(() => _importingLegacyAdjustments = false);
+      return;
+    }
+    try {
+      await ScheduleOverrideStore.importLegacyOverrides(namespace, year, term);
+      await ScheduleAdjustmentSync.importLegacyQueue(namespace, year, term);
+      if (!_isCurrentScheduleScope(api, namespace, year, term)) return;
+      await _loadLegacyAdjustmentAvailability();
+      await _loadOverrides();
+      await _loadAdjustments();
+    } catch (error) {
+      if (_isCurrentScheduleScope(api, namespace, year, term)) {
+        setState(() => _adjustmentSyncError = '旧版调课导入失败：$error');
+      }
+    } finally {
+      if (mounted) setState(() => _importingLegacyAdjustments = false);
+    }
+  }
+
+  Future<void> _useCloudAdjustmentVersion() async {
+    final conflict = _adjustmentConflict;
+    if (conflict == null) return;
+    final api = widget.api;
+    final namespace = api.namespace;
+    final year = widget.year;
+    final term = widget.term;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('使用云端调课版本'),
+        content: const Text('将放弃这条记录在本机尚未同步的撤回操作，读取其他设备保存的云端版本。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            key: const ValueKey('schedule-conflict-use-cloud-confirm'),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('使用云端版本'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true ||
+        !_isCurrentScheduleScope(api, namespace, year, term)) {
+      return;
+    }
+    try {
+      final remote = await api.fetchScheduleAdjustments(year: year, term: term);
+      if (!_isCurrentScheduleScope(api, namespace, year, term)) return;
+      await ScheduleAdjustmentSync.saveSnapshot(namespace, year, term, remote);
+      await ScheduleAdjustmentSync.discardPending(namespace, conflict.pending);
+      final remaining =
+          await ScheduleAdjustmentSync.loadQueue(namespace, year, term);
+      if (!_isCurrentScheduleScope(api, namespace, year, term)) return;
+      setState(() {
+        _adjustments = mergePendingScheduleAdjustments(remote, remaining);
+        _adjustmentConflict = null;
+        _adjustmentSyncError = null;
+        _scheduleFuture = _loadSchedule();
+      });
+      await _loadAdjustments();
+    } catch (error) {
+      if (_isCurrentScheduleScope(api, namespace, year, term)) {
+        setState(() => _adjustmentSyncError = error.toString());
+      }
     }
   }
 
   /// 加载本地调课条目；内容有变化时重新取课表（api 有缓存，不会重复请求学校）。
   Future<void> _loadOverrides() async {
-    final list = await ScheduleOverrideStore.load(widget.year, widget.term);
-    if (!mounted) return;
+    final api = widget.api;
+    final namespace = api.namespace;
+    final year = widget.year;
+    final term = widget.term;
+    final list = await ScheduleOverrideStore.load(namespace, year, term);
+    if (!_isCurrentScheduleScope(api, namespace, year, term)) return;
     if (_sameOverrides(list, _overrides)) return;
     setState(() => _overrides = list);
     _scheduleFuture = _loadSchedule();
@@ -850,16 +1034,58 @@ class _SchedulePageState extends State<SchedulePage> {
   }
 
   Future<ScheduleResult> _loadSchedule({bool forceRefresh = false}) async {
-    final result = await widget.api.schedule(
-      year: widget.year,
-      term: widget.term,
+    final api = widget.api;
+    final namespace = api.namespace;
+    final year = widget.year;
+    final term = widget.term;
+    final firstWeekStart = widget.firstWeekStart;
+    final revision = ++_widgetScheduleRevision;
+    final overrides = List<ScheduleOverride>.of(_overrides);
+    final adjustments = List<ScheduleAdjustmentRecord>.of(_adjustments);
+    final result = await api.schedule(
+      year: year,
+      term: term,
       forceRefresh: forceRefresh,
     );
-    final merged = applyScheduleOverrides(result.data.items, _overrides);
+    final merged = applyScheduleOverrides(result.data.items, overrides);
+    if (!_isCurrentScheduleScope(api, namespace, year, term) ||
+        revision != _widgetScheduleRevision) {
+      return ScheduleResult(items: merged, raw: result.data.raw);
+    }
+    unawaited(_syncWidgetSchedule(api, namespace, year, term, firstWeekStart,
+        revision, result.data.items, adjustments, overrides));
     // 课表数据到位后统一配置提醒（内部均有签名守卫，重复调用无开销）；
     // 叠加后的课表用于提醒，停课/替换后的课程不再触发原时间提醒
     unawaited(_applyCourseReminders(merged));
     return ScheduleResult(items: merged, raw: result.data.raw);
+  }
+
+  Future<void> _syncWidgetSchedule(
+    ApiClient api, String namespace, int year, int term, DateTime firstWeekStart,
+    int revision, List<ScheduleCourse> courses,
+    List<ScheduleAdjustmentRecord> adjustments, List<ScheduleOverride> overrides,
+  ) async {
+    try {
+      await updateWidgetSchedule(
+        api: api,
+        year: year,
+        term: term,
+        firstWeekStart: firstWeekStart,
+        courses: courses,
+        adjustments: adjustments,
+        overrides: overrides,
+        isCurrent: () =>
+            _isCurrentScheduleScope(api, namespace, year, term) &&
+            revision == _widgetScheduleRevision,
+      );
+      if (mounted && revision == _widgetScheduleRevision) {
+        setState(() => _widgetSyncError = null);
+      }
+    } catch (error) {
+      if (mounted && revision == _widgetScheduleRevision) {
+        setState(() => _widgetSyncError = '桌面组件课表同步失败：$error');
+      }
+    }
   }
 
   /// 应用课程提醒配置：本地通知（reminder_service）+ 原生后台同步。
@@ -886,6 +1112,8 @@ class _SchedulePageState extends State<SchedulePage> {
   }
 
   Future<void> _refreshSchedule() async {
+    await _loadAdjustments();
+    if (!mounted) return;
     setState(() {
       _scheduleFuture = _loadSchedule(forceRefresh: true);
     });
@@ -897,6 +1125,10 @@ class _SchedulePageState extends State<SchedulePage> {
     DateTime targetDate,
     String conflictMode,
   ) async {
+    final api = widget.api;
+    final namespace = api.namespace;
+    final year = widget.year;
+    final term = widget.term;
     final sourceOccurrences = expandEffectiveSchedule(
       courses: _lastItems,
       firstWeekStart: widget.firstWeekStart,
@@ -948,30 +1180,21 @@ class _SchedulePageState extends State<SchedulePage> {
       status: 'active',
       revision: 1,
     );
+    await ScheduleAdjustmentSync.enqueue(namespace, adjustment);
+    if (!_isCurrentScheduleScope(api, namespace, year, term)) return;
     setState(() => _adjustments = [..._adjustments, adjustment]);
     // 日期级调整先在本地生效，提醒和原生组件随同一份生效实例立即重排。
     unawaited(
         _scheduleFuture.then((result) => _applyCourseReminders(result.items)));
     unawaited(_syncCalendarAfterAdjustment());
-    await ScheduleAdjustmentSync.enqueue(adjustment);
-    try {
-      final synced = await widget.api.createScheduleAdjustment(adjustment);
-      if (!mounted) return;
-      setState(() {
-        _adjustments = [
-          for (final item in _adjustments)
-            if (item.clientId == adjustment.clientId) synced else item,
-        ];
-      });
-    } catch (error) {
-      debugPrint('日期调课已加入离线队列: $error');
-    }
+    await _loadAdjustments();
     if (!mounted) return;
     ScaffoldMessenger.maybeOf(context)?.showSnackBar(
       SnackBar(
         content: Text(
           '已将 ${dateText(sourceDate)} 调至 ${dateText(targetDate)}'
-          '${conflictMode == 'replaceConflicts' ? '，已替换冲突课程' : '，两者并存'}',
+          '${conflictMode == 'replaceConflicts' ? '，已替换冲突课程' : '，两者并存'}'
+          '${_adjustmentSyncError == null ? '' : '（已保存在本机，云端未同步）'}',
         ),
         duration: const Duration(seconds: 8),
         action: SnackBarAction(
@@ -983,6 +1206,10 @@ class _SchedulePageState extends State<SchedulePage> {
   }
 
   Future<void> _restoreAdjustment(String clientId) async {
+    final api = widget.api;
+    final namespace = api.namespace;
+    final year = widget.year;
+    final term = widget.term;
     final current =
         _adjustments.where((item) => item.clientId == clientId).firstOrNull;
     if (current == null) return;
@@ -999,6 +1226,8 @@ class _SchedulePageState extends State<SchedulePage> {
       revision: current.revision + 1,
       id: current.id,
     );
+    await ScheduleAdjustmentSync.enqueue(namespace, restored);
+    if (!_isCurrentScheduleScope(api, namespace, year, term)) return;
     setState(() {
       _adjustments = [
         for (final item in _adjustments)
@@ -1008,15 +1237,7 @@ class _SchedulePageState extends State<SchedulePage> {
     unawaited(
         _scheduleFuture.then((result) => _applyCourseReminders(result.items)));
     unawaited(_syncCalendarAfterAdjustment());
-    await ScheduleAdjustmentSync.enqueue(restored);
-    try {
-      await widget.api.restoreScheduleAdjustment(
-        clientId: current.clientId,
-        expectedRevision: current.revision,
-      );
-    } catch (error) {
-      debugPrint('撤回调课云端同步失败: $error');
-    }
+    await _loadAdjustments();
   }
 
   Future<void> _loadViewPreferences() async {
@@ -1183,11 +1404,64 @@ class _SchedulePageState extends State<SchedulePage> {
                       onMoveToDay: _moveCourseToDay,
                       onAdjustDate: _adjustDate,
                     );
+          final scheduleContent = Column(
+            children: [
+              if (_widgetSyncError != null)
+                ListTile(
+                    key: const ValueKey('schedule-widget-sync-error'),
+                    leading: const Icon(Icons.error_outline),
+                    title: Text(_widgetSyncError!)),
+              if (_hasLegacyAdjustments)
+                ListTile(
+                  dense: true,
+                  title: const Text('旧版本机调课待确认归属'),
+                  trailing: TextButton(
+                    key: const ValueKey('schedule-legacy-import'),
+                    onPressed: _importingLegacyAdjustments
+                        ? null
+                        : _importLegacyAdjustments,
+                    child: const Text('导入'),
+                  ),
+                ),
+              if (_adjustmentSyncError != null)
+                Material(
+                  key: const ValueKey('schedule-adjustment-sync-error'),
+                  color: Theme.of(context).colorScheme.errorContainer,
+                  child: Padding(
+                    padding: const EdgeInsets.only(left: 12),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            '调课同步失败，本机记录仍保留：$_adjustmentSyncError',
+                            maxLines: 3,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        IconButton(
+                          key: const ValueKey('schedule-adjustment-sync-retry'),
+                          tooltip: '重试调课同步',
+                          onPressed: _loadAdjustments,
+                          icon: const Icon(Icons.refresh),
+                        ),
+                        if (_adjustmentConflict != null)
+                          TextButton(
+                            key: const ValueKey('schedule-conflict-use-cloud'),
+                            onPressed: _useCloudAdjustmentVersion,
+                            child: const Text('使用云端版本'),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+              Expanded(child: content),
+            ],
+          );
           final compact = MediaQuery.sizeOf(context).width < 600;
           if (compact) {
             return Stack(
               children: [
-                content,
+                scheduleContent,
                 Positioned.fill(
                   child: _ScheduleFloatingMenu(
                     selected: _viewMode,
@@ -1215,7 +1489,7 @@ class _SchedulePageState extends State<SchedulePage> {
             expandChild: true,
             child: Column(
               children: [
-                Expanded(child: content),
+                Expanded(child: scheduleContent),
                 if (showJson) ...[
                   const SizedBox(height: 10),
                   Flexible(child: JsonPanel(json: result.prettyJson)),
@@ -1624,6 +1898,7 @@ class _SchedulePageState extends State<SchedulePage> {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => ScheduleOverridesPage(
+          namespace: widget.api.namespace,
           year: widget.year,
           term: widget.term,
           items: items,
@@ -1840,6 +2115,10 @@ class _SchedulePageState extends State<SchedulePage> {
 
   /// 表单保存：写入本地存储并重新叠加课表。
   Future<void> _saveOverrideFromPage(ScheduleOverride override) async {
+    final api = widget.api;
+    final namespace = api.namespace;
+    final year = widget.year;
+    final term = widget.term;
     final list = [..._overrides];
     final index = list.indexWhere((o) => o.id == override.id);
     if (index >= 0) {
@@ -1847,8 +2126,8 @@ class _SchedulePageState extends State<SchedulePage> {
     } else {
       list.add(override);
     }
-    await ScheduleOverrideStore.save(widget.year, widget.term, list);
-    if (!mounted) return;
+    await ScheduleOverrideStore.save(namespace, year, term, list);
+    if (!_isCurrentScheduleScope(api, namespace, year, term)) return;
     setState(() => _overrides = list);
     _scheduleFuture = _loadSchedule();
   }
@@ -1881,7 +2160,19 @@ class _SchedulePageState extends State<SchedulePage> {
       _reminderSettingsLoaded = true;
     });
     // 设置加载完成后按最新配置应用一次提醒
-    unawaited(_scheduleFuture.then((r) => _applyCourseReminders(r.items)));
+    unawaited(_applyRemindersWhenScheduleReady(_scheduleFuture));
+  }
+
+  Future<void> _applyRemindersWhenScheduleReady(Future<ScheduleResult> future) async {
+    try {
+      final result = await future;
+      if (!mounted || future != _scheduleFuture) return;
+      await _applyCourseReminders(result.items);
+    } catch (error) {
+      if (mounted && future == _scheduleFuture) {
+        setState(() => _reminderSyncError = '读取提醒课表失败：$error');
+      }
+    }
   }
 
   Future<void> _setCourseRemindersEnabled(bool value) async {

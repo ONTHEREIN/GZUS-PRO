@@ -76,11 +76,16 @@ def _ehall_upstream_error_detail(exc: Exception) -> str:
 
 
 def _get_student_id(session: AppSession) -> str:
+    if session.student_account:
+        return session.student_account
     client = session.client
     account = getattr(client, "_account", None)
     if account:
         return account
-    return session.student_name or "unknown"
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="无法确认当前学号，请重新登录",
+    )
 
 
 def _schedule_cache_params(year: int, term: int) -> dict[str, str]:
@@ -116,6 +121,11 @@ def _with_cache_fallback(resource: str, student_id: str, call):
 
 
 def _load_leave_courses(payload: LeavePreviewRequest, session: AppSession) -> list[dict]:
+    if payload.effective_occurrences is not None:
+        return [
+            item.model_dump(mode="json", by_alias=True, exclude_none=True)
+            for item in payload.effective_occurrences
+        ]
     if payload.courses:
         return [normalize_schedule_course(course) for course in payload.courses]
 
@@ -192,10 +202,11 @@ def affairs(session: AppSession = Depends(require_session)) -> list[dict]:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="办事大厅会话不可用，请重新登录",
         )
+    student_id = _get_student_id(session)
     try:
         return _with_cache_fallback(
             "ehall_affairs",
-            _get_student_id(session),
+            student_id,
             lambda: ehall_client.get_affairs(
                 page_size=100,
                 max_pages=1,
@@ -225,10 +236,11 @@ def applications(session: AppSession = Depends(require_session)) -> list[dict]:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="办事大厅会话不可用，请重新登录",
         )
+    student_id = _get_student_id(session)
     try:
         return _with_cache_fallback(
             "ehall_applications",
-            _get_student_id(session),
+            student_id,
             lambda: ehall_client.get_applications(
                 page_size=80,
                 max_pages=1,
@@ -275,10 +287,7 @@ def leave_preview(
             year=payload.year,
             term=payload.term,
             first_week_start=payload.first_week_start,
-            effective_occurrences=[
-                item.model_dump(by_alias=True) for item in payload.effective_occurrences
-            ]
-            or None,
+            effective_occurrences=courses if payload.effective_occurrences is not None else None,
             selected_course_keys=payload.selected_course_keys,
         )
     except ValueError as exc:
@@ -332,12 +341,14 @@ def leave_fill(
             year=payload.year,
             term=payload.term,
             first_week_start=payload.first_week_start,
-            effective_occurrences=[
-                item.model_dump(by_alias=True) for item in payload.effective_occurrences
-            ]
-            or None,
+            effective_occurrences=courses if payload.effective_occurrences is not None else None,
             selected_course_keys=payload.selected_course_keys,
         )
+        if not preview["items"]:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="该时间段没有匹配课程，请重新选择日期后再生成请假单",
+            )
         if preview["hasMissingFields"]:
             return {
                 "status": "needs_manual",
@@ -457,6 +468,13 @@ def leave_attachment(
         return {"status": "no_ehall_session", "uploaded": False}
     try:
         content = base64.b64decode(payload.attachment_content_base64, validate=True)
+        if not content:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="附件不能为空")
+        if len(content) > LEAVE_ATTACHMENT_MAX_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail="图片大小不能超过 7 MB",
+            )
         uploaded = ehall_client.upload_leave_attachment(
             doc_unid=payload.doc_unid,
             process_id=payload.process_id,

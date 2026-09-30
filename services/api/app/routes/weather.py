@@ -7,8 +7,10 @@ from datetime import datetime
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
+
+from app.rate_limit import limiter
 
 router = APIRouter(prefix="/weather", tags=["weather"])
 
@@ -18,6 +20,7 @@ WTTR_TIMEOUT = 15.0
 # ---------- 内存缓存 ----------
 _cache: dict[str, tuple[dict[str, Any], float]] = {}
 _CACHE_TTL = 30 * 60  # 30 分钟
+_CACHE_MAX_ENTRIES = 256
 
 
 def _cache_key(lat: float | None, lon: float | None) -> str:
@@ -187,7 +190,9 @@ def _safe_int(value: Any, default: int = 0) -> int:
 
 
 @router.get("")
+@limiter.limit("30/minute")
 async def get_weather(
+    request: Request,
     lat: float | None = Query(default=None, ge=-90, le=90),
     lon: float | None = Query(default=None, ge=-180, le=180),
 ) -> JSONResponse:
@@ -242,5 +247,7 @@ async def get_weather(
         raise
 
     # 缓存结果
+    if key not in _cache and len(_cache) >= _CACHE_MAX_ENTRIES:
+        _cache.pop(next(iter(_cache)))
     _cache[key] = (result, time.time())
     return JSONResponse(content=result)

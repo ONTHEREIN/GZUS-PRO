@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     ehall_staff_json_path: str = ""
     cas_login_url: str = "https://cas.gzus.edu.cn/lyuapServer/login"
     cas_password_change_url: str = "https://cas.gzus.edu.cn/aqzx/#/password/passwordModify"
-    ehall_service_url: str = "http://ehall.gzus.edu.cn/shiro-cas"
+    ehall_service_url: str = "https://ehall.gzus.edu.cn/shiro-cas"
     jwxt_sso_service_url: str = "https://jwxt.gzus.edu.cn/sso/lyiotlogin"
     public_api_base_url: str = "http://127.0.0.1:8000"
     frontend_base_url: str = "http://localhost:8080"
@@ -48,9 +48,9 @@ class Settings(BaseSettings):
     ecard_openid: str = ""
     ecard_unionid: str = ""
     ecard_secret: str = ""
-    ecard_verify_tls: bool = False
-    ecard_daily_reminder_hour: int = 8
-    ecard_daily_reminder_minute: int = 0
+    ecard_verify_tls: bool = True
+    ecard_daily_reminder_hour: int = Field(default=8, ge=0, le=23)
+    ecard_daily_reminder_minute: int = Field(default=0, ge=0, le=59)
     ehall_csrf_key: str = ""
     credential_encryption_key: str = ""
     rsa_private_key_pem: str = ""
@@ -117,12 +117,18 @@ def get_settings() -> Settings:
     settings = Settings()
     if settings.demo_account_enabled:
         if not settings.debug:
-            raise RuntimeError("DEMO_ACCOUNT_ENABLED requires DEBUG=true")
+            raise RuntimeError(
+                "生产环境禁止启用 DEMO_ACCOUNT_ENABLED；请将 DEMO_ACCOUNT_ENABLED=false"
+            )
         if not settings.demo_password:
             raise RuntimeError("DEMO_PASSWORD must be set when DEMO_ACCOUNT_ENABLED=true")
         if not settings.demo_account or not settings.demo_student_id:
             raise RuntimeError("DEMO_ACCOUNT and DEMO_STUDENT_ID must be set for the demo account")
     if not settings.debug:
+        if urlparse(settings.ehall_service_url).scheme != "https":
+            raise RuntimeError("EHALL_SERVICE_URL must use HTTPS in production")
+        if not settings.ecard_verify_tls:
+            raise RuntimeError("ECARD_VERIFY_TLS must be true in production")
         if not settings.credential_encryption_key:
             raise RuntimeError(
                 "CREDENTIAL_ENCRYPTION_KEY must be set to a random key in production. "

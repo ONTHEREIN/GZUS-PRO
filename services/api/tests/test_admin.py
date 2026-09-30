@@ -8,6 +8,8 @@ from app.database import (
     AdminUser,
     AppSessionModel,
     CredentialRevocation,
+    IosPushToken,
+    WebPushSubscription,
     get_sync_session_factory,
 )
 from app.main import app
@@ -123,12 +125,34 @@ def test_admin_revoke_session(monkeypatch):
     _authed_session(monkeypatch)
     _add_admin("20240001", role="owner")
     _add_session_row("target-session", "20240002", credential_fingerprint="a" * 64)
+    _add_session_row("other-device", "20240002", credential_fingerprint="b" * 64)
+    with get_sync_session_factory()() as db:
+        db.add(WebPushSubscription(
+            student_id="20240002", session_id="target-session",
+            endpoint="https://push.example.test/target", p256dh="key", auth="auth",
+        ))
+        db.add(IosPushToken(
+            student_id="20240002", session_id="other-device",
+            device_token="c" * 64, environment="production",
+        ))
+        db.commit()
+    class FakeWebSocket:
+        closed_code = None
+
+        async def close(self, code, reason):
+            self.closed_code = code
+
+    websocket = FakeWebSocket()
+    app.state.ws_manager.active["target-session"] = websocket
+    app.state.ws_manager.enqueue("target-session", {"type": "new_notice"})
     with TestClient(app) as client:
         response = client.post(
             "/admin/sessions/target-session/revoke",
             headers={"X-Session-Id": "test-session"},
         )
     assert response.status_code == 200
+    assert websocket.closed_code == 4001
+    assert app.state.ws_manager.drain("target-session") == []
     factory = get_sync_session_factory()
     with factory() as db:
         row = db.query(AppSessionModel).filter(AppSessionModel.id == "target-session").first()
@@ -137,6 +161,8 @@ def test_admin_revoke_session(monkeypatch):
         revoked_credential = db.get(CredentialRevocation, "a" * 64)
         assert revoked_credential is not None
         assert revoked_credential.reason == "admin_kick"
+        assert db.query(WebPushSubscription).count() == 0
+        assert db.query(IosPushToken).count() == 0
         # 审计日志已落库
         log = db.query(AdminAuditLog).filter(AdminAuditLog.action == "revoke_session").first()
         assert log is not None
@@ -242,6 +268,12 @@ def test_admin_remove_user_ok(monkeypatch):
         assert row is None
         log = db.query(AdminAuditLog).filter(AdminAuditLog.action == "remove_admin").first()
         assert log is not None
+
+    # 删除白名单后，旧会话中持久化的 is_admin 标记不能继续授权。
+    _authed_session(monkeypatch, session_id="removed-admin", student_id="20240003")
+    with TestClient(app) as client:
+        denied = client.get("/admin/me", headers={"X-Session-Id": "removed-admin"})
+    assert denied.status_code == 403
 
 
 def test_seed_owner_from_env(monkeypatch):

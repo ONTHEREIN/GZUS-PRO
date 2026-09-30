@@ -72,6 +72,9 @@ open class HomeWidgetProvider : AppWidgetProvider() {
             kind: String
         ) {
             try {
+                if (kind == "next" || kind == "today" || kind == "weekly") {
+                    WidgetRefreshScheduler.refreshCachedSchedule(context)
+                }
                 val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 if (isSmallWidget(manager, widgetId) && kind != "weekly") {
                     updateGenericWidget(context, manager, widgetId, widgetData(prefs, kind), kind)

@@ -14,6 +14,8 @@ os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ["CREDENTIAL_ENCRYPTION_KEY"] = "test-credential-key"
 os.environ["PUBLIC_API_BASE_URL"] = "https://api.example.test"
 os.environ["FRONTEND_BASE_URL"] = "https://app.example.test"
+os.environ["EHALL_SERVICE_URL"] = "https://ehall.gzus.edu.cn/shiro-cas"
+os.environ["ECARD_VERIFY_TLS"] = "true"
 
 
 @pytest.fixture(autouse=True)
@@ -24,6 +26,8 @@ def _reset_db(monkeypatch):
     monkeypatch.setenv("CREDENTIAL_ENCRYPTION_KEY", "test-credential-key")
     monkeypatch.setenv("PUBLIC_API_BASE_URL", "https://api.example.test")
     monkeypatch.setenv("FRONTEND_BASE_URL", "https://app.example.test")
+    monkeypatch.setenv("EHALL_SERVICE_URL", "https://ehall.gzus.edu.cn/shiro-cas")
+    monkeypatch.setenv("ECARD_VERIFY_TLS", "true")
     get_settings.cache_clear()
     from app import database
     from app.cache_service import reset_cache_factory

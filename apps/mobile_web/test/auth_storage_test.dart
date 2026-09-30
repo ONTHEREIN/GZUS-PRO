@@ -17,12 +17,14 @@ void main() {
       'ehall-cookie',
       'ehall-token',
     );
+    await storage.saveSessionRefreshToken('sso-refresh-token');
     final restored = await storage.load();
 
     expect(restored.jwxtCookies, 'jwxt-cookie');
     expect(restored.ehallCookies, 'ehall-cookie');
     expect(restored.ehallAuthToken, 'ehall-token');
     expect(restored.credentialToken, isNull);
+    expect(restored.sessionRefreshToken, 'sso-refresh-token');
     expect(restored.password, isNull);
   });
 
@@ -30,6 +32,7 @@ void main() {
     const storage = AuthStorage();
     await storage.saveSchoolAuth('jwxt-cookie', 'ehall-cookie', 'ehall-token');
     await storage.savePassword('school-password');
+    await storage.saveSessionRefreshToken('sso-refresh-token');
 
     await storage.clear();
     final restored = await storage.load();
@@ -38,6 +41,7 @@ void main() {
     expect(restored.ehallCookies, isNull);
     expect(restored.ehallAuthToken, isNull);
     expect(restored.password, isNull);
+    expect(restored.sessionRefreshToken, isNull);
   });
 
   test('密码仅保存到系统安全存储', () async {

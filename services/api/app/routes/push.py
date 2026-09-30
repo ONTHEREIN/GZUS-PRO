@@ -26,6 +26,15 @@ router = APIRouter(prefix="/push", tags=["push"])
 
 _LEGACY_ACTIVITY_TOKEN_TTL = timedelta(hours=6)
 _ACTIVITY_EXPIRY_GRACE = timedelta(minutes=15)
+_MAX_WEB_PUSH_PER_SESSION = 5
+_MAX_WEB_PUSH_PER_STUDENT = 20
+
+
+def _require_student_id(session: AppSession) -> str:
+    student_id = student_id_of(session)
+    if not student_id:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="无法识别当前登录用户")
+    return student_id
 
 
 class _TestPushClient:
@@ -61,9 +70,14 @@ def register_web_push(
     session: AppSession = Depends(require_session),
     user_agent: str | None = Header(None),
 ) -> dict[str, str]:
-    student_id = student_id_of(session)
-    if not student_id:
-        return {"status": "error", "message": "Student ID not found"}
+    from app.push import validate_web_push_endpoint, validate_web_push_keys
+
+    try:
+        validate_web_push_endpoint(payload.endpoint)
+        validate_web_push_keys(payload.keys.p256dh, payload.keys.auth)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    student_id = _require_student_id(session)
 
     expiration_time = None
     if payload.expiration_time:
@@ -78,9 +92,19 @@ def register_web_push(
         existing = db.query(WebPushSubscription).filter(
             WebPushSubscription.endpoint == payload.endpoint
         ).first()
+        if existing is None or existing.student_id != student_id:
+            student_count = db.query(WebPushSubscription).filter_by(student_id=student_id).count()
+            if student_count >= _MAX_WEB_PUSH_PER_STUDENT:
+                raise HTTPException(status_code=409, detail="浏览器推送设备已达 20 个上限")
+        if existing is None or existing.session_id != session.id:
+            session_count = db.query(WebPushSubscription).filter_by(session_id=session.id).count()
+            if session_count >= _MAX_WEB_PUSH_PER_SESSION:
+                raise HTTPException(status_code=409, detail="当前会话的浏览器推送订阅已达 5 个上限")
         
         if existing:
             existing.student_id = student_id
+            existing.session_id = session.id
+            existing.credential_fingerprint = session.credential_fingerprint
             existing.p256dh = payload.keys.p256dh
             existing.auth = payload.keys.auth
             existing.expiration_time = expiration_time
@@ -89,6 +113,8 @@ def register_web_push(
         else:
             new_sub = WebPushSubscription(
                 student_id=student_id,
+                session_id=session.id,
+                credential_fingerprint=session.credential_fingerprint,
                 endpoint=payload.endpoint,
                 p256dh=payload.keys.p256dh,
                 auth=payload.keys.auth,
@@ -107,14 +133,13 @@ def unregister_web_push(
     payload: WebPushSubscriptionUnregisterRequest | None = None,
     session: AppSession = Depends(require_session),
 ) -> dict[str, str]:
-    student_id = student_id_of(session)
-    if not student_id:
-        return {"status": "error", "message": "Student ID not found"}
+    student_id = _require_student_id(session)
     
     factory = get_sync_session_factory()
     with factory() as db:
         query = db.query(WebPushSubscription).filter(
-            WebPushSubscription.student_id == student_id
+            WebPushSubscription.student_id == student_id,
+            WebPushSubscription.session_id == session.id,
         )
         if payload is not None and payload.endpoint:
             query = query.filter(WebPushSubscription.endpoint == payload.endpoint)
@@ -129,9 +154,7 @@ def register_ios_push(
     payload: IosPushTokenRequest,
     session: AppSession = Depends(require_session),
 ) -> dict[str, str]:
-    student_id = student_id_of(session)
-    if not student_id:
-        return {"status": "error", "message": "Student ID not found"}
+    student_id = _require_student_id(session)
 
     device_token = payload.device_token.lower()
     factory = get_sync_session_factory()
@@ -146,10 +169,14 @@ def register_ios_push(
                 existing.course_local_event_keys_json = None
                 existing.course_local_valid_until = None
             existing.student_id = student_id
+            existing.session_id = session.id
+            existing.credential_fingerprint = session.credential_fingerprint
             existing.updated_at = datetime.now(timezone.utc)
         else:
             db.add(IosPushToken(
                 student_id=student_id,
+                session_id=session.id,
+                credential_fingerprint=session.credential_fingerprint,
                 device_token=device_token,
                 environment=payload.environment,
             ))
@@ -162,14 +189,13 @@ def unregister_ios_push(
     payload: IosPushTokenRequest,
     session: AppSession = Depends(require_session),
 ) -> dict[str, str]:
-    student_id = student_id_of(session)
-    if not student_id:
-        return {"status": "error", "message": "Student ID not found"}
+    student_id = _require_student_id(session)
 
     factory = get_sync_session_factory()
     with factory() as db:
         db.query(IosPushToken).filter(
             IosPushToken.student_id == student_id,
+            IosPushToken.session_id == session.id,
             IosPushToken.device_token == payload.device_token.lower(),
             IosPushToken.environment == payload.environment,
         ).delete()
@@ -183,9 +209,7 @@ def sync_ios_course_schedule(
     session: AppSession = Depends(require_session),
 ) -> dict[str, str]:
     """记录当前 iOS 设备已经由系统本地通知覆盖的课程事件。"""
-    student_id = student_id_of(session)
-    if not student_id:
-        return {"status": "error", "message": "Student ID not found"}
+    student_id = _require_student_id(session)
     device_token = payload.device_token.lower()
     with get_sync_session_factory()() as db:
         row = db.query(IosPushToken).filter_by(
@@ -194,7 +218,7 @@ def sync_ios_course_schedule(
         ).first()
         if row is None:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="请先注册 iOS 普通推送令牌")
-        if row.student_id != student_id:
+        if row.student_id != student_id or row.session_id != session.id:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="设备令牌不属于当前账号")
         row.course_local_event_keys_json = json.dumps(
             sorted(set(payload.event_keys)), ensure_ascii=False, separators=(",", ":")
@@ -210,9 +234,7 @@ def register_ios_live_activity_token(
     payload: IosLiveActivityTokenRequest,
     session: AppSession = Depends(require_session),
 ) -> dict[str, str]:
-    student_id = student_id_of(session)
-    if not student_id:
-        return {"status": "error", "message": "Student ID not found"}
+    student_id = _require_student_id(session)
     if payload.token_type == "activity" and not payload.activity_id:
         raise HTTPException(status_code=422, detail="activity token 缺少 activityId")
 
@@ -248,6 +270,8 @@ def register_ios_live_activity_token(
         ).first()
         if existing:
             existing.student_id = student_id
+            existing.session_id = session.id
+            existing.credential_fingerprint = session.credential_fingerprint
             existing.activity_id = payload.activity_id
             existing.activity_type = payload.activity_type
             existing.device_id = payload.device_id
@@ -256,6 +280,8 @@ def register_ios_live_activity_token(
         else:
             db.add(IosLiveActivityToken(
                 student_id=student_id,
+                session_id=session.id,
+                credential_fingerprint=session.credential_fingerprint,
                 token_type=payload.token_type,
                 token=token,
                 environment=payload.environment,
@@ -273,13 +299,12 @@ def unregister_ios_live_activity_token(
     payload: IosLiveActivityTokenUnregisterRequest,
     session: AppSession = Depends(require_session),
 ) -> dict[str, str]:
-    student_id = student_id_of(session)
-    if not student_id:
-        return {"status": "error", "message": "Student ID not found"}
+    student_id = _require_student_id(session)
     factory = get_sync_session_factory()
     with factory() as db:
         db.query(IosLiveActivityToken).filter_by(
             student_id=student_id,
+            session_id=session.id,
             token_type="activity",
             environment=payload.environment,
             activity_id=payload.activity_id,
@@ -294,13 +319,12 @@ def unregister_ios_live_activity_tokens(
     payload: IosLiveActivityTokensUnregisterRequest | None = None,
     session: AppSession = Depends(require_session),
 ) -> dict[str, str]:
-    student_id = student_id_of(session)
-    if not student_id:
-        return {"status": "error", "message": "Student ID not found"}
+    student_id = _require_student_id(session)
     factory = get_sync_session_factory()
     with factory() as db:
         query = db.query(IosLiveActivityToken).filter(
-            IosLiveActivityToken.student_id == student_id
+            IosLiveActivityToken.student_id == student_id,
+            IosLiveActivityToken.session_id == session.id,
         )
         if payload is not None and payload.device_id:
             query = query.filter(IosLiveActivityToken.device_id == payload.device_id)
@@ -314,6 +338,8 @@ async def test_push(
     request: Request,
     session: AppSession = Depends(require_session),
 ) -> dict[str, str]:
+    if not get_settings().debug:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
     try:
         body = await request.json()
     except Exception:
@@ -361,16 +387,8 @@ def poll_push(
     request: Request,
     session: AppSession = Depends(require_session),
 ) -> dict[str, list[dict]]:
-    try:
-        manager = request.app.state.ws_manager
-        return {"messages": manager.drain(session.id)}
-    except Exception:
-        import logging
-        _logger = logging.getLogger(__name__)
-        _logger.warning(
-            "Error draining push messages for session %s", session.id[:8], exc_info=True
-        )
-        return {"messages": []}
+    manager = request.app.state.ws_manager
+    return {"messages": manager.drain(session.id)}
 
 
 def _copy_live_update_fields(source: dict, target: dict) -> None:

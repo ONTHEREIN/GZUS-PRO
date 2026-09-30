@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from app.database import (
     AdminAuditLog,
     AdminNotice,
+    AdminUser,
     LoginCarouselSlide,
     ShiplyExportJob,
     WxArticle,
@@ -25,9 +26,25 @@ from app.shiply_content import (
     ShiplyContentExportError,
     build_home_content_bundle,
     build_login_content_bundle,
+    download_cover_image,
 )
 from app.shiply_export_jobs import reconcile_shiply_export_jobs
 from app.shiply_export_jobs import create_or_get_shiply_export_job
+
+
+@pytest.mark.parametrize("url", [
+    "http://mmbiz.qpic.cn/cover.jpg",
+    "https://127.0.0.1/internal",
+    "https://mmbiz.qpic.cn.evil.test/cover.jpg",
+    "https://mmbiz.qpic.cn:8443/cover.jpg",
+])
+def test_cover_download_rejects_untrusted_origin_before_request(monkeypatch, url):
+    def unexpected_client(*_args, **_kwargs):
+        raise AssertionError("非法封面地址不能触发 HTTP 请求")
+
+    monkeypatch.setattr("app.shiply_content.httpx.Client", unexpected_client)
+    with pytest.raises(ShiplyContentExportError, match="仅支持微信"):
+        download_cover_image(url)
 
 
 class _FakeSchoolClient:
@@ -53,6 +70,9 @@ def _authed_session(monkeypatch):
     )
     monkeypatch.setattr(app.state.sessions, "get", lambda session_id, touch=True: session)
     monkeypatch.setattr(app.state.sessions, "touch", lambda session_id: None)
+    with get_sync_session_factory()() as db:
+        db.add(AdminUser(student_id="20240001", role="admin"))
+        db.commit()
     return {"X-Session-Id": session.id}
 
 
@@ -270,6 +290,7 @@ def test_notices_include_public_false_only_returns_student_items(monkeypatch):
         id="personal-notice-session",
         client=_FakeSchoolClient(),
         student_name="测试用户",
+        student_account="20240001",
     )
     monkeypatch.setattr(app.state.sessions, "get", lambda session_id, touch=True: session)
     monkeypatch.setattr(app.state.sessions, "touch", lambda session_id: None)

@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 
 from app.database import LoginCarouselSlide, get_sync_session_factory
+from app.image_media import SAFE_IMAGE_MIME_TYPES
 
 router = APIRouter(prefix="/content", tags=["content"])
 
@@ -53,6 +54,8 @@ def login_slide_image(slide_id: int) -> Response:
         )
         if row is None:
             raise HTTPException(status_code=404, detail="轮播图不存在")
+        if row.image_mime not in SAFE_IMAGE_MIME_TYPES:
+            raise HTTPException(status_code=404, detail="图片格式不受支持")
         try:
             content = base64.b64decode(row.image_data, validate=True)
         except ValueError as exc:

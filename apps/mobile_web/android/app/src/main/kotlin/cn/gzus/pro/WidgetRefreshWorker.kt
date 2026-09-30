@@ -17,7 +17,10 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
-import java.util.Calendar
+import java.time.Instant
+import java.time.LocalDateTime
+import java.time.ZoneId
+import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 private const val WIDGET_REFRESH_WORK_NAME = "gzus-widget-refresh"
@@ -33,12 +36,17 @@ object WidgetRefreshScheduler {
     private const val KEY_WEEK = "week"
     private const val KEY_ETAG = "etag"
     private const val KEY_LAST_TRIGGER = "lastTrigger"
+    private const val KEY_GENERATION = "generation"
+    private const val KEY_SCHEDULE_CONTEXT = "scheduleContext"
+    private const val KEY_FIRST_WEEK_START = "firstWeekStart"
 
-    fun configure(context: Context, baseUrl: String, sessionId: String, year: Int, term: Int, week: Int) {
+    fun configure(context: Context, baseUrl: String, sessionId: String, year: Int, term: Int, week: Int, scheduleContext: String, firstWeekStart: Long): Unit = WidgetRefreshTransactions.update {
         require(baseUrl.isNotBlank()) { "组件刷新 API 地址不能为空" }
         require(sessionId.isNotBlank()) { "组件刷新会话不能为空" }
         require(year > 0) { "组件刷新学年无效：$year" }
         require(term in 1..2) { "组件刷新学期无效：$term" }
+        require(firstWeekStart > 0) { "组件刷新缺少开学日期" }
+        JSONObject(scheduleContext)
         require(week > 0) { "组件刷新周次无效：$week" }
         prefs(context).edit()
             .putString(KEY_BASE_URL, baseUrl.trimEnd('/'))
@@ -46,11 +54,16 @@ object WidgetRefreshScheduler {
             .putInt(KEY_YEAR, year)
             .putInt(KEY_TERM, term)
             .putInt(KEY_WEEK, week)
+            .putString(KEY_SCHEDULE_CONTEXT, scheduleContext)
+            .putLong(KEY_FIRST_WEEK_START, firstWeekStart)
+            .putString(KEY_GENERATION, UUID.randomUUID().toString())
+            .remove(KEY_ETAG)
+            .remove(KEY_LAST_TRIGGER)
             .apply()
         enqueue(context)
     }
 
-    fun replaceSession(context: Context, baseUrl: String, sessionId: String) {
+    fun replaceSession(context: Context, baseUrl: String, sessionId: String): Unit = WidgetRefreshTransactions.update {
         val existing = prefs(context)
         configure(
             context = context,
@@ -59,20 +72,26 @@ object WidgetRefreshScheduler {
             year = existing.getInt(KEY_YEAR, 0),
             term = existing.getInt(KEY_TERM, 0),
             week = existing.getInt(KEY_WEEK, 0),
+            scheduleContext = existing.getString(KEY_SCHEDULE_CONTEXT, null) ?: throw IllegalArgumentException("组件刷新缺少课表上下文"),
+            firstWeekStart = existing.getLong(KEY_FIRST_WEEK_START, 0L),
         )
     }
 
-    fun clear(context: Context) {
+    fun clear(context: Context): Unit = WidgetRefreshTransactions.update {
         prefs(context).edit().clear().apply()
-        WorkManager.getInstance(context).cancelUniqueWork(WIDGET_REFRESH_WORK_NAME)
+        applicationWidgetPrefs(context).edit().clear().apply()
+        val workManager = WorkManager.getInstance(context)
+        workManager.cancelUniqueWork(WIDGET_REFRESH_WORK_NAME)
+        workManager.cancelUniqueWork(WIDGET_REFRESH_ONCE_WORK_NAME)
+        HomeWidgetProvider.updateAll(context)
     }
 
-    fun triggerIfDue(context: Context) {
-        if (configuration(context) == null) return
+    fun triggerIfDue(context: Context): Unit = WidgetRefreshTransactions.update {
+        if (configuration(context) == null) return@update
         val preferences = prefs(context)
         val now = System.currentTimeMillis()
         val last = preferences.getLong(KEY_LAST_TRIGGER, 0L)
-        if (now - last < 25 * 60 * 1000L) return
+        if (now - last < 25 * 60 * 1000L) return@update
         preferences.edit().putLong(KEY_LAST_TRIGGER, now).apply()
         WorkManager.getInstance(context).enqueueUniqueWork(
             WIDGET_REFRESH_ONCE_WORK_NAME,
@@ -83,19 +102,49 @@ object WidgetRefreshScheduler {
         )
     }
 
-    internal fun configuration(context: Context): WidgetRefreshConfiguration? {
+    internal fun configuration(context: Context): WidgetRefreshConfiguration? = WidgetRefreshTransactions.update {
         val prefs = prefs(context)
-        val baseUrl = prefs.getString(KEY_BASE_URL, null) ?: return null
-        val sessionId = prefs.getString(KEY_SESSION_ID, null) ?: return null
+        val baseUrl = prefs.getString(KEY_BASE_URL, null) ?: return@update null
+        val sessionId = prefs.getString(KEY_SESSION_ID, null) ?: return@update null
+        val generation = prefs.getString(KEY_GENERATION, null) ?: return@update null
+        val scheduleContext = prefs.getString(KEY_SCHEDULE_CONTEXT, null) ?: return@update null
+        val firstWeekStart = prefs.getLong(KEY_FIRST_WEEK_START, 0L)
         val year = prefs.getInt(KEY_YEAR, 0)
         val term = prefs.getInt(KEY_TERM, 0)
         val week = prefs.getInt(KEY_WEEK, 0)
-        if (baseUrl.isBlank() || sessionId.isBlank() || year <= 0 || term !in 1..2 || week <= 0) return null
-        return WidgetRefreshConfiguration(baseUrl, sessionId, year, term, week, prefs.getString(KEY_ETAG, null))
+        if (baseUrl.isBlank() || sessionId.isBlank() || year <= 0 || term !in 1..2 || week <= 0 || firstWeekStart <= 0) return@update null
+        WidgetRefreshConfiguration(baseUrl, sessionId, year, term, week, prefs.getString(KEY_ETAG, null), generation, scheduleContext, firstWeekStart)
     }
+
+    internal fun commitResponse(context: Context, requestedConfiguration: WidgetRefreshConfiguration, persist: () -> Unit): Boolean =
+        WidgetRefreshTransactions.commit(requestedConfiguration.generation, { configuration(context)?.generation }, persist)
 
     internal fun saveEtag(context: Context, etag: String?) {
         prefs(context).edit().putString(KEY_ETAG, etag).apply()
+    }
+
+    internal fun saveSchedule(
+        editor: android.content.SharedPreferences.Editor,
+        courses: org.json.JSONArray,
+        configuration: WidgetRefreshConfiguration,
+    ) {
+        val zone = ZoneId.systemDefault()
+        val firstWeekStart = Instant.ofEpochMilli(configuration.firstWeekStart).atZone(zone).toLocalDate()
+        val projected = projectWidgetSchedule(courses, firstWeekStart, LocalDateTime.now(zone), zone)
+        for (key in projected.keys()) {
+            if (key.endsWith("EpochMillis")) editor.putLong(key, projected.getLong(key))
+            else editor.putString(key, projected.getString(key))
+        }
+    }
+
+    internal fun refreshCachedSchedule(context: Context): Unit = WidgetRefreshTransactions.update {
+        val configuration = configuration(context) ?: return@update
+        val preferences = applicationWidgetPrefs(context)
+        val raw = preferences.getString("effectiveCoursesJson", null)
+            ?: throw IllegalStateException("组件刷新缺少生效课程缓存")
+        val editor = preferences.edit()
+        saveSchedule(editor, org.json.JSONArray(raw), configuration)
+        editor.apply()
     }
 
     private fun enqueue(context: Context) {
@@ -116,6 +165,9 @@ object WidgetRefreshScheduler {
         EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
         EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
     )
+
+    private fun applicationWidgetPrefs(context: Context) =
+        context.getSharedPreferences(WIDGET_HOME_PREFS, Context.MODE_PRIVATE)
 }
 
 internal data class WidgetRefreshConfiguration(
@@ -125,6 +177,9 @@ internal data class WidgetRefreshConfiguration(
     val term: Int,
     val week: Int,
     val etag: String?,
+    val generation: String,
+    val scheduleContext: String,
+    val firstWeekStart: Long,
 )
 
 class WidgetRefreshWorker(
@@ -133,26 +188,44 @@ class WidgetRefreshWorker(
 ) : CoroutineWorker(appContext, workerParams) {
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         val configuration = WidgetRefreshScheduler.configuration(applicationContext) ?: return@withContext Result.success()
-        val connection = (URL("${configuration.baseUrl}/widget-snapshot?year=${configuration.year}&term=${configuration.term}&week=${configuration.week}")
+        val connection = (URL("${configuration.baseUrl}/widget-snapshot")
             .openConnection() as HttpURLConnection).apply {
-            requestMethod = "GET"
+            requestMethod = "POST"
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
             connectTimeout = 10_000
             readTimeout = 15_000
             setRequestProperty("X-Session-Id", configuration.sessionId)
             configuration.etag?.let { setRequestProperty("If-None-Match", it) }
         }
         try {
+            connection.outputStream.use { it.write(configuration.scheduleContext.toByteArray(Charsets.UTF_8)) }
             when (val status = connection.responseCode) {
-                HttpURLConnection.HTTP_NOT_MODIFIED -> Result.success()
+                HttpURLConnection.HTTP_NOT_MODIFIED -> {
+                    WidgetRefreshScheduler.commitResponse(applicationContext, configuration) {
+                        val prefs = applicationContext.getSharedPreferences(WIDGET_HOME_PREFS, Context.MODE_PRIVATE)
+                        val cached = prefs.getString("effectiveCoursesJson", null) ?: throw IllegalStateException("组件 304 响应缺少生效课程缓存")
+                        val editor = prefs.edit()
+                        WidgetRefreshScheduler.saveSchedule(editor, org.json.JSONArray(cached), configuration)
+                        editor.apply()
+                        HomeWidgetProvider.updateAll(applicationContext)
+                    }
+                    Result.success()
+                }
                 HttpURLConnection.HTTP_UNAUTHORIZED -> {
-                    WidgetRefreshScheduler.clear(applicationContext)
+                    WidgetRefreshScheduler.commitResponse(applicationContext, configuration) {
+                        WidgetRefreshScheduler.clear(applicationContext)
+                    }
                     Result.failure()
                 }
                 HttpURLConnection.HTTP_OK -> {
                     val body = connection.inputStream.bufferedReader().use { it.readText() }
-                    saveSnapshot(JSONObject(body), configuration.week)
-                    WidgetRefreshScheduler.saveEtag(applicationContext, connection.getHeaderField("ETag"))
-                    HomeWidgetProvider.updateAll(applicationContext)
+                    val snapshot = JSONObject(body)
+                    WidgetRefreshScheduler.commitResponse(applicationContext, configuration) {
+                        saveSnapshot(snapshot, configuration)
+                        WidgetRefreshScheduler.saveEtag(applicationContext, connection.getHeaderField("ETag"))
+                        HomeWidgetProvider.updateAll(applicationContext)
+                    }
                     Result.success()
                 }
                 in 500..599 -> Result.retry()
@@ -163,14 +236,16 @@ class WidgetRefreshWorker(
         }
     }
 
-    private fun saveSnapshot(snapshot: JSONObject, currentWeek: Int) {
+    private fun saveSnapshot(snapshot: JSONObject, configuration: WidgetRefreshConfiguration) {
+        require(snapshot.getString("scheduleFormat") == "dated-v1") { "组件快照不是带日期的生效课表" }
         val modules = snapshot.optJSONObject("modules") ?: throw IllegalStateException("组件快照缺少 modules")
         val prefs = applicationContext.getSharedPreferences(WIDGET_HOME_PREFS, Context.MODE_PRIVATE)
         val editor = prefs.edit().putString("widgetSnapshotPayload", snapshot.toString())
-        modules.optJSONObject("schedule")?.optJSONArray("data")?.let { schedule ->
-            saveWeeklySchedule(editor, schedule, currentWeek)
-            saveTodaySchedule(editor, schedule, currentWeek)
+        val scheduleModule = modules.getJSONObject("schedule")
+        if (scheduleModule.getString("status") == "error") {
+            throw IllegalStateException("组件课表读取失败：${scheduleModule.optString("error")}")
         }
+        WidgetRefreshScheduler.saveSchedule(editor, scheduleModule.getJSONArray("data"), configuration)
         modules.optJSONObject("grades")?.optJSONArray("data")?.let { grades ->
             editor.putString("gradeItemsJson", grades.toString())
             editor.putString("gradeCount", grades.length().toString())
@@ -193,119 +268,6 @@ class WidgetRefreshWorker(
         editor.apply()
     }
 
-    private fun saveTodaySchedule(
-        editor: android.content.SharedPreferences.Editor,
-        courses: org.json.JSONArray,
-        currentWeek: Int,
-    ) {
-        val now = Calendar.getInstance()
-        val weekday = ((now.get(Calendar.DAY_OF_WEEK) + 5) % 7) + 1
-        val today = buildList {
-            for (index in 0 until courses.length()) {
-                val course = courses.optJSONObject(index) ?: continue
-                if (course.optInt("weekday", -1) != weekday || !occursInWeek(course.optString("weeks"), currentWeek)) continue
-                val startSection = course.optInt("startSection", 0)
-                val endSection = course.optInt("endSection", startSection)
-                if (startSection !in 1..SECTION_TIMES.size || endSection !in 1..SECTION_TIMES.size) continue
-                val start = SECTION_TIMES[startSection - 1].first
-                val end = SECTION_TIMES[endSection - 1].second
-                val startMinutes = minutesOf(start)
-                val endMinutes = minutesOf(end)
-                add(
-                    JSONObject()
-                        .put("itemKey", "${course.optString("courseId").ifBlank { course.optString("kch_id").ifBlank { course.optString("name", "课程") } }}:$weekday:$startSection")
-                        .put("week", currentWeek)
-                        .put("weekday", weekday)
-                        .put("startSection", startSection)
-                        .put("time", start)
-                        .put("name", course.optString("name", "课程"))
-                        .put("info", listOf(course.optString("classroom"), course.optString("teacher")).filter { it.isNotBlank() }.joinToString(" · "))
-                        .put("ongoing", nowMinutes(now) in startMinutes until endMinutes)
-                        .put("startMinutes", startMinutes)
-                        .put("endMinutes", endMinutes),
-                )
-            }
-        }.sortedBy { it.optInt("startMinutes") }
-        val nowValue = nowMinutes(now)
-        val next = today.firstOrNull { it.optInt("endMinutes") > nowValue }
-        val tomorrowWeekday = weekday % 7 + 1
-        val hasTomorrow = (0 until courses.length()).any { index ->
-            val course = courses.optJSONObject(index) ?: return@any false
-            course.optInt("weekday", 0) == tomorrowWeekday &&
-                occursInWeek(course.optString("weeks"), currentWeek)
-        }
-        val noTodayOrTomorrow = today.isEmpty() && !hasTomorrow
-        val nextTitle = if (noTodayOrTomorrow) "今明无课" else next?.optString("name") ?: "暂无下一节课"
-        editor
-            .putString("todayCoursesJson", org.json.JSONArray(today).toString())
-            .putString("todayTitle", if (today.isEmpty()) "今日无课" else "今日 ${today.size} 节课")
-            .putString("todayMeta", "第${currentWeek}周 · ${today.size} 节课")
-            .putString("todayItems", org.json.JSONArray(today.map { "${it.optString("time")} ${it.optString("name")}" }).toString())
-            .putString("nextTitle", nextTitle)
-            .putString("nextTime", if (noTodayOrTomorrow) "" else next?.optString("time") ?: "")
-            .putString("nextMeta", if (noTodayOrTomorrow) "今日、明日暂无课程" else next?.let { "${it.optString("time")} · ${it.optString("info")}" } ?: "今天没有更多课程")
-            .putString("nextDetail", if (next == null || noTodayOrTomorrow) "点击查看课表" else if (next.optBoolean("ongoing")) "进行中" else "待开始")
-            .putString("nextClassroom", if (noTodayOrTomorrow) "" else next?.optString("info") ?: "")
-            .putString("nextTeacher", "")
-            .putString("nextStatus", when {
-                noTodayOrTomorrow || next == null -> "none"
-                next.optBoolean("ongoing") -> "ongoing"
-                else -> "upcoming"
-            })
-    }
-
-    private fun saveWeeklySchedule(
-        editor: android.content.SharedPreferences.Editor,
-        courses: org.json.JSONArray,
-        currentWeek: Int,
-    ) {
-        val result = org.json.JSONArray()
-        for (index in 0 until courses.length()) {
-            val course = courses.optJSONObject(index) ?: continue
-            val weekday = course.optInt("weekday", 0)
-            val startSection = course.optInt("startSection", 0)
-            val endSection = course.optInt("endSection", startSection)
-            if (weekday !in 1..7 || startSection !in 1..SECTION_TIMES.size || endSection !in startSection..SECTION_TIMES.size) continue
-            if (!occursInWeek(course.optString("weeks"), currentWeek)) continue
-            val source = course.optString("courseId").ifBlank {
-                course.optString("kch_id").ifBlank { course.optString("courseCode").ifBlank { course.optString("name", "课程") } }
-            }
-            result.put(
-                JSONObject()
-                    .put("itemKey", "$source:$weekday:$startSection")
-                    .put("week", currentWeek)
-                    .put("weekday", weekday)
-                    .put("startSection", startSection)
-                    .put("endSection", endSection)
-                    .put("time", "${SECTION_TIMES[startSection - 1].first}-${SECTION_TIMES[endSection - 1].second}")
-                    .put("name", course.optString("name", "课程"))
-                    .put("classroom", course.optString("classroom"))
-                    .put("teacher", course.optString("teacher"))
-                    .put("ongoing", false),
-            )
-        }
-        editor.putString("weeklyCoursesJson", result.toString())
-    }
-
-    private fun occursInWeek(spec: String, week: Int): Boolean {
-        if (spec.isBlank()) return true
-        if (spec.contains("单") && week % 2 == 0) return false
-        if (spec.contains("双") && week % 2 != 0) return false
-        val ranges = Regex("(\\d+)\\s*[-~至]\\s*(\\d+)").findAll(spec)
-            .map { it.groupValues[1].toInt()..it.groupValues[2].toInt() }
-            .toList()
-        if (ranges.any { week in it }) return true
-        return Regex("\\d+").findAll(spec).any { it.value.toInt() == week }
-    }
-
-    private fun minutesOf(value: String): Int {
-        val parts = value.split(':')
-        return parts[0].toInt() * 60 + parts[1].toInt()
-    }
-
-    private fun nowMinutes(calendar: Calendar): Int =
-        calendar.get(Calendar.HOUR_OF_DAY) * 60 + calendar.get(Calendar.MINUTE)
-
     private fun averageOf(items: org.json.JSONArray, key: String): Double? {
         val values = buildList {
             for (index in 0 until items.length()) {
@@ -315,10 +277,3 @@ class WidgetRefreshWorker(
         return values.takeIf { it.isNotEmpty() }?.average()
     }
 }
-
-private val SECTION_TIMES = listOf(
-    "09:00" to "09:40", "09:40" to "10:20", "10:40" to "11:20", "11:20" to "12:00",
-    "12:30" to "13:10", "13:10" to "13:50", "14:00" to "14:40", "14:40" to "15:20",
-    "15:30" to "16:10", "16:10" to "16:50", "17:00" to "17:40", "17:40" to "18:20",
-    "19:00" to "19:40", "19:40" to "20:20", "20:30" to "21:10", "21:10" to "21:50",
-)

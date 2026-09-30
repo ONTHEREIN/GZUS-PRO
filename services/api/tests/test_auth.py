@@ -5,14 +5,173 @@ from fastapi.testclient import TestClient
 
 from app.cas_auto_login import CasLoginResult
 from app.config import get_settings
+from app.database import (
+    AppSessionModel,
+    BackgroundNotificationProfile,
+    SchoolAccountSession,
+    WebPushSubscription,
+    get_sync_session_factory,
+)
+from app.demo_data import DemoAcademicClient, DEMO_STUDENT_ID, DEMO_STUDENT_NAME
 from app.main import create_app
 from app.routes import auth as auth_routes
+from app.rate_limit import limiter
 from app.sessions import (
     credential_fingerprint,
     decrypt_credential_payload,
     decrypt_credentials,
+    decrypt_sso_session_resume_token,
     encrypt_credentials,
+    encrypt_device_credentials,
+    encrypt_sso_session_resume_token,
 )
+
+
+def test_logout_revokes_device_credential_and_background_access() -> None:
+    app = create_app()
+    credential_id = "logout-device"
+    fingerprint = credential_fingerprint(credential_id)
+    with TestClient(app) as client:
+        session = app.state.sessions.create(
+            DemoAcademicClient(),
+            DEMO_STUDENT_NAME,
+            student_account=DEMO_STUDENT_ID,
+            credential_fingerprint=fingerprint,
+            is_demo=True,
+        )
+        second_session = app.state.sessions.create(
+            DemoAcademicClient(),
+            DEMO_STUDENT_NAME,
+            student_account=DEMO_STUDENT_ID,
+            credential_fingerprint=fingerprint,
+            is_demo=True,
+        )
+        app.state.ws_manager.enqueue(second_session.id, {"type": "new_notice"})
+        with get_sync_session_factory()() as db:
+            db.add(SchoolAccountSession(student_id=DEMO_STUDENT_ID))
+            db.add(BackgroundNotificationProfile(
+                student_id=DEMO_STUDENT_ID,
+                credential_fingerprint=fingerprint,
+                encrypted_credentials="test-token",
+            ))
+            db.commit()
+
+        logout = client.post("/auth/logout", headers={"X-Session-Id": session.id})
+        assert logout.status_code == 200, logout.text
+        assert app.state.sessions.is_credential_revoked(fingerprint)
+        assert app.state.ws_manager.drain(second_session.id) == []
+        assert client.get("/auth/student-info", headers={"X-Session-Id": second_session.id}).status_code == 401
+        resume = client.post("/auth/session-relogin", json={
+            "credentialToken": encrypt_sso_session_resume_token(
+                DEMO_STUDENT_ID, credential_id, get_settings().credential_encryption_key
+            ),
+        })
+
+    assert logout.status_code == 200
+    assert app.state.sessions.is_credential_revoked(fingerprint)
+    assert resume.status_code == 401
+    with get_sync_session_factory()() as db:
+        assert db.query(BackgroundNotificationProfile).filter_by(student_id=DEMO_STUDENT_ID).first() is None
+        assert db.query(SchoolAccountSession).count() == 0
+
+
+@pytest.mark.parametrize("token_kind", ["password", "sso"])
+def test_logout_revokes_device_credential_after_session_expired(token_kind: str) -> None:
+    app = create_app()
+    credential_id = "expired-device"
+    fingerprint = credential_fingerprint(credential_id)
+    key = get_settings().credential_encryption_key
+    token = (
+        encrypt_device_credentials(DEMO_STUDENT_ID, "test-password", credential_id, key)
+        if token_kind == "password"
+        else encrypt_sso_session_resume_token(DEMO_STUDENT_ID, credential_id, key)
+    )
+    with TestClient(app) as client:
+        session = app.state.sessions.create(
+            DemoAcademicClient(), DEMO_STUDENT_NAME,
+            student_account=DEMO_STUDENT_ID,
+            credential_fingerprint=fingerprint,
+            is_demo=True,
+        )
+        with get_sync_session_factory()() as db:
+            db.add(BackgroundNotificationProfile(
+                student_id=DEMO_STUDENT_ID,
+                credential_fingerprint=fingerprint,
+                encrypted_credentials="test-token",
+            ))
+            db.add(WebPushSubscription(
+                student_id=DEMO_STUDENT_ID,
+                session_id=session.id,
+                credential_fingerprint=fingerprint,
+                endpoint="https://fcm.googleapis.com/expired-device",
+                p256dh="key", auth="auth",
+            ))
+            db.query(AppSessionModel).filter_by(id=session.id).delete()
+            db.commit()
+
+        response = client.post(
+            "/auth/logout",
+            json={"credentialToken": token},
+            headers={"X-Session-Id": session.id},
+        )
+        assert response.status_code == 200, response.text
+        assert app.state.sessions.is_credential_revoked(fingerprint)
+        if token_kind == "sso":
+            relogin = client.post("/auth/session-relogin", json={"credentialToken": token})
+        else:
+            relogin = client.post("/auth/relogin", json={"credentialToken": token})
+        assert relogin.status_code == 401
+
+    with get_sync_session_factory()() as db:
+        assert db.query(BackgroundNotificationProfile).count() == 0
+        assert db.query(WebPushSubscription).count() == 0
+
+
+def test_logout_rejects_credential_from_another_device() -> None:
+    app = create_app()
+    first_fingerprint = credential_fingerprint("first-device")
+    second_fingerprint = credential_fingerprint("second-device")
+    with TestClient(app) as client:
+        first = app.state.sessions.create(
+            DemoAcademicClient(), student_account=DEMO_STUDENT_ID,
+            credential_fingerprint=first_fingerprint, is_demo=True,
+        )
+        second = app.state.sessions.create(
+            DemoAcademicClient(), student_account=DEMO_STUDENT_ID,
+            credential_fingerprint=second_fingerprint, is_demo=True,
+        )
+        token = encrypt_sso_session_resume_token(
+            DEMO_STUDENT_ID, "first-device", get_settings().credential_encryption_key
+        )
+
+        response = client.post(
+            "/auth/logout",
+            json={"credentialToken": token},
+            headers={"X-Session-Id": second.id},
+        )
+
+        assert response.status_code == 403
+        assert app.state.sessions.is_credential_revoked(first_fingerprint) is False
+        assert app.state.sessions.is_credential_revoked(second_fingerprint) is False
+        assert client.get("/auth/student-info", headers={"X-Session-Id": first.id}).status_code == 200
+        assert client.get("/auth/student-info", headers={"X-Session-Id": second.id}).status_code == 200
+
+
+def test_revoked_session_cannot_read_student_info() -> None:
+    app = create_app()
+    with TestClient(app) as client:
+        session = app.state.sessions.create(
+            DemoAcademicClient(),
+            DEMO_STUDENT_NAME,
+            student_account=DEMO_STUDENT_ID,
+            is_demo=True,
+        )
+        before = client.get("/auth/student-info", headers={"X-Session-Id": session.id})
+        app.state.sessions.revoke(session.id, reason="admin_kick")
+        after = client.get("/auth/student-info", headers={"X-Session-Id": session.id})
+
+    assert before.status_code == 200
+    assert after.status_code == 401
 
 
 class SuccessfulCasConnector:
@@ -25,7 +184,7 @@ class SuccessfulCasConnector:
     ) -> None:
         assert cas_url.startswith("https://cas.gzus.edu.cn/")
         assert ehall_url == "https://ehall.gzus.edu.cn"
-        assert ehall_service_url == "http://ehall.gzus.edu.cn/shiro-cas"
+        assert ehall_service_url == "https://ehall.gzus.edu.cn/shiro-cas"
         assert timeout == 60
 
     def auto_login(self, account: str, password: str) -> CasLoginResult:
@@ -94,6 +253,23 @@ def test_sso_state_allows_frontend_redirect_once() -> None:
     assert replay_response.json()["detail"] == "SSO state 无效或已过期"
 
 
+def test_sso_start_limits_anonymous_requests() -> None:
+    limiter.reset()
+    app = create_app()
+    with TestClient(app) as client:
+        responses = [client.get("/auth/ly/start", follow_redirects=False) for _ in range(11)]
+    assert [response.status_code for response in responses] == [307] * 10 + [429]
+    limiter.reset()
+
+
+def test_sso_return_url_rejects_localhost_in_production(monkeypatch) -> None:
+    monkeypatch.setenv("DEBUG", "false")
+    get_settings.cache_clear()
+    assert auth_routes._safe_return_url("http://localhost:9999/callback") == (
+        "https://app.example.test"
+    )
+
+
 def test_native_sso_handoff_hides_ticket_and_requires_verifier(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -160,6 +336,57 @@ def test_native_sso_handoff_hides_ticket_and_requires_verifier(
         json={"code": second_code, "verifier": verifier},
     )
     assert replay_response.status_code == 401
+
+
+def test_sso_session_resume_token_rebuilds_session_from_shared_school_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app import school_session_service
+
+    app = create_app()
+    client = TestClient(app)
+    shared = school_session_service.record_authenticated_session(
+        "20240006",
+        "统一认证学生",
+        "JSESSIONID=sso-session",
+        None,
+        None,
+        None,
+    )
+    connector = CookieSchoolConnector(
+        get_settings().jw_base_url,
+        get_settings().request_timeout_seconds,
+        None,
+    )
+    connector.login_with_cookies("JSESSIONID=sso-session", "20240006")
+    monkeypatch.setattr(
+        school_session_service,
+        "_build_clients",
+        lambda row, student_id: (connector, None),
+    )
+    token = encrypt_sso_session_resume_token(
+        "20240006",
+        "sso-device",
+        get_settings().credential_encryption_key,
+    )
+
+    response = client.post(
+        "/auth/session-relogin",
+        json={"credentialToken": token},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["studentId"] == "20240006"
+    assert data["studentName"] == shared.student_name
+    assert data["credentialToken"] is None
+    assert decrypt_sso_session_resume_token(
+        data["sessionRefreshToken"],
+        get_settings().credential_encryption_key,
+    ) == ("20240006", "sso-device")
+    session = app.state.sessions.get(data["sessionId"], touch=False)
+    assert session is not None
+    assert session.credential_fingerprint == credential_fingerprint("sso-device")
 
 
 def test_expired_sso_state_and_handoff_are_rejected() -> None:
@@ -296,6 +523,33 @@ def test_relogin_upgrades_legacy_credential_and_rotates_session(
     )
     assert (account, password) == ("20240004", "auto-login-password")
     assert credential_id is not None
+
+
+def test_relogin_does_not_restore_shared_school_session_after_admin_revocation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = create_app()
+    credential_id = "revoked-during-cas"
+    fingerprint = credential_fingerprint(credential_id)
+
+    class RevokingCasConnector(SuccessfulCasConnector):
+        def auto_login(self, account: str, password: str) -> CasLoginResult:
+            app.state.sessions.revoke_credential(fingerprint, reason="admin_kick")
+            return super().auto_login(account, password)
+
+    monkeypatch.setattr("app.cas_auto_login.CasAutoLogin", RevokingCasConnector)
+    monkeypatch.setattr(auth_routes, "SchoolSdkClient", CookieSchoolConnector)
+    token = encrypt_device_credentials(
+        "20240004", "auto-login-password", credential_id,
+        get_settings().credential_encryption_key,
+    )
+    with TestClient(app) as client:
+        response = client.post("/auth/relogin", json={"credentialToken": token})
+
+    assert response.status_code == 401
+    with get_sync_session_factory()() as db:
+        assert db.query(SchoolAccountSession).count() == 0
+        assert db.query(AppSessionModel).count() == 0
 
 
 def test_relogin_preserves_credential_on_transient_cas_failure(

@@ -6,17 +6,25 @@ import '../../../schedule_utils.dart';
 /// 带起止时间的课程。
 class TimedCourse {
   const TimedCourse({
-    required this.course,
+    required this.occurrence,
     required this.start,
     required this.end,
   });
 
-  final ScheduleCourse course;
+  final ScheduleOccurrence occurrence;
+  ScheduleCourse get course => occurrence.course;
   final DateTime start;
   final DateTime end;
 
   String get timeText =>
       '${_two(start.hour)}:${_two(start.minute)}-${_two(end.hour)}:${_two(end.minute)}';
+
+  String get nextTimeText {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final day = DateTime(start.year, start.month, start.day);
+    return day == today ? timeText : '${dateText(day)} $timeText';
+  }
 
   bool get isOngoing {
     final now = DateTime.now();
@@ -25,33 +33,27 @@ class TimedCourse {
 }
 
 List<TimedCourse> homeTimedCourses(
-  List<ScheduleCourse> courses, {
-  required int currentWeek,
-  required DateTime firstWeekStart,
-}) {
+  List<ScheduleOccurrence> occurrences,
+) {
   final result = <TimedCourse>[];
-  for (final course in courses) {
-    final weekday = course.weekday;
+  for (final occurrence in occurrences) {
+    final course = occurrence.course;
     final startSection = course.startSection;
     final endSection = course.endSection ?? startSection;
-    if (weekday == null ||
-        startSection == null ||
+    if (startSection == null ||
         endSection == null ||
-        weekday < 1 ||
-        weekday > 7 ||
         startSection < 1 ||
         endSection < 1 ||
         startSection > scheduleTimes.length ||
         endSection > scheduleTimes.length ||
-        !course.occursInWeek(currentWeek)) {
+        endSection < startSection) {
       continue;
     }
-    final day =
-        firstWeekStart.add(Duration(days: (currentWeek - 1) * 7 + weekday - 1));
+    final day = occurrence.date;
     final startTime = _timeParts(scheduleTimes[startSection - 1].$1);
     final endTime = _timeParts(scheduleTimes[endSection - 1].$2);
     result.add(TimedCourse(
-      course: course,
+      occurrence: occurrence,
       start: DateTime(
         day.year,
         day.month,
@@ -72,8 +74,7 @@ List<TimedCourse> homeTimedCourses(
   return result;
 }
 
-List<TimedCourse> todayTimedCourses(List<TimedCourse> courses) {
-  final now = DateTime.now();
+List<TimedCourse> todayTimedCourses(List<TimedCourse> courses, DateTime now) {
   return courses
       .where((item) =>
           item.start.year == now.year &&
@@ -82,8 +83,7 @@ List<TimedCourse> todayTimedCourses(List<TimedCourse> courses) {
       .toList();
 }
 
-TimedCourse? nextTimedCourse(List<TimedCourse> courses) {
-  final now = DateTime.now();
+TimedCourse? nextTimedCourse(List<TimedCourse> courses, DateTime now) {
   final current = courses.where(
     (item) => !now.isBefore(item.start) && now.isBefore(item.end),
   );

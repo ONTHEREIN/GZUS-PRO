@@ -419,6 +419,9 @@ class BackgroundService : Service() {
 
     private fun showPushNotification(message: JSONObject) {
         val payload = LiveUpdatePayload.fromMessage(message)
+        if (payload.eventKey.isNotBlank() && !claimNotificationEvent(payload.eventKey)) {
+            return
+        }
         val title = payload.title
         val body = payload.body
         val extras = JSONObject(payload.extrasJson)
@@ -446,7 +449,7 @@ class BackgroundService : Service() {
                     progressPayload.endTimeMillis <= System.currentTimeMillis()
                 ) {
                     progressPayload.copy(
-                        endTimeMillis = System.currentTimeMillis() + 30 * 60 * 1000L,
+                        endTimeMillis = System.currentTimeMillis() + 15 * 60 * 1000L,
                     )
                 } else {
                     progressPayload
@@ -514,9 +517,49 @@ class BackgroundService : Service() {
             setRequestProperty("X-Installation-Id", installationId)
         }
         try {
-            connection.responseCode
-        } catch (_: Exception) {
-            // 下次轮询会再次获取未确认事件。
+            val status = connection.responseCode
+            if (status !in 200..299) {
+                android.util.Log.w("BackgroundService", "通知展示确认失败: HTTP $status")
+            }
+        } catch (error: Exception) {
+            android.util.Log.w("BackgroundService", "通知展示确认请求失败", error)
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private fun claimNotificationEvent(eventId: String): Boolean {
+        if (eventId.isBlank()) return true
+        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val apiBaseUrl = prefs.getString(KEY_API_BASE_URL, null)?.trimEnd('/') ?: return false
+        val sessionId = prefs.getString(KEY_SESSION_ID, null)?.takeIf { it.isNotBlank() } ?: return false
+        val installationId = prefs.getString(KEY_INSTALLATION_ID, null)?.takeIf { it.isNotBlank() }
+            ?: return false
+        val connection = (URL(
+            "$apiBaseUrl/notifications/events/${Uri.encode(eventId)}/claim"
+        ).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 5000
+            readTimeout = 5000
+            doOutput = true
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("X-Session-Id", sessionId)
+            setRequestProperty("X-Installation-Id", installationId)
+        }
+        return try {
+            val status = connection.responseCode
+            if (status !in 200..299) {
+                android.util.Log.w("BackgroundService", "通知领取失败: HTTP $status")
+                false
+            } else {
+                JSONObject(
+                    BufferedReader(InputStreamReader(connection.inputStream, Charsets.UTF_8))
+                        .use { it.readText() },
+                ).optBoolean("claimed", false)
+            }
+        } catch (error: Exception) {
+            android.util.Log.w("BackgroundService", "通知领取请求失败", error)
+            false
         } finally {
             connection.disconnect()
         }

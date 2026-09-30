@@ -7,7 +7,6 @@
     android:updatePeriodMillis="1800000"
     android:initialLayout="@layout/widget_weekly_schedule"
     android:description="@string/widget_desc_weekly_schedule"
-    android:previewImage="@drawable/widget_preview_today_schedule"
-    android:previewLayout="@layout/widget_weekly_schedule"
+    android:previewImage="@drawable/widget_preview_weekly_schedule"
     android:resizeMode="horizontal|vertical"
     android:widgetCategory="home_screen" />

@@ -45,23 +45,19 @@ class BackgroundService {
 
   static Future<void> updateCourseReminders({
     required String coursesJson,
-    String effectiveOccurrencesJson = '[]',
-    int beforeStartMinutes = 10,
-    int beforeEndMinutes = 5,
-    String firstWeekStart = '',
+    required String effectiveOccurrencesJson,
+    required int beforeStartMinutes,
+    required int beforeEndMinutes,
+    required String firstWeekStart,
   }) async {
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
-    try {
-      await _channel.invokeMethod('updateCourseReminders', {
-        'coursesJson': coursesJson,
-        'effectiveOccurrencesJson': effectiveOccurrencesJson,
-        'beforeStartMinutes': beforeStartMinutes,
-        'beforeEndMinutes': beforeEndMinutes,
-        'firstWeekStart': firstWeekStart,
-      });
-    } on PlatformException {
-      // Native bridge is unavailable on unsupported Android builds.
-    }
+    await _channel.invokeMethod('updateCourseReminders', {
+      'coursesJson': coursesJson,
+      'effectiveOccurrencesJson': effectiveOccurrencesJson,
+      'beforeStartMinutes': beforeStartMinutes,
+      'beforeEndMinutes': beforeEndMinutes,
+      'firstWeekStart': firstWeekStart,
+    });
   }
 
   static Future<void> cancelCourseReminders() async {

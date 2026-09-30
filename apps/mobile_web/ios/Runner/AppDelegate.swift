@@ -35,25 +35,6 @@ import WidgetKit
   private let selectedCalendarDefaultsKey = "onegzus.selected.calendar.identifier"
   private let remotePushTokenDefaultsKey = "remote_push_token"
   private let notificationOpenDefaultsKey = "notification_open_extras"
-  /// 课程节次时间表（与 lib/schedule_utils.dart 的 scheduleTimes 保持一致）
-  private let widgetSectionTimes: [(String, String)] = [
-    ("09:00", "09:40"),
-    ("09:40", "10:20"),
-    ("10:40", "11:20"),
-    ("11:20", "12:00"),
-    ("12:30", "13:10"),
-    ("13:10", "13:50"),
-    ("14:00", "14:40"),
-    ("14:40", "15:20"),
-    ("15:30", "16:10"),
-    ("16:10", "16:50"),
-    ("17:00", "17:40"),
-    ("17:40", "18:20"),
-    ("19:00", "19:40"),
-    ("19:40", "20:20"),
-    ("20:30", "21:10"),
-    ("21:10", "21:50"),
-  ]
   private var liquidGlassChannel: FlutterMethodChannel?
   private var homeWidgets: FlutterMethodChannel?
   private weak var nativeLiquidTabBar: NativeLiquidTabBarView?
@@ -588,6 +569,20 @@ import WidgetKit
   }
 
   private func handleHomeWidgetMethod(call: FlutterMethodCall, result: @escaping FlutterResult) {
+    do {
+      if ["update", "updateScheduleContext", "replaceRefreshSession", "clearRefreshConfiguration"].contains(call.method) {
+        try WidgetSnapshotStore.withStorageAccess { _ in
+          try handleHomeWidgetStorageMethod(call: call, result: result)
+        }
+      } else {
+        try handleHomeWidgetStorageMethod(call: call, result: result)
+      }
+    } catch {
+      result(FlutterError(code: "WIDGET_STORAGE_FAILED", message: "桌面组件存储失败：\(error.localizedDescription)", details: nil))
+    }
+  }
+
+  private func handleHomeWidgetStorageMethod(call: FlutterMethodCall, result: @escaping FlutterResult) throws {
     if call.method == "consumeInitialTab" {
       let tab = UserDefaults.standard.string(forKey: pendingWidgetTabDefaultsKey)
       UserDefaults.standard.removeObject(forKey: pendingWidgetTabDefaultsKey)
@@ -602,7 +597,7 @@ import WidgetKit
       return
     }
     if call.method == "clearRefreshConfiguration" {
-      clearWidgetRefreshConfiguration()
+      try clearWidgetRefreshConfiguration()
       result(true)
       return
     }
@@ -611,7 +606,31 @@ import WidgetKit
         result(FlutterError(code: "INVALID_ARGUMENT", message: "组件刷新会话参数无效", details: nil))
         return
       }
-      configureWidgetRefresh(values: values, preservePeriod: true, result: result)
+      if try configureWidgetRefresh(values: values, preservePeriod: true, result: result) {
+        result(true)
+      }
+      return
+    }
+    if call.method == "updateScheduleContext" {
+      guard let values = call.arguments as? [String: Any],
+            let existing = WidgetSnapshotStore.configuration(),
+            values["widgetApiBaseUrl"] as? String == existing.baseURL,
+            values["widgetSessionId"] as? String == existing.sessionID,
+            values["widgetYear"] as? Int == existing.year,
+            values["widgetTerm"] as? Int == existing.term,
+            let raw = values["effectiveCoursesJson"] as? String,
+            let data = raw.data(using: .utf8) else {
+        result(FlutterError(code: "WIDGET_SCOPE_CHANGED", message: "组件配置尚未就绪或账号、学期已切换，请返回首页刷新", details: nil))
+        return
+      }
+      let courses = try JSONDecoder().decode([WidgetCourseTimelineItem].self, from: data)
+      guard try configureWidgetRefresh(values: values, preservePeriod: false, result: result),
+            let configuration = WidgetSnapshotStore.configuration() else { return }
+      try WidgetSnapshotStore.withStorageAccess { defaults in
+        try WidgetSnapshotStore.storeSchedule(courses, configuration: configuration, defaults: defaults)
+      }
+      if #available(iOS 14.0, *) { WidgetCenter.shared.reloadAllTimelines() }
+      result(true)
       return
     }
     guard call.method == "update" else {
@@ -630,11 +649,12 @@ import WidgetKit
       result(FlutterError(code: "APP_GROUP_UNAVAILABLE", message: "The OneGzus widget app group is unavailable.", details: nil))
       return
     }
+    guard try configureWidgetRefresh(values: values, preservePeriod: false, result: result) else { return }
 
     let stringKeys = [
       "nextTitle", "nextMeta", "nextDetail", "nextClassroom", "nextTeacher", "nextStatus", "nextTime",
       "todayTitle", "todayMeta", "todayItems", "todayCoursesJson",
-      "weeklyCoursesJson",
+      "weeklyCoursesJson", "effectiveCoursesJson",
       "utilityTitle", "utilityMeta", "utilityDetail", "utilityColdWater", "utilityHotWater", "utilityElectricity", "utilityRoomInfo",
       "progressTitle", "progressMeta", "progressDetail", "progressItemsJson",
       "examCount", "examItemsJson", "gradeGpa", "gradeAverage", "gradeCount", "gradeItemsJson"
@@ -665,61 +685,66 @@ import WidgetKit
       defaults.set(value, forKey: key)
     }
     reloadWidgetTimelines(changedKinds)
-    configureWidgetRefresh(values: values, preservePeriod: false, result: result)
+    result(true)
   }
 
   private func configureWidgetRefresh(
     values: [String: Any],
     preservePeriod: Bool,
     result: @escaping FlutterResult
-  ) {
+  ) throws -> Bool {
     guard let baseUrl = values["widgetApiBaseUrl"] as? String, !baseUrl.isEmpty,
           let sessionId = values["widgetSessionId"] as? String, !sessionId.isEmpty else {
       if preservePeriod {
         result(FlutterError(code: "INVALID_ARGUMENT", message: "组件刷新会话参数不完整", details: nil))
+        return false
       } else {
-        result(true)
+        try clearWidgetRefreshConfiguration()
+        return true
       }
-      return
     }
     let defaults = UserDefaults.standard
     let old = defaults.dictionary(forKey: widgetRefreshConfigDefaultsKey) ?? [:]
     let year = values["widgetYear"] as? Int ?? old["year"] as? Int
     let term = values["widgetTerm"] as? Int ?? old["term"] as? Int
     let week = values["widgetCurrentWeek"] as? Int ?? old["week"] as? Int
-    guard let year, let term, let week else {
-      result(FlutterError(code: "INVALID_ARGUMENT", message: "组件刷新缺少学年、学期或周次", details: nil))
-      return
+    guard let year, let term, let week, year > 0, (1...2).contains(term), week > 0 else {
+      result(FlutterError(code: "INVALID_ARGUMENT", message: "组件刷新学年、学期或周次无效", details: nil))
+      return false
     }
     let firstWeekStartEpochMillis = (values["widgetFirstWeekStartEpochMillis"] as? NSNumber)?.int64Value
       ?? WidgetSnapshotStore.configuration()?.firstWeekStartEpochMillis
       ?? 0
     guard firstWeekStartEpochMillis > 0 else {
       result(FlutterError(code: "INVALID_ARGUMENT", message: "组件刷新缺少开学第一周日期", details: nil))
-      return
+      return false
+    }
+    guard let scheduleContext = values["widgetScheduleContextJson"] as? String ?? WidgetSnapshotStore.configuration()?.scheduleContext,
+          let contextData = scheduleContext.data(using: .utf8),
+          (try JSONSerialization.jsonObject(with: contextData)) is [String: Any] else {
+      result(FlutterError(code: "INVALID_ARGUMENT", message: "组件刷新缺少有效课表上下文", details: nil))
+      return false
     }
     guard saveWidgetRefreshSession(sessionId) else {
       result(FlutterError(code: "KEYCHAIN_WRITE_FAILED", message: "无法安全保存组件刷新会话", details: nil))
-      return
+      return false
     }
-    guard WidgetSnapshotStore.configure(
+    try WidgetSnapshotStore.configure(
       baseURL: baseUrl,
       sessionID: sessionId,
       year: year,
       term: term,
-      firstWeekStartEpochMillis: firstWeekStartEpochMillis
-    ) else {
-      result(FlutterError(code: "APP_GROUP_UNAVAILABLE", message: "无法保存组件刷新配置", details: nil))
-      return
-    }
+      firstWeekStartEpochMillis: firstWeekStartEpochMillis,
+      scheduleContext: scheduleContext
+    )
     defaults.set(["baseUrl": baseUrl, "year": year, "term": term, "week": week], forKey: widgetRefreshConfigDefaultsKey)
     scheduleWidgetRefresh()
-    result(true)
+    return true
   }
 
   private func scheduleWidgetRefresh() {
     guard #available(iOS 13.0, *) else { return }
-    guard UserDefaults.standard.dictionary(forKey: widgetRefreshConfigDefaultsKey) != nil else { return }
+    guard WidgetSnapshotStore.configuration() != nil else { return }
     let request = BGAppRefreshTaskRequest(identifier: widgetRefreshTaskIdentifier)
     request.earliestBeginDate = Date(timeIntervalSinceNow: 30 * 60)
     do {
@@ -731,211 +756,21 @@ import WidgetKit
 
   @available(iOS 13.0, *)
   private func handleWidgetRefresh(_ task: BGAppRefreshTask) {
-    guard let config = UserDefaults.standard.dictionary(forKey: widgetRefreshConfigDefaultsKey),
-          let baseUrl = config["baseUrl"] as? String,
-          let year = config["year"] as? Int,
-          let term = config["term"] as? Int,
-          let week = config["week"] as? Int,
-          let sessionId = loadWidgetRefreshSession() else {
-      task.setTaskCompleted(success: false)
-      return
-    }
-    let currentWeek = WidgetSnapshotStore.configuration()?.currentWeek(now: Date()) ?? week
-    guard let url = URL(string: "\(baseUrl.trimmingCharacters(in: CharacterSet(charactersIn: "/")))/widget-snapshot?year=\(year)&term=\(term)&week=\(currentWeek)") else {
-      task.setTaskCompleted(success: false)
-      return
-    }
-    let request = NSMutableURLRequest(url: url)
-    request.timeoutInterval = 20
-    request.setValue(sessionId, forHTTPHeaderField: "X-Session-Id")
-    if let etag = UserDefaults.standard.string(forKey: widgetRefreshEtagDefaultsKey) {
-      request.setValue(etag, forHTTPHeaderField: "If-None-Match")
-    }
-    let dataTask = URLSession.shared.dataTask(with: request as URLRequest) { [weak self] data, response, error in
-      defer { self?.scheduleWidgetRefresh() }
-      guard error == nil, let response = response as? HTTPURLResponse else {
-        task.setTaskCompleted(success: false)
-        return
+    // 主应用和 Widget 扩展复用同一刷新与响应归属校验，避免两套存储逻辑。
+    let dataTask = WidgetSnapshotStore.refreshIfNeeded { [weak self] success in
+      self?.scheduleWidgetRefresh()
+      if #available(iOS 14.0, *), success {
+        WidgetCenter.shared.reloadAllTimelines()
       }
-      if response.statusCode == 401 {
-        self?.clearWidgetRefreshConfiguration()
-        task.setTaskCompleted(success: false)
-        return
-      }
-      if response.statusCode == 304 {
-        task.setTaskCompleted(success: true)
-        return
-      }
-      guard response.statusCode == 200, let data else {
-        task.setTaskCompleted(success: false)
-        return
-      }
-      if let etag = response.value(forHTTPHeaderField: "ETag"), let self {
-        UserDefaults.standard.set(etag, forKey: self.widgetRefreshEtagDefaultsKey)
-      }
-      task.setTaskCompleted(success: self?.storeWidgetSnapshot(data, currentWeek: currentWeek) ?? false)
+      task.setTaskCompleted(success: success)
     }
-    task.expirationHandler = { dataTask.cancel() }
-    dataTask.resume()
-  }
-
-  private func storeWidgetSnapshot(_ data: Data, currentWeek: Int) -> Bool {
-    guard let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-          let modules = payload["modules"] as? [String: Any],
-          let defaults = UserDefaults(suiteName: homeWidgetsAppGroup) else { return false }
-    let payloadChanged = defaults.data(forKey: "widgetSnapshotPayload") != data
-    defaults.set(data, forKey: "widgetSnapshotPayload")
-    defaults.set(Int64(Date().timeIntervalSince1970 * 1_000), forKey: "widgetUpdatedAtEpochMillis")
-    if let schedule = moduleList(modules, name: "schedule") {
-      storeTodaySchedule(schedule, currentWeek: currentWeek, defaults: defaults)
-    }
-    if let grades = moduleList(modules, name: "grades") {
-      let gradeItems = grades.map { grade in
-        [
-          "name": grade["courseName"] as? String ?? "课程",
-          "score": grade["score"] as? String ?? "-",
-          "credit": grade["credit"] as? String ?? "",
-          "gpa": grade["gradePoint"] as? String ?? "",
-        ]
-      }
-      defaults.set(jsonString(gradeItems), forKey: "gradeItemsJson")
-      defaults.set("\(gradeItems.count)", forKey: "gradeCount")
-      let gradePoints = grades.compactMap { Double($0["gradePoint"] as? String ?? "") }
-      if !gradePoints.isEmpty {
-        defaults.set(String(format: "%.2f", gradePoints.reduce(0, +) / Double(gradePoints.count)), forKey: "gradeGpa")
-      }
-      let scores = grades.compactMap { Double($0["score"] as? String ?? "") }
-      if !scores.isEmpty {
-        defaults.set(String(format: "%.1f", scores.reduce(0, +) / Double(scores.count)), forKey: "gradeAverage")
-      }
-    }
-    if let exams = moduleList(modules, name: "exams") {
-      let examItems = exams.map { exam in
-        [
-          "name": exam["courseName"] as? String ?? "考试",
-          "date": exam["date"] as? String ?? "",
-          "time": exam["time"] as? String ?? "",
-          "location": exam["location"] as? String ?? "",
-          "days": 9999,
-          "urgent": false,
-        ] as [String: Any]
-      }
-      defaults.set(jsonString(examItems), forKey: "examItemsJson")
-      defaults.set("\(examItems.count)", forKey: "examCount")
-    }
-    if let progress = moduleObject(modules, name: "progress"), let items = progress["items"] as? [[String: Any]] {
-      defaults.set(jsonString(items), forKey: "progressItemsJson")
-    }
-    if let ecard = moduleObject(modules, name: "ecard") {
-      defaults.set(ecard["powerText"] as? String ?? "-", forKey: "utilityElectricity")
-      defaults.set(ecard["coldWaterText"] as? String ?? "-", forKey: "utilityColdWater")
-      defaults.set(ecard["hotWaterText"] as? String ?? "-", forKey: "utilityHotWater")
-      defaults.set(ecard["roomDisplay"] as? String ?? "", forKey: "utilityRoomInfo")
-      defaults.set(ecard["status"] as? String == "ok", forKey: "utilityIsBound")
-    }
-    if payloadChanged {
-      WidgetCenter.shared.reloadAllTimelines()
-    }
-    return true
-  }
-
-  private func moduleList(_ modules: [String: Any], name: String) -> [[String: Any]]? {
-    guard let module = modules[name] as? [String: Any], module["status"] as? String != "error" else { return nil }
-    return module["data"] as? [[String: Any]]
-  }
-
-  private func moduleObject(_ modules: [String: Any], name: String) -> [String: Any]? {
-    guard let module = modules[name] as? [String: Any], module["status"] as? String != "error" else { return nil }
-    return module["data"] as? [String: Any]
-  }
-
-  private func jsonString(_ value: Any) -> String {
-    guard let data = try? JSONSerialization.data(withJSONObject: value) else { return "[]" }
-    return String(data: data, encoding: .utf8) ?? "[]"
-  }
-
-  private func storeTodaySchedule(
-    _ courses: [[String: Any]],
-    currentWeek: Int,
-    defaults: UserDefaults
-  ) {
-    let calendar = Calendar.current
-    let now = Date()
-    let weekday = ((calendar.component(.weekday, from: now) + 5) % 7) + 1
-    let today = courses.compactMap { course -> [String: Any]? in
-      guard intValue(course["weekday"]) == weekday,
-            let startSection = intValue(course["startSection"]),
-            let endSection = intValue(course["endSection"]),
-            startSection >= 1, endSection <= widgetSectionTimes.count,
-            occursInWeek(course["weeks"] as? String ?? "", currentWeek: currentWeek) else { return nil }
-      let startTime = widgetSectionTimes[startSection - 1].0
-      let endTime = widgetSectionTimes[endSection - 1].1
-      let start = dateToday(startTime, calendar: calendar, now: now)
-      let end = dateToday(endTime, calendar: calendar, now: now)
-      return [
-        "time": startTime,
-        "name": course["name"] as? String ?? "课程",
-        "info": [course["classroom"] as? String, course["teacher"] as? String].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "),
-        "ongoing": start <= now && now < end,
-        "start": start,
-        "end": end,
-      ]
-    }.sorted { ($0["start"] as? Date ?? now) < ($1["start"] as? Date ?? now) }
-    let visibleCourses = today.map { course in
-      [
-        "time": course["time"] as? String ?? "",
-        "name": course["name"] as? String ?? "课程",
-        "info": course["info"] as? String ?? "",
-        "ongoing": course["ongoing"] as? Bool ?? false,
-      ]
-    }
-    let tomorrowWeekday = weekday == 7 ? 1 : weekday + 1
-    let hasTomorrow = courses.contains { course in
-      intValue(course["weekday"]) == tomorrowWeekday &&
-        occursInWeek(course["weeks"] as? String ?? "", currentWeek: currentWeek)
-    }
-    let noTodayOrTomorrow = today.isEmpty && !hasTomorrow
-    let next = today.first { ($0["end"] as? Date ?? now) > now }
-    defaults.set(jsonString(visibleCourses), forKey: "todayCoursesJson")
-    defaults.set(today.map { "\($0["time"] as? String ?? "") \($0["name"] as? String ?? "课程")" }, forKey: "todayItems")
-    defaults.set(today.isEmpty ? "今日无课" : "今日 \(today.count) 节课", forKey: "todayTitle")
-    defaults.set("第\(currentWeek)周 · \(today.count) 节课", forKey: "todayMeta")
-    defaults.set(noTodayOrTomorrow ? "今明无课" : (next?["name"] as? String ?? "暂无下一节课"), forKey: "nextTitle")
-    defaults.set(noTodayOrTomorrow ? "" : (next?["time"] as? String ?? ""), forKey: "nextTime")
-    defaults.set(noTodayOrTomorrow ? "" : (next?["info"] as? String ?? ""), forKey: "nextClassroom")
-    defaults.set(noTodayOrTomorrow || next == nil ? "none" : ((next?["ongoing"] as? Bool ?? false) ? "ongoing" : "upcoming"), forKey: "nextStatus")
-    defaults.set(noTodayOrTomorrow ? 0 : Int64(((next?["start"] as? Date)?.timeIntervalSince1970 ?? 0) * 1_000), forKey: "nextStartEpochMillis")
-    defaults.set(noTodayOrTomorrow ? 0 : Int64(((next?["end"] as? Date)?.timeIntervalSince1970 ?? 0) * 1_000), forKey: "nextEndEpochMillis")
-  }
-
-  private func intValue(_ value: Any?) -> Int? {
-    if let number = value as? NSNumber { return number.intValue }
-    if let text = value as? String { return Int(text) }
-    return nil
-  }
-
-  private func occursInWeek(_ spec: String, currentWeek: Int) -> Bool {
-    if spec.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return true }
-    if spec.contains("单") && currentWeek % 2 == 0 { return false }
-    if spec.contains("双") && currentWeek % 2 != 0 { return false }
-    let values = spec.split { !$0.isNumber && $0 != "-" && $0 != "~" && $0 != "至" }.map(String.init)
-    for value in values {
-      let bounds = value.split(whereSeparator: { $0 == "-" || $0 == "~" || $0 == "至" }).compactMap { Int($0) }
-      if bounds.count == 2 && currentWeek >= bounds[0] && currentWeek <= bounds[1] { return true }
-      if bounds.count == 1 && currentWeek == bounds[0] { return true }
-    }
-    return false
-  }
-
-  private func dateToday(_ time: String, calendar: Calendar, now: Date) -> Date {
-    let values = time.split(separator: ":").compactMap { Int($0) }
-    return calendar.date(bySettingHour: values[0], minute: values[1], second: 0, of: now) ?? now
+    task.expirationHandler = { dataTask?.cancel() }
   }
 
   private func widgetKinds(forValueKey key: String) -> Set<String> {
     if key.hasPrefix("next") { return [nextClassHomeScreenWidgetKind, nextClassLockScreenWidgetKind] }
     if key.hasPrefix("today") { return [todayCoursesWidgetKind] }
-    if key == "weeklyCoursesJson" {
+    if key == "weeklyCoursesJson" || key == "effectiveCoursesJson" {
       return [weeklyScheduleWidgetKind, nextClassHomeScreenWidgetKind, nextClassLockScreenWidgetKind]
     }
     if key.hasPrefix("weekly") { return [weeklyScheduleWidgetKind] }
@@ -962,16 +797,8 @@ import WidgetKit
     return SecItemAdd(item as CFDictionary, nil) == errSecSuccess
   }
 
-  private func loadWidgetRefreshSession() -> String? {
-    let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: widgetRefreshKeychainService, kSecAttrAccount as String: widgetRefreshKeychainAccount, kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne]
-    var item: CFTypeRef?
-    guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
-          let data = item as? Data else { return nil }
-    return String(data: data, encoding: .utf8)
-  }
-
-  private func clearWidgetRefreshConfiguration() {
-    WidgetSnapshotStore.clearConfiguration()
+  private func clearWidgetRefreshConfiguration() throws {
+    try WidgetSnapshotStore.clearConfiguration()
     UserDefaults.standard.removeObject(forKey: widgetRefreshConfigDefaultsKey)
     UserDefaults.standard.removeObject(forKey: widgetRefreshEtagDefaultsKey)
     let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: widgetRefreshKeychainService, kSecAttrAccount as String: widgetRefreshKeychainAccount]
@@ -979,6 +806,7 @@ import WidgetKit
     if #available(iOS 13.0, *) {
       BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: widgetRefreshTaskIdentifier)
     }
+    if #available(iOS 14.0, *) { WidgetCenter.shared.reloadAllTimelines() }
   }
 
   override func application(

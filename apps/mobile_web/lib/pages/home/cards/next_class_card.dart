@@ -33,7 +33,7 @@ class NextClassMediumCard extends StatelessWidget {
             ),
             child: item == null
                 ? Center(
-                    child: Text('今日无课',
+                    child: Text('暂无课程',
                         style: TextStyle(color: cs.onPrimaryContainer)))
                 : Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -55,7 +55,8 @@ class NextClassMediumCard extends StatelessWidget {
                           children: [
                             Expanded(
                               child: HomeMeta(
-                                  icon: Icons.schedule, text: item.timeText),
+                                  icon: Icons.schedule,
+                                  text: item.nextTimeText),
                             ),
                             const SizedBox(width: 8),
                             Expanded(
@@ -69,7 +70,7 @@ class NextClassMediumCard extends StatelessWidget {
                           ],
                         )
                       else ...[
-                        HomeMeta(icon: Icons.schedule, text: item.timeText),
+                        HomeMeta(icon: Icons.schedule, text: item.nextTimeText),
                         const SizedBox(height: 6),
                         HomeMeta(
                           icon: Icons.location_on,
@@ -123,7 +124,7 @@ class NextClassSmallCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  item.timeText,
+                  item.nextTimeText,
                   style: TextStyle(
                     color: cs.onSurfaceVariant,
                     fontSize: 13,

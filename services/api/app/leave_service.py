@@ -6,6 +6,8 @@ from collections import OrderedDict
 from datetime import date, time, timedelta
 from typing import Any
 
+from pydantic import JsonValue
+
 from app.academic_period import default_first_week_start  # noqa: F401 向后兼容 re-export
 from app.school_client import pick
 
@@ -45,50 +47,54 @@ def build_leave_preview(
         raise ValueError("结束日期不能早于开始日期")
 
     semester_start = first_week_start or default_first_week_start(year, term)
+    occurrences: list[tuple[date, dict[str, JsonValue]]] = []
+    if effective_occurrences is not None:
+        # 日期实例是权威结果，直接遍历，避免扫描无课日期或退回原课表。
+        for course in effective_occurrences:
+            class_date = date.fromisoformat(str(course["date"]))
+            if start_date <= class_date <= end_date:
+                occurrences.append((class_date, course))
+        occurrences.sort(key=lambda item: item[0])
+    else:
+        # 原始周课表最多展开 30 周；用户输入的超长区间不应耗尽 API 线程。
+        semester_end = semester_start + timedelta(days=min(209, (date.max - semester_start).days))
+        first_day = max(start_date, semester_start)
+        last_day = min(end_date, semester_end)
+        for offset in range(max(0, (last_day - first_day).days + 1)):
+            current = first_day + timedelta(days=offset)
+            week = ((current - semester_start).days // 7) + 1
+            for course in courses:
+                if _course_occurs_on(course, week, current.weekday() + 1):
+                    occurrences.append((current, course))
+
     grouped: OrderedDict[tuple[str, str, str], dict] = OrderedDict()
-    current = start_date
-    while current <= end_date:
-        week = ((current - semester_start).days // 7) + 1
-        if 1 <= week <= 30:
-            weekday = current.weekday() + 1
-            if effective_occurrences:
-                day_courses = [
-                    item for item in effective_occurrences
-                    if str(item.get("date") or "") == current.isoformat()
-                ]
-            else:
-                day_courses = [
-                    course for course in courses
-                    if _course_occurs_on(course, week, weekday)
-                ]
-            for course in day_courses:
-                if selected_course_keys:
-                    key = str(
-                        course.get("occurrenceKey")
-                        or course.get("courseKey")
-                        or course.get("courseCode")
-                        or course.get("courseName")
-                        or ""
-                    )
-                    if key not in selected_course_keys:
-                        continue
-                normalized = _normalize_leave_course(course)
-                key = (
-                    normalized["courseName"],
-                    normalized.get("courseCode") or "",
-                    normalized.get("teacher") or "",
-                )
-                entry = grouped.setdefault(
-                    key,
-                    {
-                        **normalized,
-                        "absenceCount": 0,
-                        "classTimes": [],
-                    },
-                )
-                entry["absenceCount"] += 1
-                entry["classTimes"].append(_class_time_text(current, course))
-        current += timedelta(days=1)
+    for current, course in occurrences:
+        if selected_course_keys:
+            selected_key = str(
+                course.get("occurrenceKey")
+                or course.get("courseKey")
+                or course.get("courseCode")
+                or course.get("courseName")
+                or ""
+            )
+            if selected_key not in selected_course_keys:
+                continue
+        normalized = _normalize_leave_course(course)
+        key = (
+            normalized["courseName"],
+            normalized.get("courseCode") or "",
+            normalized.get("teacher") or "",
+        )
+        entry = grouped.setdefault(
+            key,
+            {
+                **normalized,
+                "absenceCount": 0,
+                "classTimes": [],
+            },
+        )
+        entry["absenceCount"] += 1
+        entry["classTimes"].append(_class_time_text(current, course))
 
     items = list(grouped.values())
     for item in items:

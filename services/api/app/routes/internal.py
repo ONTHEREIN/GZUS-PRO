@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from collections.abc import Callable
 from zoneinfo import ZoneInfo
 
@@ -122,8 +122,13 @@ def ecard_reminder_cron(
                         "studentId": binding.student_id,
                         "itemKey": item_key,
                         "liveUpdate": True,
+                        "liveEvent": "start",
                         "style": "progress",
+                        "targetTab": "ecard",
+                        "ongoing": True,
                         "shortCriticalText": "水电",
+                        "startTime": int(datetime.now(ZoneInfo("Asia/Shanghai")).timestamp() * 1000),
+                        "endTime": int((datetime.now(ZoneInfo("Asia/Shanghai")) + timedelta(minutes=15)).timestamp() * 1000),
                     }
                     event_key = ecard_reminder_event_key(
                         binding.student_id, today_key, reminder_time, item_key

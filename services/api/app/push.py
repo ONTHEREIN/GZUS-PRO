@@ -1,17 +1,62 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
+import requests
 from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec
 
 from app.config import get_settings
 from app.database import WebPushSubscription, get_sync_session_factory
 from app.apns_service import send_apns_to_student, send_live_activity_to_student
 
 logger = logging.getLogger(__name__)
+_WEB_PUSH_HOSTS = {
+    "fcm.googleapis.com",
+    "updates.push.services.mozilla.com",
+    "web.push.apple.com",
+}
+
+
+def validate_web_push_endpoint(endpoint: str) -> str:
+    """只接受浏览器推送服务地址，避免服务端向客户端指定的内网地址发请求。"""
+    parsed = urlparse(endpoint)
+    host = parsed.hostname
+    if (
+        parsed.scheme != "https"
+        or host is None
+        or (host not in _WEB_PUSH_HOSTS and not host.endswith(".notify.windows.com"))
+        or parsed.port is not None
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        raise ValueError("Web Push endpoint 必须是浏览器推送服务的 HTTPS 地址")
+    return endpoint
+
+
+def validate_web_push_keys(p256dh: str, auth: str) -> None:
+    """验证浏览器 PushSubscription 密钥，避免无效订阅进入投递队列。"""
+    try:
+        public_key = base64.b64decode(
+            p256dh + "=" * (-len(p256dh) % 4), altchars=b"-_", validate=True
+        )
+        ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), public_key)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError("Web Push p256dh 公钥无效") from exc
+    try:
+        auth_secret = base64.b64decode(
+            auth + "=" * (-len(auth) % 4), altchars=b"-_", validate=True
+        )
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError("Web Push auth 密钥无效") from exc
+    if len(auth_secret) != 16:
+        raise ValueError("Web Push auth 密钥必须为 16 字节")
 
 
 @dataclass(frozen=True)
@@ -62,9 +107,7 @@ def is_web_push_enabled() -> bool:
 
 
 def send_web_push_to_student(student_id: str, title: str, body: str, extras: dict | None = None) -> int:
-    """
-    Send a web push notification to all subscriptions for a student.
-    """
+    """向学生的浏览器推送订阅投递通知。"""
     if not is_web_push_enabled():
         logger.error(
             "web_push_configuration_unavailable",
@@ -76,13 +119,11 @@ def send_web_push_to_student(student_id: str, title: str, body: str, extras: dic
 
     settings = get_settings()
     factory = get_sync_session_factory()
-    
     delivered = 0
     with factory() as db:
         subscriptions = db.query(WebPushSubscription).filter(
             WebPushSubscription.student_id == student_id
         ).all()
-        
         if not subscriptions:
             logger.warning(
                 "web_push_no_subscriptions",
@@ -90,45 +131,59 @@ def send_web_push_to_student(student_id: str, title: str, body: str, extras: dic
             )
             return 0
 
-        for sub in subscriptions:
-            try:
-                subscription_info = {
-                    "endpoint": sub.endpoint,
-                    "keys": {
-                        "p256dh": sub.p256dh,
-                        "auth": sub.auth
-                    }
-                }
-                
-                payload = json.dumps({
-                    "title": title,
-                    "body": body,
-                    "extras": extras or {}
-                })
-                
-                webpush(
-                    subscription_info=subscription_info,
-                    data=payload,
-                    vapid_private_key=settings.web_push_vapid_private_key,
-                    vapid_claims={
-                        "sub": settings.web_push_vapid_subject,
-                        "exp": int((datetime.now(timezone.utc).timestamp() + 86400))
-                    }
-                )
-                
-                delivered += 1
-                logger.info("web_push_sent", extra={"student_id": student_id})
-                
-            except WebPushException as e:
-                if e.response and e.response.status_code in (404, 410):
-                    # Subscription is invalid, delete it
-                    logger.warning("web_push_subscription_removed", extra={"student_id": student_id})
+        with requests.Session() as push_http:
+            push_http.max_redirects = 0
+            for sub in subscriptions:
+                try:
+                    validate_web_push_endpoint(sub.endpoint)
+                except ValueError:
+                    logger.warning(
+                        "web_push_untrusted_endpoint_removed",
+                        extra={"student_id": student_id, "subscription_id": sub.id},
+                    )
                     db.delete(sub)
                     db.commit()
-                else:
-                    logger.error("web_push_delivery_failed", extra={"student_id": student_id}, exc_info=True)
-            except Exception:
-                logger.error("web_push_delivery_unexpected", extra={"student_id": student_id}, exc_info=True)
+                    continue
+                try:
+                    subscription_info = {
+                        "endpoint": sub.endpoint,
+                        "keys": {"p256dh": sub.p256dh, "auth": sub.auth},
+                    }
+                    payload = json.dumps({
+                        "title": title,
+                        "body": body,
+                        "extras": extras or {},
+                    })
+                    webpush(
+                        subscription_info=subscription_info,
+                        data=payload,
+                        vapid_private_key=settings.web_push_vapid_private_key,
+                        vapid_claims={
+                            "sub": settings.web_push_vapid_subject,
+                            "exp": int(datetime.now(timezone.utc).timestamp() + 86400),
+                        },
+                        requests_session=push_http,
+                        timeout=10,
+                    )
+                    delivered += 1
+                    logger.info("web_push_sent", extra={"student_id": student_id})
+                except WebPushException as e:
+                    if e.response and e.response.status_code in (404, 410):
+                        logger.warning("web_push_subscription_removed", extra={"student_id": student_id})
+                        db.delete(sub)
+                        db.commit()
+                    else:
+                        logger.error(
+                            "web_push_delivery_failed",
+                            extra={"student_id": student_id},
+                            exc_info=True,
+                        )
+                except Exception:
+                    logger.error(
+                        "web_push_delivery_unexpected",
+                        extra={"student_id": student_id},
+                        exc_info=True,
+                    )
     return delivered
 
 

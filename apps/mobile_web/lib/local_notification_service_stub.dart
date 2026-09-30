@@ -27,9 +27,30 @@ class LocalNotificationService {
   static final _plugin = FlutterLocalNotificationsPlugin();
   static OnNotificationTap? _onTap;
   static bool _timezoneInitialized = false;
+  static bool _initialized = false;
+  static Future<void>? _initializing;
 
   static Future<void> init({OnNotificationTap? onTap}) async {
     _onTap = onTap;
+    if (_initialized) return;
+    final initializing = _initializing;
+    if (initializing != null) {
+      await initializing;
+      return;
+    }
+    final future = _initialize();
+    _initializing = future;
+    try {
+      await future;
+      _initialized = true;
+    } finally {
+      if (_initializing == future) _initializing = null;
+    }
+  }
+
+  static Future<void> ensureInitialized() => init(onTap: _onTap);
+
+  static Future<void> _initialize() async {
     const androidSettings =
         AndroidInitializationSettings('@mipmap/ic_launcher');
     const iosSettings = DarwinInitializationSettings(

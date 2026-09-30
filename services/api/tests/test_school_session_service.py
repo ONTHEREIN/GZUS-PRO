@@ -1,4 +1,8 @@
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from threading import Event
+
+import pytest
 
 from app import cloud_notifications
 from app.cas_auto_login import is_school_session_limit_error
@@ -84,11 +88,95 @@ def test_background_reuses_shared_session_and_logs_in_once(monkeypatch):
         lambda _cookies, account=None, validate_cookies=False: _FakeSchoolClient(),
     )
     credentials = encrypt_credentials("20260001", "password", "test-credential-key")
+    with get_sync_session_factory()() as db:
+        db.add(BackgroundNotificationProfile(
+            student_id="20260001",
+            credential_fingerprint="active-device",
+            encrypted_credentials=credentials,
+        ))
+        db.commit()
 
     school_session_service.ensure_background_clients("20260001", credentials)
     school_session_service.ensure_background_clients("20260001", credentials)
 
     assert attempts == ["20260001"]
+
+
+def test_revoked_background_authorization_cannot_restore_shared_session(monkeypatch):
+    credentials = encrypt_credentials("20260001", "password", "test-credential-key")
+    with get_sync_session_factory()() as db:
+        db.add(BackgroundNotificationProfile(
+            student_id="20260001",
+            credential_fingerprint="revoked-device",
+            encrypted_credentials=credentials,
+        ))
+        db.commit()
+    school_session_service.revoke_account_school_access("20260001")
+
+    def unexpected_cas_login(account: str, password: str):
+        raise AssertionError(f"已撤销授权不应再次登录学校：{account}")
+
+    monkeypatch.setattr(
+        school_session_service,
+        "_cas_login",
+        unexpected_cas_login,
+    )
+
+    with pytest.raises(school_session_service.BackgroundAuthorizationRevokedError):
+        school_session_service.ensure_background_clients("20260001", credentials)
+
+    with get_sync_session_factory()() as db:
+        assert db.query(SchoolAccountSession).count() == 0
+
+
+def test_account_revocation_waits_for_background_school_session_refresh(monkeypatch):
+    credentials = encrypt_credentials("20260001", "password", "test-credential-key")
+    with get_sync_session_factory()() as db:
+        db.add(BackgroundNotificationProfile(
+            student_id="20260001",
+            credential_fingerprint="active-device",
+            encrypted_credentials=credentials,
+        ))
+        db.commit()
+    cas_started = Event()
+    release_cas = Event()
+    revoke_started = Event()
+
+    def delayed_cas_login(account: str, password: str) -> tuple[str, str, None, None]:
+        cas_started.set()
+        if not release_cas.wait(3):
+            raise TimeoutError("测试等待 CAS 登录超时")
+        return account, "JSESSIONID=shared", None, None
+
+    monkeypatch.setattr(school_session_service, "_cas_login", delayed_cas_login)
+    monkeypatch.setattr(
+        school_session_service,
+        "_rebuild_school_client",
+        lambda _cookies, account=None, validate_cookies=False: _FakeSchoolClient(),
+    )
+
+    def revoke_account() -> None:
+        revoke_started.set()
+        school_session_service.revoke_account_school_access("20260001")
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        refresh = executor.submit(
+            school_session_service.ensure_background_clients, "20260001", credentials
+        )
+        try:
+            assert cas_started.wait(3)
+            revoke = executor.submit(revoke_account)
+            assert revoke_started.wait(3)
+            assert not release_cas.wait(0.2)
+            assert not revoke.done()
+        finally:
+            release_cas.set()
+        refresh.result(timeout=3)
+        revoke.result(timeout=3)
+
+    with get_sync_session_factory()() as db:
+        assert db.query(BackgroundNotificationProfile).count() == 0
+        assert db.query(SchoolAccountSession).count() == 0
 
 
 def test_new_frontend_session_references_shared_version_without_copying_cookies(monkeypatch):

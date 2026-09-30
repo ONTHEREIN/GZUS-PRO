@@ -636,40 +636,16 @@ class SchoolSdkClient:
             self._client.logout()
 
     def get_jwxt_cookies_string(self) -> str:
-        """Extract JWXT session cookies as a cookie header string.
-
-        Used to persist cookies for session reconstruction after serverless cold start.
-        Returns cookies from _httpx_client (preferred, richer) or _client._http fallback.
-        """
-        seen: set[str] = set()
-        parts: list[str] = []
-
-        # Prefer httpx_client cookies (full jar with domain/path metadata)
+        """导出实际发送到教务系统的 Cookie，供学校会话持久化与恢复。"""
+        target_url = f"{self.base_url}/"
         if self._httpx_client is not None:
-            try:
-                for cookie in self._httpx_client.cookies.jar:
-                    name = cookie.name
-                    if name and name not in seen:
-                        seen.add(name)
-                        parts.append(f"{name}={cookie.value}")
-            except Exception:
-                pass
+            return self._httpx_client.build_request("GET", target_url).headers.get("Cookie", "")
+        if self._client is None:
+            raise AuthenticationError("尚未建立教务系统会话，无法导出 Cookie")
+        import requests
 
-        # Fallback to school_client._http cookies
-        if not parts and self._client is not None:
-            try:
-                cookie_jar = getattr(getattr(self._client, "_http", None), "cookies", None)
-                if cookie_jar is not None:
-                    for cookie in cookie_jar:
-                        name = cookie.name
-                        value = cookie.value
-                        if name not in seen:
-                            seen.add(name)
-                            parts.append(f"{name}={value}")
-            except Exception:
-                pass
-
-        return "; ".join(parts)
+        request = requests.Request("GET", target_url, cookies=self._client._http.cookies)
+        return request.prepare().headers.get("Cookie", "")
 
     def _load_school_client(self) -> Any:
         apply_school_sdk_import_patches()

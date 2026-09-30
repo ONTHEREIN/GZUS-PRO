@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from threading import Event, Thread
 
 import pytest
 from sqlalchemy import event, inspect
@@ -6,7 +7,64 @@ from sqlalchemy.exc import NoSuchTableError
 
 from app import database
 from app.config import get_settings
-from app.database import IosLiveActivityToken, get_sync_session_factory
+from app.database import (
+    AppSessionModel,
+    DataCache,
+    IosLiveActivityToken,
+    IosPushToken,
+    WebPushSubscription,
+    get_sync_session_factory,
+)
+
+
+def test_init_db_backfills_push_credential_ownership():
+    database.init_db()
+    fingerprint = "a" * 64
+    with get_sync_session_factory()() as db:
+        db.add(AppSessionModel(id="legacy-session", credential_fingerprint=fingerprint))
+        db.add(WebPushSubscription(
+            student_id="20240001", session_id="legacy-session",
+            endpoint="https://fcm.googleapis.com/legacy", p256dh="key", auth="auth",
+        ))
+        db.add(IosPushToken(
+            student_id="20240001", session_id="legacy-session",
+            device_token="a" * 64, environment="production",
+        ))
+        db.add(IosLiveActivityToken(
+            student_id="20240001", session_id="legacy-session",
+            token_type="start", token="b" * 64, environment="production",
+        ))
+        db.add(WebPushSubscription(
+            student_id="20240001", session_id="already-expired",
+            endpoint="https://fcm.googleapis.com/orphan", p256dh="key", auth="auth",
+        ))
+        db.commit()
+
+    database._db_initialized = False
+    database.init_db()
+
+    with get_sync_session_factory()() as db:
+        assert db.query(WebPushSubscription).count() == 1
+        assert db.query(WebPushSubscription).one().credential_fingerprint == fingerprint
+        assert db.query(IosPushToken).one().credential_fingerprint == fingerprint
+        assert db.query(IosLiveActivityToken).one().credential_fingerprint == fingerprint
+
+
+def test_init_db_removes_legacy_plaintext_ecard_token():
+    database.init_db()
+    factory = get_sync_session_factory()
+    with factory() as db:
+        db.add(DataCache(
+            cache_key="ecard_global_token", student_id="", resource="ecard",
+            response_json='{"token":"legacy-secret"}',
+        ))
+        db.commit()
+
+    database._db_initialized = False
+    database.init_db()
+
+    with factory() as db:
+        assert db.query(DataCache).filter_by(cache_key="ecard_global_token").count() == 0
 
 
 def test_requires_database_url(monkeypatch):
@@ -34,7 +92,31 @@ def test_allows_memory_sqlite_for_tests(monkeypatch):
 
     engine = database.get_sync_engine()
 
-    assert str(engine.url) == "sqlite:///:memory:"
+    assert engine.url.query["mode"] == "memory"
+    assert engine.url.query["cache"] == "shared"
+    with engine.begin() as writer:
+        writer.exec_driver_sql("CREATE TABLE shared_memory_probe (value INTEGER NOT NULL)")
+        writer.exec_driver_sql("INSERT INTO shared_memory_probe (value) VALUES (42)")
+    with engine.connect() as first, engine.connect() as second:
+        assert first.connection.driver_connection is not second.connection.driver_connection
+        assert second.exec_driver_sql("SELECT value FROM shared_memory_probe").scalar_one() == 42
+
+    waiting = Event()
+    acquired = Event()
+
+    def open_other_thread_connection() -> None:
+        waiting.set()
+        with engine.connect():
+            acquired.set()
+
+    with engine.connect():
+        worker = Thread(target=open_other_thread_connection)
+        worker.start()
+        assert waiting.wait(1)
+        assert not acquired.wait(0.05)
+    assert acquired.wait(1)
+    worker.join(timeout=1)
+    assert not worker.is_alive()
 
 
 def test_ensure_columns_skips_existing_columns():
@@ -103,8 +185,10 @@ def test_init_db_removes_legacy_activity_tokens_without_expiry():
     database.init_db()
     factory = get_sync_session_factory()
     with factory() as db:
+        db.add(AppSessionModel(id="current-session"))
         db.add(IosLiveActivityToken(
             student_id="20260001",
+            session_id="current-session",
             token_type="activity",
             token="a" * 64,
             environment="production",
@@ -112,6 +196,7 @@ def test_init_db_removes_legacy_activity_tokens_without_expiry():
         ))
         db.add(IosLiveActivityToken(
             student_id="20260001",
+            session_id="current-session",
             token_type="activity",
             token="b" * 64,
             environment="production",
@@ -126,3 +211,29 @@ def test_init_db_removes_legacy_activity_tokens_without_expiry():
     with factory() as db:
         assert db.query(IosLiveActivityToken).filter_by(token="a" * 64).count() == 0
         assert db.query(IosLiveActivityToken).filter_by(token="b" * 64).count() == 1
+
+
+def test_init_db_removes_push_targets_without_session_owner():
+    database.init_db()
+    factory = get_sync_session_factory()
+    with factory() as db:
+        db.add(WebPushSubscription(
+            student_id="20260001", endpoint="https://push.example.test/legacy",
+            p256dh="key", auth="auth",
+        ))
+        db.add(IosPushToken(
+            student_id="20260001", device_token="a" * 64, environment="production",
+        ))
+        db.add(IosLiveActivityToken(
+            student_id="20260001", token_type="start", token="b" * 64,
+            environment="production",
+        ))
+        db.commit()
+
+    database._db_initialized = False
+    database.init_db()
+
+    with factory() as db:
+        assert db.query(WebPushSubscription).count() == 0
+        assert db.query(IosPushToken).count() == 0
+        assert db.query(IosLiveActivityToken).count() == 0

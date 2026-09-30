@@ -11,6 +11,7 @@ import '../../widgets/floating_page_scaffold.dart';
 class ScheduleOverridesPage extends StatefulWidget {
   const ScheduleOverridesPage({
     super.key,
+    required this.namespace,
     required this.year,
     required this.term,
     required this.items,
@@ -19,6 +20,7 @@ class ScheduleOverridesPage extends StatefulWidget {
   });
 
   final int year;
+  final String namespace;
   final int term;
 
   /// 叠加后的课表（含本地条目），用于匹配下拉与条目展示。
@@ -41,7 +43,8 @@ class _ScheduleOverridesPageState extends State<ScheduleOverridesPage> {
   }
 
   Future<void> _load() async {
-    final list = await ScheduleOverrideStore.load(widget.year, widget.term);
+    final list = await ScheduleOverrideStore.load(
+        widget.namespace, widget.year, widget.term);
     if (!mounted) return;
     setState(() {
       _overrides = list;
@@ -57,7 +60,8 @@ class _ScheduleOverridesPageState extends State<ScheduleOverridesPage> {
     } else {
       list.add(override);
     }
-    await ScheduleOverrideStore.save(widget.year, widget.term, list);
+    await ScheduleOverrideStore.save(
+        widget.namespace, widget.year, widget.term, list);
     if (!mounted) return;
     setState(() => _overrides = list);
     widget.onChanged();
@@ -65,7 +69,8 @@ class _ScheduleOverridesPageState extends State<ScheduleOverridesPage> {
 
   Future<void> _deleteOverride(ScheduleOverride override) async {
     final list = _overrides.where((o) => o.id != override.id).toList();
-    await ScheduleOverrideStore.save(widget.year, widget.term, list);
+    await ScheduleOverrideStore.save(
+        widget.namespace, widget.year, widget.term, list);
     if (!mounted) return;
     setState(() => _overrides = list);
     widget.onChanged();

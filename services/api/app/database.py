@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import datetime, timezone
+from threading import RLock
+from uuid import uuid4
 
 from sqlalchemy import (
     Boolean,
@@ -21,7 +23,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.pool import QueuePool
 
 from app.config import get_settings
 
@@ -63,6 +65,8 @@ class WebPushSubscription(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     student_id = Column(String(100), nullable=False, index=True)
+    session_id = Column(String(64), nullable=True, index=True)
+    credential_fingerprint = Column(String(64), nullable=True, index=True)
     endpoint = Column(String(500), nullable=False, unique=True)
     p256dh = Column(String(300), nullable=False)
     auth = Column(String(100), nullable=False)
@@ -86,6 +90,8 @@ class IosPushToken(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     student_id = Column(String(100), nullable=False, index=True)
+    session_id = Column(String(64), nullable=True, index=True)
+    credential_fingerprint = Column(String(64), nullable=True, index=True)
     device_token = Column(String(512), nullable=False)
     environment = Column(String(20), nullable=False)
     course_local_event_keys_json = Column(Text, nullable=True)
@@ -107,6 +113,8 @@ class IosLiveActivityToken(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     student_id = Column(String(100), nullable=False, index=True)
+    session_id = Column(String(64), nullable=True, index=True)
+    credential_fingerprint = Column(String(64), nullable=True, index=True)
     token_type = Column(String(20), nullable=False)
     token = Column(String(512), nullable=False)
     environment = Column(String(20), nullable=False)
@@ -408,7 +416,13 @@ class NotificationDelivery(Base):
     body = Column(Text, nullable=True)
     extras_json = Column(Text, nullable=True)
     expires_at = Column(DateTime, nullable=True, index=True)
+    # 通知中心保留 30 天；实况/补拉只允许在这条时间前发生。
+    delivery_expires_at = Column(DateTime, nullable=True, index=True)
+    claim_installation_id = Column(String(128), nullable=True, index=True)
+    claimed_at = Column(DateTime, nullable=True)
+    claim_expires_at = Column(DateTime, nullable=True, index=True)
     presented_at = Column(DateTime, nullable=True)
+    live_activity_ended_at = Column(DateTime, nullable=True)
     read_at = Column(DateTime, nullable=True)
     delivery_status = Column(String(20), default="pending", nullable=False)
     retry_count = Column(Integer, default=0, nullable=False)
@@ -678,6 +692,7 @@ def get_sync_engine():
         if database_url.startswith("postgresql"):
             _engine = create_engine(
                 database_url,
+                connect_args={"options": "-c timezone=UTC"},
                 pool_size=settings.db_pool_size,
                 max_overflow=settings.db_max_overflow,
                 pool_recycle=settings.db_pool_recycle,
@@ -685,11 +700,30 @@ def get_sync_engine():
                 pool_timeout=settings.db_pool_timeout,
             )
         elif ":memory:" in database_url:
+            # 单连接 StaticPool 会让 TestClient 与后台轮询线程并发使用同一个
+            # SQLite 事务；命名内存库允许每个线程持有独立连接并共享测试数据。
+            memory_url = (
+                f"sqlite:///file:onegzus-test-{uuid4().hex}"
+                "?mode=memory&cache=shared&uri=true"
+            )
             _engine = create_engine(
-                database_url,
-                poolclass=StaticPool,
+                memory_url,
+                poolclass=QueuePool,
+                pool_size=5,
+                max_overflow=5,
                 connect_args={"check_same_thread": False},
             )
+            # SQLite 共享内存库允许多连接读取同一数据，但并发写会立即报
+            # SQLITE_LOCKED。测试中将连接使用串行化，保留独立事务语义。
+            connection_lock = RLock()
+
+            @event.listens_for(_engine, "checkout")
+            def _lock_test_connection(_connection, _record, _proxy):
+                connection_lock.acquire()
+
+            @event.listens_for(_engine, "checkin")
+            def _unlock_test_connection(_connection, _record):
+                connection_lock.release()
         else:
             _engine = create_engine(
                 database_url,
@@ -708,10 +742,25 @@ def get_sync_session_factory() -> sessionmaker[Session]:
 
 
 def check_database_ready() -> None:
-    """验证数据库连接可用，不执行建表或迁移。"""
+    """验证数据库连接可用且当前模型 schema 已完成迁移。"""
     engine = get_sync_engine()
     with engine.connect() as connection:
         connection.execute(text("SELECT 1"))
+
+    inspector = inspect(engine)
+    existing_tables = set(inspector.get_table_names())
+    missing_tables = sorted(set(Base.metadata.tables) - existing_tables)
+    if missing_tables:
+        raise RuntimeError("数据库 schema 缺少表：" + ", ".join(missing_tables))
+
+    missing_columns: list[str] = []
+    for table_name, table in Base.metadata.tables.items():
+        existing_columns = {column["name"] for column in inspector.get_columns(table_name)}
+        for column in table.columns:
+            if column.name not in existing_columns:
+                missing_columns.append(f"{table_name}.{column.name}")
+    if missing_columns:
+        raise RuntimeError("数据库 schema 缺少列：" + ", ".join(sorted(missing_columns)))
 
 
 def record_maintenance_job_result(
@@ -768,11 +817,22 @@ def init_db():
     if _db_initialized:
         return
     engine = get_sync_engine()
-    Base.metadata.create_all(engine)
+    if _is_sqlite(engine):
+        Base.metadata.create_all(engine)
+    else:
+        # 生产迁移只允许短时间持锁；候选 release 不应无限等待业务连接释放。
+        with engine.begin() as connection:
+            connection.exec_driver_sql("SET LOCAL lock_timeout = '2s'")
+            connection.exec_driver_sql("SET LOCAL statement_timeout = '10s'")
+            Base.metadata.create_all(connection)
 
     # Lightweight migration: add columns that exist in the model but might not
     # exist in the database yet (e.g., added after initial deployment).
     _ensure_columns(engine, "app_sessions", _APP_SESSION_COMPAT_COLUMNS)
+    _ensure_columns(engine, "web_push_subscriptions", {
+        "session_id": "VARCHAR(64)",
+        "credential_fingerprint": "VARCHAR(64)",
+    })
     _ensure_columns(
         engine,
         "ecard_bindings",
@@ -817,7 +877,12 @@ def init_db():
             "body": "TEXT",
             "extras_json": "TEXT",
             "expires_at": "TIMESTAMP",
+            "delivery_expires_at": "TIMESTAMP",
+            "claim_installation_id": "VARCHAR(128)",
+            "claimed_at": "TIMESTAMP",
+            "claim_expires_at": "TIMESTAMP",
             "presented_at": "TIMESTAMP",
+            "live_activity_ended_at": "TIMESTAMP",
             "read_at": "TIMESTAMP",
             "delivery_status": "TEXT DEFAULT 'delivered'",
             "retry_count": "INTEGER DEFAULT 0",
@@ -830,6 +895,8 @@ def init_db():
         engine,
         "ios_push_tokens",
         {
+            "session_id": "VARCHAR(64)",
+            "credential_fingerprint": "VARCHAR(64)",
             "course_local_event_keys_json": "TEXT",
             "course_local_valid_until": "TIMESTAMP",
         },
@@ -847,11 +914,28 @@ def init_db():
         engine,
         "ios_live_activity_tokens",
         {
+            "session_id": "VARCHAR(64)",
+            "credential_fingerprint": "VARCHAR(64)",
             "device_id": "VARCHAR(128)",
             "expires_at": "TIMESTAMP",
         },
     )
     with engine.begin() as connection:
+        connection.execute(text("DELETE FROM data_cache WHERE cache_key = 'ecard_global_token'"))
+        # 旧推送令牌无法可靠对应到具体设备会话；清除后由仍在登录的设备重新注册。
+        for table in ("web_push_subscriptions", "ios_push_tokens", "ios_live_activity_tokens"):
+            connection.execute(text(f"DELETE FROM {table} WHERE session_id IS NULL"))
+            connection.execute(text(
+                f"UPDATE {table} SET credential_fingerprint = ("
+                "SELECT credential_fingerprint FROM app_sessions "
+                f"WHERE app_sessions.id = {table}.session_id) "
+                "WHERE credential_fingerprint IS NULL AND session_id IS NOT NULL"
+            ))
+            # 已删会话的旧令牌无法再关联长期凭据，不能可靠撤销。
+            connection.execute(text(
+                f"DELETE FROM {table} WHERE credential_fingerprint IS NULL "
+                "AND session_id NOT IN (SELECT id FROM app_sessions)"
+            ))
         connection.execute(
             text(
                 "DELETE FROM ios_live_activity_tokens "

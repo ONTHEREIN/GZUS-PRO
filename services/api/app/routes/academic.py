@@ -10,6 +10,7 @@ from typing import TypeVar
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse, Response
+from pydantic import ValidationError
 
 from app.cache_service import (
     ACADEMIC_CACHE_MAX_AGE_SECONDS,
@@ -37,6 +38,7 @@ from app.school_client import (
     MissingProxySlotError,
 )
 from app.sessions import AppSession
+from app.widget_schedule import WidgetCourse, WidgetSnapshotRequest, effective_widget_schedule
 
 logger = logging.getLogger(__name__)
 
@@ -328,7 +330,10 @@ def _get_student_id(session: AppSession) -> str:
     account = getattr(client, "_account", None)
     if account:
         return account
-    return session.student_name or "unknown"
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="无法确认当前学号，请重新登录",
+    )
 
 
 def _run_academic_call(call: Callable[[], T]) -> T:
@@ -635,6 +640,68 @@ async def widget_snapshot(
         content={"generatedAt": payload["generatedAt"], **snapshot},
         headers={"ETag": f'"{etag}"', "Cache-Control": "private, no-store"},
     )
+
+
+@router.post("/widget-snapshot")
+async def effective_widget_snapshot(
+    request: Request,
+    context: WidgetSnapshotRequest,
+    session: AppSession = Depends(require_session),
+) -> Response:
+    """只读组件快照：云端调课叠加本机规则与待同步操作，不写入学校或调课表。"""
+    from app.routes.schedule_adjustments import list_adjustments
+
+    payload = await dashboard(
+        request=request,
+        year=str(context.year),
+        term=str(context.term),
+        week=None,
+        modules=",".join(sorted(_WIDGET_SNAPSHOT_MODULE_IDS)),
+        include_public=False,
+        session=session,
+    )
+    modules = _compact_widget_modules(payload["modules"])
+    schedule = modules["schedule"]
+    if schedule["status"] != "error":
+        try:
+            courses = [
+                WidgetCourse.model_validate({
+                    **item,
+                    "raw": item["raw"] if isinstance(item.get("raw"), dict) else item,
+                })
+                for item in schedule["data"]
+            ]
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "message": "学校课表字段无效，无法生成生效课程组件",
+                    "year": context.year,
+                    "term": context.term,
+                    "errors": [
+                        {
+                            "field": ".".join(str(part) for part in item["loc"]),
+                            "message": item["msg"],
+                        }
+                        for item in exc.errors(include_input=False, include_url=False)
+                    ],
+                },
+            ) from exc
+        remote = list_adjustments(year=context.year, term=context.term, session=session)
+        schedule = {
+            **schedule,
+            "data": [
+                item.model_dump(mode="json", by_alias=True)
+                for item in effective_widget_schedule(courses, context, remote)
+            ],
+        }
+    snapshot = {"scheduleFormat": "dated-v1", "modules": {**modules, "schedule": schedule}}
+    canonical = json.dumps(snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    etag = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    headers = {"ETag": f'"{etag}"', "Cache-Control": "private, no-store"}
+    if request.headers.get("if-none-match", "").strip('"') == etag:
+        return Response(status_code=status.HTTP_304_NOT_MODIFIED, headers=headers)
+    return JSONResponse(content={"generatedAt": payload["generatedAt"], **snapshot}, headers=headers)
 
 
 def _session_notices(jwxt_items: list[dict], ehall_client) -> list[dict]:

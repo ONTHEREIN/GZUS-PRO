@@ -7,6 +7,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import 'live_activity_service.dart';
 import 'local_notification_service.dart';
 import 'live_update_service.dart';
+import 'app_logger.dart';
 
 class WsService {
   static WebSocketChannel? _channel;
@@ -18,11 +19,13 @@ class WsService {
   static bool _intentionalClose = false;
   static bool _isPaused = false;
   static Future<void> Function(String eventId)? _onPresented;
+  static Future<bool> Function(String eventId)? _onClaim;
 
   static void configure({
     required String apiBaseUrl,
     required String sessionId,
     Future<void> Function(String eventId)? onPresented,
+    Future<bool> Function(String eventId)? onClaim,
   }) {
     if (_sessionId != null && _sessionId != sessionId) {
       disconnect();
@@ -30,6 +33,7 @@ class WsService {
     _baseUrl = apiBaseUrl;
     _sessionId = sessionId;
     _onPresented = onPresented;
+    _onClaim = onClaim;
   }
 
   static Future<void> connect() async {
@@ -144,6 +148,18 @@ class WsService {
 
   static Future<void> handleNotificationMessage(
       Map<String, dynamic> msg) async {
+    final rawExtras = msg['extras'];
+    final nestedEventKey = rawExtras is Map ? rawExtras['eventKey'] : null;
+    final eventId = (msg['eventKey'] ?? nestedEventKey)?.toString().trim();
+    final claim = _onClaim;
+    if (eventId != null && eventId.isNotEmpty && claim != null) {
+      final claimed = await _claimEvent(claim, eventId);
+      if (!claimed) {
+        AppLogger.warning('通知领取失败或已被其他设备领取：eventKey=$eventId');
+        debugPrint('[WsService] Notification already claimed: $eventId');
+        return;
+      }
+    }
     final title = msg['title'] as String? ?? '软帮手';
     final body = msg['body'] as String? ?? '';
     debugPrint(
@@ -194,11 +210,27 @@ class WsService {
     _markPresented(msg);
   }
 
+  static Future<bool> _claimEvent(
+    Future<bool> Function(String eventId) claim,
+    String eventId,
+  ) async {
+    try {
+      return await claim(eventId);
+    } catch (error) {
+      AppLogger.warning(
+          '通知领取请求异常：eventKey=$eventId, error=${error.runtimeType}');
+      debugPrint('[WsService] Failed to claim notification: $error');
+      return false;
+    }
+  }
+
   static void _markPresented(Map<String, dynamic> msg) {
     final eventId = (msg['eventKey'] ?? msg['id'])?.toString().trim();
     final callback = _onPresented;
     if (eventId == null || eventId.isEmpty || callback == null) return;
     unawaited(callback(eventId).catchError((error) {
+      AppLogger.warning(
+          '通知展示确认失败：eventKey=$eventId, error=${error.runtimeType}');
       debugPrint(
           '[WsService] Failed to record notification presentation: $error');
     }));

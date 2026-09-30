@@ -1030,15 +1030,18 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
     _logoutInProgress = true;
     final activeSessionId = api.sessionId;
     final activeStudentId = api.studentId;
+    final logoutCredentialToken = api.logoutCredentialToken;
     api.clearCredentials();
     LoginRequiredServices.disconnect();
-    unawaited(HomeWidgetBridge.clearRefreshConfiguration());
 
     if (!mounted) {
-      unawaited(_performLogoutCleanup(activeSessionId, activeStudentId));
+      await _performLogoutCleanup(
+        activeSessionId, activeStudentId, logoutCredentialToken,
+      );
       return;
     }
     setState(() {
+      initializing = true;
       loggedIn = false;
       studentName = null;
       _backgroundGuideCompleted = false;
@@ -1053,7 +1056,13 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
     widget.onAuthenticationChanged?.call(false);
     _navigatorKey.currentState?.popUntil((route) => route.isFirst);
 
-    unawaited(_performLogoutCleanup(activeSessionId, activeStudentId));
+    try {
+      await _performLogoutCleanup(
+        activeSessionId, activeStudentId, logoutCredentialToken,
+      );
+    } finally {
+      if (mounted) setState(() => initializing = false);
+    }
   }
 
   void _enterScheduleOnlyMode() {
@@ -1092,9 +1101,20 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
   Future<void> _performLogoutCleanup(
     String? activeSessionId,
     String? activeStudentId,
+    String? logoutCredentialToken,
   ) async {
     try {
       if (activeSessionId != null && activeSessionId.isNotEmpty) {
+        try {
+          await api.revokeSession(activeSessionId, logoutCredentialToken);
+        } catch (error) {
+          debugPrint('撤销服务端会话失败: error=${error.runtimeType}');
+          if (mounted) {
+            setState(() {
+              loginError = '本机已退出，但未能确认服务端下线。请联网后联系管理员处理旧会话。';
+            });
+          }
+        }
         if (kIsWeb) {
           try {
             await LoginRequiredServices.unsubscribeWebPush(
@@ -1105,23 +1125,13 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
             debugPrint('注销 Web Push 订阅失败: error=${error.runtimeType}');
           }
         }
-        if (!kIsWeb) {
-          try {
-            await LoginRequiredServices.unregisterIosPushToken(
-              api,
-              activeSessionId,
-            );
-          } catch (error) {
-            debugPrint('注销 iOS 推送令牌失败: error=${error.runtimeType}');
-          }
-        }
-        try {
-          await api.revokeSession(activeSessionId);
-        } catch (error) {
-          debugPrint('撤销服务端会话失败: error=${error.runtimeType}');
-        }
       }
 
+      try {
+        await HomeWidgetBridge.clearRefreshConfiguration();
+      } catch (error) {
+        debugPrint('清除桌面组件刷新配置失败: error=${error.runtimeType}');
+      }
       try {
         await _clearSavedSession();
       } catch (error) {

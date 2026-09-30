@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 class SensitiveAuthState {
   const SensitiveAuthState({
     required this.credentialToken,
+    required this.sessionRefreshToken,
     required this.password,
     required this.jwxtCookies,
     required this.ehallCookies,
@@ -11,6 +12,7 @@ class SensitiveAuthState {
   });
 
   final String? credentialToken;
+  final String? sessionRefreshToken;
   final String? password;
   final String? jwxtCookies;
   final String? ehallCookies;
@@ -20,8 +22,13 @@ class SensitiveAuthState {
 class AuthStorage {
   const AuthStorage();
 
-  static const FlutterSecureStorage _secureStorage = FlutterSecureStorage();
+  static const FlutterSecureStorage _secureStorage = FlutterSecureStorage(
+    iOptions: IOSOptions(
+      accessibility: KeychainAccessibility.first_unlock,
+    ),
+  );
   static const String _credentialTokenKey = 'auth.credentialToken';
+  static const String _sessionRefreshTokenKey = 'auth.sessionRefreshToken';
   static const String _passwordKey = 'auth.password';
   static const String _jwxtCookiesKey = 'auth.jwxtCookies';
   static const String _ehallCookiesKey = 'auth.ehallCookies';
@@ -45,6 +52,19 @@ class AuthStorage {
   Future<void> clearCredentialToken() async {
     await _secureStorage.delete(key: _credentialTokenKey);
     await _removeLegacyValues([_credentialTokenKey]);
+  }
+
+  Future<void> saveSessionRefreshToken(String token) async {
+    if (token.isEmpty) {
+      throw ArgumentError.value(token, 'token', '会话恢复凭据不能为空');
+    }
+    await _secureStorage.write(key: _sessionRefreshTokenKey, value: token);
+    await _removeLegacyValues([_sessionRefreshTokenKey]);
+  }
+
+  Future<void> clearSessionRefreshToken() async {
+    await _secureStorage.delete(key: _sessionRefreshTokenKey);
+    await _removeLegacyValues([_sessionRefreshTokenKey]);
   }
 
   Future<void> savePassword(String password) async {
@@ -81,6 +101,10 @@ class AuthStorage {
       prefs,
       _credentialTokenKey,
     );
+    final sessionRefreshToken = await _readAndMigrate(
+      prefs,
+      _sessionRefreshTokenKey,
+    );
     final password = await _readAndMigrate(prefs, _passwordKey);
     final jwxtCookies = await _readAndMigrate(prefs, _jwxtCookiesKey);
     final ehallCookies = await _readAndMigrate(prefs, _ehallCookiesKey);
@@ -90,6 +114,7 @@ class AuthStorage {
     );
     return SensitiveAuthState(
       credentialToken: credentialToken,
+      sessionRefreshToken: sessionRefreshToken,
       password: password,
       jwxtCookies: jwxtCookies,
       ehallCookies: ehallCookies,
@@ -100,6 +125,7 @@ class AuthStorage {
   Future<void> clear() async {
     for (final key in [
       _credentialTokenKey,
+      _sessionRefreshTokenKey,
       _passwordKey,
       _jwxtCookiesKey,
       _ehallCookiesKey,
@@ -109,6 +135,7 @@ class AuthStorage {
     }
     await _removeLegacyValues([
       _credentialTokenKey,
+      _sessionRefreshTokenKey,
       _passwordKey,
       _jwxtCookiesKey,
       _ehallCookiesKey,

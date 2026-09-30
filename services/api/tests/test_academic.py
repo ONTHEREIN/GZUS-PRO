@@ -457,6 +457,25 @@ def test_ehall_applications_route_returns_application_items():
     assert applications[0]["department"] == "信息中心"
 
 
+def test_cache_endpoints_reject_session_without_student_id():
+    class ClientWithoutAccount(FakeClient):
+        _account = None
+
+    app = create_app()
+    session = app.state.sessions.create(
+        ClientWithoutAccount(),
+        "测试学生",
+        ehall_client=FakeEhallClient(),
+    )
+    headers = {"X-Session-Id": session.id}
+
+    with TestClient(app) as client:
+        for path in ("/schedule", "/ehall/affairs", "/ehall/applications"):
+            response = client.get(path, headers=headers)
+            assert response.status_code == 401
+            assert response.json()["detail"] == "无法确认当前学号，请重新登录"
+
+
 def test_ehall_affairs_route_returns_504_when_upstream_fails():
     app = create_app()
     session = app.state.sessions.create(

@@ -12,6 +12,10 @@ import '../../location_service.dart';
 import '../../permission_service.dart';
 import '../../models/home_config.dart';
 import '../../models/grade_models.dart';
+import '../../models/schedule_override.dart';
+import '../../schedule_adjustment_sync.dart';
+import '../../schedule_utils.dart';
+import '../../widget_schedule_bridge.dart';
 import '../../responsive/spacing.dart';
 import '../../test_flags.dart';
 import '../../responsive/breakpoints.dart';
@@ -37,7 +41,7 @@ import 'cards/weather_card.dart';
 class HomeDashboardData {
   const HomeDashboardData({
     required this.info,
-    required this.courses,
+    required this.occurrences,
     required this.notices,
     required this.attendance,
     required this.credits,
@@ -50,7 +54,7 @@ class HomeDashboardData {
   });
 
   final StudentInfo info;
-  final List<ScheduleCourse> courses;
+  final List<ScheduleOccurrence> occurrences;
   final List<NoticeItem> notices;
   final AttendanceResponse attendance;
   final List<CreditItem> credits;
@@ -101,7 +105,10 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
   // 首页只请求一次 dashboard 快照，各模块独立解析，避免单个坏数据清空整页。
   late Future<DashboardSnapshot> _dashboardFuture;
   late Future<StudentInfo> _infoFuture;
-  late Future<ScheduleResult> _scheduleFuture;
+  late Future<List<ScheduleOccurrence>> _scheduleFuture;
+  late String _homeNamespace;
+  int _dashboardGeneration = 0;
+  String? _widgetScheduleContextJson;
   late Future<List<NoticeItem>> _noticesFuture;
   late Future<AttendanceResponse> _attendanceFuture;
   late Future<List<CreditItem>> _creditsFuture;
@@ -145,16 +152,49 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
 
   void _initFutures({bool forceRefresh = false}) {
     _moreModuleDataLoaded = false;
+    _dashboardGeneration++;
+    final generation = _dashboardGeneration;
+    _widgetScheduleContextJson = null;
+    final api = widget.api;
+    final namespace = api.namespace;
+    _homeNamespace = namespace;
+    final year = widget.year;
+    final term = widget.term;
+    final firstWeekStart = widget.firstWeekStart;
+    final gradesKey = 'local.grades.$namespace.$year.$term';
+    final examsKey = 'local.exams.$namespace.$year.$term';
     _dashboardFuture = _loadDashboardSnapshot(forceRefresh: forceRefresh);
     _infoFuture = _dashboardFuture.then(_parseInfo);
     _scheduleFuture = _dashboardFuture.then(
-      (snapshot) {
+      (snapshot) async {
         final courses = _moduleList(snapshot, 'schedule', '课表')
             .map(ScheduleCourse.fromJson)
             .toList();
-        return ScheduleResult(
-          items: courses,
-          raw: courses.map((item) => item.raw).toList(),
+        if (api.namespace != namespace) {
+          throw StateError('账号已切换，请重新读取首页课表');
+        }
+        final remote =
+            await api.fetchScheduleAdjustments(year: year, term: term);
+        final pending =
+            await ScheduleAdjustmentSync.loadQueue(namespace, year, term);
+        final adjustments = mergePendingScheduleAdjustments(remote, pending);
+        final overrides =
+            await ScheduleOverrideStore.load(namespace, year, term);
+        if (api.namespace != namespace || generation != _dashboardGeneration) {
+          throw StateError('账号已切换，请重新读取首页课表');
+        }
+        _widgetScheduleContextJson = widgetScheduleRequestJson(
+          year: year,
+          term: term,
+          firstWeekStart: firstWeekStart,
+          overrides: overrides,
+          pending: pending,
+        );
+        return expandEffectiveSchedule(
+          courses: courses,
+          firstWeekStart: firstWeekStart,
+          adjustments: adjustments,
+          overrides: overrides,
         );
       },
     );
@@ -185,19 +225,19 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
           .map(GradeItem.fromJson)
           .toList();
       if (grades.isNotEmpty) {
-        unawaited(_saveLocalGrades(grades));
+        await _saveLocalGrades(gradesKey, grades);
         return grades;
       }
-      return _loadLocalGrades();
+      return _loadLocalGrades(gradesKey);
     });
     _examsFuture = _dashboardFuture.then((snapshot) async {
       final exams =
           _moduleList(snapshot, 'exams', '考试').map(ExamItem.fromJson).toList();
       if (exams.isNotEmpty) {
-        unawaited(_saveLocalExams(exams));
+        await _saveLocalExams(examsKey, exams);
         return exams;
       }
-      return _loadLocalExams();
+      return _loadLocalExams(examsKey);
     });
     unawaited(_updateHomeWidget());
     if (_moreModulesExpanded) {
@@ -427,7 +467,9 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
   @override
   void didUpdateWidget(covariant HomePage oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.year != widget.year ||
+    if (oldWidget.api != widget.api ||
+        _homeNamespace != widget.api.namespace ||
+        oldWidget.year != widget.year ||
         oldWidget.term != widget.term ||
         oldWidget.currentWeek != widget.currentWeek ||
         oldWidget.firstWeekStart != widget.firstWeekStart) {
@@ -456,11 +498,6 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
   }
 
   static const _weatherKey = 'local.weather';
-  // v2：旧版本曾把伪造的示例成绩/考试写入 local.grades/local.exams，
-  // 升级键名以丢弃这些假数据，避免老用户继续看到与真实成绩不符的内容。
-  static const _gradesKey = 'local.grades.v2';
-  static const _examsKey = 'local.exams.v2';
-
   Future<WeatherData?> _loadLocalWeather() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -535,68 +572,64 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
     };
   }
 
-  Future<List<GradeItem>> _loadLocalGrades() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final raw = prefs.getString(_gradesKey);
-      if (raw != null) {
-        final list = jsonDecode(raw) as List<dynamic>;
-        return list
-            .whereType<Map<String, dynamic>>()
-            .map((e) => GradeItem.fromJson(e))
-            .toList();
+  Future<List<GradeItem>> _loadLocalGrades(String cacheKey) async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(cacheKey);
+    if (raw == null) return const [];
+    final decoded = jsonDecode(raw);
+    if (decoded is! List) throw const FormatException('首页成绩缓存格式无效');
+    return decoded.map((item) {
+      if (item is! Map<String, dynamic>) {
+        throw const FormatException('首页成绩缓存条目格式无效');
       }
-    } catch (_) {}
-    // 无本地真实成绩时返回空列表，绝不展示/落盘伪造的示例成绩。
-    return const [];
+      return GradeItem.fromJson(item);
+    }).toList();
   }
 
-  Future<void> _saveLocalGrades(List<GradeItem> data) async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final list = data
-          .map((g) => {
-                'courseName': g.courseName,
-                'score': g.score,
-                'credit': g.credit,
-                'gradePoint': g.gradePoint,
-                'term': g.term,
-              })
-          .toList();
-      await prefs.setString(_gradesKey, jsonEncode(list));
-    } catch (_) {}
+  Future<void> _saveLocalGrades(String cacheKey, List<GradeItem> data) async {
+    final prefs = await SharedPreferences.getInstance();
+    final list = data
+        .map((g) => {
+              'courseName': g.courseName,
+              'score': g.score,
+              'credit': g.credit,
+              'gradePoint': g.gradePoint,
+              'term': g.term,
+            })
+        .toList();
+    if (!await prefs.setString(cacheKey, jsonEncode(list))) {
+      throw StateError('无法保存首页成绩缓存，请检查设备存储');
+    }
   }
 
-  Future<List<ExamItem>> _loadLocalExams() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final raw = prefs.getString(_examsKey);
-      if (raw != null) {
-        final list = jsonDecode(raw) as List<dynamic>;
-        return list
-            .whereType<Map<String, dynamic>>()
-            .map((e) => ExamItem.fromJson(e))
-            .toList();
+  Future<List<ExamItem>> _loadLocalExams(String cacheKey) async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(cacheKey);
+    if (raw == null) return const [];
+    final decoded = jsonDecode(raw);
+    if (decoded is! List) throw const FormatException('首页考试缓存格式无效');
+    return decoded.map((item) {
+      if (item is! Map<String, dynamic>) {
+        throw const FormatException('首页考试缓存条目格式无效');
       }
-    } catch (_) {}
-    // 无本地真实考试数据时返回空列表，绝不展示/落盘伪造的示例考试。
-    return const [];
+      return ExamItem.fromJson(item);
+    }).toList();
   }
 
-  Future<void> _saveLocalExams(List<ExamItem> data) async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final list = data
-          .map((e) => {
-                'name': e.name,
-                'date': e.date,
-                'time': e.time,
-                'weekday': e.weekday,
-                'location': e.location,
-              })
-          .toList();
-      await prefs.setString(_examsKey, jsonEncode(list));
-    } catch (_) {}
+  Future<void> _saveLocalExams(String cacheKey, List<ExamItem> data) async {
+    final prefs = await SharedPreferences.getInstance();
+    final list = data
+        .map((e) => {
+              'name': e.name,
+              'date': e.date,
+              'time': e.time,
+              'weekday': e.weekday,
+              'location': e.location,
+            })
+        .toList();
+    if (!await prefs.setString(cacheKey, jsonEncode(list))) {
+      throw StateError('无法保存首页考试缓存，请检查设备存储');
+    }
   }
 
   @override
@@ -643,7 +676,11 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
                   return _HomeLayoutItem(
                     id: id,
                     size: size,
-                    child: _homeModuleFor(id, size),
+                    child: KeyedSubtree(
+                      key: ValueKey(
+                          'home-module.$_homeNamespace.${widget.year}.${widget.term}.${widget.firstWeekStart}.$id'),
+                      child: _homeModuleFor(id, size),
+                    ),
                   );
                 }).toList();
                 ListView buildList() => ListView(
@@ -702,19 +739,36 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
   }
 
   Future<void> _updateHomeWidget() async {
+    final generation = _dashboardGeneration;
+    final api = widget.api;
+    final namespace = api.namespace;
+    final sessionId = api.sessionId;
+    final year = widget.year;
+    final term = widget.term;
+    final firstWeekStart = widget.firstWeekStart;
+    final fallbackInfo = _fallbackStudentInfo();
     try {
-      final results = await Future.wait([
-        _infoFuture,
+      final results = await Future.wait<Object?>([
+        _infoFuture.then<Object?>((value) => value, onError: (_, __) => null),
+        // 读取生效课表失败不能写入「无课」，否则会清空组件并掩盖同步错误。
         _scheduleFuture,
-        _ecardFuture,
-        _progressFuture,
-        _gradesFuture,
-        _examsFuture,
-      ].map((future) =>
-          future.then<Object?>((value) => value, onError: (_, __) => null)));
+        ...[
+          _ecardFuture,
+          _progressFuture,
+          _gradesFuture,
+          _examsFuture
+        ].map((future) =>
+            future.then<Object?>((value) => value, onError: (_, __) => null)),
+      ]);
+      if (!mounted ||
+          generation != _dashboardGeneration ||
+          api.namespace != namespace ||
+          api.sessionId != sessionId) {
+        return;
+      }
       final data = HomeDashboardData(
-        info: results[0] as StudentInfo? ?? _fallbackStudentInfo(),
-        courses: (results[1] as ScheduleResult?)?.items ?? const [],
+        info: results[0] as StudentInfo? ?? fallbackInfo,
+        occurrences: results[1] as List<ScheduleOccurrence>,
         notices: const [],
         attendance:
             AttendanceResponse.fromJson({'status': 'empty', 'items': []}),
@@ -727,16 +781,20 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
         grades: results[4] as List<GradeItem>?,
         exams: results[5] as List<ExamItem>?,
       );
+      final scheduleContextJson = _widgetScheduleContextJson;
+      if (scheduleContextJson == null) throw StateError('桌面组件缺少当前课表上下文');
       await HomeWidgetBridge.update(
         data: data,
-        currentWeek: widget.currentWeek,
-        firstWeekStart: widget.firstWeekStart,
-        apiBaseUrl: widget.api.baseUrl,
-        sessionId: widget.api.sessionId ?? '',
-        year: widget.year,
-        term: widget.term,
+        firstWeekStart: firstWeekStart,
+        apiBaseUrl: api.baseUrl,
+        sessionId: sessionId ?? '',
+        scheduleContextJson: scheduleContextJson,
+        year: year,
+        term: term,
       );
-    } catch (_) {}
+    } catch (error) {
+      debugPrint('首页桌面组件更新失败：$error');
+    }
   }
 
   /// 根据模块尺寸返回应占行数（小=1，中=2，大=2）。
@@ -771,7 +829,7 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
   Widget _homeModuleFor(String id, HomeModuleSize size) {
     switch (id) {
       case 'nextClass':
-        return _AsyncModuleCard<ScheduleResult>(
+        return _AsyncModuleCard<List<ScheduleOccurrence>>(
           future: _scheduleFuture,
           onRetry: _retryDashboard,
           title: '下一节课',
@@ -779,12 +837,8 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
           density: _cardDensity(size),
           minHeight: _moduleHeight(size, context.gzusBreakpoint),
           builder: (data) {
-            final timedCourses = homeTimedCourses(
-              data.items,
-              currentWeek: widget.currentWeek,
-              firstWeekStart: widget.firstWeekStart,
-            );
-            final course = nextTimedCourse(timedCourses);
+            final timedCourses = homeTimedCourses(data);
+            final course = nextTimedCourse(timedCourses, DateTime.now());
             void onTap() => widget.onNavigate('schedule');
             return switch (size) {
               HomeModuleSize.large => NextClassMediumCard(
@@ -806,7 +860,7 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
           },
         );
       case 'todayTimeline':
-        return _AsyncModuleCard<ScheduleResult>(
+        return _AsyncModuleCard<List<ScheduleOccurrence>>(
           future: _scheduleFuture,
           onRetry: _retryDashboard,
           title: '今日时间线',
@@ -814,12 +868,8 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
           density: _cardDensity(size),
           minHeight: _moduleHeight(size, context.gzusBreakpoint),
           builder: (data) {
-            final timedCourses = homeTimedCourses(
-              data.items,
-              currentWeek: widget.currentWeek,
-              firstWeekStart: widget.firstWeekStart,
-            );
-            final courses = todayTimedCourses(timedCourses);
+            final timedCourses = homeTimedCourses(data);
+            final courses = todayTimedCourses(timedCourses, DateTime.now());
             void onTap() => widget.onNavigate('schedule');
             return switch (size) {
               HomeModuleSize.large => TodayTimelineLargeCard(
@@ -841,7 +891,7 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
           },
         );
       case 'weekGrid':
-        return _AsyncModuleCard<ScheduleResult>(
+        return _AsyncModuleCard<List<ScheduleOccurrence>>(
           future: _scheduleFuture,
           onRetry: _retryDashboard,
           title: '周课表',
@@ -849,8 +899,9 @@ class _HomePageState extends State<HomePage> with PageSilentRefresh<HomePage> {
           density: _cardDensity(size),
           minHeight: _moduleHeight(size, context.gzusBreakpoint),
           builder: (data) {
-            final courses = data.items
-                .where((item) => item.occursInWeek(widget.currentWeek))
+            final courses = data
+                .where((item) => item.week == widget.currentWeek)
+                .map((item) => item.course.copyWith(weeks: '${item.week}'))
                 .toList();
             void onTap() => widget.onNavigate('schedule');
             return switch (size) {
@@ -1740,33 +1791,27 @@ class HomeWidgetBridge {
 
   static Future<void> update({
     required HomeDashboardData data,
-    required int currentWeek,
     required DateTime firstWeekStart,
     required String apiBaseUrl,
     required String sessionId,
     required int year,
     required int term,
+    required String scheduleContextJson,
   }) async {
     if (kIsWeb) return;
-    final timedCourses = homeTimedCourses(
-      data.courses,
-      currentWeek: currentWeek,
-      firstWeekStart: firstWeekStart,
-    );
-    final today = todayTimedCourses(timedCourses);
-    final next = nextTimedCourse(timedCourses);
-    final tomorrowDate = DateTime.now().add(const Duration(days: 1));
-    final tomorrow = timedCourses.where((item) {
-      return item.start.year == tomorrowDate.year &&
-          item.start.month == tomorrowDate.month &&
-          item.start.day == tomorrowDate.day;
-    }).toList();
-    final noTodayOrTomorrow = today.isEmpty && tomorrow.isEmpty;
-    final weeklyCourses = timedCourses.map((item) {
+    final now = DateTime.now();
+    final timedCourses = homeTimedCourses(data.occurrences);
+    final today = todayTimedCourses(timedCourses, now);
+    final next = nextTimedCourse(timedCourses, now);
+    final todayWeek = weekFromDate(firstWeekStart, now);
+    final weeklyCourses = timedCourses
+        .where((item) => item.occurrence.week == todayWeek)
+        .map((item) {
       final course = item.course;
       return {
-        'itemKey': _widgetCourseKey(course),
-        'week': currentWeek,
+        'itemKey': item.occurrence.occurrenceKey,
+        'week': item.occurrence.week,
+        'date': dateText(item.occurrence.date),
         'weekday': course.weekday ?? 0,
         'startSection': course.startSection ?? 0,
         'endSection': course.endSection ?? course.startSection ?? 0,
@@ -1800,39 +1845,33 @@ class HomeWidgetBridge {
     final gradeStats = _widgetGradeStats(validGrades);
     try {
       await _channel.invokeMethod('update', {
-        'nextTitle':
-            noTodayOrTomorrow ? '今明无课' : (next?.course.name ?? '暂无下一节课'),
-        'nextMeta': noTodayOrTomorrow
-            ? '今日、明日暂无课程'
-            : (next == null ? '今天没有更多课程' : '${next.timeText} · $nextLocation'),
-        'nextDetail': noTodayOrTomorrow || next == null
+        'nextTitle': next?.course.name ?? '暂无下一节课',
+        'nextMeta':
+            next == null ? '暂无待上课程' : '${next.nextTimeText} · $nextLocation',
+        'nextDetail': next == null
             ? '点击查看课表'
             : _cleanJoin([
                 _notBlank(next.course.teacher),
                 next.isOngoing ? '进行中' : '待开始',
               ], ' · '),
-        'nextClassroom':
-            noTodayOrTomorrow ? '' : (next?.course.classroom ?? ''),
-        'nextTeacher': noTodayOrTomorrow ? '' : (next?.course.teacher ?? ''),
-        'nextStatus': noTodayOrTomorrow || next == null
-            ? 'none'
-            : (next.isOngoing ? 'ongoing' : 'upcoming'),
-        'nextTime': noTodayOrTomorrow ? '' : (next?.timeText ?? ''),
-        'nextStartEpochMillis':
-            noTodayOrTomorrow ? 0 : (next?.start.millisecondsSinceEpoch ?? 0),
-        'nextEndEpochMillis':
-            noTodayOrTomorrow ? 0 : (next?.end.millisecondsSinceEpoch ?? 0),
+        'nextClassroom': next?.course.classroom ?? '',
+        'nextTeacher': next?.course.teacher ?? '',
+        'nextStatus':
+            next == null ? 'none' : (next.isOngoing ? 'ongoing' : 'upcoming'),
+        'nextTime': next?.nextTimeText ?? '',
+        'nextStartEpochMillis': next?.start.millisecondsSinceEpoch ?? 0,
+        'nextEndEpochMillis': next?.end.millisecondsSinceEpoch ?? 0,
         'widgetUpdatedAtEpochMillis': DateTime.now().millisecondsSinceEpoch,
         'todayTitle': today.isEmpty ? '今日无课' : '今日 ${today.length} 节课',
-        'todayMeta': '第$currentWeek周 · ${today.length} 节课',
+        'todayMeta': '第$todayWeek周 · ${today.length} 节课',
         'todayItems': today
             .take(4)
             .map((item) => '${item.timeText} ${item.course.name}')
             .toList(),
         'todayCoursesJson': jsonEncode(today
             .map((item) => {
-                  'itemKey': _widgetCourseKey(item.course),
-                  'week': currentWeek,
+                  'itemKey': item.occurrence.occurrenceKey,
+                  'week': item.occurrence.week,
                   'weekday': item.course.weekday ?? 0,
                   'startSection': item.course.startSection ?? 0,
                   'time': '${_two(item.start.hour)}:${_two(item.start.minute)}',
@@ -1844,6 +1883,9 @@ class HomeWidgetBridge {
                 })
             .toList()),
         'weeklyCoursesJson': jsonEncode(weeklyCourses),
+        'effectiveCoursesJson':
+            jsonEncode(widgetScheduleItems(data.occurrences)),
+        'widgetScheduleContextJson': scheduleContextJson,
         'utilityTitle':
             data.ecard.isBound ? (data.ecard.roomDisplay ?? '生活缴费') : '未绑定宿舍',
         'utilityMeta':
@@ -1908,11 +1950,13 @@ class HomeWidgetBridge {
         'widgetSessionId': sessionId,
         'widgetYear': year,
         'widgetTerm': term,
-        'widgetCurrentWeek': currentWeek,
+        'widgetCurrentWeek': todayWeek.clamp(1, 30),
         'widgetFirstWeekStartEpochMillis':
             firstWeekStart.millisecondsSinceEpoch,
       }).timeout(const Duration(milliseconds: 300));
-    } catch (_) {}
+    } catch (error) {
+      throw StateError('更新桌面组件失败：$error');
+    }
   }
 
   static Future<WidgetLaunchTarget?> consumeInitialTarget() async {
@@ -1999,12 +2043,6 @@ class WidgetLaunchTarget {
       startSection: number(value['startSection']),
     );
   }
-}
-
-String _widgetCourseKey(ScheduleCourse course) {
-  final raw = course.raw;
-  final source = raw['courseId'] ?? raw['kch_id'] ?? raw['courseCode'];
-  return '${source ?? course.name}:${course.weekday ?? 0}:${course.startSection ?? 0}';
 }
 
 ({String gpa, String average, int count}) _widgetGradeStats(
@@ -2125,10 +2163,6 @@ class _AsyncModuleCardState<T> extends State<_AsyncModuleCard<T>> {
           );
         }
         if (snapshot.hasError) {
-          if (_lastData != null) {
-            // 静默刷新失败：保留旧数据
-            return widget.builder(_lastData as T);
-          }
           return HomeCardShell(
             title: widget.title,
             icon: widget.icon,
@@ -2210,6 +2244,7 @@ class _AsyncModuleError extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     return Center(
+      key: const ValueKey('home-module-error'),
       child: FittedBox(
         fit: BoxFit.scaleDown,
         child: Column(

@@ -121,14 +121,22 @@ def _cover_file_name(article_id: int, mime: str | None) -> str:
 def download_cover_image(url: str) -> DownloadedImage:
     """下载公众号封面；失败重试后抛出明确错误，不生成不完整资源包。"""
     parsed = urlparse(url)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise ShiplyContentExportError(f"公众号封面 URL 无效: {url}")
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname not in {"mmbiz.qpic.cn", "mmbiz.qlogo.cn"}
+        or parsed.port is not None
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        raise ShiplyContentExportError(f"公众号封面仅支持微信 HTTPS 图片域名: {url}")
     last_error: Exception | None = None
     for attempt in range(1, DOWNLOAD_RETRIES + 1):
         try:
-            with httpx.Client(timeout=DOWNLOAD_TIMEOUT, follow_redirects=True) as client:
+            with httpx.Client(timeout=DOWNLOAD_TIMEOUT, follow_redirects=False) as client:
                 response = client.get(url)
                 response.raise_for_status()
+            if 300 <= response.status_code < 400:
+                raise ShiplyContentExportError(f"公众号封面发生未允许的跳转: {url}")
             content_type = response.headers.get("content-type", "").split(";", 1)[0].strip()
             if not content_type.startswith("image/"):
                 raise ShiplyContentExportError(

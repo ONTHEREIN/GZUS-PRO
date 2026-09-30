@@ -28,15 +28,19 @@ class LiveActivityService {
     _sessionId = api.sessionId;
     final prefs = await SharedPreferences.getInstance();
     _enabled = prefs.getBool('live_activities_enabled') ?? true;
+    if (!_initialized) {
+      _channel.setMethodCallHandler(_handleNativeEvent);
+      _initialized = true;
+    }
+    if (!_enabled) {
+      await _channel.invokeMethod<bool>('clearConfiguration');
+      return;
+    }
     await _channel.invokeMethod<bool>('configure', {
       'baseUrl': api.baseUrl,
       'sessionId': api.sessionId,
       'environment': _iosPushEnvironment,
     });
-    if (!_initialized) {
-      _channel.setMethodCallHandler(_handleNativeEvent);
-      _initialized = true;
-    }
     final capabilities = await _getCapabilities();
     _deviceId = capabilities['installationId']?.toString().trim();
     if (capabilities['enabled'] != true) return;
@@ -86,10 +90,11 @@ class LiveActivityService {
     if (kIsWeb || defaultTargetPlatform != TargetPlatform.iOS) return;
     if (!enabled) {
       _activeEvents.clear();
+      await _channel.invokeMethod<bool>('clearConfiguration');
       try {
         await _channel.invokeMethod<bool>('endAll');
       } on PlatformException {
-        return;
+        // 原生活动可能已经结束，仍需删除服务端令牌。
       }
       final api = _api;
       if (api != null &&
@@ -103,6 +108,15 @@ class LiveActivityService {
       }
       return;
     }
+    final api = _api;
+    if (api == null || api.sessionId == null) {
+      throw StateError('启用实况通知前需要有效登录会话');
+    }
+    await _channel.invokeMethod<bool>('configure', {
+      'baseUrl': api.baseUrl,
+      'sessionId': api.sessionId,
+      'environment': _iosPushEnvironment,
+    });
     final token =
         await _channel.invokeMethod<String>('registerPushToStartToken');
     if (token != null && token.isNotEmpty) {
@@ -340,7 +354,7 @@ class LiveActivityEvent {
             endTime != null &&
             endTime.isAfter(startTime);
     return LiveActivityEvent(
-      id: (value('id') ?? _fallbackId(message)).toString(),
+      id: (value('eventKey') ?? value('id') ?? _fallbackId(message)).toString(),
       type: type,
       title: value('title')?.toString() ?? '软帮手',
       body: value('body')?.toString() ?? '',
@@ -423,10 +437,7 @@ class LiveActivityEvent {
 
   DateTime get effectiveEndTime {
     if (endTime != null) return endTime!;
-    if (type == 'course_reminder') {
-      return createdAt.add(const Duration(minutes: 15));
-    }
-    return createdAt.add(const Duration(hours: 4));
+    return createdAt.add(const Duration(minutes: 15));
   }
 
   String get deepLink {

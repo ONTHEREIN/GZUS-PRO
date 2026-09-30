@@ -38,7 +38,7 @@ void main() {
     }
   });
 
-  test('non-countdown events receive the four-hour design lifetime', () {
+  test('non-countdown events receive the fifteen-minute live lifetime', () {
     final before = DateTime.now();
     final event = LiveActivityEvent(
       id: 'notice:1',
@@ -46,7 +46,7 @@ void main() {
       title: '新通知',
       body: '摘要',
     );
-    final after = DateTime.now().add(const Duration(hours: 4, seconds: 1));
+    final after = DateTime.now().add(const Duration(minutes: 15, seconds: 1));
 
     expect(event.effectiveEndTime.isAfter(before), isTrue);
     expect(event.effectiveEndTime.isBefore(after), isTrue);
@@ -222,7 +222,8 @@ void main() {
     expect(event.priority, 3);
   });
 
-  test('Android payload preserves aliases, routing and structured summaries', () {
+  test('Android payload preserves aliases, routing and structured summaries',
+      () {
     final start = DateTime(2026, 9, 18, 8);
     final end = start.add(const Duration(hours: 2));
     final event = LiveActivityEvent.fromMessage({
@@ -279,7 +280,8 @@ void main() {
     expect(course.priority, lessThan(grade.priority));
   });
 
-  test('multiple native activities start without preempting each other', () async {
+  test('multiple native activities start without preempting each other',
+      () async {
     debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
     SharedPreferences.setMockInitialValues({
       'live_activities_enabled': true,

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'dart:io' show HttpClient, SocketException;
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:gbk_codec/gbk_codec.dart';
 import 'package:http/io_client.dart';
 import 'package:http/http.dart' as http;
@@ -126,6 +127,7 @@ class ApiClient {
   PersistentCache? _publicPersistentCache;
   Future<PersistentCache>? _publicPersistentCacheFuture;
   String? _credentialToken;
+  String? _sessionRefreshToken;
   String? _jwxtCookies;
   String? _ehallCookies;
   String? _ehallAuthToken;
@@ -160,6 +162,7 @@ class ApiClient {
   String get namespace =>
       _studentId ?? _offlineScheduleStudentId ?? sessionId ?? 'default';
   String? get studentId => _studentId;
+  String? get logoutCredentialToken => _credentialToken ?? _sessionRefreshToken;
   bool get isScheduleOnlyMode => _offlineScheduleStudentId != null;
   String? get jwxtCookies => _jwxtCookies;
   String? get ehallCookies => _ehallCookies;
@@ -575,6 +578,8 @@ class ApiClient {
     await _adoptLoginIdentity(result);
     _captureTransientEhallAuth(result);
     _cache.clear();
+    await clearSavedCredentialToken();
+    await saveSessionRefreshToken(result.sessionRefreshToken);
     await _saveSchoolAuth(result);
     return result;
   }
@@ -591,6 +596,7 @@ class ApiClient {
     await _adoptLoginIdentity(result);
     _captureTransientEhallAuth(result);
     _cache.clear();
+    _sessionRefreshToken = null;
     if (result.credentialToken != null) {
       _credentialToken = result.credentialToken;
     }
@@ -614,19 +620,17 @@ class ApiClient {
   }
 
   Map<String, dynamic> _loginPayload(String account, String password) {
-    final body = <String, dynamic>{'account': account};
     final publicKeyPem = _rsaPublicKeyPem;
     final keyId = _rsaKeyId;
-    if (publicKeyPem != null && keyId != null) {
-      final encrypted = _rsaEncrypt(password, publicKeyPem);
-      if (encrypted != null) {
-        body['encryptedPassword'] = encrypted;
-        body['keyId'] = keyId;
-        return body;
-      }
+    if (publicKeyPem == null || keyId == null) {
+      throw ApiException('无法获取登录公钥，请检查网络后重试');
     }
-    body['password'] = password;
-    return body;
+    final encrypted = _rsaEncrypt(password, publicKeyPem);
+    return <String, dynamic>{
+      'account': account,
+      'encryptedPassword': encrypted,
+      'keyId': keyId,
+    };
   }
 
   bool _isPasswordDecryptFailure(String message) =>
@@ -647,8 +651,14 @@ class ApiClient {
     }
   }
 
-  Future<void> revokeSession(String activeSessionId) async {
-    await _postSessionCleanup('/auth/logout', activeSessionId);
+  Future<void> revokeSession(
+    String activeSessionId,
+    String? credentialToken,
+  ) async {
+    await _postSessionCleanupWithBody('/auth/logout', activeSessionId, {
+      if (credentialToken != null && credentialToken.isNotEmpty)
+        'credentialToken': credentialToken,
+    });
   }
 
   /// 立即清除凭证，防止后续请求触发 relogin 重试
@@ -658,6 +668,7 @@ class ApiClient {
     setStudentId(null);
     _offlineScheduleStudentId = null;
     _credentialToken = null;
+    _sessionRefreshToken = null;
     _jwxtCookies = null;
     _ehallCookies = null;
     _ehallAuthToken = null;
@@ -669,6 +680,11 @@ class ApiClient {
     clearCredentials();
     await _authStorage.clear();
     await _clearSavedAuthPreferences();
+  }
+
+  Future<void> clearSessionRefreshToken() async {
+    _sessionRefreshToken = null;
+    await _authStorage.clearSessionRefreshToken();
   }
 
   /// 登录态失效后清除个人数据，只允许读取此前缓存的课表。
@@ -700,6 +716,7 @@ class ApiClient {
     setStudentId(null);
     _offlineScheduleStudentId = null;
     _credentialToken = null;
+    _sessionRefreshToken = null;
     _jwxtCookies = null;
     _ehallCookies = null;
     _ehallAuthToken = null;
@@ -730,10 +747,30 @@ class ApiClient {
   }
 
   Future<LoginResult> _reloginOnce() async {
-    await loadSavedCredentials();
-    if (_credentialToken != null) {
+    try {
+      await loadSavedCredentials();
+    } on PlatformException catch (error, stackTrace) {
+      AppLogger.error('读取本地自动登录凭据失败', error, stackTrace);
+      debugPrint('[Auth] 读取本地自动登录凭据失败：${error.code}');
+      rethrow;
+    }
+    final hasCredentialToken =
+        _credentialToken != null && _credentialToken!.isNotEmpty;
+    final credentialStatus =
+        '自动续登凭据读取结果：hasCredentialToken=$hasCredentialToken';
+    AppLogger.info(credentialStatus);
+    debugPrint('[Auth] $credentialStatus');
+    if (hasCredentialToken) {
       return _reloginWithCredentialToken(_credentialToken!);
     }
+    final sessionRefreshToken = _sessionRefreshToken;
+    if (sessionRefreshToken != null && sessionRefreshToken.isNotEmpty) {
+      AppLogger.info('检测到统一认证会话恢复凭据');
+      debugPrint('[Auth] 检测到统一认证会话恢复凭据');
+      return _reloginWithSessionRefreshToken(sessionRefreshToken);
+    }
+    AppLogger.warning('自动续登未执行：本地没有可用的长期登录凭据');
+    debugPrint('[Auth] 自动续登未执行：本地没有可用的长期登录凭据');
     throw ApiException('登录状态已失效，请重新登录', statusCode: 401);
   }
 
@@ -741,10 +778,59 @@ class ApiClient {
       String credentialToken) async {
     // 直接发HTTP请求，不走 _withReloginRetry，避免 relogin 自身 401 时无限递归
     final url = _requireBaseUrl();
+    late final http.Response response;
+    try {
+      response = await _http
+          .post(Uri.parse('$url/auth/relogin'),
+              headers: _headers(),
+              body: jsonEncode({'credentialToken': credentialToken}))
+          .timeout(_requestTimeout);
+    } on TimeoutException {
+      AppLogger.warning('自动续登请求超时');
+      debugPrint('[Auth] 自动续登请求超时');
+      rethrow;
+    } on http.ClientException {
+      AppLogger.warning('自动续登请求连接失败');
+      debugPrint('[Auth] 自动续登请求连接失败');
+      rethrow;
+    } on SocketException {
+      AppLogger.warning('自动续登请求网络失败');
+      debugPrint('[Auth] 自动续登请求网络失败');
+      rethrow;
+    }
+    AppLogger.info('自动续登响应：status=${response.statusCode}');
+    debugPrint('[Auth] 自动续登响应：status=${response.statusCode}');
+    final decoded = _decode(response);
+    final result = LoginResult.fromJson(decoded as Map<String, dynamic>);
+    final previousSessionId = sessionId;
+    sessionId = result.sessionId;
+    await _adoptLoginIdentity(result);
+    _captureTransientEhallAuth(result);
+    _cache.clear();
+    _sessionRefreshToken = null;
+
+    await saveCredentialToken(result.credentialToken ?? credentialToken);
+    await _saveSchoolAuth(result);
+    final activeSessionId = result.sessionId;
+    final sessionStatus =
+        '自动续登完成：sessionRotated=${activeSessionId != null && activeSessionId != previousSessionId}';
+    AppLogger.info(sessionStatus);
+    debugPrint('[Auth] $sessionStatus');
+    if (activeSessionId != null && activeSessionId != previousSessionId) {
+      await onSessionReplaced?.call(activeSessionId);
+    }
+    return result;
+  }
+
+  Future<LoginResult> _reloginWithSessionRefreshToken(
+      String sessionRefreshToken) async {
+    final url = _requireBaseUrl();
     final response = await _http
-        .post(Uri.parse('$url/auth/relogin'),
-            headers: _headers(),
-            body: jsonEncode({'credentialToken': credentialToken}))
+        .post(
+          Uri.parse('$url/auth/session-relogin'),
+          headers: _headers(),
+          body: jsonEncode({'credentialToken': sessionRefreshToken}),
+        )
         .timeout(_requestTimeout);
     final decoded = _decode(response);
     final result = LoginResult.fromJson(decoded as Map<String, dynamic>);
@@ -753,14 +839,22 @@ class ApiClient {
     await _adoptLoginIdentity(result);
     _captureTransientEhallAuth(result);
     _cache.clear();
-
-    await saveCredentialToken(result.credentialToken ?? credentialToken);
+    await clearSavedCredentialToken();
+    await saveSessionRefreshToken(
+      result.sessionRefreshToken ?? sessionRefreshToken,
+    );
     await _saveSchoolAuth(result);
     final activeSessionId = result.sessionId;
     if (activeSessionId != null && activeSessionId != previousSessionId) {
       await onSessionReplaced?.call(activeSessionId);
     }
     return result;
+  }
+
+  Future<void> saveSessionRefreshToken(String? token) async {
+    if (token == null || token.isEmpty) return;
+    await _authStorage.saveSessionRefreshToken(token);
+    _sessionRefreshToken = token;
   }
 
   Future<void> _adoptLoginIdentity(LoginResult result) async {
@@ -832,6 +926,7 @@ class ApiClient {
     _account = prefs.getString('auth.account');
     _isDemo = prefs.getBool('auth.isDemo') ?? false;
     _credentialToken = sensitiveAuth.credentialToken;
+    _sessionRefreshToken = sensitiveAuth.sessionRefreshToken;
     if (_isSchoolDirectEnabled) {
       _jwxtCookies = sensitiveAuth.jwxtCookies;
     }
@@ -886,7 +981,7 @@ class ApiClient {
     }
   }
 
-  String? _rsaEncrypt(String plaintext, String publicKeyPem) {
+  String _rsaEncrypt(String plaintext, String publicKeyPem) {
     try {
       final parser = encrypt.RSAKeyParser();
       final publicKey = parser.parse(publicKeyPem) as RSAPublicKey;
@@ -896,8 +991,8 @@ class ApiClient {
       ));
       final encrypted = encrypter.encrypt(plaintext);
       return encrypted.base64;
-    } catch (_) {
-      return null;
+    } catch (error) {
+      throw ApiException('登录公钥无效，无法加密密码，请联系管理员（${error.runtimeType}）');
     }
   }
 
@@ -1032,7 +1127,7 @@ class ApiClient {
 
   Future<ScheduleAdjustmentRecord> createScheduleAdjustment(
       ScheduleAdjustmentRecord adjustment) async {
-    final result = await _post(
+    final result = await _postScheduleAdjustment(
       '/settings/schedule/adjustments',
       adjustment.toJson()
         ..remove('status')
@@ -1066,11 +1161,22 @@ class ApiClient {
     required String clientId,
     required int expectedRevision,
   }) async {
-    final result = await _post(
+    final result = await _postScheduleAdjustment(
       '/settings/schedule/adjustments/$clientId/restore?expectedRevision=$expectedRevision',
       const {},
     );
     return ScheduleAdjustmentRecord.fromJson(result);
+  }
+
+  Future<Map<String, dynamic>> _postScheduleAdjustment(
+      String path, Map<String, dynamic> body) {
+    final accountNamespace = namespace;
+    return _withReloginRetry(() {
+      if (namespace != accountNamespace) {
+        throw ApiException('账号已切换，请重新同步调课');
+      }
+      return _postWithoutRelogin(path, body);
+    });
   }
 
   Future<BackgroundNotificationStatus?>
@@ -1697,7 +1803,7 @@ class ApiClient {
     required DateTime endDate,
     required DateTime firstWeekStart,
     List<Map<String, dynamic>> courses = const [],
-    List<Map<String, dynamic>> effectiveOccurrences = const [],
+    required List<Map<String, dynamic>> effectiveOccurrences,
     List<String> selectedCourseKeys = const [],
   }) async {
     final data = await _post('/ehall/leave/preview', {
@@ -1707,8 +1813,7 @@ class ApiClient {
       'endDate': dateText(endDate),
       'firstWeekStart': dateText(firstWeekStart),
       if (courses.isNotEmpty) 'courses': courses,
-      if (effectiveOccurrences.isNotEmpty)
-        'effectiveOccurrences': effectiveOccurrences,
+      'effectiveOccurrences': effectiveOccurrences,
       if (selectedCourseKeys.isNotEmpty)
         'selectedCourseKeys': selectedCourseKeys,
     });
@@ -1725,7 +1830,7 @@ class ApiClient {
     required List<PickedAttachment> attachments,
     List<MatchedTeacherItem> teacherHandlers = const [],
     List<Map<String, dynamic>> courses = const [],
-    List<Map<String, dynamic>> effectiveOccurrences = const [],
+    required List<Map<String, dynamic>> effectiveOccurrences,
     List<String> selectedCourseKeys = const [],
   }) async {
     final data = await _post('/ehall/leave/fill', {
@@ -1746,8 +1851,7 @@ class ApiClient {
         'teacherHandlers':
             teacherHandlers.map((item) => item.toJson()).toList(),
       if (courses.isNotEmpty) 'courses': courses,
-      if (effectiveOccurrences.isNotEmpty)
-        'effectiveOccurrences': effectiveOccurrences,
+      'effectiveOccurrences': effectiveOccurrences,
       if (selectedCourseKeys.isNotEmpty)
         'selectedCourseKeys': selectedCourseKeys,
     });
@@ -2132,6 +2236,16 @@ class ApiClient {
     );
   }
 
+  Future<bool> claimNotificationEvent(String eventId) async {
+    final installationId = await NotificationInstallation.id();
+    final data = await _postWithHeaders(
+      '/notifications/events/${Uri.encodeComponent(eventId)}/claim',
+      {},
+      {'X-Installation-Id': installationId},
+    );
+    return data['claimed'] == true;
+  }
+
   Future<void> markNotificationRead(String eventId) async {
     await _post(
       '/notifications/events/${Uri.encodeComponent(eventId)}/read',
@@ -2313,6 +2427,21 @@ class ApiClient {
   Future<Map<String, dynamic>> adminNotices(
           {int limit = 50, int offset = 0}) async =>
       _get('/admin/notices?limit=$limit&offset=$offset');
+
+  /// 用管理员会话读取未发布校历的预览图。
+  Future<Uint8List> adminNoticePreview(int noticeId) async {
+    final url = _requireBaseUrl();
+    final response = await _http
+        .get(
+          Uri.parse('$url/admin/notices/$noticeId/preview'),
+          headers: _headers(),
+        )
+        .timeout(_requestTimeout);
+    if (response.statusCode >= 400) {
+      throw ApiException('读取校历预览图失败', statusCode: response.statusCode);
+    }
+    return response.bodyBytes;
+  }
 
   /// 上传校历/通知（imageData 为 base64，可带 data:image/...;base64 前缀）。
   Future<Map<String, dynamic>> adminCreateNotice({
@@ -2836,7 +2965,8 @@ class ApiClient {
     } on ApiException catch (e) {
       if (e.statusCode == 401) {
         await loadSavedCredentials();
-        if (_credentialToken == null) {
+        if ((_credentialToken == null || _credentialToken!.isEmpty) &&
+            (_sessionRefreshToken == null || _sessionRefreshToken!.isEmpty)) {
           await enterScheduleOnlyMode();
           onReloginFailed?.call();
           throw ApiException('登录已过期，请重新登录', statusCode: 401);
@@ -2931,43 +3061,6 @@ class ApiClient {
         'X-GZUS-Trace-Id': _newTraceId(),
         'X-Session-Id': activeSessionId,
       };
-
-  Future<void> _postSessionCleanup(
-    String path,
-    String activeSessionId,
-  ) async {
-    final url = _requireBaseUrl();
-    Object? lastError;
-    StackTrace? lastStackTrace;
-    for (var attempt = 1; attempt <= 2; attempt++) {
-      try {
-        final response = await _http
-            .post(
-              Uri.parse('$url$path'),
-              headers: _headersForSession(activeSessionId),
-              body: jsonEncode({}),
-            )
-            .timeout(const Duration(seconds: 10));
-        _decodeObject(response);
-        return;
-      } catch (error, stackTrace) {
-        lastError = error;
-        lastStackTrace = stackTrace;
-        final sessionPrefix = activeSessionId.length <= 8
-            ? activeSessionId
-            : activeSessionId.substring(0, 8);
-        debugPrint(
-          '会话清理请求失败: path=$path, attempt=$attempt, '
-          'session=$sessionPrefix, '
-          'error=${error.runtimeType}',
-        );
-        if (attempt < 2) {
-          await Future<void>.delayed(const Duration(milliseconds: 300));
-        }
-      }
-    }
-    Error.throwWithStackTrace(lastError!, lastStackTrace!);
-  }
 
   Future<void> _postSessionCleanupWithBody(
     String path,

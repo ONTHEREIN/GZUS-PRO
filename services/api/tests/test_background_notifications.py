@@ -1,8 +1,9 @@
 import json
 
+import pytest
 from fastapi.testclient import TestClient
 
-from app import cloud_notifications
+from app import cloud_notifications, school_session_service
 from app.cloud_notifications import run_background_notification_poll_once
 from app.database import (
     BackgroundNotificationProfile,
@@ -172,6 +173,40 @@ def _client() -> tuple[TestClient, str]:
     return TestClient(app), session.id
 
 
+def test_background_poll_commits_previous_account_before_polling_next(monkeypatch):
+    with get_sync_session_factory()() as db:
+        for account in ("poll-first", "poll-second"):
+            db.add(BackgroundNotificationProfile(
+                student_id=account,
+                credential_fingerprint=account,
+                encrypted_credentials="test-credentials",
+            ))
+        db.commit()
+
+    processed_accounts: list[str] = []
+
+    def poll_profile(profile: BackgroundNotificationProfile) -> int:
+        if processed_accounts:
+            # 独立连接必须能读取已提交结果，并可更新上一账号，模拟会话刷新。
+            with get_sync_session_factory()() as db:
+                previous = db.query(BackgroundNotificationProfile).filter_by(
+                    student_id=processed_accounts[-1],
+                ).one()
+                assert previous.last_error == "poll-completed"
+                previous.last_error = "session-refreshed"
+                db.commit()
+        processed_accounts.append(profile.student_id)
+        profile.last_error = "poll-completed"
+        return 0
+
+    monkeypatch.setattr(cloud_notifications, "_poll_profile", poll_profile)
+    assert run_background_notification_poll_once() == {"processed": 2, "delivered": 0}
+    assert len(processed_accounts) == 2
+    with get_sync_session_factory()() as db:
+        rows = db.query(BackgroundNotificationProfile).all()
+        assert sorted(row.last_error for row in rows) == ["poll-completed", "session-refreshed"]
+
+
 def test_background_notification_access_can_be_enabled_synced_and_revoked():
     client, session_id = _client()
     token = encrypt_device_credentials(
@@ -224,6 +259,8 @@ def test_background_notification_access_can_be_enabled_synced_and_revoked():
     with factory() as db:
         assert db.query(BackgroundNotificationProfile).count() == 0
         assert db.query(NotificationDelivery).count() == 1
+    with pytest.raises(school_session_service.BackgroundAuthorizationRevokedError):
+        school_session_service.ensure_background_clients("20260001", token)
 
 
 def test_revoked_device_credential_removes_background_notification_profile():

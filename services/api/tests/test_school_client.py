@@ -583,6 +583,24 @@ def test_cookie_login_prefers_jsessionid_cookie():
     assert cookie == "JSESSIONID=abc123"
 
 
+@pytest.mark.parametrize("transport", ["httpx", "requests"])
+def test_persisted_cookies_only_include_academic_domain_and_path(transport):
+    with httpx.Client() as http_client:
+        client = SchoolSdkClient("https://jwxt.gzus.edu.cn/jwglxt")
+        if transport == "httpx":
+            client._httpx_client = http_client
+            cookies = http_client.cookies
+        else:
+            client._client = CookieSchoolClient().user_login_with_cookies("JSESSIONID=academic", "20240001")
+            cookies = client._client._http.cookies
+            cookies.clear()
+        cookies.set("JSESSIONID", "sso-session", domain="jwxt.gzus.edu.cn", path="/sso")
+        cookies.set("JSESSIONID", "academic-session", domain="jwxt.gzus.edu.cn", path="/jwglxt")
+        cookies.set("JSESSIONID", "cas-session", domain="cas.gzus.edu.cn", path="/")
+
+        assert client.get_jwxt_cookies_string() == "JSESSIONID=academic-session"
+
+
 def test_cookie_login_applies_all_cookies_to_user_session(monkeypatch):
     client = SchoolSdkClient("https://jwxt.seig.edu.cn/jwglxt")
     monkeypatch.setattr(client, "_load_school_client", lambda: CookieSchoolClient)

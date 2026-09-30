@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 import httpx
+from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from fastapi.testclient import TestClient
 
@@ -12,12 +13,26 @@ from app import push as push_service
 from app.database import (
     IosLiveActivityToken,
     IosPushToken,
+    AppSessionModel,
     NotificationDelivery,
     WebPushSubscription,
     get_sync_session_factory,
 )
 from app.main import app
+from app.routes.push import _TestPushClient
 from app.sessions import SessionStore
+
+
+def _web_push_keys() -> dict[str, str]:
+    public_key = ec.generate_private_key(ec.SECP256R1()).public_key()
+    encoded = public_key.public_bytes(
+        serialization.Encoding.X962,
+        serialization.PublicFormat.UncompressedPoint,
+    )
+    return {
+        "p256dh": base64.urlsafe_b64encode(encoded).rstrip(b"=").decode(),
+        "auth": base64.urlsafe_b64encode(b"0123456789abcdef").rstrip(b"=").decode(),
+    }
 
 
 def test_web_push_public_key_is_browser_base64url(monkeypatch):
@@ -35,6 +50,46 @@ def test_web_push_public_key_is_browser_base64url(monkeypatch):
     assert public_key is not None
     assert len(public_key) == 87
     assert all(character.isalnum() or character in "-_" for character in public_key)
+
+
+def test_web_push_delivery_rejects_stored_untrusted_target_and_disables_redirects(monkeypatch):
+    import pywebpush
+
+    from app import database
+
+    database.init_db()
+    with get_sync_session_factory()() as db:
+        db.add_all([
+            WebPushSubscription(
+                student_id="20260001", session_id="session-a",
+                endpoint="https://127.0.0.1/internal", p256dh="key", auth="auth",
+            ),
+            WebPushSubscription(
+                student_id="20260001", session_id="session-b",
+                endpoint="https://fcm.googleapis.com/send/token", p256dh="key", auth="auth",
+            ),
+        ])
+        db.commit()
+
+    requests_seen = []
+
+    def fake_webpush(**kwargs):
+        requests_seen.append(kwargs)
+
+    monkeypatch.setattr(push_service, "is_web_push_enabled", lambda: True)
+    monkeypatch.setattr(pywebpush, "webpush", fake_webpush)
+
+    assert push_service.send_web_push_to_student("20260001", "标题", "正文") == 1
+    assert len(requests_seen) == 1
+    assert requests_seen[0]["subscription_info"]["endpoint"] == (
+        "https://fcm.googleapis.com/send/token"
+    )
+    assert requests_seen[0]["requests_session"].max_redirects == 0
+    assert requests_seen[0]["timeout"] == 10
+    with get_sync_session_factory()() as db:
+        assert [row.endpoint for row in db.query(WebPushSubscription).all()] == [
+            "https://fcm.googleapis.com/send/token"
+        ]
 
 
 def test_push_keeps_success_from_one_channel_when_the_other_raises(monkeypatch):
@@ -82,6 +137,127 @@ def client():
 
 
 class TestPushRoutes:
+    def test_push_registration_preserves_credential_owner(self, client):
+        fingerprint = "a" * 64
+        session = client.app.state.sessions.create(
+            _TestPushClient(), credential_fingerprint=fingerprint
+        )
+        headers = {"X-Session-Id": session.id}
+        assert client.post(
+            "/push/web/register",
+            json={"endpoint": "https://fcm.googleapis.com/owned", "keys": _web_push_keys()},
+            headers=headers,
+        ).status_code == 200
+        assert client.post(
+            "/push/ios/register",
+            json={"deviceToken": "a" * 64, "environment": "production"},
+            headers=headers,
+        ).status_code == 200
+        assert client.post(
+            "/push/ios/live-activity-tokens",
+            json={"tokenType": "start", "token": "b" * 64, "environment": "production"},
+            headers=headers,
+        ).status_code == 200
+
+        with get_sync_session_factory()() as db:
+            for model in (WebPushSubscription, IosPushToken, IosLiveActivityToken):
+                assert db.query(model).one().credential_fingerprint == fingerprint
+
+    def test_registration_requires_identifiable_student(self, client):
+        class NoStudentClient:
+            def get_info(self) -> dict[str, str]:
+                return {}
+
+            def get_jwxt_cookies_string(self) -> str:
+                return ""
+
+            def logout(self) -> None:
+                return None
+
+        session = app.state.sessions.create(NoStudentClient(), "未知用户")
+        headers = {"X-Session-Id": session.id}
+        web = client.post(
+            "/push/web/register",
+            json={"endpoint": "https://fcm.googleapis.com/send/token", "keys": _web_push_keys()},
+            headers=headers,
+        )
+        ios = client.post(
+            "/push/ios/register",
+            json={"deviceToken": "a" * 64, "environment": "production"},
+            headers=headers,
+        )
+
+        assert web.status_code == ios.status_code == 401
+        with get_sync_session_factory()() as db:
+            assert db.query(WebPushSubscription).count() == 0
+            assert db.query(IosPushToken).count() == 0
+
+    @pytest.mark.parametrize("endpoint", [
+        "http://fcm.googleapis.com/send/token",
+        "https://127.0.0.1/internal",
+        "https://fcm.googleapis.com.evil.test/send/token",
+        "https://fcm.googleapis.com:8443/send/token",
+        "https://user@fcm.googleapis.com/send/token",
+    ])
+    def test_web_push_registration_rejects_untrusted_endpoint(self, client, endpoint):
+        session_id = client.post("/push/test-session").json()["sessionId"]
+        response = client.post(
+            "/push/web/register",
+            json={"endpoint": endpoint, "keys": _web_push_keys()},
+            headers={"X-Session-Id": session_id},
+        )
+        assert response.status_code == 422
+        with get_sync_session_factory()() as db:
+            assert db.query(WebPushSubscription).count() == 0
+
+    def test_web_push_registration_rejects_invalid_keys(self, client):
+        session_id = client.post("/push/test-session").json()["sessionId"]
+        valid_keys = _web_push_keys()
+        for keys in (
+            {**valid_keys, "p256dh": "invalid"},
+            {**valid_keys, "auth": "invalid"},
+        ):
+            response = client.post(
+                "/push/web/register",
+                json={"endpoint": "https://fcm.googleapis.com/send/token", "keys": keys},
+                headers={"X-Session-Id": session_id},
+            )
+            assert response.status_code == 422
+        with get_sync_session_factory()() as db:
+            assert db.query(WebPushSubscription).count() == 0
+
+    def test_web_push_registration_limits_one_session_to_five_endpoints(self, client):
+        session_id = client.post("/push/test-session").json()["sessionId"]
+        responses = [
+            client.post(
+                "/push/web/register",
+                json={
+                    "endpoint": f"https://fcm.googleapis.com/send/token-{index}",
+                    "keys": _web_push_keys(),
+                },
+                headers={"X-Session-Id": session_id},
+            )
+            for index in range(6)
+        ]
+        assert [response.status_code for response in responses] == [200] * 5 + [409]
+        with get_sync_session_factory()() as db:
+            assert db.query(WebPushSubscription).count() == 5
+
+    def test_push_test_endpoint_is_unavailable_in_production(self, client, monkeypatch):
+        from app.config import get_settings
+
+        session_id = client.post("/push/test-session").json()["sessionId"]
+        monkeypatch.setenv("DEBUG", "false")
+        get_settings.cache_clear()
+
+        response = client.post(
+            "/push/test",
+            json={"title": "测试"},
+            headers={"X-Session-Id": session_id},
+        )
+
+        assert response.status_code == 404
+
     def test_live_activity_routes_are_registered(self):
         paths = set(app.openapi()["paths"])
 
@@ -106,15 +282,15 @@ class TestPushRoutes:
         session_id = client.post("/push/test-session").json()["sessionId"]
         headers = {"X-Session-Id": session_id}
         endpoints = [
-            "https://push.example.test/device-a",
-            "https://push.example.test/device-b",
+            "https://fcm.googleapis.com/device-a",
+            "https://fcm.googleapis.com/device-b",
         ]
         for endpoint in endpoints:
             response = client.post(
                 "/push/web/register",
                 json={
                     "endpoint": endpoint,
-                    "keys": {"p256dh": "p256dh", "auth": "auth"},
+                    "keys": _web_push_keys(),
                 },
                 headers=headers,
             )
@@ -130,6 +306,132 @@ class TestPushRoutes:
         with get_sync_session_factory()() as db:
             rows = db.query(WebPushSubscription).all()
             assert [row.endpoint for row in rows] == [endpoints[1]]
+
+    def test_logout_cleans_only_its_device_push_targets(self, client):
+        first_id = client.post("/push/test-session").json()["sessionId"]
+        second_id = client.post("/push/test-session").json()["sessionId"]
+        for index, session_id in enumerate((first_id, second_id)):
+            headers = {"X-Session-Id": session_id}
+            assert client.post(
+                "/push/web/register",
+                json={
+                    "endpoint": f"https://fcm.googleapis.com/device-{index}",
+                    "keys": _web_push_keys(),
+                },
+                headers=headers,
+            ).status_code == 200
+            assert client.post(
+                "/push/ios/register",
+                json={"deviceToken": f"{index + 1:x}" * 64, "environment": "production"},
+                headers=headers,
+            ).status_code == 200
+            assert client.post(
+                "/push/ios/live-activity-tokens",
+                json={
+                    "tokenType": "start",
+                    "token": f"{index + 3:x}" * 64,
+                    "environment": "production",
+                },
+                headers=headers,
+            ).status_code == 200
+
+        assert client.post("/auth/logout", headers={"X-Session-Id": first_id}).status_code == 200
+
+        with get_sync_session_factory()() as db:
+            for model in (WebPushSubscription, IosPushToken, IosLiveActivityToken):
+                rows = db.query(model).all()
+                assert len(rows) == 1
+                assert rows[0].session_id == second_id
+
+    def test_old_session_logout_preserves_transferred_push_targets(self, client):
+        first_id = client.post("/push/test-session").json()["sessionId"]
+        second_id = client.post("/push/test-session").json()["sessionId"]
+        for session_id in (first_id, second_id):
+            headers = {"X-Session-Id": session_id}
+            assert client.post(
+                "/push/web/register",
+                json={
+                    "endpoint": "https://fcm.googleapis.com/same-browser",
+                    "keys": _web_push_keys(),
+                },
+                headers=headers,
+            ).status_code == 200
+            assert client.post(
+                "/push/ios/register",
+                json={"deviceToken": "a" * 64, "environment": "production"},
+                headers=headers,
+            ).status_code == 200
+
+        first_headers = {"X-Session-Id": first_id}
+        assert client.post(
+            "/push/web/unregister",
+            json={"endpoint": "https://fcm.googleapis.com/same-browser"},
+            headers=first_headers,
+        ).status_code == 200
+        assert client.post(
+            "/push/ios/unregister",
+            json={"deviceToken": "a" * 64, "environment": "production"},
+            headers=first_headers,
+        ).status_code == 200
+        assert client.post("/auth/logout", headers=first_headers).status_code == 200
+
+        with get_sync_session_factory()() as db:
+            assert db.query(WebPushSubscription).one().session_id == second_id
+            assert db.query(IosPushToken).one().session_id == second_id
+
+    def test_old_credential_revocation_preserves_transferred_push_targets(self, client):
+        store = client.app.state.sessions
+        first_fingerprint = "a" * 64
+        second_fingerprint = "b" * 64
+        first = store.create(_TestPushClient(), credential_fingerprint=first_fingerprint)
+        second = store.create(_TestPushClient(), credential_fingerprint=second_fingerprint)
+        for session_id in (first.id, second.id):
+            headers = {"X-Session-Id": session_id}
+            assert client.post(
+                "/push/web/register",
+                json={
+                    "endpoint": "https://fcm.googleapis.com/transferred",
+                    "keys": _web_push_keys(),
+                },
+                headers=headers,
+            ).status_code == 200
+            assert client.post(
+                "/push/ios/register",
+                json={"deviceToken": "a" * 64, "environment": "production"},
+                headers=headers,
+            ).status_code == 200
+            assert client.post(
+                "/push/ios/live-activity-tokens",
+                json={"tokenType": "start", "token": "b" * 64, "environment": "production"},
+                headers=headers,
+            ).status_code == 200
+
+        store.revoke_credential(first_fingerprint, reason="admin_kick")
+
+        with get_sync_session_factory()() as db:
+            for model in (WebPushSubscription, IosPushToken, IosLiveActivityToken):
+                row = db.query(model).one()
+                assert row.session_id == second.id
+                assert row.credential_fingerprint == second_fingerprint
+
+    def test_logout_cleans_push_target_after_session_row_expired(self, client):
+        session_id = client.post("/push/test-session").json()["sessionId"]
+        headers = {"X-Session-Id": session_id}
+        assert client.post(
+            "/push/web/register",
+            json={
+                "endpoint": "https://fcm.googleapis.com/expired-session",
+                "keys": _web_push_keys(),
+            },
+            headers=headers,
+        ).status_code == 200
+        with get_sync_session_factory()() as db:
+            db.query(AppSessionModel).filter_by(id=session_id).delete()
+            db.commit()
+
+        assert client.post("/auth/logout", headers=headers).status_code == 200
+        with get_sync_session_factory()() as db:
+            assert db.query(WebPushSubscription).count() == 0
 
     def test_ios_token_registration_updates_current_device(self, client):
         session_response = client.post("/push/test-session")
@@ -367,7 +669,7 @@ class TestPushRoutes:
         empty_response = client.get("/push/poll", headers={"X-Session-Id": session_id})
         assert empty_response.json()["messages"] == []
 
-    def test_notification_events_are_persisted_and_acknowledged_per_installation(self, client):
+    def test_notification_events_are_claimed_once_for_the_whole_account(self, client):
         session_id = client.post("/push/test-session").json()["sessionId"]
         with get_sync_session_factory()() as db:
             db.add(NotificationDelivery(
@@ -378,32 +680,98 @@ class TestPushRoutes:
                 body="高等数学：90",
                 extras_json=json.dumps({"type": "grade_update", "targetTab": "grades"}),
                 expires_at=datetime.now(timezone.utc) + timedelta(days=30),
+                delivery_expires_at=datetime.now(timezone.utc) + timedelta(minutes=15),
             ))
             db.commit()
 
-        headers = {
+        headers_a = {
             "X-Session-Id": session_id,
-            "X-Installation-Id": "android-test-installation",
+            "X-Installation-Id": "android-test-installation-a",
         }
-        events = client.get("/notifications/events", headers=headers)
+        headers_b = {**headers_a, "X-Installation-Id": "android-test-installation-b"}
+        events = client.get("/notifications/events", headers=headers_a)
         assert events.status_code == 200
         assert events.json()["events"][0]["id"] == "grade:test:90"
 
-        pending = client.get("/notifications/events/pending", headers=headers)
+        pending = client.get("/notifications/events/pending", headers=headers_a)
         assert [item["id"] for item in pending.json()["events"]] == ["grade:test:90"]
+        claimed = client.post(
+            "/notifications/events/grade%3Atest%3A90/claim",
+            headers=headers_a,
+        )
+        assert claimed.status_code == 200
+        assert claimed.json() == {"claimed": True}
+        with get_sync_session_factory()() as db:
+            delivery = db.query(NotificationDelivery).one()
+            assert delivery.claim_installation_id == headers_a["X-Installation-Id"]
+            assert delivery.claimed_at is not None
+        assert client.post(
+            "/notifications/events/grade%3Atest%3A90/claim",
+            headers=headers_b,
+        ).json() == {"claimed": False}
+        assert client.get("/notifications/events/pending", headers=headers_b).json()["events"] == []
+        assert client.post(
+            "/notifications/events/grade%3Atest%3A90/presented",
+            headers=headers_b,
+        ).status_code == 409
         presented = client.post(
             "/notifications/events/grade%3Atest%3A90/presented",
-            headers=headers,
+            headers=headers_a,
         )
         assert presented.status_code == 200
-        assert client.get("/notifications/events/pending", headers=headers).json()["events"] == []
+        assert client.get("/notifications/events/pending", headers=headers_b).json()["events"] == []
 
         read = client.post(
             "/notifications/events/grade%3Atest%3A90/read",
             headers={"X-Session-Id": session_id},
         )
         assert read.status_code == 200
-        assert client.get("/notifications/events", headers=headers).json()["events"][0]["readAt"]
+        assert client.get("/notifications/events", headers=headers_a).json()["events"][0]["readAt"]
+
+    def test_expired_claim_can_be_taken_over_and_legacy_event_is_not_pending(self, client):
+        session_id = client.post("/push/test-session").json()["sessionId"]
+        now = datetime.now(timezone.utc)
+        with get_sync_session_factory()() as db:
+            db.add(NotificationDelivery(
+                student_id="test-student",
+                event_key="notice:takeover",
+                notification_type="new_notice",
+                title="新公告",
+                body="公告内容",
+                extras_json=json.dumps({"type": "new_notice"}),
+                expires_at=now + timedelta(days=30),
+                delivery_expires_at=now + timedelta(minutes=15),
+                claim_installation_id="dead-device",
+                claim_expires_at=now - timedelta(seconds=1),
+            ))
+            db.add(NotificationDelivery(
+                student_id="test-student",
+                event_key="grade:legacy",
+                notification_type="grade_update",
+                title="旧成绩",
+                body="旧记录",
+                extras_json=json.dumps({"type": "grade_update"}),
+                expires_at=now + timedelta(days=30),
+            ))
+            db.commit()
+        headers = {
+            "X-Session-Id": session_id,
+            "X-Installation-Id": "new-device",
+        }
+        pending = client.get("/notifications/events/pending", headers=headers)
+        assert [item["id"] for item in pending.json()["events"]] == ["notice:takeover"]
+        assert client.post("/notifications/events/notice%3Atakeover/claim", headers=headers).json() == {
+            "claimed": True,
+        }
+        assert client.post(
+            "/notifications/events/notice%3Atakeover/presented",
+            headers={**headers, "X-Installation-Id": "dead-device"},
+        ).status_code == 409
+        history_ids = {
+            item["id"]
+            for item in client.get("/notifications/events", headers=headers).json()["events"]
+        }
+        assert {"notice:takeover", "grade:legacy"} <= history_ids
 
 
 def test_apns_payload_keeps_only_notification_routing_metadata():
@@ -547,6 +915,24 @@ def test_live_activity_payload_supports_start_update_and_end():
         assert len(payload) <= 4096
 
 
+def test_live_activity_payload_marks_stale_and_immediately_dismisses():
+    start = json.loads(apns_service.build_live_activity_payload(
+        "start",
+        "通知",
+        "正文",
+        {"id": "notice:1", "type": "new_notice", "endTime": 1_700_003_600_000},
+    ))
+    assert start["aps"]["stale-date"] == 1_700_003_600
+
+    end = json.loads(apns_service.build_live_activity_payload(
+        "end",
+        "通知",
+        "正文",
+        {"id": "notice:1", "type": "new_notice", "dismissImmediately": True},
+    ))
+    assert end["aps"]["dismissal-date"] <= int(datetime.now(timezone.utc).timestamp())
+
+
 def test_live_activity_start_prunes_expired_activity_tokens_and_allows_parallel_events(monkeypatch):
     now = datetime.now(timezone.utc)
     factory = get_sync_session_factory()
@@ -647,6 +1033,39 @@ def test_live_activity_end_removes_successfully_ended_activity_tokens(monkeypatc
     assert set(sent) == {"c" * 64, "d" * 64}
     with factory() as db:
         assert db.query(IosLiveActivityToken).count() == 0
+
+
+def test_live_activity_end_can_send_to_token_that_reached_its_activity_deadline(monkeypatch):
+    factory = get_sync_session_factory()
+    with factory() as db:
+        db.add(IosLiveActivityToken(
+            student_id="20260001",
+            token_type="activity",
+            token="e" * 64,
+            environment="production",
+            activity_id="notice:expired",
+            activity_type="new_notice",
+            expires_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+        ))
+        db.commit()
+
+    monkeypatch.setattr(apns_service, "is_apns_enabled", lambda: True)
+    monkeypatch.setattr(apns_service, "_credentials", lambda _settings: object())
+    sent: list[str] = []
+    monkeypatch.setattr(
+        apns_service,
+        "_send_live_activity_with_retry",
+        lambda _credentials, token, _environment, _payload: sent.append(token),
+    )
+
+    assert apns_service.send_live_activity_to_student(
+        "20260001",
+        "end",
+        "通知",
+        "正文",
+        {"id": "notice:expired", "type": "new_notice", "dismissImmediately": True},
+    ) == 1
+    assert sent == ["e" * 64]
 
 
 def test_live_activity_request_uses_liveactivity_topic_and_push_type(monkeypatch):

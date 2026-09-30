@@ -652,7 +652,12 @@ class _DashboardShellState extends State<DashboardShell> {
     if (firstVisit) return;
     final last = _lastSilentRefresh[tabId];
     final now = DateTime.now();
-    if (last != null && now.difference(last).inSeconds < 60) return;
+    // 首页必须立即重新叠加本机调课，不能因网络刷新节流显示旧课程。
+    if (tabId != 'home' &&
+        last != null &&
+        now.difference(last).inSeconds < 60) {
+      return;
+    }
     _lastSilentRefresh[tabId] = now;
     final state = _pageKeys[tabId]?.currentState;
     if (state is PageSilentRefresh) state.silentRefresh();
@@ -1013,33 +1018,42 @@ class _DashboardShellState extends State<DashboardShell> {
   }
 
   Future<void> _saveScheduleSettings() async {
+    final selectedYear = year;
+    final selectedTerm = term;
+    final selectedFirstWeekStart = dateText(firstWeekStart);
+    final selectedWeek = currentWeek;
+    final selectedAutoWeek = autoWeek;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(
-      _settingsKey(widget.api.namespace, year, term, 'firstWeekStart'),
-      dateText(firstWeekStart),
+      _settingsKey(
+          widget.api.namespace, selectedYear, selectedTerm, 'firstWeekStart'),
+      selectedFirstWeekStart,
     );
     await prefs.setInt(
-      _settingsKey(widget.api.namespace, year, term, 'week'),
-      currentWeek,
+      _settingsKey(widget.api.namespace, selectedYear, selectedTerm, 'week'),
+      selectedWeek,
     );
     await prefs.setBool(
       schedulePreferenceKey(widget.api.namespace, 'autoWeek'),
-      autoWeek,
+      selectedAutoWeek,
     );
-    unawaited(_syncScheduleSettingsToCloud());
   }
 
-  /// 把当前学期的开学日期合并进云端（best-effort，失败仅打印日志）。
-  Future<void> _syncScheduleSettingsToCloud() async {
+  Future<void> _syncFirstWeekStartToCloud() async {
     try {
-      final merged = Map<String, String>.from(widget.cloudFirstWeeks)
-        ..['$year-$term'] = dateText(firstWeekStart);
       await widget.api.saveScheduleSettings(
-        firstWeeks: merged,
-        autoWeek: autoWeek,
+        firstWeeks: {'$year-$term': dateText(firstWeekStart)},
       );
     } catch (error) {
       debugPrint('同步开学日期到云端失败: error=${error.runtimeType}');
+    }
+  }
+
+  Future<void> _syncAutoWeekToCloud() async {
+    try {
+      await widget.api.saveScheduleSettings(autoWeek: autoWeek);
+    } catch (error) {
+      debugPrint('同步自动周次到云端失败: error=${error.runtimeType}');
     }
   }
 
@@ -1085,6 +1099,7 @@ class _DashboardShellState extends State<DashboardShell> {
       _pageGeneration++;
     });
     _saveScheduleSettings();
+    unawaited(_syncFirstWeekStartToCloud());
   }
 
   void _setCurrentWeek(int value) {
@@ -1094,6 +1109,7 @@ class _DashboardShellState extends State<DashboardShell> {
       _pageGeneration++;
     });
     _saveScheduleSettings();
+    unawaited(_syncAutoWeekToCloud());
   }
 
   void _setAutoWeek(bool value) {
@@ -1106,5 +1122,6 @@ class _DashboardShellState extends State<DashboardShell> {
       _pageGeneration++;
     });
     _saveScheduleSettings();
+    unawaited(_syncAutoWeekToCloud());
   }
 }

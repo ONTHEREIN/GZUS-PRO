@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -35,6 +36,25 @@ __all__ = [
 ]
 
 logger = logging.getLogger(__name__)
+_LIVE_NOTIFICATION_DURATION = timedelta(minutes=15)
+_ECARD_REMINDER_GRACE = timedelta(minutes=5)
+
+
+def _active_sessions(app) -> list[tuple[str, object]]:
+    sessions = getattr(app.state.sessions, "_sessions", {})
+    return [
+        (session_id, session)
+        for session_id, session in list(sessions.items())
+        if getattr(session, "revoked_at", None) is None
+    ]
+
+
+def _live_window() -> tuple[int, int]:
+    start = datetime.now(timezone.utc)
+    return (
+        int(start.timestamp() * 1000),
+        int((start + _LIVE_NOTIFICATION_DURATION).timestamp() * 1000),
+    )
 
 
 def _notice_key(item: dict) -> str:
@@ -108,7 +128,6 @@ def _active_push_succeeded(
 async def run_notice_poller_once(app) -> None:
     cache: NoticeCache = getattr(app.state, "notice_cache", NoticeCache())
     app.state.notice_cache = cache
-    sessions = getattr(app.state.sessions, "_sessions", {})
     manager = app.state.ws_manager
 
     async def poll_session(session_id: str, session) -> None:
@@ -141,7 +160,7 @@ async def run_notice_poller_once(app) -> None:
             title = str(item.get("title") or "新通知")
             body = str(item.get("summary") or item.get("category") or "有新的教务通知")
             event_id = f"notice:{_notice_key(item)}"
-            end_time = int((datetime.now(timezone.utc) + timedelta(minutes=30)).timestamp() * 1000)
+            start_time, end_time = _live_window()
             message = {
                 "id": event_id,
                 "eventKey": event_id,
@@ -151,11 +170,13 @@ async def run_notice_poller_once(app) -> None:
                 "url": item.get("url") or "",
                 "notice": item,
                 "liveUpdate": True,
+                "liveEvent": "start",
                 "targetTab": "notices",
-                "ongoing": False,
+                "ongoing": True,
                 "shortCriticalText": "通知",
                 "progress": 1,
-                "priority": live_activity_priority("new_notice", False),
+                "priority": live_activity_priority("new_notice", True),
+                "startTime": start_time,
                 "endTime": end_time,
             }
             notification_body = title if not body else f"{title}\n{body}"
@@ -172,15 +193,18 @@ async def run_notice_poller_once(app) -> None:
                         "targetTab": "notices",
                         "url": item.get("url") or "",
                         "liveUpdate": True,
-                        "ongoing": False,
+                        "liveEvent": "start",
+                        "ongoing": True,
                         "shortCriticalText": "通知",
                         "progress": 1,
-                        "priority": live_activity_priority("new_notice", False),
+                        "priority": live_activity_priority("new_notice", True),
+                        "startTime": start_time,
                         "endTime": end_time,
                     },
                 )
             await manager.send_to_session(session_id, message)
-            if student_id and not _active_push_succeeded(
+            if student_id and not await asyncio.to_thread(
+                _active_push_succeeded,
                 student_id,
                 event_id,
                 "new_notice",
@@ -192,10 +216,12 @@ async def run_notice_poller_once(app) -> None:
                     "targetTab": "notices",
                     "url": item.get("url") or "",
                     "liveUpdate": True,
-                    "ongoing": False,
+                    "liveEvent": "start",
+                    "ongoing": True,
                     "shortCriticalText": "通知",
                     "progress": 1,
-                    "priority": live_activity_priority("new_notice", False),
+                    "priority": live_activity_priority("new_notice", True),
+                    "startTime": start_time,
                     "endTime": end_time,
                 },
             ):
@@ -204,10 +230,10 @@ async def run_notice_poller_once(app) -> None:
 
     tasks = [
         poll_session(session_id, session)
-        for session_id, session in list(sessions.items())
+        for session_id, session in _active_sessions(app)
     ]
     if tasks:
-        await asyncio.gather(*tasks, return_exceptions=True)
+        await asyncio.gather(*tasks)
 
 
 async def run_notice_poller(app):
@@ -355,24 +381,30 @@ def ecard_reminder_time_enabled(binding, reminder_time: str) -> bool:
     return reminder_time in configured_times
 
 
-def _next_reminder_at(now: datetime, reminder_times: list[str] | None = None) -> datetime:
+def _next_reminder_at(
+    now: datetime,
+    reminder_times: list[str] | None,
+    last_attempted: datetime | None,
+) -> datetime:
     tz = ZoneInfo("Asia/Shanghai")
     local_now = now.astimezone(tz)
     settings = get_settings()
-    times = reminder_times or [f"{settings.ecard_daily_reminder_hour:02d}:{settings.ecard_daily_reminder_minute:02d}"]
-    
-    candidates = []
-    for t in times:
-        try:
-            parts = t.split(":")
-            h, m = int(parts[0]), int(parts[1])
-        except (ValueError, IndexError):
+    candidates: list[datetime] = []
+    for value in reminder_times or []:
+        if not isinstance(value, str):
             continue
-        target = local_now.replace(hour=h, minute=m, second=0, microsecond=0)
-        if target <= local_now:
+        try:
+            parsed = datetime.strptime(value, "%H:%M")
+        except ValueError:
+            continue
+        if parsed.strftime("%H:%M") != value:
+            continue
+        target = local_now.replace(hour=parsed.hour, minute=parsed.minute, second=0, microsecond=0)
+        if target < local_now - _ECARD_REMINDER_GRACE or (
+            last_attempted is not None and target <= last_attempted.astimezone(tz)
+        ):
             target += timedelta(days=1)
         candidates.append(target)
-    
     if not candidates:
         target = local_now.replace(
             hour=settings.ecard_daily_reminder_hour,
@@ -380,10 +412,11 @@ def _next_reminder_at(now: datetime, reminder_times: list[str] | None = None) ->
             second=0,
             microsecond=0,
         )
-        if target <= local_now:
+        if target < local_now - _ECARD_REMINDER_GRACE or (
+            last_attempted is not None and target <= last_attempted.astimezone(tz)
+        ):
             target += timedelta(days=1)
         return target.astimezone(timezone.utc)
-    
     return min(candidates).astimezone(timezone.utc)
 
 
@@ -395,14 +428,17 @@ async def run_ecard_reminder_once(app, reminder_time: str) -> None:
         return
 
     factory = get_sync_session_factory()
-    with factory() as db:
+    with closing(client), factory() as db:
         bindings = db.query(EcardBinding).filter(EcardBinding.reminder_enabled.is_(True)).all()
+        # 查询完成后释放连接；学校余额接口可能耗时，期间不应占住数据库连接。
+        db.commit()
         for binding in bindings:
             if not ecard_reminder_time_enabled(binding, reminder_time):
                 continue
+            student_id = binding.student_id
             try:
                 room_ref = EcardRoomRef.from_id(binding.room_id)
-                summary = client.balance(room_ref, binding.student_id)
+                summary = await asyncio.to_thread(client.balance, room_ref, student_id)
             except (ValueError, EcardApiError) as exc:
                 logger.warning("ecard reminder failed for %s: %s", binding.student_id, exc)
                 continue
@@ -416,6 +452,7 @@ async def run_ecard_reminder_once(app, reminder_time: str) -> None:
 
             for item_key, title, body in pending:
                 today_key = today
+                live_start, live_end = _live_window()
                 progress_current = ecard_progress_current(
                     summary,
                     item_key,
@@ -430,15 +467,17 @@ async def run_ecard_reminder_once(app, reminder_time: str) -> None:
                     "studentId": binding.student_id,
                     "itemKey": item_key,
                     "liveUpdate": True,
+                    "liveEvent": "start",
                     "targetTab": "ecard",
                     "style": "progress",
-                    "ongoing": False,
+                    "ongoing": True,
                     "shortCriticalText": "水电",
-                    "priority": live_activity_priority("ecard_reminder", False),
+                    "priority": live_activity_priority("ecard_reminder", True),
+                    "startTime": live_start,
                     "progressMax": 100,
                     "progressCurrent": progress_current,
                     "progress": progress_current / 100,
-                    "endTime": int((datetime.now(timezone.utc) + timedelta(minutes=30)).timestamp() * 1000),
+                    "endTime": live_end,
                 }
                 utility_metrics, urgent_metric = utility_live_metrics(
                     summary,
@@ -466,9 +505,12 @@ async def run_ecard_reminder_once(app, reminder_time: str) -> None:
                     body,
                     live_payload,
                 )
-                await _send_ecard_ws(app, binding.student_id, title, body, summary, live_payload)
-                if _active_push_succeeded(
-                    binding.student_id,
+                # 投递可能访问数据库并等待外部推送服务；先释放当前事务的连接。
+                db.commit()
+                await _send_ecard_ws(app, student_id, title, body, summary, live_payload)
+                if await asyncio.to_thread(
+                    _active_push_succeeded,
+                    student_id,
                     event_key,
                     "ecard_reminder",
                     title,
@@ -476,18 +518,18 @@ async def run_ecard_reminder_once(app, reminder_time: str) -> None:
                     live_payload,
                 ):
                     mark_ecard_reminder_sent(binding, item_key, today_key)
+                    db.commit()
                 else:
                     logger.warning(
                         "ecard_reminder_not_delivered",
-                        extra={"student_id": binding.student_id, "item_key": item_key},
+                        extra={"student_id": student_id, "item_key": item_key},
                     )
         db.commit()
 
 
 async def _send_ecard_ws(app, student_id: str, title: str, body: str, summary: dict, live_payload: dict) -> None:
-    sessions = getattr(app.state.sessions, "_sessions", {})
     manager = app.state.ws_manager
-    for session_id, session in list(sessions.items()):
+    for session_id, session in _active_sessions(app):
         # 直接使用会话持久化学号，避免每个会话一次含照片下载的 JWXT 往返
         current_id = student_id_of(session)
         if current_id and current_id == student_id:
@@ -505,6 +547,7 @@ async def _send_ecard_ws(app, student_id: str, title: str, body: str, summary: d
 
 
 async def run_ecard_reminder_poller(app) -> None:
+    last_attempted: datetime | None = None
     while True:
         now = datetime.now(timezone.utc)
         # Collect all unique reminder times from bindings
@@ -519,8 +562,13 @@ async def run_ecard_reminder_poller(app) -> None:
                 except (json.JSONDecodeError, TypeError):
                     pass
         
-        next_at = _next_reminder_at(now, list(all_times) if all_times else None)
-        await asyncio.sleep(max(1, (next_at - now).total_seconds()))
+        next_at = _next_reminder_at(now, list(all_times), last_attempted)
+        delay = (next_at - now).total_seconds()
+        if delay > 0:
+            # 定期重读绑定，让用户新增或修改的提醒时间当天生效。
+            await asyncio.sleep(min(60, delay))
+            continue
+        last_attempted = next_at
         reminder_time = next_at.astimezone(ZoneInfo("Asia/Shanghai")).strftime("%H:%M")
         await run_ecard_reminder_once(app, reminder_time)
 
@@ -551,7 +599,6 @@ def _parse_exam_start_epoch_ms(time_str: str) -> int | None:
 async def run_exam_reminder_once(app) -> None:
     cache: ExamReminderCache = getattr(app.state, "exam_reminder_cache", ExamReminderCache())
     app.state.exam_reminder_cache = cache
-    sessions = getattr(app.state.sessions, "_sessions", {})
     manager = app.state.ws_manager
     tz = ZoneInfo("Asia/Shanghai")
     today = datetime.now(tz).date()
@@ -605,7 +652,7 @@ async def run_exam_reminder_once(app) -> None:
             if end_time is not None and end_time <= now_ms:
                 cache.mark_reminded(session_id, key)
                 continue
-            live_activity = end_time is not None and 0 < end_time - now_ms <= 2 * 60 * 60 * 1000
+            live_start, live_end = _live_window()
             message: dict = {
                 "id": f"exam_reminder:{session_id}:{key}",
                 "type": "exam_reminder",
@@ -614,39 +661,41 @@ async def run_exam_reminder_once(app) -> None:
                 "courseName": course_name,
                 "location": location or None,
                 "seat": seat or None,
-                "liveUpdate": live_activity,
+                "liveUpdate": True,
+                "liveEvent": "start",
                 "targetTab": "exams",
                 "style": "progress",
                 "shortCriticalText": "考试",
-                "progressStartTime": now_ms,
+                "progressStartTime": live_start,
                 "progressMax": 100,
                 "progressCurrent": 0,
                 "progress": 0,
-                "startTime": now_ms,
-                "priority": live_activity_priority("exam_reminder", live_activity),
+                "startTime": live_start,
+                "endTime": live_end,
+                "ongoing": True,
+                "priority": live_activity_priority("exam_reminder", True),
             }
             message["eventKey"] = f"exam:{key}"
-            if end_time is not None:
-                message["endTime"] = end_time
             extras: dict = {
                 "id": f"exam_reminder:{student_id}:{key}",
                 "type": "exam_reminder",
                 "courseName": course_name,
                 "location": location or None,
                 "seat": seat or None,
-                "liveUpdate": live_activity,
+                "liveUpdate": True,
+                "liveEvent": "start",
                 "targetTab": "exams",
                 "style": "progress",
                 "shortCriticalText": "考试",
-                "progressStartTime": now_ms,
+                "progressStartTime": live_start,
                 "progressMax": 100,
                 "progressCurrent": 0,
                 "progress": 0,
-                "startTime": now_ms,
-                "priority": live_activity_priority("exam_reminder", live_activity),
+                "startTime": live_start,
+                "endTime": live_end,
+                "ongoing": True,
+                "priority": live_activity_priority("exam_reminder", True),
             }
-            if end_time is not None:
-                extras["endTime"] = end_time
             if student_id:
                 persist_notification_event(
                     student_id,
@@ -657,7 +706,8 @@ async def run_exam_reminder_once(app) -> None:
                     extras,
                 )
             await manager.send_to_session(session_id, message)
-            if not student_id or _active_push_succeeded(
+            if not student_id or await asyncio.to_thread(
+                _active_push_succeeded,
                 student_id,
                 f"exam:{key}",
                 "exam_reminder",
@@ -669,10 +719,10 @@ async def run_exam_reminder_once(app) -> None:
 
     tasks = [
         poll_session(session_id, session)
-        for session_id, session in list(sessions.items())
+        for session_id, session in _active_sessions(app)
     ]
     if tasks:
-        await asyncio.gather(*tasks, return_exceptions=True)
+        await asyncio.gather(*tasks)
 
 
 async def run_exam_reminder_poller(app) -> None:
@@ -684,7 +734,6 @@ async def run_exam_reminder_poller(app) -> None:
 async def run_grade_update_once(app) -> None:
     cache: GradeUpdateCache = getattr(app.state, "grade_update_cache", GradeUpdateCache())
     app.state.grade_update_cache = cache
-    sessions = getattr(app.state.sessions, "_sessions", {})
     manager = app.state.ws_manager
 
     async def poll_session(session_id: str, session) -> None:
@@ -722,6 +771,7 @@ async def run_grade_update_once(app) -> None:
             status = str(live_grade["gradeStatus"])
             title = "成绩更新"
             body = f"{course_name}：{score} · {status}" if score else f"{course_name}：{status}"
+            live_start, live_end = _live_window()
             payload = {
                 "id": f"grade_update:{student_id}:{_grade_key(grade)}:{_grade_signature(grade)}",
                 "type": "grade_update",
@@ -731,14 +781,17 @@ async def run_grade_update_once(app) -> None:
                 "grade": grade,
                 **live_grade,
                 "liveUpdate": True,
+                "liveEvent": "start",
                 "targetTab": "grades",
                 "style": "progress",
-                "ongoing": False,
+                "ongoing": True,
                 "shortCriticalText": "成绩",
                 "progressMax": 100,
                 "progressCurrent": 100,
                 "progress": 1,
-                "priority": live_activity_priority("grade_update", False),
+                "startTime": live_start,
+                "endTime": live_end,
+                "priority": live_activity_priority("grade_update", True),
             }
             event_key = f"grade:{_grade_key(grade)}:{_grade_signature(grade)}"
             payload["eventKey"] = event_key
@@ -752,7 +805,8 @@ async def run_grade_update_once(app) -> None:
                 extras,
             )
             await manager.send_to_session(session_id, payload)
-            if not _active_push_succeeded(
+            if not await asyncio.to_thread(
+                _active_push_succeeded,
                 student_id,
                 event_key,
                 "grade_update",
@@ -775,10 +829,10 @@ async def run_grade_update_once(app) -> None:
 
     tasks = [
         poll_session(session_id, session)
-        for session_id, session in list(sessions.items())
+        for session_id, session in _active_sessions(app)
     ]
     if tasks:
-        await asyncio.gather(*tasks, return_exceptions=True)
+        await asyncio.gather(*tasks)
 
 
 async def run_grade_update_poller(app) -> None:

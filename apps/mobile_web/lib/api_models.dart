@@ -288,6 +288,7 @@ class LoginResult {
     this.studentName,
     this.studentId,
     this.credentialToken,
+    this.sessionRefreshToken,
     this.jwxtCookies,
     this.ehallCookies,
     this.ehallAuthToken,
@@ -301,6 +302,7 @@ class LoginResult {
         studentName: json['studentName'] as String?,
         studentId: json['studentId'] as String?,
         credentialToken: json['credentialToken'] as String?,
+        sessionRefreshToken: json['sessionRefreshToken'] as String?,
         jwxtCookies:
             json['jwxtCookies'] as String? ?? json['cookies'] as String?,
         ehallCookies: json['ehallCookies'] as String?,
@@ -316,6 +318,9 @@ class LoginResult {
 
   /// 用于自动重新登录的凭证令牌
   final String? credentialToken;
+
+  /// 统一认证登录使用的设备绑定会话恢复凭据。
+  final String? sessionRefreshToken;
 
   /// 教务系统 cookies，仅原生移动端前台直连学校接口时使用。
   final String? jwxtCookies;

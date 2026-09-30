@@ -5,10 +5,17 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from app.database import AppSessionModel, get_sync_session_factory
+from app.database import (
+    AppSessionModel,
+    IosLiveActivityToken,
+    IosPushToken,
+    SchoolAccountSession,
+    WebPushSubscription,
+    get_sync_session_factory,
+)
 from app.main import create_app
 from app.routes.deps import require_session
-from app.sessions import SessionStore, SessionStoreUnavailableError
+from app.sessions import CredentialRevokedError, SessionStore, SessionStoreUnavailableError
 
 
 class _Client:
@@ -137,6 +144,21 @@ def test_require_session_rejects_admin_revoked_session():
     assert exc.value.detail == "当前设备已被管理员下线，请重新验证登录"
 
 
+def test_put_rechecks_session_revoked_by_another_process():
+    local_store = SessionStore(ttl_seconds=7200)
+    session = local_store.create(_Client())
+    assert local_store.get(session.id) is not None
+    remote_store = SessionStore(ttl_seconds=7200)
+    assert remote_store.revoke(session.id, reason="admin_kick")
+
+    request = _request_for(local_store)
+    request.method = "PUT"
+    with pytest.raises(HTTPException) as exc:
+        require_session(request, x_session_id=session.id)
+
+    assert exc.value.status_code == 401
+
+
 def test_admin_credential_revocation_is_persistent():
     store = SessionStore(ttl_seconds=7200)
     fingerprint = "a" * 64
@@ -145,6 +167,101 @@ def test_admin_credential_revocation_is_persistent():
     store.revoke_credential(fingerprint, reason="admin_kick")
 
     assert store.is_credential_revoked(fingerprint) is True
+
+    with pytest.raises(CredentialRevokedError):
+        store.create(_Client("20240001"), student_account="20240001", credential_fingerprint=fingerprint)
+    with get_sync_session_factory()() as db:
+        assert db.query(AppSessionModel).count() == 0
+
+
+def test_expired_session_push_targets_follow_credential_revocation():
+    store = SessionStore(ttl_seconds=7200)
+    fingerprint = "a" * 64
+    persistent = store.create(_Client(), credential_fingerprint=fingerprint)
+    temporary = store.create(_Client())
+    with get_sync_session_factory()() as db:
+        db.add(WebPushSubscription(
+            student_id="20240001", session_id=persistent.id,
+            credential_fingerprint=fingerprint,
+            endpoint="https://fcm.googleapis.com/persistent", p256dh="key", auth="auth",
+        ))
+        db.add(IosPushToken(
+            student_id="20240001", session_id=persistent.id,
+            credential_fingerprint=fingerprint,
+            device_token="a" * 64, environment="production",
+        ))
+        db.add(IosLiveActivityToken(
+            student_id="20240001", session_id=persistent.id,
+            credential_fingerprint=fingerprint,
+            token_type="start", token="b" * 64, environment="production",
+        ))
+        db.add(WebPushSubscription(
+            student_id="20240001", session_id=temporary.id,
+            endpoint="https://fcm.googleapis.com/temporary", p256dh="key", auth="auth",
+        ))
+        db.commit()
+    expired_at = datetime.now(timezone.utc) - timedelta(hours=3)
+    _set_last_active(persistent.id, expired_at)
+    _set_last_active(temporary.id, expired_at)
+
+    store._purge_expired()
+
+    with get_sync_session_factory()() as db:
+        assert db.query(AppSessionModel).count() == 0
+        assert [row.session_id for row in db.query(WebPushSubscription).all()] == [persistent.id]
+        assert db.query(IosPushToken).count() == 1
+        assert db.query(IosLiveActivityToken).count() == 1
+
+    store.revoke_credential(fingerprint, reason="admin_kick")
+
+    with get_sync_session_factory()() as db:
+        for model in (WebPushSubscription, IosPushToken, IosLiveActivityToken):
+            assert db.query(model).count() == 0
+
+
+def test_get_expired_session_cleans_unowned_push_targets():
+    store = SessionStore(ttl_seconds=7200)
+    temporary = store.create(_Client("20240001"), student_account="20240001")
+    fingerprint = "a" * 64
+    persistent = store.create(
+        _Client("20240001"), student_account="20240001",
+        credential_fingerprint=fingerprint,
+    )
+    with get_sync_session_factory()() as db:
+        db.add(SchoolAccountSession(student_id="20240001"))
+        db.add(WebPushSubscription(
+            student_id="20240001", session_id=temporary.id,
+            endpoint="https://fcm.googleapis.com/temporary", p256dh="key", auth="auth",
+        ))
+        db.add(IosPushToken(
+            student_id="20240001", session_id=temporary.id,
+            device_token="a" * 64, environment="production",
+        ))
+        db.add(IosLiveActivityToken(
+            student_id="20240001", session_id=temporary.id,
+            token_type="start", token="b" * 64, environment="production",
+        ))
+        db.add(WebPushSubscription(
+            student_id="20240001", session_id=persistent.id,
+            credential_fingerprint=fingerprint,
+            endpoint="https://fcm.googleapis.com/persistent", p256dh="key", auth="auth",
+        ))
+        db.commit()
+    expired_at = datetime.now(timezone.utc) - timedelta(hours=3)
+    _set_last_active(temporary.id, expired_at)
+    _set_last_active(persistent.id, expired_at)
+
+    assert store.get(temporary.id, fresh=True) is None
+    assert store.get(persistent.id, fresh=True) is None
+
+    with get_sync_session_factory()() as db:
+        assert db.query(AppSessionModel).count() == 0
+        assert [row.session_id for row in db.query(WebPushSubscription).all()] == [persistent.id]
+        assert db.query(IosPushToken).count() == 0
+        assert db.query(IosLiveActivityToken).count() == 0
+        assert db.query(SchoolAccountSession).count() == 0
+    assert temporary.id not in store._sessions
+    assert persistent.id not in store._sessions
 
 
 def test_get_raises_when_session_database_is_unavailable(monkeypatch):

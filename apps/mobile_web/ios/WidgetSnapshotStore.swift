@@ -1,4 +1,47 @@
 import Foundation
+import Darwin
+
+/// 主应用与 Widget 扩展共用文件锁，防止检查请求归属后被账号切换插入。
+enum WidgetStorageTransactions {
+  private static let processLock = NSRecursiveLock()
+  private static var activeLockURL: URL?
+
+  static func access<T>(lockURL: URL, operation: () throws -> T) throws -> T {
+    processLock.lock()
+    defer { processLock.unlock() }
+    if activeLockURL == lockURL { return try operation() }
+    guard activeLockURL == nil else { throw POSIXError(.EDEADLK) }
+    let descriptor = open(lockURL.path, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR)
+    guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+    defer {
+      if close(descriptor) != 0 { NSLog("widget_storage_close_failed: errno=%d", errno) }
+    }
+    guard flock(descriptor, LOCK_EX) == 0 else {
+      throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+    }
+    activeLockURL = lockURL
+    defer {
+      activeLockURL = nil
+      if flock(descriptor, LOCK_UN) != 0 {
+        NSLog("widget_storage_unlock_failed: errno=%d", errno)
+      }
+    }
+    return try operation()
+  }
+
+  static func commit(
+    lockURL: URL,
+    generationURL: URL,
+    requestedGeneration: String,
+    persist: () throws -> Bool
+  ) throws -> Bool {
+    try access(lockURL: lockURL) {
+      guard FileManager.default.fileExists(atPath: generationURL.path),
+            try String(contentsOf: generationURL, encoding: .utf8) == requestedGeneration else { return false }
+      return try persist()
+    }
+  }
+}
 
 struct WidgetCourseTimelineItem: Codable, Equatable {
   let itemKey: String
@@ -11,6 +54,7 @@ struct WidgetCourseTimelineItem: Codable, Equatable {
   let classroom: String
   let teacher: String
   let ongoing: Bool
+  let date: String?
 }
 
 struct WidgetNextClassState: Equatable {
@@ -55,12 +99,12 @@ enum WidgetNextClassTimeline {
   ) -> WidgetNextClassState {
     let datedCourses = datedCourses(courses, relativeTo: now, calendar: calendar)
     if let current = datedCourses.first(where: { $0.start <= now && now < $0.end }) {
-      return makeState(current, status: "ongoing")
+      return makeState(current, status: "ongoing", now: now, calendar: calendar)
     }
     guard let upcoming = datedCourses.first(where: { $0.start >= now }) else {
       return .none
     }
-    return makeState(upcoming, status: "upcoming")
+    return makeState(upcoming, status: "upcoming", now: now, calendar: calendar)
   }
 
   static func transitionDates(
@@ -80,10 +124,10 @@ enum WidgetNextClassTimeline {
     }
   }
 
-  private static func makeState(_ course: DatedCourse, status: String) -> WidgetNextClassState {
+  private static func makeState(_ course: DatedCourse, status: String, now: Date, calendar: Calendar) -> WidgetNextClassState {
     WidgetNextClassState(
       title: course.source.name,
-      time: course.time,
+      time: calendar.isDate(course.start, inSameDayAs: now) ? course.time : "\(course.source.date ?? "") \(course.time)".trimmingCharacters(in: .whitespaces),
       location: course.source.classroom,
       teacher: course.source.teacher,
       status: status,
@@ -113,8 +157,16 @@ enum WidgetNextClassTimeline {
       }
       let startText = timeText(course.time, index: 0) ?? sectionTimes[course.startSection - 1].0
       let endText = timeText(course.time, index: 1) ?? sectionTimes[course.endSection - 1].1
-      guard let start = date(startText, dayOffset: course.weekday - 1, from: monday, calendar: calendar),
-            let end = date(endText, dayOffset: course.weekday - 1, from: monday, calendar: calendar),
+      let day: Date
+      if let actualDate = course.date {
+        guard let parsed = WidgetCourseDates.parse(actualDate, calendar: calendar) else { return nil }
+        day = parsed
+      } else {
+        guard let legacyDay = calendar.date(byAdding: .day, value: course.weekday - 1, to: monday) else { return nil }
+        day = legacyDay
+      }
+      guard let start = date(startText, dayOffset: 0, from: day, calendar: calendar),
+            let end = date(endText, dayOffset: 0, from: day, calendar: calendar),
             end > start else {
         return nil
       }
@@ -161,6 +213,90 @@ enum WidgetNextClassTimeline {
   }
 }
 
+enum WidgetCourseDates {
+  static func parse(_ text: String, calendar: Calendar) -> Date? {
+    let parts = text.split(separator: "-").compactMap { Int($0) }
+    guard parts.count == 3,
+          let day = calendar.date(from: DateComponents(year: parts[0], month: parts[1], day: parts[2])),
+          calendar.component(.year, from: day) == parts[0],
+          calendar.component(.month, from: day) == parts[1],
+          calendar.component(.day, from: day) == parts[2] else { return nil }
+    return day
+  }
+
+  static func time(_ text: String, on day: Date, calendar: Calendar) -> Date? {
+    let parts = text.split(separator: ":").compactMap { Int($0) }
+    guard parts.count == 2, (0...23).contains(parts[0]), (0...59).contains(parts[1]) else { return nil }
+    return calendar.date(bySettingHour: parts[0], minute: parts[1], second: 0, of: day)
+  }
+}
+
+struct WidgetTodayCourse: Codable {
+  let itemKey: String
+  let date: String
+  let week: Int?
+  let weekday: Int
+  let startSection: Int
+  let time: String
+  let name: String
+  let info: String
+  let ongoing: Bool
+}
+
+struct WidgetScheduleProjection {
+  let weekly: [WidgetCourseTimelineItem]
+  let today: [WidgetTodayCourse]
+  let next: WidgetNextClassState
+  let week: Int
+
+  static func make(
+    courses: [WidgetCourseTimelineItem], firstWeekStart: Date, now: Date, calendar: Calendar
+  ) throws -> WidgetScheduleProjection {
+    let todayStart = calendar.startOfDay(for: now)
+    let weekday = ((calendar.component(.weekday, from: now) + 5) % 7) + 1
+    guard let monday = calendar.date(byAdding: .day, value: 1 - weekday, to: todayStart),
+          let nextMonday = calendar.date(byAdding: .day, value: 7, to: monday) else {
+      throw CocoaError(.coderReadCorrupt)
+    }
+    let firstWeekday = ((calendar.component(.weekday, from: firstWeekStart) + 5) % 7) + 1
+    guard let firstMonday = calendar.date(byAdding: .day, value: 1 - firstWeekday, to: calendar.startOfDay(for: firstWeekStart)),
+          let days = calendar.dateComponents([.day], from: firstMonday, to: monday).day else {
+      throw CocoaError(.coderReadCorrupt)
+    }
+    var weekly: [WidgetCourseTimelineItem] = []
+    var today: [WidgetTodayCourse] = []
+    for course in courses.sorted(by: { ($0.date ?? "", $0.startSection) < ($1.date ?? "", $1.startSection) }) {
+      guard let dateText = course.date,
+            let day = WidgetCourseDates.parse(dateText, calendar: calendar),
+            (1...16).contains(course.startSection),
+            (course.startSection...16).contains(course.endSection),
+            ((calendar.component(.weekday, from: day) + 5) % 7) + 1 == course.weekday else {
+        throw CocoaError(.coderReadCorrupt, userInfo: [NSLocalizedDescriptionKey: "生效课程缺少有效日期、星期或节次"])
+      }
+      let times = course.time.split(separator: "-").map(String.init)
+      guard times.count == 2,
+            let start = WidgetCourseDates.time(times[0], on: day, calendar: calendar),
+            let end = WidgetCourseDates.time(times[1], on: day, calendar: calendar), end > start else {
+        throw CocoaError(.coderReadCorrupt, userInfo: [NSLocalizedDescriptionKey: "生效课程时间无效"])
+      }
+      let ongoing = start <= now && now < end
+      if day >= monday && day < nextMonday {
+        weekly.append(WidgetCourseTimelineItem(itemKey: course.itemKey, week: course.week,
+          weekday: course.weekday, startSection: course.startSection, endSection: course.endSection,
+          time: course.time, name: course.name, classroom: course.classroom, teacher: course.teacher,
+          ongoing: ongoing, date: dateText))
+      }
+      if calendar.isDate(day, inSameDayAs: now) {
+        today.append(WidgetTodayCourse(itemKey: course.itemKey, date: dateText, week: course.week,
+          weekday: course.weekday, startSection: course.startSection, time: times[0], name: course.name,
+          info: [course.classroom, course.teacher].filter { !$0.isEmpty }.joined(separator: " · "), ongoing: ongoing))
+      }
+    }
+    return WidgetScheduleProjection(weekly: weekly, today: today,
+      next: WidgetNextClassTimeline.state(at: now, courses: courses, calendar: calendar), week: days / 7 + 1)
+  }
+}
+
 enum WidgetSnapshotStore {
   private static let appGroupIdentifier = "group.cn.gzus.pro.6772c5tf6c"
   private static let configurationKey = "widget_refresh_configuration"
@@ -180,6 +316,8 @@ enum WidgetSnapshotStore {
     let year: Int
     let term: Int
     let firstWeekStartEpochMillis: Int64
+    let generation: String?
+    let scheduleContext: String?
 
     func currentWeek(now: Date) -> Int {
       guard firstWeekStartEpochMillis > 0 else { return 1 }
@@ -199,19 +337,58 @@ enum WidgetSnapshotStore {
     sessionID: String,
     year: Int,
     term: Int,
-    firstWeekStartEpochMillis: Int64
-  ) -> Bool {
-    guard let defaults = UserDefaults(suiteName: appGroupIdentifier) else { return false }
-    let configuration = Configuration(
-      baseURL: baseURL,
-      sessionID: sessionID,
-      year: year,
-      term: term,
-      firstWeekStartEpochMillis: firstWeekStartEpochMillis
-    )
-    guard let data = try? JSONEncoder().encode(configuration) else { return false }
-    defaults.set(data, forKey: configurationKey)
-    return true
+    firstWeekStartEpochMillis: Int64,
+    scheduleContext: String
+  ) throws {
+    try withStorageAccess { defaults in
+      let generation = UUID().uuidString
+      let configuration = Configuration(
+        baseURL: baseURL,
+        sessionID: sessionID,
+        year: year,
+        term: term,
+        firstWeekStartEpochMillis: firstWeekStartEpochMillis,
+        generation: generation,
+        scheduleContext: scheduleContext
+      )
+      let data = try JSONEncoder().encode(configuration)
+      try Data(generation.utf8).write(to: generationURL(), options: .atomic)
+      defaults.set(data, forKey: configurationKey)
+      defaults.removeObject(forKey: etagKey)
+      defaults.removeObject(forKey: lastFetchKey)
+    }
+  }
+
+  private static func commitResponse(
+    configuration: Configuration,
+    persist: (UserDefaults) throws -> Bool
+  ) throws -> Bool {
+    guard let generation = configuration.generation else { return false }
+    return try withStorageAccess { defaults in
+      let markerURL = try generationURL()
+      return try WidgetStorageTransactions.commit(
+        lockURL: markerURL.deletingLastPathComponent().appendingPathComponent("widget-refresh.lock"),
+        generationURL: markerURL,
+        requestedGeneration: generation
+      ) { try persist(defaults) }
+    }
+  }
+
+  static func withStorageAccess<T>(_ operation: (UserDefaults) throws -> T) throws -> T {
+    guard let defaults = UserDefaults(suiteName: appGroupIdentifier),
+          let directory = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupIdentifier) else {
+      throw CocoaError(.fileNoSuchFile, userInfo: [NSLocalizedDescriptionKey: "无法访问桌面组件共享存储"])
+    }
+    return try WidgetStorageTransactions.access(lockURL: directory.appendingPathComponent("widget-refresh.lock")) {
+      try operation(defaults)
+    }
+  }
+
+  private static func generationURL() throws -> URL {
+    guard let directory = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupIdentifier) else {
+      throw CocoaError(.fileNoSuchFile, userInfo: [NSLocalizedDescriptionKey: "无法访问桌面组件刷新配置"])
+    }
+    return directory.appendingPathComponent("widget-refresh-generation")
   }
 
   static func configuration() -> Configuration? {
@@ -222,81 +399,124 @@ enum WidgetSnapshotStore {
 
   static func nextClassCourses() -> [WidgetCourseTimelineItem] {
     guard let defaults = UserDefaults(suiteName: appGroupIdentifier),
-          let raw = defaults.string(forKey: "weeklyCoursesJson"),
+          let raw = defaults.string(forKey: "effectiveCoursesJson"),
           let data = raw.data(using: .utf8) else {
       return []
     }
     return (try? JSONDecoder().decode([WidgetCourseTimelineItem].self, from: data)) ?? []
   }
 
-  static func clearConfiguration() {
-    guard let defaults = UserDefaults(suiteName: appGroupIdentifier) else { return }
-    defaults.removeObject(forKey: configurationKey)
-    defaults.removeObject(forKey: etagKey)
-    defaults.removeObject(forKey: lastFetchKey)
+  static func clearConfiguration() throws {
+    try withStorageAccess { defaults in
+      let markerURL = try generationURL()
+      if FileManager.default.fileExists(atPath: markerURL.path) {
+        try FileManager.default.removeItem(at: markerURL)
+      }
+      for key in defaults.dictionaryRepresentation().keys {
+        if ["next", "today", "weekly", "effectiveCourses", "utility", "progress", "exam", "grade", "widget"].contains(where: { key.hasPrefix($0) }) {
+          defaults.removeObject(forKey: key)
+        }
+      }
+    }
   }
 
-  static func refreshIfNeeded(completion: @escaping () -> Void) {
+  @discardableResult
+  static func refreshIfNeeded(completion: @escaping (Bool) -> Void) -> URLSessionDataTask? {
     guard let defaults = UserDefaults(suiteName: appGroupIdentifier),
           let configuration = configuration() else {
-      completion()
-      return
+      completion(false)
+      return nil
     }
     let now = Date()
-    if let lastFetch = defaults.object(forKey: lastFetchKey) as? Date,
-       now.timeIntervalSince(lastFetch) < minimumFetchInterval {
-      completion()
-      return
+    // 跨日先投影具体日期缓存，网络失败时也不会继续显示昨天的今日/本周课程。
+    var cacheProjected = false
+    do {
+      cacheProjected = try commitResponse(configuration: configuration) { defaults in
+        guard defaults.string(forKey: "effectiveCoursesJson") != nil else { return false }
+        try projectCachedSchedule(configuration: configuration, defaults: defaults)
+        return true
+      }
+    } catch {
+      NSLog("widget_schedule_project_failed: %@", error.localizedDescription)
     }
-    guard var components = URLComponents(
+    if cacheProjected,
+       let lastFetch = defaults.object(forKey: lastFetchKey) as? Date,
+       now.timeIntervalSince(lastFetch) < minimumFetchInterval {
+      completion(true)
+      return nil
+    }
+    guard let components = URLComponents(
       string: "\(configuration.baseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/")))/widget-snapshot"
     ) else {
-      completion()
-      return
+      completion(false)
+      return nil
     }
-    components.queryItems = [
-      URLQueryItem(name: "year", value: String(configuration.year)),
-      URLQueryItem(name: "term", value: String(configuration.term)),
-      URLQueryItem(name: "week", value: String(configuration.currentWeek(now: now))),
-    ]
     guard let url = components.url else {
-      completion()
-      return
+      completion(false)
+      return nil
     }
     var request = URLRequest(url: url)
+    guard let scheduleContext = configuration.scheduleContext else {
+      completion(false)
+      return nil
+    }
+    request.httpMethod = "POST"
+    request.httpBody = Data(scheduleContext.utf8)
+    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     request.timeoutInterval = 20
     request.setValue(configuration.sessionID, forHTTPHeaderField: "X-Session-Id")
     if let etag = defaults.string(forKey: etagKey) {
       request.setValue(etag, forHTTPHeaderField: "If-None-Match")
     }
-    URLSession.shared.dataTask(with: request) { data, response, _ in
-      defer { completion() }
-      guard let response = response as? HTTPURLResponse else { return }
-      if response.statusCode == 401 {
-        clearConfiguration()
+    let task = URLSession.shared.dataTask(with: request) { data, response, error in
+      guard error == nil, let response = response as? HTTPURLResponse else {
+        completion(false)
         return
       }
-      guard response.statusCode == 200 || response.statusCode == 304 else { return }
-      defaults.set(now, forKey: lastFetchKey)
-      if response.statusCode == 304 { return }
-      guard let data, storeSnapshot(data, currentWeek: configuration.currentWeek(now: now), defaults: defaults) else {
-        return
+      do {
+        let success = try commitResponse(configuration: configuration) { defaults -> Bool in
+          if response.statusCode == 401 {
+            try clearConfiguration()
+            return false
+          }
+          guard response.statusCode == 200 || response.statusCode == 304 else { return false }
+          if response.statusCode == 200 {
+            guard let data, try storeSnapshot(data, configuration: configuration, defaults: defaults) else {
+              return false
+            }
+          } else {
+            try projectCachedSchedule(configuration: configuration, defaults: defaults)
+          }
+          defaults.set(Date(), forKey: lastFetchKey)
+          if let etag = response.value(forHTTPHeaderField: "ETag") {
+            defaults.set(etag, forKey: etagKey)
+          }
+          return true
+        }
+        completion(success)
+      } catch {
+        NSLog("widget_refresh_store_failed: %@", error.localizedDescription)
+        completion(false)
       }
-      if let etag = response.value(forHTTPHeaderField: "ETag") {
-        defaults.set(etag, forKey: etagKey)
-      }
-    }.resume()
+    }
+    task.resume()
+    return task
   }
 
-  private static func storeSnapshot(_ data: Data, currentWeek: Int, defaults: UserDefaults) -> Bool {
+  private static func storeSnapshot(_ data: Data, configuration: Configuration, defaults: UserDefaults) throws -> Bool {
     guard let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
           let modules = payload["modules"] as? [String: Any] else { return false }
+    guard payload["scheduleFormat"] as? String == "dated-v1",
+          let scheduleModule = modules["schedule"] as? [String: Any],
+          scheduleModule["status"] as? String != "error",
+          let schedule = scheduleModule["data"] else {
+      throw CocoaError(.coderReadCorrupt, userInfo: [NSLocalizedDescriptionKey: "组件快照缺少生效课表或课表读取失败"])
+    }
+    let scheduleData = try JSONSerialization.data(withJSONObject: schedule)
+    let courses = try JSONDecoder().decode([WidgetCourseTimelineItem].self, from: scheduleData)
+    try storeSchedule(courses, configuration: configuration, defaults: defaults)
     defaults.set(data, forKey: "widgetSnapshotPayload")
     defaults.set(Int64(Date().timeIntervalSince1970 * 1_000), forKey: "widgetUpdatedAtEpochMillis")
-    if let schedule = moduleList(modules, name: "schedule") {
-      storeWeeklySchedule(schedule, currentWeek: currentWeek, defaults: defaults)
-      storeTodaySchedule(schedule, currentWeek: currentWeek, defaults: defaults)
-    }
     if let grades = moduleList(modules, name: "grades") {
       let gradeItems = grades.map { grade in
         [
@@ -359,123 +579,38 @@ enum WidgetSnapshotStore {
     return String(data: data, encoding: .utf8) ?? "[]"
   }
 
-  private static func storeTodaySchedule(_ courses: [[String: Any]], currentWeek: Int, defaults: UserDefaults) {
-    let calendar = Calendar.current
-    let now = Date()
-    let weekday = ((calendar.component(.weekday, from: now) + 5) % 7) + 1
-    let today = courses.compactMap { course -> [String: Any]? in
-      guard intValue(course["weekday"]) == weekday,
-            let startSection = intValue(course["startSection"]),
-            let endSection = intValue(course["endSection"]),
-            startSection >= 1, endSection <= sectionTimes.count,
-            occursInWeek(course["weeks"] as? String ?? "", currentWeek: currentWeek) else { return nil }
-      let startTime = sectionTimes[startSection - 1].0
-      let endTime = sectionTimes[endSection - 1].1
-      let start = dateToday(startTime, calendar: calendar, now: now)
-      let end = dateToday(endTime, calendar: calendar, now: now)
-      let source = (course["courseId"] as? String ?? course["kch_id"] as? String ?? course["courseCode"] as? String ?? course["name"] as? String ?? "课程")
-      return [
-        "itemKey": "\(source):\(weekday):\(startSection)",
-        "weekday": weekday,
-        "startSection": startSection,
-        "time": startTime,
-        "name": course["name"] as? String ?? "课程",
-        "info": [course["classroom"] as? String, course["teacher"] as? String].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "),
-        "ongoing": start <= now && now < end,
-        "start": start,
-        "end": end,
-      ]
-    }.sorted { ($0["start"] as? Date ?? now) < ($1["start"] as? Date ?? now) }
-    let visibleCourses = today.map { course in
-      ["itemKey": course["itemKey"] as? String ?? "", "week": currentWeek, "weekday": course["weekday"] as? Int ?? weekday, "startSection": course["startSection"] as? Int ?? 0, "time": course["time"] as? String ?? "", "name": course["name"] as? String ?? "课程", "info": course["info"] as? String ?? "", "ongoing": course["ongoing"] as? Bool ?? false]
-    }
-    let tomorrowWeekday = weekday == 7 ? 1 : weekday + 1
-    let hasTomorrow = courses.contains { course in
-      intValue(course["weekday"]) == tomorrowWeekday &&
-        occursInWeek(course["weeks"] as? String ?? "", currentWeek: currentWeek)
-    }
-    let noTodayOrTomorrow = today.isEmpty && !hasTomorrow
-    let next = today.first { ($0["end"] as? Date ?? now) > now }
-    defaults.set(jsonString(visibleCourses), forKey: "todayCoursesJson")
-    defaults.set(today.map { "\($0["time"] as? String ?? "") \($0["name"] as? String ?? "课程")" }, forKey: "todayItems")
-    defaults.set(today.isEmpty ? "今日无课" : "今日 \(today.count) 节课", forKey: "todayTitle")
-    defaults.set("第\(currentWeek)周 · \(today.count) 节课", forKey: "todayMeta")
-    defaults.set(noTodayOrTomorrow ? "今明无课" : (next?["name"] as? String ?? "暂无下一节课"), forKey: "nextTitle")
-    defaults.set(noTodayOrTomorrow ? "" : (next?["time"] as? String ?? ""), forKey: "nextTime")
-    defaults.set(noTodayOrTomorrow ? "" : (next?["info"] as? String ?? ""), forKey: "nextClassroom")
-    defaults.set(noTodayOrTomorrow || next == nil ? "none" : ((next?["ongoing"] as? Bool ?? false) ? "ongoing" : "upcoming"), forKey: "nextStatus")
-    defaults.set(noTodayOrTomorrow ? 0 : Int64(((next?["start"] as? Date)?.timeIntervalSince1970 ?? 0) * 1_000), forKey: "nextStartEpochMillis")
-    defaults.set(noTodayOrTomorrow ? 0 : Int64(((next?["end"] as? Date)?.timeIntervalSince1970 ?? 0) * 1_000), forKey: "nextEndEpochMillis")
-  }
-
-  private static func storeWeeklySchedule(_ courses: [[String: Any]], currentWeek: Int, defaults: UserDefaults) {
+  static func storeSchedule(
+    _ courses: [WidgetCourseTimelineItem],
+    configuration: Configuration,
+    defaults: UserDefaults
+  ) throws {
     let now = Date()
     let calendar = Calendar.current
-    let todayStart = calendar.startOfDay(for: now)
-    let calendarWeekday = calendar.component(.weekday, from: now)
-    let mondayOffset = calendarWeekday == 1 ? -6 : 2 - calendarWeekday
-    let monday = calendar.date(byAdding: .day, value: mondayOffset, to: todayStart) ?? todayStart
-    let values = courses.compactMap { course -> [String: Any]? in
-      guard let weekday = intValue(course["weekday"]), (1...7).contains(weekday),
-            let startSection = intValue(course["startSection"]), startSection >= 1,
-            let endSection = intValue(course["endSection"] ?? course["startSection"]), endSection >= startSection,
-            endSection <= sectionTimes.count,
-            occursInWeek(course["weeks"] as? String ?? "", currentWeek: currentWeek) else { return nil }
-      let startTime = sectionTimes[startSection - 1].0
-      let endTime = sectionTimes[endSection - 1].1
-      let itemKey = (course["courseId"] as? String ?? course["kch_id"] as? String ?? course["courseCode"] as? String ?? course["name"] as? String ?? "课程") + ":\(weekday):\(startSection)"
-      let dayOffset = weekday - 1
-      let start = dateByAddingDays(dayOffset, time: startTime, calendar: calendar, baseDate: monday)
-      let end = dateByAddingDays(dayOffset, time: endTime, calendar: calendar, baseDate: monday)
-      return [
-        "itemKey": itemKey,
-        "week": currentWeek,
-        "weekday": weekday,
-        "startSection": startSection,
-        "endSection": endSection,
-        "time": "\(startTime)-\(endTime)",
-        "name": course["name"] as? String ?? "课程",
-        "classroom": course["classroom"] as? String ?? "",
-        "teacher": course["teacher"] as? String ?? "",
-        "ongoing": Calendar.current.isDate(start, inSameDayAs: now) && start <= now && now < end,
-      ]
-    }.sorted {
-      let leftDay = intValue($0["weekday"]) ?? 0
-      let rightDay = intValue($1["weekday"]) ?? 0
-      if leftDay != rightDay { return leftDay < rightDay }
-      return (intValue($0["startSection"]) ?? 0) < (intValue($1["startSection"]) ?? 0)
+    let firstWeek = Date(timeIntervalSince1970: TimeInterval(configuration.firstWeekStartEpochMillis) / 1_000)
+    let projected = try WidgetScheduleProjection.make(courses: courses, firstWeekStart: firstWeek, now: now, calendar: calendar)
+    defaults.set(String(decoding: try JSONEncoder().encode(courses), as: UTF8.self), forKey: "effectiveCoursesJson")
+    defaults.set(String(decoding: try JSONEncoder().encode(projected.weekly), as: UTF8.self), forKey: "weeklyCoursesJson")
+    defaults.set(String(decoding: try JSONEncoder().encode(projected.today), as: UTF8.self), forKey: "todayCoursesJson")
+    defaults.set(projected.today.isEmpty ? "今日无课" : "今日 \(projected.today.count) 节课", forKey: "todayTitle")
+    defaults.set("第\(projected.week)周 · \(projected.today.count) 节课", forKey: "todayMeta")
+    defaults.set(projected.today.map { "\($0.time) \($0.name)" }, forKey: "todayItems")
+    let next = projected.next
+    defaults.set(next.title, forKey: "nextTitle")
+    defaults.set(next.time, forKey: "nextTime")
+    defaults.set(next.location, forKey: "nextClassroom")
+    defaults.set(next.teacher, forKey: "nextTeacher")
+    defaults.set(next.status, forKey: "nextStatus")
+    defaults.set(next.status == "none" ? "暂无待上课程" : "\(next.time) · \(next.location)", forKey: "nextMeta")
+    defaults.set(next.status == "ongoing" ? "进行中" : next.status == "upcoming" ? "待开始" : "点击查看课表", forKey: "nextDetail")
+    defaults.set(Int64((next.start?.timeIntervalSince1970 ?? 0) * 1_000), forKey: "nextStartEpochMillis")
+    defaults.set(Int64((next.end?.timeIntervalSince1970 ?? 0) * 1_000), forKey: "nextEndEpochMillis")
+  }
+
+  private static func projectCachedSchedule(configuration: Configuration, defaults: UserDefaults) throws {
+    guard let raw = defaults.string(forKey: "effectiveCoursesJson"), let data = raw.data(using: .utf8) else {
+      throw CocoaError(.coderReadCorrupt, userInfo: [NSLocalizedDescriptionKey: "桌面组件缺少生效课程缓存"])
     }
-    defaults.set(jsonString(values), forKey: "weeklyCoursesJson")
+    try storeSchedule(JSONDecoder().decode([WidgetCourseTimelineItem].self, from: data), configuration: configuration, defaults: defaults)
   }
 
-  private static func dateByAddingDays(_ days: Int, time: String, calendar: Calendar, baseDate: Date) -> Date {
-    let date = calendar.date(byAdding: .day, value: days, to: baseDate) ?? baseDate
-    let parts = time.split(separator: ":").compactMap { Int($0) }
-    return calendar.date(bySettingHour: parts.first ?? 0, minute: parts.dropFirst().first ?? 0, second: 0, of: date) ?? date
-  }
-
-  private static func intValue(_ value: Any?) -> Int? {
-    if let number = value as? NSNumber { return number.intValue }
-    if let text = value as? String { return Int(text) }
-    return nil
-  }
-
-  private static func occursInWeek(_ spec: String, currentWeek: Int) -> Bool {
-    if spec.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return true }
-    if spec.contains("单") && currentWeek % 2 == 0 { return false }
-    if spec.contains("双") && currentWeek % 2 != 0 { return false }
-    let values = spec.split { !$0.isNumber && $0 != "-" && $0 != "~" && $0 != "至" }.map(String.init)
-    for value in values {
-      let bounds = value.split(whereSeparator: { $0 == "-" || $0 == "~" || $0 == "至" }).compactMap { Int($0) }
-      if bounds.count == 2 && currentWeek >= bounds[0] && currentWeek <= bounds[1] { return true }
-      if bounds.count == 1 && currentWeek == bounds[0] { return true }
-    }
-    return false
-  }
-
-  private static func dateToday(_ time: String, calendar: Calendar, now: Date) -> Date {
-    let values = time.split(separator: ":").compactMap { Int($0) }
-    guard values.count == 2 else { return now }
-    return calendar.date(bySettingHour: values[0], minute: values[1], second: 0, of: now) ?? now
-  }
 }

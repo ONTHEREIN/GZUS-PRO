@@ -14,9 +14,26 @@ FAIL=0
 check() {
   local desc="$1" url="$2" expect="$3"
   local code content_type
-  code="$(curl -sS -m 15 -o /tmp/onegzus-verify -w '%{http_code}' "$url" 2>/dev/null || echo 000)"
+  if ! code="$(curl -sS -m 15 -o /dev/null -w '%{http_code}' "$url" 2>/dev/null)"; then
+    code="000"
+  fi
   content_type="$(curl -sSI -m 15 "$url" 2>/dev/null | grep -i '^content-type:' | tail -1 | tr -d '\r' | cut -d: -f2- | xargs)"
   if [[ "$code" == "200" ]] && echo "$content_type" | grep -qi "$expect"; then
+    echo "  ✔ $desc ($url -> $content_type)"
+  else
+    echo "  ✘ $desc ($url -> HTTP $code, Content-Type: $content_type)" >&2
+    FAIL=1
+  fi
+}
+
+check_large_asset() {
+  local desc="$1" url="$2" expect="$3"
+  local code content_type
+  if ! code="$(curl -sS -m 15 --range 0-1023 -o /dev/null -w '%{http_code}' "$url" 2>/dev/null)"; then
+    code="000"
+  fi
+  content_type="$(curl -sSI -m 15 "$url" 2>/dev/null | grep -i '^content-type:' | tail -1 | tr -d '\r' | cut -d: -f2- | xargs)"
+  if [[ "$code" == "206" ]] && echo "$content_type" | grep -qi "$expect"; then
     echo "  ✔ $desc ($url -> $content_type)"
   else
     echo "  ✘ $desc ($url -> HTTP $code, Content-Type: $content_type)" >&2
@@ -27,7 +44,7 @@ check() {
 echo "==> 验证 $BASE_URL"
 
 echo "---- 后端 ----"
-check "API 健康检查"            "$BASE_URL/api/health"              "json"
+check "API 就绪检查"            "$BASE_URL/api/health/ready"        "json"
 
 echo "---- 静态资源 ----"
 check "Flutter 主入口"          "$BASE_URL/main.dart.js"             "javascript"
@@ -36,7 +53,7 @@ check "PWA 脚本"                "$BASE_URL/gzus_pwa.js"             "javascrip
 check "PWA Service Worker"      "$BASE_URL/gzus_pwa_sw.js"           "javascript"
 check "Manifest"                "$BASE_URL/manifest.json"            "json"
 check "CanvasKit JS"            "$BASE_URL/canvaskit/canvaskit.js"   "javascript"
-check "CanvasKit WASM"          "$BASE_URL/canvaskit/canvaskit.wasm" "wasm"
+check_large_asset "CanvasKit WASM" "$BASE_URL/canvaskit/canvaskit.wasm" "wasm"
 check "应用图标"                "$BASE_URL/icons/icon-192x192.png"   "png"
 
 echo "---- 安全响应头 ----"
@@ -50,7 +67,9 @@ for h in "strict-transport-security" "x-content-type-options" "x-frame-options" 
 done
 
 echo "---- SPA 回退 ----"
-code="$(curl -sS -m 15 -o /dev/null -w '%{http_code}' "$BASE_URL/some/spa/route" 2>/dev/null || echo 000)"
+if ! code="$(curl -sS -m 15 -o /dev/null -w '%{http_code}' "$BASE_URL/some/spa/route" 2>/dev/null)"; then
+  code="000"
+fi
 if [[ "$code" == "200" ]]; then echo "  ✔ SPA 回退返回 200"; else echo "  ✘ SPA 回退 HTTP $code" >&2; FAIL=1; fi
 
 echo ""

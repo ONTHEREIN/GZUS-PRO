@@ -105,33 +105,72 @@ class ScheduleOverride {
   }
 }
 
-/// 本地调课条目的持久化（SharedPreferences，按学年学期隔离）。
+/// 本地调课条目的持久化（SharedPreferences，按账号及学年学期隔离）。
 class ScheduleOverrideStore {
-  static String keyOf(int year, int term) =>
-      'schedule.localOverrides.$year.$term';
+  static String keyOf(String namespace, int year, int term) =>
+      'schedule.$namespace.localOverrides.$year.$term';
 
-  static Future<List<ScheduleOverride>> load(int year, int term) async {
+  static Future<List<ScheduleOverride>> load(
+      String namespace, int year, int term) async {
     final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(keyOf(year, term));
-    if (raw == null || raw.isEmpty) return const [];
-    try {
-      final list = jsonDecode(raw) as List<dynamic>? ?? const [];
-      return [
-        for (final item in list)
-          if (item is Map<String, dynamic>) ScheduleOverride.fromJson(item),
-      ];
-    } catch (_) {
-      return const [];
-    }
+    final raw = prefs.getString(keyOf(namespace, year, term));
+    return _decodeOverrides(raw);
   }
 
-  static Future<void> save(
-      int year, int term, List<ScheduleOverride> overrides) async {
+  static List<ScheduleOverride> _decodeOverrides(String? raw) {
+    if (raw == null || raw.isEmpty) return const [];
+    final list = jsonDecode(raw);
+    if (list is! List) throw const FormatException('本地调课记录格式无效');
+    return list.map((item) {
+      if (item is! Map<String, dynamic>) {
+        throw const FormatException('本地调课条目格式无效');
+      }
+      return ScheduleOverride.fromJson(item);
+    }).toList();
+  }
+
+  static Future<bool> hasLegacyOverrides(int year, int term) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
-      keyOf(year, term),
+    return prefs.containsKey('schedule.localOverrides.$year.$term');
+  }
+
+  /// 旧版记录没有账号标记，导入前由用户确认归属。
+  static Future<void> importLegacyOverrides(
+      String namespace, int year, int term) async {
+    final prefs = await SharedPreferences.getInstance();
+    final legacyKey = 'schedule.localOverrides.$year.$term';
+    if (!prefs.containsKey(legacyKey)) return;
+    final legacy = _decodeOverrides(prefs.getString(legacyKey));
+    final key = keyOf(namespace, year, term);
+    final current = _decodeOverrides(prefs.getString(key));
+    final byId = {for (final item in current) item.id: item};
+    for (final item in legacy) {
+      final existing = byId[item.id];
+      if (existing != null &&
+          jsonEncode(existing.toJson()) != jsonEncode(item.toJson())) {
+        throw StateError('当前账号存在同编号的不同本地调课，无法导入');
+      }
+    }
+    final next = [
+      ...current,
+      for (final item in legacy)
+        if (!byId.containsKey(item.id)) item
+    ];
+    if (!await prefs.setString(
+        key, jsonEncode([for (final item in next) item.toJson()]))) {
+      throw StateError('本地调课记录导入失败');
+    }
+    if (!await prefs.remove(legacyKey)) throw StateError('旧版本地调课记录清理失败');
+  }
+
+  static Future<void> save(String namespace, int year, int term,
+      List<ScheduleOverride> overrides) async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = await prefs.setString(
+      keyOf(namespace, year, term),
       jsonEncode([for (final o in overrides) o.toJson()]),
     );
+    if (!saved) throw StateError('本地调课记录保存失败');
   }
 }
 

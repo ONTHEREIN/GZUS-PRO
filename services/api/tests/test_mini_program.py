@@ -11,6 +11,7 @@
 
 from fastapi.testclient import TestClient
 from types import SimpleNamespace
+import pytest
 
 from app.config import get_settings
 from app.database import WechatBinding, get_sync_session_factory
@@ -39,6 +40,11 @@ FORBIDDEN_FIELDS = {
     "autoLoginToken",
     "rsaPrivateKey",
 }
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limits() -> None:
+    limiter.reset()
 
 # 教务路由直接挂在根路径下（academic.router 没有 `/academic` 前缀），
 # 小程序必须调用这些路径；写成 `/academic/*` 只会得到 404。
@@ -98,6 +104,30 @@ def test_mini_program_login_returns_only_short_lived_session(monkeypatch) -> Non
         "studentName": "测试同学",
         "studentId": "20260001",
     }
+
+
+def test_mini_program_password_login_is_rate_limited(monkeypatch) -> None:
+    calls = 0
+
+    def fake_auto_login(payload, request) -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        return {
+            "status": "ok",
+            "sessionId": "mini-session",
+            "studentName": "测试同学",
+            "studentId": "20260001",
+        }
+
+    monkeypatch.setattr(mini_program, "auto_login", fake_auto_login)
+    with TestClient(create_app()) as client:
+        responses = [
+            client.post("/mini/auth/login", json={"account": "20260001", "password": "password"})
+            for _ in range(11)
+        ]
+
+    assert [response.status_code for response in responses] == [200] * 10 + [429]
+    assert calls == 10
 
 
 def test_mini_program_login_tolerates_missing_student_name(monkeypatch) -> None:
@@ -474,7 +504,7 @@ def test_wechat_login_creates_a_new_short_session(monkeypatch) -> None:
             db.commit()
         response = test_client.post("/mini/auth/wechat-login", json={"code": "code-login-ok"})
 
-    assert response.status_code == 200
+    assert response.status_code == 200, response.text
     assert set(response.json()) == SAFE_LOGIN_FIELDS
     assert response.json()["studentId"] == "20260004"
     assert response.json()["studentName"] == "登录用户"

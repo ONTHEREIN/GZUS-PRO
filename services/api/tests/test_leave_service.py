@@ -1,4 +1,5 @@
-from datetime import timedelta
+import base64
+from datetime import date, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -17,6 +18,8 @@ from app.staff_service import import_staff_records
 
 
 class FakeClient:
+    _account = "20240001"
+
     def get_schedule(self, year, term):
         return [
             {
@@ -82,6 +85,8 @@ class FakeEhallClient:
 
 
 class UnknownTeacherClient:
+    _account = "20240001"
+
     def get_schedule(self, year, term):
         return [
             {
@@ -105,6 +110,8 @@ class UnknownTeacherClient:
 
 
 class FailingScheduleClient:
+    _account = "20240001"
+
     def get_schedule(self, year, term):
         raise RuntimeError("jwxt timeout")
 
@@ -153,6 +160,134 @@ def test_build_leave_preview_flags_missing_required_course_fields():
 
     assert preview["hasMissingFields"] is True
     assert "班级编号" in preview["items"][0]["missingFields"]
+
+
+@pytest.mark.parametrize("target_offset", [8, -1, 210])
+def test_adjusted_leave_preview_and_fill_preserve_date_and_required_course_fields(target_offset):
+    app = create_app()
+    ehall = FakeEhallClient()
+    session = app.state.sessions.create(FailingScheduleClient(), "测试学生", ehall_client=ehall)
+    client = TestClient(app)
+    first_week = default_first_week_start(2026, 2)
+    target = first_week + timedelta(days=target_offset)
+    course = FakeClient().get_schedule("2026", "2")[0]
+    payload = {
+        "year": 2026,
+        "term": 2,
+        "startDate": target.isoformat(),
+        "endDate": target.isoformat(),
+        "firstWeekStart": first_week.isoformat(),
+        "effectiveOccurrences": [{
+            **course,
+            "date": target.isoformat(),
+            "occurrenceKey": "course:source->target",
+        }],
+    }
+    headers = {"X-Session-Id": session.id}
+    preview = client.post("/ehall/leave/preview", headers=headers, json=payload)
+    assert preview.status_code == 200
+    item = preview.json()["items"][0]
+    assert item["courseCode"] == "CS101"
+    assert item["teachingClassCode"] == "JXBMC001"
+    assert item["classTimes"] == [f"{target.isoformat()} 第1-2节 09:00-10:20"]
+    assert preview.json()["hasMissingFields"] is False
+    filled = client.post("/ehall/leave/fill", headers=headers, json={
+        **payload,
+        "reason": "事假",
+        "attachments": [{"attachmentName": "note.jpg", "attachmentContentBase64": "b2s="}],
+        "teacherHandlers": [{"teacher": "张老师", "userid": "u100", "cnName": "张老师"}],
+    })
+    assert filled.status_code == 200
+    assert filled.json()["status"] == "filled"
+    assert filled.json()["items"] == preview.json()["items"]
+    assert target.isoformat() in filled.json()["fillScript"]
+    assert ehall.calls == []
+    assert ehall.upload_calls == []
+
+
+def test_cancelled_courses_do_not_return_in_leave_preview_or_generate_a_form():
+    app = create_app()
+    ehall = FakeEhallClient()
+    session = app.state.sessions.create(FakeClient(), "测试学生", ehall_client=ehall)
+    client = TestClient(app)
+    first_week = default_first_week_start(2026, 2)
+    monday = first_week + timedelta(days=7)
+    payload = {
+        "year": 2026,
+        "term": 2,
+        "startDate": monday.isoformat(),
+        "endDate": monday.isoformat(),
+        "firstWeekStart": first_week.isoformat(),
+        "courses": FakeClient().get_schedule("2026", "2"),
+        "effectiveOccurrences": [],
+    }
+    headers = {"X-Session-Id": session.id}
+    preview = client.post("/ehall/leave/preview", headers=headers, json=payload)
+    assert preview.status_code == 200
+    assert preview.json()["items"] == []
+    filled = client.post("/ehall/leave/fill", headers=headers, json={
+        **payload,
+        "reason": "事假",
+        "attachments": [{"attachmentName": "note.jpg", "attachmentContentBase64": "b2s="}],
+    })
+    assert filled.status_code == 400
+    assert "没有匹配课程" in filled.json()["detail"]
+    assert ehall.calls == []
+    assert ehall.upload_calls == []
+
+
+@pytest.mark.parametrize("invalid_fields", [
+    {"date": "2026-02-30"},
+    {"startSection": 0},
+    {"endSection": 0},
+    {"startSection": 3, "endSection": 2},
+])
+def test_invalid_effective_leave_occurrences_fail_request_validation(invalid_fields):
+    app = create_app()
+    session = app.state.sessions.create(FailingScheduleClient(), "测试学生")
+    first_week = default_first_week_start(2026, 2)
+    course = FakeClient().get_schedule("2026", "2")[0]
+    response = TestClient(app).post("/ehall/leave/preview", headers={"X-Session-Id": session.id}, json={
+        "year": 2026,
+        "term": 2,
+        "startDate": first_week.isoformat(),
+        "endDate": first_week.isoformat(),
+        "effectiveOccurrences": [{
+            **course,
+            "date": first_week.isoformat(),
+            "occurrenceKey": "course:source",
+            **invalid_fields,
+        }],
+    })
+    assert response.status_code == 422
+
+
+def test_leave_preview_bounds_raw_schedule_expansion_to_the_semester():
+    preview = build_leave_preview(
+        FakeClient().get_schedule("2026", "2"),
+        start_date=date.min,
+        end_date=date.max,
+        year=2026,
+        term=2,
+        first_week_start=default_first_week_start(2026, 2),
+    )
+    assert len(preview["items"]) == 2
+    assert all(item["absenceCount"] == 16 for item in preview["items"])
+
+
+def test_leave_preview_accepts_the_last_representable_effective_date():
+    course = FakeClient().get_schedule("2026", "2")[0]
+    preview = build_leave_preview(
+        [],
+        start_date=date.max,
+        end_date=date.max,
+        year=2026,
+        term=2,
+        first_week_start=default_first_week_start(2026, 2),
+        effective_occurrences=[{**course, "date": date.max.isoformat()}],
+    )
+    assert preview["items"][0]["absenceCount"] == 1
+    assert preview["hasMissingFields"] is False
 
 
 def test_leave_preview_normalizes_raw_payload_courses():
@@ -514,3 +649,28 @@ def test_leave_attachment_uses_current_page_metadata():
             "attachment_content": b"image",
         }
     ]
+
+
+def test_leave_attachment_rejects_oversized_image_before_school_upload():
+    ehall = FakeEhallClient()
+    app = create_app()
+    session = app.state.sessions.create(FakeClient(), "测试学生", ehall_client=ehall)
+    content = base64.b64encode(b"x" * (7 * 1024 * 1024 + 1)).decode("ascii")
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/ehall/leave/attachment",
+            headers={"X-Session-Id": session.id},
+            json={
+                "docUnid": "current-doc-1",
+                "processId": "current-process-1",
+                "nodeName": "当前申请人",
+                "localStore": "0",
+                "attachmentName": "proof.jpg",
+                "attachmentContentBase64": content,
+            },
+        )
+
+    assert response.status_code == 413
+    assert response.json()["detail"] == "图片大小不能超过 7 MB"
+    assert ehall.upload_calls == []

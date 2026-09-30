@@ -46,3 +46,18 @@ def test_notifications_websocket_rejects_revoked_session_after_cold_start(client
         with client.websocket_connect(f"/ws/notifications?sessionId={session_id}"):
             pass
     assert exc.value.code == 4001
+
+
+def test_logout_closes_connected_websocket_and_drops_pending_messages(client):
+    session_id = client.post("/push/test-session").json()["sessionId"]
+    manager = client.app.state.ws_manager
+    manager.enqueue(session_id, {"type": "new_notice"})
+
+    with client.websocket_connect(f"/ws/notifications?sessionId={session_id}") as websocket:
+        response = client.post("/auth/logout", headers={"X-Session-Id": session_id})
+        assert response.status_code == 200
+        with pytest.raises(WebSocketDisconnect) as exc:
+            websocket.receive_text()
+
+    assert exc.value.code == 4001
+    assert manager.drain(session_id) == []

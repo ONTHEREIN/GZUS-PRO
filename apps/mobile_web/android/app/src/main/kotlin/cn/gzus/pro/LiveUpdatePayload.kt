@@ -98,7 +98,9 @@ data class LiveUpdatePayload(
                 else -> (type == "course_reminder" || type == "exam_reminder") &&
                     startTimeMillis > 0L && endTimeMillis > startTimeMillis
             }
-            val eventId = stringValue(merged, "id")
+            val eventId = stringValue(merged, "eventKey")
+                ?.takeIf { it.isNotBlank() }
+                ?: stringValue(merged, "id")
                 ?.takeIf { it.isNotBlank() }
                 ?: "live-update-${System.currentTimeMillis()}"
             val eventKey = stringValue(merged, "eventKey")

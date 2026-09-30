@@ -41,6 +41,8 @@ class CourseReminderScheduler(private val context: Context) {
             beforeEndMinutes: Int,
             firstWeekStart: String,
         ) {
+            // Flutter 必须传入生效结果；损坏的数据不能写入重启后使用的缓存。
+            JSONArray(effectiveOccurrencesJson)
             context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
                 .putString(KEY_COURSES_JSON, coursesJson)
                 .putString(KEY_EFFECTIVE_OCCURRENCES_JSON, effectiveOccurrencesJson)
@@ -56,7 +58,7 @@ class CourseReminderScheduler(private val context: Context) {
         cancelAll()
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val coursesJson = prefs.getString(KEY_COURSES_JSON, null) ?: return
-        val effectiveOccurrencesJson = prefs.getString(KEY_EFFECTIVE_OCCURRENCES_JSON, "[]") ?: "[]"
+        val effectiveOccurrencesJson = prefs.getString(KEY_EFFECTIVE_OCCURRENCES_JSON, null)
         val beforeStart = prefs.getInt(KEY_BEFORE_START_MINUTES, 10)
         val beforeEnd = prefs.getInt(KEY_BEFORE_END_MINUTES, 5)
         val firstWeekStart = prefs.getString(KEY_FIRST_WEEK_START, null) ?: return
@@ -69,7 +71,8 @@ class CourseReminderScheduler(private val context: Context) {
         val now = System.currentTimeMillis()
         val horizonMs = 14L * 24 * 60 * 60 * 1000
 
-        if (effectiveOccurrencesJson.isNotBlank() && effectiveOccurrencesJson != "[]") {
+        // 仅没有生效数据的旧版缓存使用周课表；空列表是停课后的有效结果。
+        if (effectiveOccurrencesJson != null) {
             scheduleEffectiveOccurrences(
                 effectiveOccurrencesJson,
                 now,
@@ -159,11 +162,7 @@ class CourseReminderScheduler(private val context: Context) {
         beforeStart: Int,
         beforeEnd: Int,
     ) {
-        val occurrences = try {
-            JSONArray(occurrencesJson)
-        } catch (_: Exception) {
-            return
-        }
+        val occurrences = JSONArray(occurrencesJson)
         val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
         for (i in 0 until occurrences.length()) {
             val occurrence = occurrences.optJSONObject(i) ?: continue
@@ -238,6 +237,12 @@ class CourseReminderScheduler(private val context: Context) {
             }
         }
         prefs.edit().remove("scheduled_ids").apply()
+    }
+
+    fun clearCourseData() {
+        cancelAll()
+        // 明确关闭提醒后，后台服务和重启不能重新排入旧课程。
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit().clear().apply()
     }
 
     private fun scheduleAlarm(

@@ -4,6 +4,7 @@ import json
 import logging
 import re
 import threading
+from contextlib import closing
 from datetime import datetime, timezone
 from typing import Any
 
@@ -136,7 +137,8 @@ def _get_rooms_cached() -> list[dict[str, str]]:
 
     # Cache miss – fetch from ecard API (outside lock to avoid blocking)
     try:
-        fresh = _client().rooms()
+        with closing(_client()) as client:
+            fresh = client.rooms()
     except (EcardConfigurationError, EcardApiError):
         # If fetch fails, return stale cache if available
         with _rooms_cache_lock:
@@ -295,7 +297,11 @@ def refresh_binding(
     summary = None
     api_error = None
     try:
-        summary = (client or _client()).balance(room_ref, student_id)
+        if client is None:
+            with closing(_client()) as owned_client:
+                summary = owned_client.balance(room_ref, student_id)
+        else:
+            summary = client.balance(room_ref, student_id)
     except EcardConfigurationError:
         raise
     except EcardApiError as exc:
@@ -506,8 +512,7 @@ def update_summary_cache(
         update = payload.model_dump(by_alias=True, exclude_unset=True)
         existing.update({key: value for key, value in update.items() if value is not None})
         binding.last_summary_json = json.dumps(existing, ensure_ascii=False)
-        # 只记录本次客户端实际回传的实时余额，避免旧缓存字段被重复记为新快照。
-        record_water_balance_snapshots(db, binding.room_id, update, datetime.now(timezone.utc))
+        # 客户端回传只作为个人缓存，不写入按宿舍共享的余额历史。
         binding.last_checked_at = datetime.now(timezone.utc)
         binding.updated_at = datetime.now(timezone.utc)
         db.commit()
@@ -570,7 +575,8 @@ def consumption(
         ):
             return _consumption_response(cached)
         try:
-            data = _client().consumption(EcardRoomRef.from_id(binding.room_id), query_month)
+            with closing(_client()) as client:
+                data = client.consumption(EcardRoomRef.from_id(binding.room_id), query_month)
             return _save_power_consumption(binding.room_id, query_month, data)
         except EcardConfigurationError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc

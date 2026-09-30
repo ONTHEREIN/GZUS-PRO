@@ -1,4 +1,6 @@
 import json
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
@@ -6,11 +8,13 @@ from fastapi.testclient import TestClient
 from app.academic_period import now_shanghai
 from app.config import get_settings
 from app.database import (
+    DataCache,
     EcardBinding,
     EcardPowerConsumption,
     EcardWaterBalanceSnapshot,
     get_sync_session_factory,
 )
+from app import database, ecard_client
 from app.ecard_client import EcardClient, EcardConfigurationError, EcardRoomRef, calc_sign
 from app.ecard_history import monthly_water_overviews, record_water_balance_snapshots
 from app.jobs import (
@@ -74,6 +78,63 @@ def test_login_request_omits_unionid(monkeypatch):
     )
 
 
+def test_cold_login_is_shared_without_persisting_token(monkeypatch):
+    monkeypatch.setenv("ECARD_OPENID", "test-openid")
+    get_settings.cache_clear()
+    for key, value in (("token", None), ("unionid", None), ("cached_at", 0.0)):
+        monkeypatch.setitem(ecard_client._GLOBAL_TOKEN, key, value)
+    database.init_db()
+    calls: list[str] = []
+
+    def fake_post_api(self, path, params):
+        calls.append(path)
+        time.sleep(0.02)
+        return {"code": 200, "token": "test-token", "unionid": "test-unionid"}
+
+    monkeypatch.setattr(EcardClient, "post_api", fake_post_api)
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        tokens = list(executor.map(lambda _: EcardClient().login(), range(4)))
+
+    assert tokens == ["test-token"] * 4
+    assert calls == ["/user/routine/routine-login"]
+    with get_sync_session_factory()() as db:
+        assert db.query(DataCache).filter_by(cache_key="ecard_global_token").count() == 0
+
+
+def test_old_auth_failure_keeps_newer_shared_token(monkeypatch):
+    monkeypatch.setenv("ECARD_OPENID", "test-openid")
+    get_settings.cache_clear()
+    for key, value in (("token", "old"), ("unionid", "old-id"), ("cached_at", time.time())):
+        monkeypatch.setitem(ecard_client._GLOBAL_TOKEN, key, value)
+    client = EcardClient()
+    assert client.login() == "old"
+
+    ecard_client._GLOBAL_TOKEN.update(token="new", unionid="new-id", cached_at=time.time())
+    client._invalidate_token("old")
+
+    assert client.login() == "new"
+    assert ecard_client._GLOBAL_TOKEN["token"] == "new"
+
+
+def test_reused_client_refreshes_expired_shared_token(monkeypatch):
+    monkeypatch.setenv("ECARD_OPENID", "test-openid")
+    get_settings.cache_clear()
+    for key, value in (("token", "old"), ("unionid", "old-id"), ("cached_at", time.time())):
+        monkeypatch.setitem(ecard_client._GLOBAL_TOKEN, key, value)
+    client = EcardClient()
+    assert client.login() == "old"
+
+    ecard_client._GLOBAL_TOKEN["cached_at"] = time.time() - ecard_client._TOKEN_TTL - 1
+    monkeypatch.setattr(
+        client,
+        "post_api",
+        lambda path, params: {"code": 200, "token": "new", "unionid": "new-id"},
+    )
+
+    assert client.login() == "new"
+    assert ecard_client._GLOBAL_TOKEN["token"] == "new"
+
+
 def test_authenticated_request_includes_unionid(monkeypatch):
     """已认证（带 token）的业务请求应携带 unionid。"""
     monkeypatch.setenv("ECARD_OPENID", "openid-abc")
@@ -112,7 +173,7 @@ def test_authenticated_request_includes_unionid(monkeypatch):
 
 def test_rooms_do_not_expose_balances(monkeypatch):
     client = object.__new__(EcardClient)
-    client._token = "token"
+    client.login = lambda: "token"
 
     def fake_post_api(path, params=None, *, token=None, timeout=None, proxy_origin=None):
         return {
@@ -147,7 +208,7 @@ def test_rooms_do_not_expose_balances(monkeypatch):
 
 def test_rooms_fill_missing_impl_type_from_current_source_and_dedupe(monkeypatch):
     client = object.__new__(EcardClient)
-    client._token = "token"
+    client.login = lambda: "token"
 
     def fake_post_api(path, params=None, *, token=None, timeout=None, proxy_origin=None):
         return {
@@ -181,7 +242,7 @@ def test_rooms_fill_missing_impl_type_from_current_source_and_dedupe(monkeypatch
 
 def test_rooms_fetch_all_impl_types(monkeypatch):
     client = object.__new__(EcardClient)
-    client._token = "token"
+    client.login = lambda: "token"
     calls = []
 
     def fake_post_api(path, params=None, *, token=None, timeout=None, proxy_origin=None):
@@ -216,7 +277,7 @@ def test_rooms_fetch_all_impl_types(monkeypatch):
 
 def test_rooms_raise_when_all_fetches_fail(monkeypatch):
     client = object.__new__(EcardClient)
-    client._token = "token"
+    client.login = lambda: "token"
 
     def fake_post_api(path, params=None, *, token=None, timeout=None, proxy_origin=None):
         raise RuntimeError("proxy failed")
@@ -234,7 +295,7 @@ def test_rooms_raise_when_all_fetches_fail(monkeypatch):
 
 def test_rooms_raise_when_all_fetches_return_errors(monkeypatch):
     client = object.__new__(EcardClient)
-    client._token = "token"
+    client.login = lambda: "token"
 
     def fake_post_api(path, params=None, *, token=None, timeout=None, proxy_origin=None):
         return {"ret": False, "code": 500, "msg": "upstream unavailable"}
@@ -252,7 +313,7 @@ def test_rooms_raise_when_all_fetches_return_errors(monkeypatch):
 
 def test_power_consumption_uses_daily_details():
     client = object.__new__(EcardClient)
-    client._token = "token"
+    client.login = lambda: "token"
     calls = []
 
     def fake_post_api(path, params=None, *, token=None, timeout=None, proxy_origin=None):
@@ -309,7 +370,7 @@ def test_power_consumption_uses_daily_details():
 
 def test_balance_uses_room_ref_and_hot_water_student_fallback():
     client = object.__new__(EcardClient)
-    client._token = "token"
+    client.login = lambda: "token"
     calls = []
 
     def fake_post_api(path, params=None, *, token=None, timeout=None, proxy_origin=None):
@@ -438,7 +499,7 @@ def test_update_summary_cache_requires_binding(monkeypatch):
     assert response.status_code == 404
 
 
-def test_update_summary_cache_only_updates_balance_snapshot(monkeypatch):
+def test_update_summary_cache_does_not_write_shared_balance_history(monkeypatch):
     session = AppSession(id="cache-bound", client=FakeSchoolClient(), student_name="测试用户")
     monkeypatch.setattr(app.state.sessions, "get", lambda session_id, touch=True: session)
     monkeypatch.setattr(app.state.sessions, "touch", lambda session_id: None)
@@ -487,8 +548,7 @@ def test_update_summary_cache_only_updates_balance_snapshot(monkeypatch):
             )
             .all()
         )
-    assert len(snapshots) == 1
-    assert snapshots[0].balance == 2
+    assert snapshots == []
     assert data["coldWaterBalance"] == 2
     assert data["reminderEnabled"] is False
     assert data["lowPowerThreshold"] == 15
@@ -526,10 +586,17 @@ def test_refresh_returns_cached_summary_when_upstream_fails(monkeypatch):
     monkeypatch.setattr(app.state.sessions, "touch", lambda session_id: None)
 
     class FailingClient:
+        def __init__(self):
+            self.closed = False
+
         def balance(self, room_ref, student_id):
             raise ecard.EcardApiError("一卡通服务请求失败")
 
-    monkeypatch.setattr(ecard, "_client", lambda: FailingClient())
+        def close(self):
+            self.closed = True
+
+    failing_client = FailingClient()
+    monkeypatch.setattr(ecard, "_client", lambda: failing_client)
 
     factory = get_sync_session_factory()
     with factory() as db:
@@ -551,6 +618,7 @@ def test_refresh_returns_cached_summary_when_upstream_fails(monkeypatch):
     assert data["roomDisplay"] == "校本部 A2 A2-932"
     assert data["powerBalance"] == 9
     assert data["powerText"] == "9 度"
+    assert failing_client.closed is True
 
 
 def test_consumption_returns_limited_when_upstream_fails(monkeypatch):
@@ -561,6 +629,9 @@ def test_consumption_returns_limited_when_upstream_fails(monkeypatch):
     class FailingClient:
         def consumption(self, room_ref, month):
             raise ecard.EcardApiError("一卡通服务请求失败")
+
+        def close(self):
+            pass
 
     monkeypatch.setattr(ecard, "_client", lambda: FailingClient())
 
@@ -590,6 +661,10 @@ def test_consumption_persists_historical_month_and_reuses_room_cache(monkeypatch
     class ConsumptionClient:
         def __init__(self):
             self.calls = 0
+            self.closes = 0
+
+        def close(self):
+            self.closes += 1
 
         def consumption(self, room_ref, month):
             self.calls += 1
@@ -629,6 +704,7 @@ def test_consumption_persists_historical_month_and_reuses_room_cache(monkeypatch
     assert first.json()["items"][0]["usage"] == 2.5
     assert first.json()["cachedAt"]
     assert consumption_client.calls == 1
+    assert consumption_client.closes == 1
     with factory() as db:
         assert db.query(EcardPowerConsumption).count() == 1
 
@@ -641,6 +717,9 @@ def test_consumption_refreshes_current_month_after_shanghai_day_changes(monkeypa
     class ConsumptionClient:
         def __init__(self):
             self.calls = 0
+
+        def close(self):
+            pass
 
         def consumption(self, room_ref, month):
             self.calls += 1
@@ -899,6 +978,21 @@ def test_ecard_reminder_has_no_daily_cap_and_respects_each_time():
     assert ecard_reminder_time_enabled(binding, "09:00") is False
 
 
+def test_reminder_rejects_invalid_time(monkeypatch):
+    session = AppSession(id="invalid-reminder-time", client=FakeSchoolClient(), student_name="测试用户")
+    monkeypatch.setattr(app.state.sessions, "get", lambda session_id, touch=True: session)
+    monkeypatch.setattr(app.state.sessions, "touch", lambda session_id: None)
+
+    with TestClient(app) as client:
+        response = client.patch(
+            "/ecard/reminder",
+            headers={"X-Session-Id": session.id},
+            json={"reminderTimes": ["25:00"]},
+        )
+
+    assert response.status_code == 422
+
+
 # ─── POST /ecard/binding（小程序内绑定宿舍）─────────────────────────────
 #
 # 小程序「生活缴费」页现在支持直接绑定宿舍，依赖这个接口。此前它没有路由级测试。
@@ -914,6 +1008,9 @@ class FakeEcardBalanceClient:
     def __init__(self, error=None):
         self._error = error
         self.calls: list[tuple[str, str]] = []
+
+    def close(self):
+        pass
 
     def balance(self, room_ref, student_id):
         self.calls.append((room_ref.id, student_id))

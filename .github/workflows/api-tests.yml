@@ -49,3 +49,39 @@ jobs:
         run: >-
           PYTHONPATH=. uv run --locked python -c
           "from app.main import create_app; assert any(getattr(route, 'path', None) == '/health/ready' for route in create_app().routes)"
+
+      - name: API deployment preflight (production config and routes)
+        working-directory: services/api
+        env:
+          DEBUG: "false"
+          DATABASE_URL: postgresql://preflight:preflight@127.0.0.1:5432/preflight
+          CREDENTIAL_ENCRYPTION_KEY: ci-preflight-credential-key
+          PUBLIC_API_BASE_URL: https://api.example.test
+          FRONTEND_BASE_URL: https://app.example.test
+          DEMO_ACCOUNT_ENABLED: "false"
+          WECHAT_MINIPROGRAM_APP_ID: wx-ci-preflight
+          WECHAT_MINIPROGRAM_APP_SECRET: ci-preflight-secret
+        run: |
+          export RSA_PRIVATE_KEY="$(uv run --locked python - <<'PY'
+          from cryptography.hazmat.primitives import serialization
+          from cryptography.hazmat.primitives.asymmetric import rsa
+
+          key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+          print(key.private_bytes(
+              serialization.Encoding.PEM,
+              serialization.PrivateFormat.PKCS8,
+              serialization.NoEncryption(),
+          ).decode(), end="")
+          PY
+          )"
+          PYTHONPATH=. uv run --locked python -m app.deployment_preflight --production
+
+      - name: Database migration readiness smoke check
+        working-directory: services/api
+        env:
+          DEBUG: "true"
+          DATABASE_URL: "sqlite:///:memory:"
+          CREDENTIAL_ENCRYPTION_KEY: test-key
+          PUBLIC_API_BASE_URL: https://api.example.test
+          FRONTEND_BASE_URL: https://app.example.test
+        run: PYTHONPATH=. uv run --locked python -m app.deployment_preflight --check-database

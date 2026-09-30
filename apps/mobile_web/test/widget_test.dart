@@ -24,9 +24,15 @@ import 'package:image_picker_platform_interface/image_picker_platform_interface.
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+  const widgetChannel = MethodChannel('cn.gzus.pro/home_widgets');
   setUp(() {
     FlutterSecureStorage.setMockInitialValues({});
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(widgetChannel, (call) async => null);
   });
+  tearDown(() => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+      .setMockMethodCallHandler(widgetChannel, null));
 
   test('course reminders include start and end slots', () {
     final course = ScheduleCourse.fromJson({
@@ -40,10 +46,13 @@ void main() {
     });
 
     final slots = ReminderService.buildCourseReminderSlots(
-      courses: [course],
-      firstWeekStart: DateTime(2026, 6, 1),
       settings: const CourseReminderSettings(enabled: true),
       now: DateTime(2026, 6, 1, 8, 45),
+      effectiveOccurrences: expandEffectiveSchedule(
+        courses: [course],
+        firstWeekStart: DateTime(2026, 6, 1),
+        adjustments: const [],
+      ),
       horizonDays: 1,
     );
 
@@ -1188,12 +1197,25 @@ void main() {
 
   test('api preserves the school password-change action from login errors',
       () async {
+    const publicKey = '''-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxN9SFRbHLnBF5JH12x8C
+ulanVI1FnHGy6HUZqw1eZNZknfJLsf3g40b/6i1G8hEJuXnF+hIZgi39BT8rH+UH
+7SBqiF+JUDdIOBB/FApXF017iZn789t9yB/oxUF1ewQz34O9SSpq0N0ZbZub78/+
+Km98S0uaWF26u6kwEBGhv8YSCo8hcxoaZwQIENKcFUoWfQLgldMAIKCgjpDmqkCQ
+6LH1r0pumBIF7QllLCkjUQfXfVM34N7sGhJCb+m5zpvLUZmC7NgOMuIChivAVfZF
+zt5hvpIEVLX6lyM+MgHgeahtWubeltbQOt0ReMVtjWtpYHyPteyo/OrQzNLkbgjw
+kwIDAQAB
+-----END PUBLIC KEY-----''';
     final api = ApiClient(
       baseUrl: 'https://api.example.test',
       httpClient: MockClient((request) async {
         if (request.url.path == '/auth/public-key') {
-          return http.Response(jsonEncode({}), 200);
+          return http.Response(
+              jsonEncode({'publicKey': publicKey, 'keyId': 'test-key'}), 200);
         }
+        final body = jsonDecode(request.body) as Map<String, dynamic>;
+        expect(body.containsKey('password'), isFalse);
+        expect(body['encryptedPassword'], isA<String>());
         return http.Response.bytes(
           utf8.encode(jsonEncode({
             'detail': {
@@ -1222,6 +1244,33 @@ void main() {
       exception.actionUrl,
       'https://cas.gzus.edu.cn/aqzx/#/password/passwordModify',
     );
+  });
+
+  test(
+      'api does not send plaintext password when login key is missing or invalid',
+      () async {
+    for (final keyResponse in [
+      <String, String>{},
+      <String, String>{'publicKey': 'invalid', 'keyId': 'test-key'},
+    ]) {
+      var loginPosted = false;
+      final api = ApiClient(
+        baseUrl: 'https://api.example.test',
+        httpClient: MockClient((request) async {
+          if (request.url.path == '/auth/public-key') {
+            return http.Response(jsonEncode(keyResponse), 200);
+          }
+          loginPosted = true;
+          return http.Response('unexpected login request', 500);
+        }),
+      );
+
+      await expectLater(
+        api.autoLogin('2024000000', 'test-password'),
+        throwsA(isA<ApiException>()),
+      );
+      expect(loginPosted, isFalse);
+    }
   });
 
   test('api stores auto-login credential in secure storage', () async {
@@ -1291,15 +1340,44 @@ void main() {
       httpClient: MockClient((request) async {
         requestedPaths.add(request.url.path);
         expect(request.headers['X-Session-Id'], 'active-session');
+        expect(jsonDecode(request.body), {'credentialToken': 'logout-token'});
         return http.Response(jsonEncode({'status': 'ok'}), 200);
       }),
     );
     api.useSession('active-session');
     api.clearCredentials();
 
-    await api.revokeSession('active-session');
+    await api.revokeSession('active-session', 'logout-token');
 
     expect(requestedPaths, ['/auth/logout']);
+  });
+
+  test('SSO login replaces an old password credential before logout', () async {
+    FlutterSecureStorage.setMockInitialValues({
+      'auth.credentialToken': 'old-password-token',
+    });
+    SharedPreferences.setMockInitialValues({});
+    final api = ApiClient(
+      baseUrl: 'https://api.example.test',
+      httpClient: MockClient((request) async {
+        expect(request.url.path, '/auth/ly/native-complete');
+        return http.Response(
+            jsonEncode({
+              'status': 'ok',
+              'sessionId': 'sso-session',
+              'studentId': '2024000000',
+              'sessionRefreshToken': 'new-sso-token',
+            }),
+            200);
+      }),
+    );
+    await api.loadSavedCredentials();
+
+    await api.completeNativeLySso('sso-code', 'verifier');
+
+    expect(api.logoutCredentialToken, 'new-sso-token');
+    const secureStorage = FlutterSecureStorage();
+    expect(await secureStorage.read(key: 'auth.credentialToken'), isNull);
   });
 
   test('native academic reads prefer cloud API for cache reuse', () async {
@@ -2395,6 +2473,9 @@ ApiClient _mockApi({
             'className': '软件2401',
             'grade': '2024',
           };
+          break;
+        case '/settings/schedule/adjustments':
+          body = <Object>[];
           break;
         case '/schedule':
           body = scheduleItems ??

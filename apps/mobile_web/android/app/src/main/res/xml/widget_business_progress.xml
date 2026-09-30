@@ -8,6 +8,5 @@
     android:initialLayout="@layout/widget_progress"
     android:description="@string/widget_desc_business_progress"
     android:previewImage="@drawable/widget_preview_business_progress"
-    android:previewLayout="@layout/widget_progress"
     android:resizeMode="horizontal|vertical"
     android:widgetCategory="home_screen" />

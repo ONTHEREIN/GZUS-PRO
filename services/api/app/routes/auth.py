@@ -4,7 +4,7 @@ from hmac import compare_digest
 from secrets import token_urlsafe
 from urllib.parse import parse_qsl, quote as url_quote, urlencode, urlparse, urlsplit, urlunsplit
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
 import logging
 import time
@@ -14,16 +14,19 @@ from app.config import get_settings
 from app.demo_data import DemoAcademicClient, DemoEhallClient, DEMO_STUDENT_ID, DEMO_STUDENT_NAME
 from app.ehall_client import EhallClient
 from app.rate_limit import limiter
+from app.routes.deps import require_session
 from app.schemas import (
     AuthResponse,
     AutoLoginRequest,
     NativeSsoCompleteRequest,
     NativeSsoStartRequest,
     NativeSsoStartResponse,
+    LogoutRequest,
     ReloginRequest,
     SsoCompleteRequest,
 )
 from app.school_client import AuthenticationError, SchoolSdkClient
+from app.sessions import AppSession
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +73,7 @@ def _safe_return_url(return_url: str) -> str:
         return settings.frontend_base_url
     if _origin(candidate) == settings.frontend_origin:
         return candidate
-    if parsed.hostname in {"localhost", "127.0.0.1"}:
+    if settings.debug and parsed.hostname in {"localhost", "127.0.0.1"}:
         return candidate
     return settings.frontend_base_url
 
@@ -119,6 +122,8 @@ def _create_pending_sso(
     settings = get_settings()
     now = time.monotonic()
     _purge_expired_sso_entries(request, now)
+    if len(request.app.state.ly_sso_states) >= 1024:
+        raise HTTPException(status_code=429, detail="登录请求过多，请稍后重试")
     state = token_urlsafe(32)
     request.app.state.ly_sso_states[state] = PendingLySso(
         return_url=return_url,
@@ -156,6 +161,7 @@ def _raise_cas_login_error(
 
 
 @router.get("/ly/start")
+@limiter.limit("10/minute")
 def ly_sso_start(return_url: str = "", request: Request = None):
     return RedirectResponse(url=_create_pending_sso(request, _safe_return_url(return_url), None))
 
@@ -183,6 +189,8 @@ def ly_sso_callback(ticket: str = "", state: str = "", request: Request = None):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="SSO state 无效或已过期")
     if pending.verifier_hash is None:
         return RedirectResponse(url=_sso_return_url(pending.return_url, ticket))
+    if len(request.app.state.ly_sso_handoffs) >= 1024:
+        raise HTTPException(status_code=429, detail="登录请求过多，请稍后重试")
     code = token_urlsafe(32)
     request.app.state.ly_sso_handoffs[code] = PendingLySsoHandoff(
         ticket=ticket,
@@ -193,6 +201,7 @@ def ly_sso_callback(ticket: str = "", state: str = "", request: Request = None):
 
 
 @router.post("/ly/complete", response_model=AuthResponse)
+@limiter.limit("10/minute")
 def ly_sso_complete(payload: SsoCompleteRequest, request: Request) -> dict:
     return _complete_sso_ticket(payload.sso_code, request)
 
@@ -237,19 +246,10 @@ def _complete_sso_ticket(ticket: str, request: Request) -> dict:
         with httpx.Client(follow_redirects=True, timeout=settings.cas_login_timeout_seconds) as http_client:
             response = http_client.get(redirect_url)
             response.raise_for_status()
-            # Extract cookies for the configured JWXT domain
-            jwxt_host = (urlparse(settings.jwxt_sso_service_url).hostname or "jwxt.gzus.edu.cn").lower()
-            cookie_parts = []
-            seen_keys = set()
-            for cookie in http_client.cookies.jar:
-                domain = (cookie.domain or "").lower().lstrip(".")
-                if not domain:
-                    continue
-                if jwxt_host == domain or jwxt_host.endswith(f".{domain}"):
-                    if cookie.name not in seen_keys:
-                        seen_keys.add(cookie.name)
-                        cookie_parts.append(f"{cookie.name}={cookie.value}")
-            jwxt_cookies = "; ".join(cookie_parts)
+            # 由 HTTP 客户端按教务系统域名、路径筛选 Cookie，排除 /sso 同名会话。
+            jwxt_cookies = http_client.build_request(
+                "GET", f"{settings.jw_base_url.rstrip('/')}/",
+            ).headers.get("Cookie", "")
     except Exception as exc:
         logger.warning("SSO ticket exchange failed: %s", type(exc).__name__)
         raise HTTPException(
@@ -284,31 +284,114 @@ def _complete_sso_ticket(ticket: str, request: Request) -> dict:
             detail="统一认证未返回有效学号，请重新登录",
         )
 
-    from app.school_session_service import record_authenticated_session
+    from app.school_session_service import account_school_session_lock, record_authenticated_session
+    from app.sessions import credential_fingerprint, encrypt_sso_session_resume_token
 
-    shared = record_authenticated_session(
+    credential_id = token_urlsafe(32)
+    with account_school_session_lock(student_id):
+        shared = record_authenticated_session(
+            student_id,
+            student_name,
+            client.get_jwxt_cookies_string(),
+            None,
+            None,
+            None,
+        )
+        session = sessions.create(
+            client,
+            student_name,
+            student_account=student_id,
+            credential_fingerprint=credential_fingerprint(credential_id),
+            school_session_version=shared.version,
+        )
+    session_refresh_token = encrypt_sso_session_resume_token(
         student_id,
-        student_name,
-        client.get_jwxt_cookies_string(),
-        None,
-        None,
-        None,
-    )
-    session = sessions.create(
-        client,
-        student_name,
-        student_account=student_id,
-        school_session_version=shared.version,
+        credential_id,
+        settings.credential_encryption_key,
     )
     response = {
         "status": "ok",
         "sessionId": session.id,
         "studentName": student_name,
         "studentId": student_id,
+        "sessionRefreshToken": session_refresh_token,
     }
     if _should_return_jwxt_cookies(request):
         response["jwxtCookies"] = client.get_jwxt_cookies_string()
     return response
+
+
+@router.post("/session-relogin", response_model=AuthResponse)
+@limiter.limit("10/minute")
+def session_relogin(payload: ReloginRequest, request: Request) -> dict:
+    """用 SSO 会话恢复凭据重建应用会话，不要求再次输入学校密码。"""
+    from app.school_session_service import (
+        SchoolSessionUnavailableError,
+        account_school_session_lock,
+        load_shared_school_clients,
+    )
+    from app.school_client import AuthenticationError
+    from app.sessions import (
+        CredentialRevokedError,
+        credential_fingerprint,
+        decrypt_sso_session_resume_token,
+        encrypt_sso_session_resume_token,
+    )
+
+    settings = get_settings()
+    try:
+        account, credential_id = decrypt_sso_session_resume_token(
+            payload.credential_token,
+            settings.credential_encryption_key,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=401, detail="统一认证会话已失效，请重新登录") from exc
+
+    fingerprint = credential_fingerprint(credential_id)
+    old_session_id = request.headers.get("X-Session-Id")
+    if old_session_id:
+        old_session = request.app.state.sessions.get(old_session_id, touch=False)
+        if old_session is not None and old_session.revoked_at is not None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="当前设备已被管理员下线，请重新验证登录",
+            )
+    if request.app.state.sessions.is_credential_revoked(fingerprint):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="当前设备已被管理员下线，请重新验证登录",
+        )
+
+    with account_school_session_lock(account):
+        if request.app.state.sessions.is_credential_revoked(fingerprint):
+            raise HTTPException(status_code=401, detail="当前设备已被管理员下线，请重新验证登录")
+        try:
+            client, ehall_client, shared = load_shared_school_clients(account)
+        except (SchoolSessionUnavailableError, AuthenticationError) as exc:
+            raise HTTPException(status_code=401, detail="统一认证会话已失效，请重新登录") from exc
+
+        try:
+            session = request.app.state.sessions.create(
+                client,
+                student_name=shared.student_name,
+                ehall_client=ehall_client,
+                student_account=account,
+                credential_fingerprint=fingerprint,
+                school_session_version=shared.version,
+            )
+        except CredentialRevokedError as exc:
+            raise HTTPException(status_code=401, detail=str(exc)) from exc
+    return {
+        "status": "ok",
+        "sessionId": session.id,
+        "studentName": shared.student_name,
+        "studentId": account,
+        "sessionRefreshToken": encrypt_sso_session_resume_token(
+            account,
+            credential_id,
+            settings.credential_encryption_key,
+        ),
+    }
 
 
 @router.post("/relogin", response_model=AuthResponse)
@@ -316,6 +399,7 @@ def _complete_sso_ticket(ticket: str, request: Request) -> dict:
 def relogin(payload: ReloginRequest, request: Request) -> dict:
     from app.cas_auto_login import CasAutoLogin
     from app.sessions import (
+        CredentialRevokedError,
         credential_fingerprint,
         decrypt_credential_payload,
         encrypt_device_credentials,
@@ -380,23 +464,29 @@ def relogin(payload: ReloginRequest, request: Request) -> dict:
             timeout_seconds=settings.request_timeout_seconds,
         )
 
-    from app.school_session_service import record_authenticated_session
+    from app.school_session_service import account_school_session_lock, record_authenticated_session
 
-    shared = record_authenticated_session(
-        account,
-        student_name,
-        result.cookies,
-        result.ehall_cookies,
-        result.ehall_auth_token,
-        None,
-    )
-    session = sessions.create(
-        client, student_name=student_name,
-        ehall_client=ehall_client,
-        student_account=account,
-        credential_fingerprint=fingerprint,
-        school_session_version=shared.version,
-    )
+    with account_school_session_lock(account):
+        if sessions.is_credential_revoked(fingerprint):
+            raise HTTPException(status_code=401, detail="当前设备已被管理员下线，请重新验证登录")
+        shared = record_authenticated_session(
+            account,
+            student_name,
+            result.cookies,
+            result.ehall_cookies,
+            result.ehall_auth_token,
+            None,
+        )
+        try:
+            session = sessions.create(
+                client, student_name=student_name,
+                ehall_client=ehall_client,
+                student_account=account,
+                credential_fingerprint=fingerprint,
+                school_session_version=shared.version,
+            )
+        except CredentialRevokedError as exc:
+            raise HTTPException(status_code=401, detail=str(exc)) from exc
 
     response = {
         "status": "ok",
@@ -501,23 +591,24 @@ def auto_login(payload: AutoLoginRequest, request: Request) -> dict:
         payload.account, password, credential_id, settings.credential_encryption_key
     )
 
-    from app.school_session_service import record_authenticated_session
+    from app.school_session_service import account_school_session_lock, record_authenticated_session
 
-    shared = record_authenticated_session(
-        payload.account,
-        student_name,
-        result.cookies,
-        result.ehall_cookies,
-        result.ehall_auth_token,
-        None,
-    )
-    session = sessions.create(
-        client, student_name,
-        ehall_client=ehall_client,
-        student_account=payload.account,
-        credential_fingerprint=credential_fingerprint(credential_id),
-        school_session_version=shared.version,
-    )
+    with account_school_session_lock(payload.account):
+        shared = record_authenticated_session(
+            payload.account,
+            student_name,
+            result.cookies,
+            result.ehall_cookies,
+            result.ehall_auth_token,
+            None,
+        )
+        session = sessions.create(
+            client, student_name,
+            ehall_client=ehall_client,
+            student_account=payload.account,
+            credential_fingerprint=credential_fingerprint(credential_id),
+            school_session_version=shared.version,
+        )
 
     logger.info("[TIMING] auto_login endpoint total: %.2fs", time.time() - t_total)
     response = {
@@ -535,21 +626,13 @@ def auto_login(payload: AutoLoginRequest, request: Request) -> dict:
 
 
 @router.get("/student-info")
-def get_student_info(request: Request) -> dict:
+def get_student_info(session: AppSession = Depends(require_session)) -> dict:
     """Async endpoint to fetch student info after login.
 
     This is called by the client after login completes to avoid blocking
     the login response while fetching detailed student info (which includes
     photo download and can take several seconds).
     """
-    sessions = request.app.state.sessions
-    session_id = request.headers.get("X-Session-Id")
-    if not session_id:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="未登录")
-    session = sessions.get(session_id)
-    if not session:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="会话已过期")
-
     client = session.client
     if not client:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="会话无效")
@@ -569,9 +652,53 @@ def get_student_info(request: Request) -> dict:
 
 
 @router.post("/logout")
-def logout(request: Request) -> dict:
+async def logout(request: Request) -> dict:
+    from pydantic import ValidationError
+
+    from app.sessions import (
+        SessionCredentialMismatchError,
+        credential_fingerprint,
+        decrypt_credential_payload,
+        decrypt_sso_session_resume_token,
+    )
+
+    raw_body = await request.body()
+    try:
+        payload = LogoutRequest.model_validate_json(raw_body) if raw_body else LogoutRequest()
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail="退出请求格式无效") from exc
+
+    fingerprint: str | None = None
+    account: str | None = None
+    if payload.credential_token:
+        try:
+            try:
+                account, credential_id = decrypt_sso_session_resume_token(
+                    payload.credential_token, get_settings().credential_encryption_key
+                )
+            except ValueError:
+                account, _, credential_id = decrypt_credential_payload(
+                    payload.credential_token, get_settings().credential_encryption_key
+                )
+            if credential_id is None:
+                raise ValueError("旧版凭据缺少设备标识")
+            fingerprint = credential_fingerprint(credential_id)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail="退出凭据无效，请重新验证登录") from exc
+
     sessions = request.app.state.sessions
-    session_id = request.headers.get("X-Session-Id")
-    if session_id:
-        sessions.remove(session_id)
+    session_id = request.headers.get("X-Session-Id") or ""
+    if session_id or fingerprint:
+        try:
+            sessions.remove(session_id, fingerprint, account)
+        except SessionCredentialMismatchError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        revoked_ids = {session_id} if session_id else set()
+        revoked_ids.update(
+            cached_id
+            for cached_id, cached in list(sessions._sessions.items())
+            if cached.revoked_at is not None
+        )
+        for revoked_id in revoked_ids:
+            await request.app.state.ws_manager.revoke(revoked_id)
     return {"status": "ok"}

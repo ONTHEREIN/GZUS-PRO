@@ -178,7 +178,7 @@ def build_live_activity_payload(
     activity_id = str(extras.get("id") or "").strip()
     activity_type = str(extras.get("type") or "notification").strip()
     start_epoch_millis = int(extras.get("startTime") or extras.get("progressStartTime") or now_ms)
-    end_epoch_millis = int(extras.get("endTime") or now_ms + 30 * 60 * 1000)
+    end_epoch_millis = int(extras.get("endTime") or now_ms + 15 * 60 * 1000)
     content_state = {
         "title": title[:256],
         "body": body[:512],
@@ -186,7 +186,7 @@ def build_live_activity_payload(
         "startEpochMillis": start_epoch_millis,
         "endEpochMillis": end_epoch_millis,
         "progress": extras.get("progress"),
-        "ongoing": bool(extras.get("ongoing", action != "end")),
+        "ongoing": False if action == "end" else bool(extras.get("ongoing", True)),
         "courseName": _optional_text(extras.get("courseName")),
         "location": _optional_text(extras.get("location")),
         "seat": _optional_text(extras.get("seat")),
@@ -202,6 +202,9 @@ def build_live_activity_payload(
         "event": action,
         "content-state": content_state,
     }
+    if action in {"start", "update"}:
+        # stale-date 只标记活动过期；服务端仍会在到期轮询中发送显式 end。
+        aps["stale-date"] = end_epoch_millis // 1000
     if action == "start":
         aps["alert"] = {"title": title[:256], "body": body[:512]}
         aps["attributes-type"] = "GzusLiveActivityAttributes"
@@ -212,8 +215,12 @@ def build_live_activity_payload(
             "deepLink": str(extras.get("deepLink") or "cn.gzus.pro://activity"),
             "priority": int(extras.get("priority") or 5),
         }
-    if action == "end" and not bool(extras.get("dismissImmediately", False)):
-        aps["dismissal-date"] = int(time.time()) + 30 * 60
+    if action == "end":
+        aps["dismissal-date"] = (
+            int(time.time()) - 1
+            if bool(extras.get("dismissImmediately", False))
+            else int(time.time()) + 15 * 60
+        )
     if action == "start":
         # ActivityKit 的启动控制字段属于 aps；放在顶层会被 APNs 接受，
         # 但系统不会把它当作启动 Live Activity 的输入令牌请求。
@@ -429,16 +436,18 @@ def send_live_activity_to_student(
     factory = get_sync_session_factory()
     with factory() as db:
         now = datetime.now(timezone.utc)
-        expired_query = db.query(IosLiveActivityToken).filter(
-            IosLiveActivityToken.student_id == student_id,
-            IosLiveActivityToken.token_type == "activity",
-            IosLiveActivityToken.expires_at.is_not(None),
-            IosLiveActivityToken.expires_at <= now,
-        )
-        expired_count = expired_query.count()
-        if expired_count:
-            expired_query.delete(synchronize_session=False)
-            db.commit()
+        expired_count = 0
+        if action != "end":
+            expired_query = db.query(IosLiveActivityToken).filter(
+                IosLiveActivityToken.student_id == student_id,
+                IosLiveActivityToken.token_type == "activity",
+                IosLiveActivityToken.expires_at.is_not(None),
+                IosLiveActivityToken.expires_at <= now,
+            )
+            expired_count = expired_query.count()
+            if expired_count:
+                expired_query.delete(synchronize_session=False)
+                db.commit()
         if not is_apns_enabled():
             logger.info(
                 "live_activity_delivery",
@@ -462,6 +471,7 @@ def send_live_activity_to_student(
         removed = 0
         failures = 0
         rejection_reasons: dict[str, int] = {}
+        completed_ids: list[int] = []
         for subscription in subscriptions:
             try:
                 _send_live_activity_with_retry(
@@ -471,6 +481,7 @@ def send_live_activity_to_student(
                     payload,
                 )
                 delivered += 1
+                completed_ids.append(subscription.id)
             except ApnsUnregisteredError as exc:
                 db.delete(subscription)
                 db.commit()
@@ -490,10 +501,10 @@ def send_live_activity_to_student(
                         "reason": reason,
                     },
                 )
-        if action == "end":
-            removed += db.query(IosLiveActivityToken).filter_by(**query).delete(
-                synchronize_session=False
-            )
+        if action == "end" and completed_ids:
+            removed += db.query(IosLiveActivityToken).filter(
+                IosLiveActivityToken.id.in_(completed_ids),
+            ).delete(synchronize_session=False)
             db.commit()
         logger.info(
             "live_activity_delivery",

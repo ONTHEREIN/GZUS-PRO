@@ -2,6 +2,8 @@
 import base64
 from datetime import UTC
 
+import pytest
+
 from app.config import get_settings
 from app.database import WechatSyncState, WxArticle, get_sync_session_factory
 from app.wechat_service import (
@@ -169,6 +171,24 @@ def test_set_hidden_and_delete():
 
 
 # ─── og 元数据解析（粘贴链接兜底） ─────────────────────────
+
+@pytest.mark.parametrize("url", [
+    "http://mp.weixin.qq.com/s/abc",
+    "https://127.0.0.1/admin",
+    "https://mp.weixin.qq.com.evil.test/s/abc",
+    "https://mp.weixin.qq.com:8443/s/abc",
+    "https://user@mp.weixin.qq.com/s/abc",
+])
+def test_fetch_article_meta_rejects_non_wechat_urls_before_request(monkeypatch, url):
+    def unexpected_client(*_args, **_kwargs):
+        raise AssertionError("非法链接不能触发 HTTP 请求")
+
+    import app.wechat_service as ws
+
+    monkeypatch.setattr(ws.httpx, "Client", unexpected_client)
+    with pytest.raises(ValueError, match="仅支持"):
+        fetch_article_meta(url)
+
 
 def test_fetch_article_meta_parses_og_tags(monkeypatch):
     html = """

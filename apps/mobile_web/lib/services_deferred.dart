@@ -213,6 +213,7 @@ class LoginRequiredServices {
         apiBaseUrl: apiBaseUrl,
         sessionId: sessionId,
         onPresented: api.markNotificationPresented,
+        onClaim: api.claimNotificationEvent,
       );
       await ws_service.WsService.connect();
     } catch (error) {

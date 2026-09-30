@@ -1130,9 +1130,11 @@ class _LoginPageState extends State<LoginPage>
           } else {
             await widget.api.clearSavedCredentialToken();
           }
+          await widget.api.clearSessionRefreshToken();
         } else {
           await widget.api.forgetRememberedAccount();
           await widget.api.clearSavedCredentialToken();
+          await widget.api.clearSessionRefreshToken();
         }
       } catch (exception, stackTrace) {
         localStorageError = exception;

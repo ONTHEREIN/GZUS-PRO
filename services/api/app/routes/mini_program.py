@@ -44,6 +44,7 @@ def _as_text(value: object) -> str:
 
 
 @router.post("/auth/login", response_model=MiniProgramAuthResponse)
+@limiter.limit("10/minute")
 def login(payload: AutoLoginRequest, request: Request) -> MiniProgramAuthResponse:
     """使用现有学校认证链路创建小程序短期会话。"""
     result = auto_login(payload, request)

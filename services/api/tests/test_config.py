@@ -49,6 +49,24 @@ def test_production_accepts_rsa_private_key(_production_env, monkeypatch):
     assert settings.debug is False
 
 
+def test_production_rejects_http_ehall_service(_production_env, monkeypatch):
+    monkeypatch.setenv("RSA_PRIVATE_KEY", _pem_key())
+    monkeypatch.setenv("EHALL_SERVICE_URL", "http://ehall.gzus.edu.cn/shiro-cas")
+    get_settings.cache_clear()
+
+    with pytest.raises(RuntimeError, match="EHALL_SERVICE_URL must use HTTPS"):
+        get_settings()
+
+
+def test_production_rejects_disabled_ecard_tls_verification(_production_env, monkeypatch):
+    monkeypatch.setenv("RSA_PRIVATE_KEY", _pem_key())
+    monkeypatch.setenv("ECARD_VERIFY_TLS", "false")
+    get_settings.cache_clear()
+
+    with pytest.raises(RuntimeError, match="ECARD_VERIFY_TLS must be true"):
+        get_settings()
+
+
 def test_rsa_key_manager_uses_configured_key(_production_env, monkeypatch):
     """rsa_key_manager 应加载配置的固定私钥（keyId 稳定，不随冷启动漂移）。"""
     from app.rsa_keys import RsaKeyManager

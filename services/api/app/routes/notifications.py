@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy import or_
 
 from app.config import get_settings
 from app.database import (
@@ -33,6 +34,7 @@ from app.sessions import (
 )
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])
+_NOTIFICATION_CLAIM_TTL = timedelta(minutes=2)
 
 
 def _student_id(session: AppSession) -> str:
@@ -181,12 +183,14 @@ def list_pending_notification_events(
                 NotificationDelivery.student_id == student_id,
                 NotificationDelivery.title.is_not(None),
                 (NotificationDelivery.expires_at.is_(None) | (NotificationDelivery.expires_at > now)),
-                ~db.query(NotificationPresentation)
-                .filter(
-                    NotificationPresentation.notification_id == NotificationDelivery.id,
-                    NotificationPresentation.installation_id == installation,
-                )
-                .exists(),
+                NotificationDelivery.delivery_expires_at.is_not(None),
+                NotificationDelivery.delivery_expires_at > now,
+                NotificationDelivery.presented_at.is_(None),
+                (
+                    NotificationDelivery.claim_installation_id.is_(None)
+                    | (NotificationDelivery.claim_expires_at <= now)
+                    | (NotificationDelivery.claim_installation_id == installation)
+                ),
             )
             .order_by(NotificationDelivery.created_at.asc())
             .limit(100)
@@ -195,13 +199,55 @@ def list_pending_notification_events(
         return NotificationEventList(events=[_notification_event(row) for row in rows])
 
 
+@router.post("/events/{event_id}/claim")
+def claim_notification_event(
+    event_id: str,
+    session: AppSession = Depends(require_session),
+    installation_id: str | None = Header(None, alias="X-Installation-Id"),
+) -> dict[str, bool]:
+    """Atomically claim an event before displaying it on any device."""
+    student_id = _student_id(session)
+    installation = _require_installation_id(installation_id)
+    now = datetime.now(timezone.utc)
+    claim_expires_at = now + _NOTIFICATION_CLAIM_TTL
+    with get_sync_session_factory()() as db:
+        row = db.query(NotificationDelivery).filter_by(
+            student_id=student_id,
+            event_key=event_id,
+        ).first()
+        if row is None or row.title is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="通知事件不存在")
+        updated = db.query(NotificationDelivery).filter(
+            NotificationDelivery.id == row.id,
+            NotificationDelivery.presented_at.is_(None),
+            NotificationDelivery.delivery_expires_at.is_not(None),
+            NotificationDelivery.delivery_expires_at > now,
+            or_(
+                NotificationDelivery.claim_installation_id.is_(None),
+                NotificationDelivery.claim_installation_id == installation,
+                NotificationDelivery.claim_expires_at.is_(None),
+                NotificationDelivery.claim_expires_at <= now,
+            ),
+        ).update(
+            {
+                NotificationDelivery.claim_installation_id: installation,
+                NotificationDelivery.claimed_at: now,
+                NotificationDelivery.claim_expires_at: claim_expires_at,
+            },
+            synchronize_session=False,
+        )
+        db.commit()
+        can_claim = updated == 1
+        return {"claimed": can_claim}
+
+
 @router.post("/events/{event_id}/presented")
 def mark_notification_presented(
     event_id: str,
     session: AppSession = Depends(require_session),
     installation_id: str | None = Header(None, alias="X-Installation-Id"),
 ) -> dict[str, str]:
-    """记录某安装实例已经展示了通知。"""
+    """完成全账号展示确认，并保留安装实例审计记录。"""
     student_id = _student_id(session)
     installation = _require_installation_id(installation_id)
     with get_sync_session_factory()() as db:
@@ -211,6 +257,24 @@ def mark_notification_presented(
         ).first()
         if row is None or row.title is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="通知事件不存在")
+        if row.presented_at is not None:
+            return {"status": "ok"}
+        now = datetime.now(timezone.utc)
+        updated = db.query(NotificationDelivery).filter(
+            NotificationDelivery.id == row.id,
+            NotificationDelivery.presented_at.is_(None),
+            NotificationDelivery.claim_installation_id == installation,
+        ).update(
+            {
+                NotificationDelivery.presented_at: now,
+                NotificationDelivery.claim_installation_id: None,
+                NotificationDelivery.claimed_at: None,
+                NotificationDelivery.claim_expires_at: None,
+            },
+            synchronize_session=False,
+        )
+        if updated != 1:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="通知未由当前设备领取")
         existing = db.query(NotificationPresentation).filter_by(
             notification_id=row.id,
             installation_id=installation,
@@ -221,8 +285,6 @@ def mark_notification_presented(
                 student_id=student_id,
                 installation_id=installation,
             ))
-        if row.presented_at is None:
-            row.presented_at = datetime.now(timezone.utc)
         try:
             db.commit()
         except IntegrityError:
@@ -256,6 +318,16 @@ def put_background_notification_access(
     session: AppSession = Depends(require_session),
 ) -> BackgroundNotificationStatus:
     student_id = _student_id(session)
+    from app.school_session_service import account_school_session_lock
+
+    with account_school_session_lock(student_id):
+        return _put_background_notification_access_locked(payload, student_id)
+
+
+def _put_background_notification_access_locked(
+    payload: BackgroundNotificationAccessRequest,
+    student_id: str,
+) -> BackgroundNotificationStatus:
     with get_sync_session_factory()() as db:
         row = db.query(BackgroundNotificationProfile).filter_by(student_id=student_id).first()
         if not payload.enabled:

@@ -159,6 +159,9 @@ void main() {
     final api = ApiClient(
       baseUrl: 'https://api.example.test',
       httpClient: MockClient((request) async {
+        if (request.url.path == '/settings/schedule/adjustments') {
+          return http.Response('[]', 200);
+        }
         if (request.url.path == '/dashboard') {
           final body = _dashboardBody();
           final modules = Map<String, Object?>.from(
@@ -392,7 +395,8 @@ Future<void> _pumpDashboardShell(
 
   final api = ApiClient(
     baseUrl: 'https://api.example.test',
-    httpClient: MockClient((_) async => http.Response('服务器错误', 500)),
+    httpClient: MockClient((_) async =>
+        http.Response.bytes(utf8.encode('服务器错误'), 500)),
   );
   api.useSession('layout-test-session');
   api.setStudentId('2024000000');
@@ -460,6 +464,9 @@ ApiClient _homeApi({
   final api = ApiClient(
     baseUrl: 'https://api.example.test',
     httpClient: MockClient((request) async {
+      if (request.url.path == '/settings/schedule/adjustments') {
+        return http.Response('[]', 200);
+      }
       final body = transform(_dashboardBody(), requestIndex);
       requestIndex++;
       return http.Response(

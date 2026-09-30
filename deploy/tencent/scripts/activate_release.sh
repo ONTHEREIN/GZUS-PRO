@@ -51,8 +51,11 @@ else
   done
   ln -sfn ../../../shared/api.env "$RELEASE/.env"
   [[ -x "$RELEASE/.venv/bin/python" ]] || { echo "API release 未完成 uv sync" >&2; exit 1; }
-  "$RELEASE/.venv/bin/python" -c 'from app.main import create_app; create_app()'
   bash "$ROOT/deploy/scripts/backup_db.sh"
+  (
+    cd "$RELEASE"
+    "$RELEASE/.venv/bin/python" -m app.deployment_preflight --production --check-database
+  )
   local_previous=""
   if [[ -L "$CURRENT" ]]; then
     local_previous="$(readlink -f "$CURRENT")"

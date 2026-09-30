@@ -8,6 +8,5 @@
     android:initialLayout="@layout/widget_today_schedule"
     android:description="@string/widget_desc_today_schedule"
     android:previewImage="@drawable/widget_preview_today_schedule"
-    android:previewLayout="@layout/widget_today_schedule"
     android:resizeMode="horizontal|vertical"
     android:widgetCategory="home_screen" />

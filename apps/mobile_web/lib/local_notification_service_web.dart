@@ -21,7 +21,14 @@ class ScheduledLocalNotification {
 }
 
 class LocalNotificationService {
-  static Future<void> init({OnNotificationTap? onTap}) async {}
+  static bool _initialized = false;
+
+  static Future<void> init({OnNotificationTap? onTap}) async {
+    if (_initialized) return;
+    _initialized = true;
+  }
+
+  static Future<void> ensureInitialized() => init();
 
   static Future<void> replaceCourseReminders(
     List<ScheduledLocalNotification> reminders,

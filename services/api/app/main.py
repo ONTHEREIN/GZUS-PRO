@@ -65,21 +65,23 @@ async def lifespan(app: FastAPI):
 
     init_db()
     reconcile_shiply_export_jobs()
-    poller_tasks = [
-        asyncio.create_task(run_notice_poller(app)),
-        asyncio.create_task(run_ecard_reminder_poller(app)),
-        asyncio.create_task(run_exam_reminder_poller(app)),
-        asyncio.create_task(run_grade_update_poller(app)),
-        asyncio.create_task(run_background_notification_poller()),
-        asyncio.create_task(run_course_reminder_dispatcher()),
-    ]
+    poller_tasks = {
+        "notices": asyncio.create_task(run_notice_poller(app)),
+        "ecard": asyncio.create_task(run_ecard_reminder_poller(app)),
+        "exams": asyncio.create_task(run_exam_reminder_poller(app)),
+        "grades": asyncio.create_task(run_grade_update_poller(app)),
+        "background_notifications": asyncio.create_task(run_background_notification_poller()),
+        "course_reminders": asyncio.create_task(run_course_reminder_dispatcher()),
+    }
+    app.state.poller_tasks = poller_tasks
     await app.state.sessions.start_cleanup_task()
     try:
         yield
     finally:
-        for task in poller_tasks:
+        for task in poller_tasks.values():
             task.cancel()
-        await asyncio.gather(*poller_tasks, return_exceptions=True)
+        await asyncio.gather(*poller_tasks.values(), return_exceptions=True)
+        app.state.poller_tasks = {}
         current_loop = asyncio.get_running_loop()
         shiply_tasks = [
             task
@@ -107,6 +109,7 @@ def create_app() -> FastAPI:
     app.state.rsa_key_manager = rsa_key_manager
     app.state.shiply_export_tasks = {}
     app.state.shiply_export_create_lock = asyncio.Lock()
+    app.state.poller_tasks = {}
 
     security_headers = _security_headers(cfg)
 
@@ -251,6 +254,23 @@ def create_app() -> FastAPI:
 
     @app.get("/health/ready")
     def ready() -> dict[str, str]:
+        stopped = [
+            name for name, task in app.state.poller_tasks.items()
+            if task.done()
+        ]
+        if stopped:
+            for name in stopped:
+                task = app.state.poller_tasks[name]
+                error = None if task.cancelled() else task.exception()
+                logging.getLogger("app.main").error(
+                    "background_poller_stopped",
+                    extra={"poller": name, "error_type": type(error).__name__ if error else None},
+                    exc_info=(type(error), error, error.__traceback__) if error else None,
+                )
+            return JSONResponse(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                content={"status": "unavailable"},
+            )
         try:
             check_database_ready()
         except Exception as exc:

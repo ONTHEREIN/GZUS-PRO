@@ -103,8 +103,7 @@ class _FeedbackListCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final category = item['category']?.toString() ?? 'bug';
-    final attachmentCount =
-        (item['attachments'] as List<dynamic>? ?? const []).length;
+    final hasAttachments = item['hasAttachments'] == true;
     return Card(
       elevation: 0,
       color: Theme.of(context).colorScheme.surfaceContainer,
@@ -133,7 +132,7 @@ class _FeedbackListCard extends StatelessWidget {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             const StatusPill(label: '待处理', color: GzusColors.amber),
-            if (attachmentCount > 0) ...[
+            if (hasAttachments) ...[
               const SizedBox(height: 6),
               const Icon(Icons.attach_file, size: 16, color: GzusColors.muted),
             ],

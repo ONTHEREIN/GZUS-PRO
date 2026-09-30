@@ -323,17 +323,11 @@ class _NoticeRow extends StatelessWidget {
             if (cover != null)
               ClipRRect(
                 borderRadius: BorderRadius.circular(8),
-                child: Image.network(
-                  api.resolveMediaUrl(cover),
-                  width: 72,
-                  height: 52,
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, __, ___) => Container(
-                    width: 72,
-                    height: 52,
-                    color: colorScheme.surfaceContainerHighest,
-                    child: const Icon(Icons.image_not_supported_outlined),
-                  ),
+                child: _AdminNoticeCover(
+                  api: api,
+                  noticeId: item['id'] as int,
+                  coverUrl: cover,
+                  published: published,
                 ),
               )
             else
@@ -398,6 +392,80 @@ class _NoticeRow extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+
+class _AdminNoticeCover extends StatefulWidget {
+  const _AdminNoticeCover({
+    required this.api,
+    required this.noticeId,
+    required this.coverUrl,
+    required this.published,
+  });
+
+  final ApiClient api;
+  final int noticeId;
+  final String coverUrl;
+  final bool published;
+
+  @override
+  State<_AdminNoticeCover> createState() => _AdminNoticeCoverState();
+}
+
+class _AdminNoticeCoverState extends State<_AdminNoticeCover> {
+  Future<Uint8List>? _preview;
+
+  @override
+  void initState() {
+    super.initState();
+    if (!widget.published) {
+      _preview = widget.api.adminNoticePreview(widget.noticeId);
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant _AdminNoticeCover oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!widget.published &&
+        (oldWidget.published ||
+            oldWidget.noticeId != widget.noticeId ||
+            oldWidget.api != widget.api)) {
+      _preview = widget.api.adminNoticePreview(widget.noticeId);
+    }
+  }
+
+  Widget _placeholder() => Container(
+        width: 72,
+        height: 52,
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        child: const Icon(Icons.image_not_supported_outlined),
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.published) {
+      return Image.network(
+        widget.api.resolveMediaUrl(widget.coverUrl),
+        width: 72,
+        height: 52,
+        fit: BoxFit.cover,
+        errorBuilder: (_, __, ___) => _placeholder(),
+      );
+    }
+    return FutureBuilder<Uint8List>(
+      future: _preview,
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) return _placeholder();
+        return Image.memory(
+          snapshot.data!,
+          width: 72,
+          height: 52,
+          fit: BoxFit.cover,
+          errorBuilder: (_, __, ___) => _placeholder(),
+        );
+      },
     );
   }
 }

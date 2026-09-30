@@ -3,7 +3,7 @@ import base64
 
 from fastapi.testclient import TestClient
 
-from app.database import AdminAuditLog, LoginCarouselSlide, get_sync_session_factory
+from app.database import AdminAuditLog, AdminUser, LoginCarouselSlide, get_sync_session_factory
 from app.main import app
 from app.sessions import AppSession
 
@@ -25,6 +25,10 @@ def _admin_session(monkeypatch, is_admin=True):
     )
     monkeypatch.setattr(app.state.sessions, "get", lambda session_id, touch=True: session)
     monkeypatch.setattr(app.state.sessions, "touch", lambda session_id: None)
+    if is_admin:
+        with get_sync_session_factory()() as db:
+            db.add(AdminUser(student_id="20240001", role="admin"))
+            db.commit()
     return {"X-Session-Id": "login-slide-session"}
 
 
@@ -150,3 +154,15 @@ def test_login_slide_image_over_limit_is_rejected(monkeypatch):
             headers=headers,
         )
     assert response.status_code == 413
+
+
+def test_login_slide_rejects_scriptable_image_format(monkeypatch):
+    headers = _admin_session(monkeypatch)
+    svg_data = base64.b64encode(b"<svg xmlns='http://www.w3.org/2000/svg'/>").decode()
+    with TestClient(app) as client:
+        response = client.post(
+            "/admin/login-slides",
+            json={"title": "脚本图片", "imageData": svg_data, "imageMime": "image/svg+xml"},
+            headers=headers,
+        )
+    assert response.status_code == 400

@@ -269,17 +269,26 @@ class MainActivity : FlutterActivity() {
                 }
                 "updateCourseReminders" -> {
                     val coursesJson = call.argument<String>("coursesJson") ?: "[]"
-                    val effectiveOccurrencesJson = call.argument<String>("effectiveOccurrencesJson") ?: "[]"
+                    val effectiveOccurrencesJson = call.argument<String>("effectiveOccurrencesJson")
+                    if (effectiveOccurrencesJson == null) {
+                        result.error("COURSE_REMINDERS_INVALID", "课程提醒缺少生效课程列表", null)
+                        return@setMethodCallHandler
+                    }
                     val beforeStartMinutes = call.argument<Int>("beforeStartMinutes") ?: 10
                     val beforeEndMinutes = call.argument<Int>("beforeEndMinutes") ?: 5
                     val firstWeekStart = call.argument<String>("firstWeekStart") ?: ""
-                    CourseReminderScheduler.saveCourseData(
-                        this, coursesJson, effectiveOccurrencesJson, beforeStartMinutes, beforeEndMinutes, firstWeekStart
-                    )
+                    try {
+                        CourseReminderScheduler.saveCourseData(
+                            this, coursesJson, effectiveOccurrencesJson, beforeStartMinutes, beforeEndMinutes, firstWeekStart
+                        )
+                    } catch (error: org.json.JSONException) {
+                        result.error("COURSE_REMINDERS_INVALID", "生效课程列表格式无效：${error.message}", null)
+                        return@setMethodCallHandler
+                    }
                     result.success(true)
                 }
                 "cancelCourseReminders" -> {
-                    CourseReminderScheduler(this).cancelAll()
+                    CourseReminderScheduler(this).clearCourseData()
                     result.success(true)
                 }
                 else -> {
@@ -369,8 +378,25 @@ class MainActivity : FlutterActivity() {
         homeWidgetsChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, HOME_WIDGETS_CHANNEL)
         homeWidgetsChannel?.setMethodCallHandler { call, result ->
             when (call.method) {
-                "update" -> {
+                "update" -> WidgetRefreshTransactions.update {
                     val args = call.arguments as? Map<*, *> ?: emptyMap<Any, Any>()
+                    val baseUrl = args["widgetApiBaseUrl"]?.toString().orEmpty()
+                    val sessionId = args["widgetSessionId"]?.toString().orEmpty()
+                    val year = (args["widgetYear"] as? Number)?.toInt() ?: 0
+                    val term = (args["widgetTerm"] as? Number)?.toInt() ?: 0
+                    val week = (args["widgetCurrentWeek"] as? Number)?.toInt() ?: 0
+                    if (baseUrl.isNotBlank() && sessionId.isNotBlank()) {
+                        try {
+                            WidgetRefreshScheduler.configure(this, baseUrl, sessionId, year, term, week,
+                                args["widgetScheduleContextJson"]?.toString().orEmpty(),
+                                (args["widgetFirstWeekStartEpochMillis"] as? Number)?.toLong() ?: 0L)
+                        } catch (error: IllegalArgumentException) {
+                            result.error("WIDGET_REFRESH_CONFIG_INVALID", error.message, null)
+                            return@update
+                        }
+                    } else {
+                        WidgetRefreshScheduler.clear(this)
+                    }
                     val prefs = getSharedPreferences("gzus_home_widgets", MODE_PRIVATE)
                     prefs.edit()
                         .putString("nextTitle", args["nextTitle"]?.toString() ?: "")
@@ -399,6 +425,7 @@ class MainActivity : FlutterActivity() {
                         .putString("progressDetail", args["progressDetail"]?.toString() ?: "")
                         .putString("todayCoursesJson", args["todayCoursesJson"]?.toString() ?: "[]")
                         .putString("weeklyCoursesJson", args["weeklyCoursesJson"]?.toString() ?: "[]")
+                        .putString("effectiveCoursesJson", args["effectiveCoursesJson"]?.toString() ?: "[]")
                         .putString("progressItemsJson", args["progressItemsJson"]?.toString() ?: "[]")
                         .putString("examItemsJson", args["examItemsJson"]?.toString() ?: "[]")
                         .putString("gradeItemsJson", args["gradeItemsJson"]?.toString() ?: "[]")
@@ -408,21 +435,38 @@ class MainActivity : FlutterActivity() {
                         .putBoolean("utilityIsBound", args["utilityIsBound"] as? Boolean ?: false)
                         .putBoolean("utilityLowPower", args["utilityLowPower"] as? Boolean ?: false)
                         .apply()
-                    val baseUrl = args["widgetApiBaseUrl"]?.toString().orEmpty()
+                    HomeWidgetProvider.updateAll(this)
+                    result.success(true)
+                }
+                "updateScheduleContext" -> WidgetRefreshTransactions.update {
+                    val args = call.arguments as? Map<*, *> ?: emptyMap<Any, Any>()
+                    val existing = WidgetRefreshScheduler.configuration(this)
+                    val baseUrl = args["widgetApiBaseUrl"]?.toString().orEmpty().trimEnd('/')
                     val sessionId = args["widgetSessionId"]?.toString().orEmpty()
                     val year = (args["widgetYear"] as? Number)?.toInt() ?: 0
                     val term = (args["widgetTerm"] as? Number)?.toInt() ?: 0
-                    val week = (args["widgetCurrentWeek"] as? Number)?.toInt() ?: 0
-                    if (baseUrl.isNotBlank() && sessionId.isNotBlank()) {
-                        try {
-                            WidgetRefreshScheduler.configure(this, baseUrl, sessionId, year, term, week)
-                        } catch (error: IllegalArgumentException) {
-                            result.error("WIDGET_REFRESH_CONFIG_INVALID", error.message, null)
-                            return@setMethodCallHandler
-                        }
+                    if (existing == null || existing.baseUrl != baseUrl || existing.sessionId != sessionId ||
+                        existing.year != year || existing.term != term) {
+                        result.error("WIDGET_SCOPE_CHANGED", "组件配置尚未就绪或账号、学期已切换，请返回首页刷新", null)
+                        return@update
                     }
-                    HomeWidgetProvider.updateAll(this)
-                    result.success(true)
+                    try {
+                        val courses = JSONArray(args["effectiveCoursesJson"]?.toString().orEmpty())
+                        WidgetRefreshScheduler.configure(this, baseUrl, sessionId, year, term,
+                            (args["widgetCurrentWeek"] as? Number)?.toInt() ?: 0,
+                            args["widgetScheduleContextJson"]?.toString().orEmpty(),
+                            (args["widgetFirstWeekStartEpochMillis"] as? Number)?.toLong() ?: 0L)
+                        val configuration = requireNotNull(WidgetRefreshScheduler.configuration(this))
+                        val editor = getSharedPreferences("gzus_home_widgets", MODE_PRIVATE).edit()
+                        WidgetRefreshScheduler.saveSchedule(editor, courses, configuration)
+                        editor.apply()
+                        HomeWidgetProvider.updateAll(this)
+                        result.success(true)
+                    } catch (error: IllegalArgumentException) {
+                        result.error("WIDGET_SCHEDULE_INVALID", error.message, null)
+                    } catch (error: org.json.JSONException) {
+                        result.error("WIDGET_SCHEDULE_INVALID", error.message, null)
+                    }
                 }
                 "replaceRefreshSession" -> {
                     val args = call.arguments as? Map<*, *> ?: emptyMap<Any, Any>()
@@ -439,8 +483,6 @@ class MainActivity : FlutterActivity() {
                 }
                 "clearRefreshConfiguration" -> {
                     WidgetRefreshScheduler.clear(this)
-                    getSharedPreferences("gzus_home_widgets", MODE_PRIVATE).edit().clear().apply()
-                    HomeWidgetProvider.updateAll(this)
                     result.success(true)
                 }
                 "consumeLaunchTarget" -> {

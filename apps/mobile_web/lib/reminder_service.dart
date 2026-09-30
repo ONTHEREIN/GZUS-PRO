@@ -6,6 +6,7 @@ import 'api_client.dart';
 import 'live_activity_service.dart';
 import 'live_update_service.dart';
 import 'local_notification_service.dart';
+import 'permission_service.dart';
 import 'schedule_utils.dart';
 
 class CourseReminderSettings {
@@ -65,7 +66,7 @@ class ReminderService {
     required List<ScheduleCourse> courses,
     required DateTime firstWeekStart,
     required CourseReminderSettings settings,
-    List<ScheduleOccurrence> effectiveOccurrences = const [],
+    required List<ScheduleOccurrence> effectiveOccurrences,
   }) async {
     final signature = _signature(
       courses,
@@ -74,23 +75,44 @@ class ReminderService {
       effectiveOccurrences,
     );
     if (_courseSignature == signature) return;
+    if (!kIsWeb &&
+        defaultTargetPlatform == TargetPlatform.iOS &&
+        settings.enabled &&
+        !await PermissionService.checkNotificationPermission()) {
+      // 首次课表引导早于通知权限页；未授权时暂不调用 iOS 排程接口，
+      // 等用户授权后由课表页按同一配置重新建立提醒计划。
+      _cancelActiveTimers();
+      _courseSignature = null;
+      _localCourseEventKeys = const [];
+      _localCourseValidUntil = null;
+      _localCourseNotifications = const [];
+      return;
+    }
+    // 登录后的推送服务初始化与首次引导可能并行；先等待原生通知插件完成初始化，
+    // 避免 iOS 在插件尚未就绪时调用原生排程接口后 Future 永不返回。
+    if (!kIsWeb &&
+        (defaultTargetPlatform == TargetPlatform.iOS ||
+            defaultTargetPlatform == TargetPlatform.android)) {
+      await LocalNotificationService.ensureInitialized();
+    }
     _cancelActiveTimers();
-    _courseSignature = signature;
+    // 原生排程失败时允许同一配置重试，只有成功后才确认签名。
+    _courseSignature = null;
     if (!settings.enabled) {
       _localCourseEventKeys = const [];
       _localCourseValidUntil = null;
       _localCourseNotifications = const [];
       await LocalNotificationService.cancelCourseReminders();
+      _courseSignature = signature;
       return;
     }
 
     final now = DateTime.now();
     final slots = buildCourseReminderSlots(
-      courses: courses,
-      firstWeekStart: firstWeekStart,
       settings: settings,
       now: now,
       effectiveOccurrences: effectiveOccurrences,
+      horizonDays: 14,
     );
     _localCourseEventKeys = [for (final slot in slots) slot.eventKey];
     _localCourseValidUntil = slots.isEmpty
@@ -117,6 +139,7 @@ class ReminderService {
       await LocalNotificationService.replaceCourseReminders(
         _localCourseNotifications,
       );
+      _courseSignature = signature;
       return;
     }
     for (final slot in slots) {
@@ -168,6 +191,7 @@ class ReminderService {
         }
       }));
     }
+    _courseSignature = signature;
   }
 
   static void cancelCourseReminders() {
@@ -207,90 +231,20 @@ class ReminderService {
     _cancelTimers.clear();
   }
 
+  /// 只按日期明确的生效课程排程；空列表表示没有课程。
   static List<CourseReminderSlot> buildCourseReminderSlots({
-    required List<ScheduleCourse> courses,
-    required DateTime firstWeekStart,
     required CourseReminderSettings settings,
     required DateTime now,
-    List<ScheduleOccurrence> effectiveOccurrences = const [],
-    int horizonDays = 14,
+    required List<ScheduleOccurrence> effectiveOccurrences,
+    required int horizonDays,
   }) {
     if (!settings.enabled) return const [];
-    if (effectiveOccurrences.isNotEmpty) {
-      return _buildEffectiveCourseReminderSlots(
-        occurrences: effectiveOccurrences,
-        settings: settings,
-        now: now,
-        horizonDays: horizonDays,
-      );
-    }
-    final normalizedFirstWeek = mondayOf(firstWeekStart);
-    final endAt = now.add(Duration(days: horizonDays));
-    final slots = <CourseReminderSlot>[];
-
-    for (final course in courses) {
-      final weekday = course.weekday;
-      final startSection = course.startSection;
-      if (weekday == null ||
-          weekday < 1 ||
-          weekday > 7 ||
-          startSection == null ||
-          startSection < 1 ||
-          startSection > scheduleTimes.length) {
-        continue;
-      }
-      final safeStartSection = startSection;
-      final safeEndSection = (course.endSection ?? safeStartSection)
-          .clamp(1, scheduleTimes.length)
-          .toInt();
-      for (var day = mondayOf(now);
-          !day.isAfter(endAt);
-          day = day.add(const Duration(days: 1))) {
-        if (day.weekday != weekday) continue;
-        final week = weekFromDate(normalizedFirstWeek, day);
-        if (week < 1 || !course.occursInWeek(week)) continue;
-
-        final startTime = scheduleTimes[safeStartSection - 1].$1;
-        final endTime = scheduleTimes[safeEndSection - 1].$2;
-        final classStart = _atTime(day, startTime);
-        final classEnd = _atTime(day, endTime);
-        final startReminder =
-            classStart.subtract(Duration(minutes: settings.beforeStartMinutes));
-        final endReminder =
-            classEnd.subtract(Duration(minutes: settings.beforeEndMinutes));
-
-        if (startReminder.isAfter(now) && !startReminder.isAfter(endAt)) {
-          slots.add(CourseReminderSlot(
-            id: _slotId(course, startReminder, 'start'),
-            remindAt: startReminder,
-            title: '即将上课',
-            body: _courseBody(course, classStart,
-                prefix: '${settings.beforeStartMinutes} 分钟后'),
-            courseName: course.name,
-            location: course.classroom,
-            countdownTarget: classStart,
-            shortCriticalText: '${settings.beforeStartMinutes}min',
-            eventKey: _eventKey('start', course.name, startReminder),
-          ));
-        }
-        if (endReminder.isAfter(now) && !endReminder.isAfter(endAt)) {
-          slots.add(CourseReminderSlot(
-            id: _slotId(course, endReminder, 'end'),
-            remindAt: endReminder,
-            title: '即将下课',
-            body: _courseBody(course, classEnd,
-                prefix: '${settings.beforeEndMinutes} 分钟后下课'),
-            courseName: course.name,
-            location: course.classroom,
-            countdownTarget: classEnd,
-            shortCriticalText: '${settings.beforeEndMinutes}min',
-            eventKey: _eventKey('end', course.name, endReminder),
-          ));
-        }
-      }
-    }
-    slots.sort((a, b) => a.remindAt.compareTo(b.remindAt));
-    return slots.take(64).toList();
+    return _buildEffectiveCourseReminderSlots(
+      occurrences: effectiveOccurrences,
+      settings: settings,
+      now: now,
+      horizonDays: horizonDays,
+    );
   }
 
   static String _signature(
@@ -311,7 +265,7 @@ class ReminderService {
       coursePart,
       effectiveOccurrences
           .map((item) =>
-              '${item.occurrenceKey}|${dateText(item.date)}|${item.course.name}|${item.course.startSection}|${item.course.endSection}')
+              '${item.occurrenceKey}|${dateText(item.date)}|${item.course.name}|${item.course.startSection}|${item.course.endSection}|${item.course.classroom}|${item.course.teacher}')
           .join(';'),
     ].join('#');
   }
@@ -350,7 +304,7 @@ class ReminderService {
           classEnd.subtract(Duration(minutes: settings.beforeEndMinutes));
       if (startReminder.isAfter(now) && !startReminder.isAfter(endAt)) {
         slots.add(CourseReminderSlot(
-          id: _slotId(course, startReminder, 'start'),
+          id: _slotId(occurrence.occurrenceKey, startReminder, 'start'),
           remindAt: startReminder,
           title: '即将上课',
           body: _courseBody(course, classStart,
@@ -364,7 +318,7 @@ class ReminderService {
       }
       if (endReminder.isAfter(now) && !endReminder.isAfter(endAt)) {
         slots.add(CourseReminderSlot(
-          id: _slotId(course, endReminder, 'end'),
+          id: _slotId(occurrence.occurrenceKey, endReminder, 'end'),
           remindAt: endReminder,
           title: '即将下课',
           body: _courseBody(course, classEnd,
@@ -392,9 +346,8 @@ class ReminderService {
     return '$prefix：${_timeText(time)} ${course.name}$room$teacher';
   }
 
-  static int _slotId(ScheduleCourse course, DateTime remindAt, String kind) {
-    return Object.hash(course.name, course.weekday, course.startSection,
-            course.endSection, remindAt.millisecondsSinceEpoch, kind)
+  static int _slotId(String occurrenceKey, DateTime remindAt, String kind) {
+    return Object.hash(occurrenceKey, remindAt.millisecondsSinceEpoch, kind)
         .abs();
   }
 

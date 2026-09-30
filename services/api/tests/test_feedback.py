@@ -85,6 +85,10 @@ def test_admin_can_list_and_view_feedback_details(monkeypatch):
                 "title": "增加快捷入口",
                 "description": "希望更多页可以快速提交建议。",
                 "clientLogs": "诊断日志",
+                "attachments": [{
+                    "name": "screen.png",
+                    "contentBase64": base64.b64encode(b"screenshot").decode("ascii"),
+                }],
             },
         )
 
@@ -102,8 +106,13 @@ def test_admin_can_list_and_view_feedback_details(monkeypatch):
     assert listing.status_code == 200
     assert listing.json()["total"] == 1
     assert listing.json()["items"][0]["category"] == "suggestion"
+    assert listing.json()["items"][0]["hasAttachments"] is True
+    assert "attachments" not in listing.json()["items"][0]
     assert detail.status_code == 200
     assert detail.json()["clientLogs"] == "诊断日志"
+    assert detail.json()["attachments"][0]["contentBase64"] == base64.b64encode(
+        b"screenshot"
+    ).decode("ascii")
 
 
 def test_non_admin_cannot_view_feedback(monkeypatch):

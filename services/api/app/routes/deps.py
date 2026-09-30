@@ -2,7 +2,7 @@ import logging
 
 from fastapi import Depends, Header, HTTPException, Request, status
 
-from app.sessions import AppSession
+from app.sessions import AppSession, student_id_of
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +19,7 @@ def require_session(
         session = request.app.state.sessions.get(
             x_session_id,
             touch=False,
-            fresh=method in {"POST", "PATCH", "DELETE"},
+            fresh=method in {"POST", "PUT", "PATCH", "DELETE"},
         )
     except TypeError:
         session = request.app.state.sessions.get(x_session_id, touch=False)
@@ -36,7 +36,9 @@ def require_session(
 
 def require_admin(session: AppSession = Depends(require_session)) -> AppSession:
     """要求当前会话的学号位于管理员白名单。"""
-    if not session.is_admin:
+    from app.routes.admin import admin_role_of
+
+    if not session.is_admin or admin_role_of(student_id_of(session)) is None:
         logger.warning(
             "admin_permission_denied",
             extra={"session_id_prefix": session.id[:8], "student_account": session.student_account},

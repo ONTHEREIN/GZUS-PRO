@@ -77,18 +77,43 @@ window.gzusWebPushRequestPermission = async function(callback) {
   }
 };
 
+let webPushOperationVersion = 0;
+let pendingWebPushUnsubscribe = Promise.resolve();
+
 window.gzusWebPushSubscribe = async function(publicKey, apiBaseUrl, sessionId, callback) {
+  const operationVersion = ++webPushOperationVersion;
   try {
+    await pendingWebPushUnsubscribe;
+    if (operationVersion !== webPushOperationVersion) {
+      callback(false);
+      return;
+    }
     const swReg = await navigator.serviceWorker.ready;
+    if (operationVersion !== webPushOperationVersion) {
+      callback(false);
+      return;
+    }
     const storedKey = window.localStorage.getItem('gzus_web_push_vapid_key');
     const existing = await swReg.pushManager.getSubscription();
+    if (operationVersion !== webPushOperationVersion) {
+      callback(false);
+      return;
+    }
     if (existing && storedKey !== publicKey) {
       await existing.unsubscribe();
+    }
+    if (operationVersion !== webPushOperationVersion) {
+      callback(false);
+      return;
     }
     const subscription = await swReg.pushManager.subscribe({
       userVisibleOnly: true,
       applicationServerKey: urlBase64ToUint8Array(publicKey),
     });
+    if (operationVersion !== webPushOperationVersion) {
+      callback(false);
+      return;
+    }
     
     const keys = {
       p256dh: uint8ArrayToBase64Url(subscription.getKey('p256dh')),
@@ -104,6 +129,10 @@ window.gzusWebPushSubscribe = async function(publicKey, apiBaseUrl, sessionId, c
         expirationTime: subscription.expirationTime,
       }),
     });
+    if (operationVersion !== webPushOperationVersion) {
+      callback(false);
+      return;
+    }
     if (!response.ok) {
       await subscription.unsubscribe();
       throw new Error(`Web push register failed: ${response.status}`);
@@ -116,30 +145,46 @@ window.gzusWebPushSubscribe = async function(publicKey, apiBaseUrl, sessionId, c
 };
 
 window.gzusWebPushUnsubscribe = async function(apiBaseUrl, sessionId, callback) {
-  try {
-    const swReg = await navigator.serviceWorker.ready;
-    const subscription = await swReg.pushManager.getSubscription();
-    const endpoint = subscription?.endpoint || '';
-    if (subscription) {
-      await subscription.unsubscribe();
-    }
-    window.localStorage.removeItem('gzus_web_push_vapid_key');
-    // 只注销当前浏览器的订阅，不能影响同一账号的其它设备。
-    if (endpoint) {
-      const response = await fetch(apiUrl(apiBaseUrl, '/push/web/unregister'), {
-        method: 'POST',
-        headers: requestHeaders(sessionId),
-        body: JSON.stringify({ endpoint: endpoint }),
-      });
-      if (!response.ok) {
-        throw new Error(`Web push unregister failed: ${response.status}`);
+  const operationVersion = ++webPushOperationVersion;
+  const previousUnsubscribe = pendingWebPushUnsubscribe;
+  const localUnsubscribe = async () => {
+    try {
+      await previousUnsubscribe;
+      const swReg = await navigator.serviceWorker.getRegistration();
+      if (operationVersion !== webPushOperationVersion) {
+        callback(true);
+        return;
       }
+      const subscription = swReg ? await swReg.pushManager.getSubscription() : null;
+      if (operationVersion !== webPushOperationVersion) {
+        callback(true);
+        return;
+      }
+      const endpoint = subscription?.endpoint || '';
+      if (subscription) {
+        await subscription.unsubscribe();
+      }
+      window.localStorage.removeItem('gzus_web_push_vapid_key');
+      // 只注销当前浏览器的订阅，不能影响同一账号的其它设备。
+      if (endpoint) {
+        fetch(apiUrl(apiBaseUrl, '/push/web/unregister'), {
+          method: 'POST',
+          headers: requestHeaders(sessionId),
+          body: JSON.stringify({ endpoint: endpoint }),
+        }).then((response) => {
+          if (!response.ok) {
+            console.error(`Web push unregister failed: ${response.status}`);
+          }
+        }).catch((error) => console.error('Web push unregister failed:', error));
+      }
+      callback(true);
+    } catch (e) {
+      console.error('Unsubscribe failed:', e);
+      callback(false);
     }
-    callback(true);
-  } catch (e) {
-    console.error('Unsubscribe failed:', e);
-    callback(false);
-  }
+  };
+  pendingWebPushUnsubscribe = localUnsubscribe();
+  await pendingWebPushUnsubscribe;
 };
 
 window.gzusWebPushClearCache = async function() {

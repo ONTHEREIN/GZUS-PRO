@@ -13,6 +13,7 @@ from pydantic import AliasChoices, BaseModel, Field
 
 from app import wechat_service
 from app.config import get_settings
+from app.image_media import SAFE_IMAGE_MIME_TYPES
 from app.database import (
     AdminAuditLog,
     LoginCarouselSlide,
@@ -308,7 +309,7 @@ def admin_sessions(
 
 
 @router.post("/sessions/{session_id}/revoke")
-def revoke_session(
+async def revoke_session(
     session_id: str,
     request: Request,
     session: AppSession = Depends(require_admin),
@@ -343,6 +344,9 @@ def revoke_session(
 
         # 管理员撤销任一设备凭据即要求该账号重新授权，清理后台配置、共享学校会话及其它前台会话。
         revoke_account_school_access(row.student_account)
+        for cached_id, cached in list(request.app.state.sessions._sessions.items()):
+            if cached.student_account == row.student_account:
+                request.app.state.sessions.revoke(cached_id, reason="admin_kick")
 
     with factory() as db:
         if credential_fingerprint:
@@ -364,6 +368,14 @@ def revoke_session(
             target_id=session_id,
         )
         db.commit()
+    revoked_ids = {session_id}
+    revoked_ids.update(
+        cached_id
+        for cached_id, cached in list(request.app.state.sessions._sessions.items())
+        if cached.revoked_at is not None
+    )
+    for revoked_id in revoked_ids:
+        await request.app.state.ws_manager.revoke(revoked_id)
     return {"ok": True, "sessionId": session_id}
 
 
@@ -710,13 +722,38 @@ def admin_feedback_list(
     with factory() as db:
         total = db.query(FeedbackTicket).count()
         rows = (
-            db.query(FeedbackTicket)
+            db.query(
+                FeedbackTicket.id,
+                FeedbackTicket.student_id,
+                FeedbackTicket.student_name,
+                FeedbackTicket.category,
+                FeedbackTicket.title,
+                FeedbackTicket.description,
+                FeedbackTicket.contact,
+                FeedbackTicket.status,
+                FeedbackTicket.created_at,
+                (FeedbackTicket.attachments_json != "[]").label("has_attachments"),
+            )
             .order_by(FeedbackTicket.created_at.desc())
             .offset(offset)
             .limit(limit)
             .all()
         )
-        items = [_feedback_to_dict(row, include_details=False) for row in rows]
+        items = [
+            {
+                "id": row.id,
+                "studentId": row.student_id,
+                "studentName": row.student_name,
+                "category": row.category,
+                "title": row.title,
+                "description": row.description,
+                "contact": row.contact,
+                "status": row.status,
+                "hasAttachments": row.has_attachments,
+                "createdAt": row.created_at,
+            }
+            for row in rows
+        ]
     return {"total": total, "items": items}
 
 
@@ -818,6 +855,8 @@ def admin_notices_create(
                 mime = header.split(";", 1)[0].split(":", 1)[-1]
                 payload.image_mime = mime or None
             image_data = rest
+        if (payload.image_mime or "image/png") not in SAFE_IMAGE_MIME_TYPES:
+            raise HTTPException(status_code=400, detail="图片格式不受支持")
         try:
             raw_len = len(base64.b64decode(image_data))
         except Exception as exc:
@@ -882,6 +921,8 @@ def admin_notices_update(
                     mime = header.split(";", 1)[0].split(":", 1)[-1]
                     payload.image_mime = mime or None
                 image_data = rest
+            if (payload.image_mime or "image/png") not in SAFE_IMAGE_MIME_TYPES:
+                raise HTTPException(status_code=400, detail="图片格式不受支持")
             try:
                 raw_len = len(base64.b64decode(image_data))
             except Exception as exc:
@@ -943,18 +984,44 @@ def admin_notices_delete(
 
 @router.get("/notices/{notice_id}/image")
 def admin_notice_image(notice_id: int) -> Response:
-    """校历/通知图片（公开二进制返回，供 App 展示；无需管理员权限）。"""
+    """仅公开已发布校历/通知的图片。"""
     ensure_admin_tables()
     factory = get_sync_session_factory()
     with factory() as db:
-        row = db.query(AdminNotice).filter(AdminNotice.id == notice_id).first()
+        row = db.query(AdminNotice).filter(
+            AdminNotice.id == notice_id,
+            AdminNotice.published.is_(True),
+        ).first()
         if row is None or not row.image_data:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="图片不存在")
+        mime = row.image_mime or "image/png"
+        if mime not in SAFE_IMAGE_MIME_TYPES:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="图片格式不受支持")
         try:
-            raw = base64.b64decode(row.image_data)
+            raw = base64.b64decode(row.image_data, validate=True)
         except Exception:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="图片数据损坏")
+    return Response(content=raw, media_type=mime)
+
+
+@router.get("/notices/{notice_id}/preview")
+def admin_notice_preview(
+    notice_id: int,
+    session: AppSession = Depends(require_admin),
+) -> Response:
+    """管理员预览未发布校历的图片。"""
+    ensure_admin_tables()
+    with get_sync_session_factory()() as db:
+        row = db.query(AdminNotice).filter(AdminNotice.id == notice_id).first()
+        if row is None or not row.image_data:
+            raise HTTPException(status_code=404, detail="图片不存在")
         mime = row.image_mime or "image/png"
+        if mime not in SAFE_IMAGE_MIME_TYPES:
+            raise HTTPException(status_code=404, detail="图片格式不受支持")
+        try:
+            raw = base64.b64decode(row.image_data, validate=True)
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail="图片数据损坏") from exc
     return Response(content=raw, media_type=mime)
 
 
@@ -1035,6 +1102,8 @@ def _decode_admin_image(image_data: str, image_mime: str | None) -> tuple[str, s
             normalized_mime = header.split(";", 1)[0].split(":", 1)[-1] or None
     if normalized_mime is None:
         raise HTTPException(status_code=400, detail="图片缺少 MIME 类型")
+    if normalized_mime not in SAFE_IMAGE_MIME_TYPES:
+        raise HTTPException(status_code=400, detail="图片格式不受支持")
     try:
         raw_image = base64.b64decode(normalized_data, validate=True)
     except ValueError as exc:
@@ -1244,6 +1313,8 @@ def admin_login_slide_image(
         row = db.query(LoginCarouselSlide).filter(LoginCarouselSlide.id == slide_id).first()
         if row is None:
             raise HTTPException(status_code=404, detail="轮播图不存在")
+        if row.image_mime not in SAFE_IMAGE_MIME_TYPES:
+            raise HTTPException(status_code=404, detail="图片格式不受支持")
         try:
             content = base64.b64decode(row.image_data, validate=True)
         except ValueError as exc:

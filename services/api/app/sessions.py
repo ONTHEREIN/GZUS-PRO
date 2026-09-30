@@ -8,11 +8,13 @@ import logging
 import threading
 import time
 import uuid
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Protocol
 
 from cryptography.fernet import Fernet
+from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session as DbSession
 
@@ -26,6 +28,26 @@ _DB_READ_AFTER_WRITE_RETRIES = 3
 
 class SessionStoreUnavailableError(RuntimeError):
     """会话持久层暂时不可用。"""
+
+
+class SessionCredentialMismatchError(ValueError):
+    """退出凭据与目标会话不属于同一设备。"""
+
+
+class CredentialRevokedError(RuntimeError):
+    """凭据已撤销，不能创建新会话。"""
+
+
+def _lock_credential(db: DbSession, fingerprint: str) -> None:
+    """同一设备的会话创建与凭据撤销在 PostgreSQL 中串行提交。"""
+    if db.get_bind().dialect.name != "postgresql":
+        return
+    lock_key = int.from_bytes(
+        hashlib.sha256(f"credential:{fingerprint}".encode("ascii")).digest()[:8],
+        "big",
+        signed=True,
+    )
+    db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock_key})
 
 
 class AcademicClient(Protocol):
@@ -104,6 +126,26 @@ def student_id_of(session: "AppSession") -> str:
     return str(info.get("studentId") or info.get("student_id") or info.get("sno") or "")
 
 
+def remove_push_registrations_for_sessions(db: DbSession, session_ids: list[str]) -> None:
+    """撤销会话时删除由这些会话注册的推送目标。"""
+    if not session_ids:
+        return
+    from app.database import IosLiveActivityToken, IosPushToken, WebPushSubscription
+
+    for model in (WebPushSubscription, IosPushToken, IosLiveActivityToken):
+        db.query(model).filter(model.session_id.in_(session_ids)).delete(synchronize_session=False)
+
+
+def remove_push_registrations_for_credential(db: DbSession, fingerprint: str) -> None:
+    """长期凭据撤销后清除推送目标，包括所属会话已过期的设备。"""
+    from app.database import IosLiveActivityToken, IosPushToken, WebPushSubscription
+
+    for model in (WebPushSubscription, IosPushToken, IosLiveActivityToken):
+        db.query(model).filter(
+            model.credential_fingerprint == fingerprint
+        ).delete(synchronize_session=False)
+
+
 def encrypt_credentials(account: str, password: str, key: str) -> str:
     """Encrypt account:password into a single token."""
     f = _get_fernet(key)
@@ -115,6 +157,32 @@ def encrypt_device_credentials(account: str, password: str, credential_id: str, 
     f = _get_fernet(key)
     payload = json.dumps([account, password, credential_id], ensure_ascii=False, separators=(",", ":"))
     return f.encrypt(payload.encode("utf-8")).decode("ascii")
+
+
+def encrypt_sso_session_resume_token(account: str, credential_id: str, key: str) -> str:
+    """签发不含学校密码的 SSO 会话恢复凭据。"""
+    f = _get_fernet(key)
+    payload = json.dumps(
+        {"kind": "sso", "account": account, "credentialId": credential_id},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    return f.encrypt(payload.encode("utf-8")).decode("ascii")
+
+
+def decrypt_sso_session_resume_token(token: str, key: str) -> tuple[str, str]:
+    """解密 SSO 会话恢复凭据，返回学号和设备凭据标识。"""
+    f = _get_fernet(key)
+    payload = json.loads(f.decrypt(token.encode("ascii")).decode("utf-8"))
+    if not isinstance(payload, dict) or payload.get("kind") != "sso":
+        raise ValueError("不是 SSO 会话恢复凭据")
+    account = payload.get("account")
+    credential_id = payload.get("credentialId")
+    if not isinstance(account, str) or not account:
+        raise ValueError("SSO 会话恢复凭据缺少学号")
+    if not isinstance(credential_id, str) or not credential_id:
+        raise ValueError("SSO 会话恢复凭据缺少设备标识")
+    return account, credential_id
 
 
 def decrypt_credentials(token: str, key: str, ttl_seconds: int | None = None) -> tuple[str, str]:
@@ -305,7 +373,7 @@ class SessionStore:
         credential_fingerprint: str | None = None,
         school_session_version: int | None = None,
     ) -> AppSession:
-        from app.database import AppSessionModel
+        from app.database import AppSessionModel, CredentialRevocation
 
         # Extract cookies from live client objects
         jwxt_cookies = ""
@@ -380,6 +448,10 @@ class SessionStore:
 
         try:
             self._clear_legacy_credentials(db)
+            if credential_fingerprint:
+                _lock_credential(db, credential_fingerprint)
+                if db.get(CredentialRevocation, credential_fingerprint) is not None:
+                    raise CredentialRevokedError("当前设备凭据已被撤销，请重新验证登录")
             row = AppSessionModel(
                 id=session.id,
                 student_name=student_name,
@@ -437,6 +509,7 @@ class SessionStore:
                     synchronize_session=False,
                 )
             )
+            remove_push_registrations_for_sessions(db, [session_id])
             db.commit()
             if revoked:
                 logger.info(
@@ -482,6 +555,7 @@ class SessionStore:
             return cached
 
         db = self._open_db("get", session_id)
+        expired_student_account: str | None = None
 
         try:
             self._clear_legacy_credentials(db)
@@ -529,8 +603,15 @@ class SessionStore:
                         int(self._ttl.total_seconds()),
                         idle_secs,
                     )
+                    if not row.credential_fingerprint:
+                        remove_push_registrations_for_sessions(db, [session_id])
+                    expired_student_account = row.student_account
                     db.delete(row)
                     db.commit()
+                    with self._lock:
+                        self._sessions.pop(session_id, None)
+                        self._session_checked_at.pop(session_id, None)
+                        self._last_touch_at.pop(session_id, None)
                     return None
 
             revoked_at = getattr(row, "revoked_at", None)
@@ -658,6 +739,10 @@ class SessionStore:
             raise self._persistence_error("get", session_id, exc) from exc
         finally:
             db.close()
+            if expired_student_account:
+                from app.school_session_service import release_if_unused
+
+                release_if_unused(expired_student_account)
 
     @staticmethod
     def _sync_shared_school_session(session: AppSession) -> None:
@@ -730,10 +815,11 @@ class SessionStore:
 
     def revoke_credential(self, credential_fingerprint: str, reason: str) -> None:
         """撤销某台设备的长期凭据，不影响同账号的其他设备。"""
-        from app.database import CredentialRevocation
+        from app.database import AppSessionModel, CredentialRevocation
 
         db = self._open_db("revoke_credential", credential_fingerprint)
         try:
+            _lock_credential(db, credential_fingerprint)
             existing = db.get(CredentialRevocation, credential_fingerprint)
             if existing is None:
                 db.add(
@@ -742,7 +828,14 @@ class SessionStore:
                         reason=reason,
                     )
                 )
-                db.commit()
+            session_ids = [
+                row.id for row in db.query(AppSessionModel.id).filter(
+                    AppSessionModel.credential_fingerprint == credential_fingerprint
+                ).all()
+            ]
+            remove_push_registrations_for_sessions(db, session_ids)
+            remove_push_registrations_for_credential(db, credential_fingerprint)
+            db.commit()
         except SQLAlchemyError as exc:
             db.rollback()
             raise self._persistence_error("revoke_credential", credential_fingerprint, exc) from exc
@@ -787,18 +880,94 @@ class SessionStore:
         finally:
             db.close()
 
-    def remove(self, session_id: str) -> None:
+    def remove(
+        self,
+        session_id: str,
+        credential_fingerprint: str | None,
+        student_account: str | None,
+    ) -> None:
+        """退出会话并撤销同一设备的长期凭据与后台授权。"""
         from app.database import AppSessionModel
+        from app.school_session_service import account_school_session_lock
+
+        try:
+            with self._open_db("remove_lookup", session_id) as lookup_db:
+                row = lookup_db.query(AppSessionModel).filter(AppSessionModel.id == session_id).first()
+                if (
+                    row is not None and student_account is not None
+                    and row.student_account is not None and row.student_account != student_account
+                ):
+                    raise SessionCredentialMismatchError("退出凭据与当前会话不属于同一账号")
+                account = (row.student_account if row is not None else None) or student_account
+        except SQLAlchemyError as exc:
+            raise self._persistence_error("remove_lookup", session_id, exc) from exc
+        with account_school_session_lock(account) if account else nullcontext():
+            self._remove_locked(session_id, credential_fingerprint, student_account, account)
+
+    def _remove_locked(
+        self,
+        session_id: str,
+        credential_fingerprint: str | None,
+        student_account: str | None,
+        resolved_account: str | None,
+    ) -> None:
+        from app.database import AppSessionModel, BackgroundNotificationProfile, CredentialRevocation
 
         db = self._open_db("remove", session_id)
-        student_account: str | None = None
+        fingerprint = credential_fingerprint
         try:
             row = db.query(AppSessionModel).filter(AppSessionModel.id == session_id).first()
             if row is not None:
-                student_account = row.student_account
+                if (
+                    fingerprint is not None and row.credential_fingerprint is not None
+                    and fingerprint != row.credential_fingerprint
+                ) or (
+                    student_account is not None and row.student_account is not None
+                    and student_account != row.student_account
+                ):
+                    raise SessionCredentialMismatchError("退出凭据与当前会话不属于同一设备")
+                student_account = row.student_account or student_account
+                fingerprint = row.credential_fingerprint or fingerprint
+            else:
+                student_account = student_account or resolved_account
+
+            affected_ids = [session_id]
+            if fingerprint:
+                _lock_credential(db, fingerprint)
+                affected_ids.extend(
+                    item.id for item in db.query(AppSessionModel.id).filter(
+                        AppSessionModel.credential_fingerprint == fingerprint
+                    ).all()
+                )
+                if db.get(CredentialRevocation, fingerprint) is None:
+                    db.add(CredentialRevocation(
+                        credential_fingerprint=fingerprint,
+                        reason="logout",
+                    ))
+                db.query(BackgroundNotificationProfile).filter(
+                    BackgroundNotificationProfile.credential_fingerprint == fingerprint
+                ).delete(synchronize_session=False)
+                db.query(AppSessionModel).filter(
+                    AppSessionModel.credential_fingerprint == fingerprint,
+                    AppSessionModel.id != session_id,
+                    AppSessionModel.revoked_at.is_(None),
+                ).update({
+                    "revoked_at": datetime.now(timezone.utc),
+                    "revoked_reason": "logout",
+                }, synchronize_session=False)
+            remove_push_registrations_for_sessions(db, affected_ids)
+            if fingerprint:
+                remove_push_registrations_for_credential(db, fingerprint)
+            if row is not None:
                 db.delete(row)
-                db.commit()
+            db.commit()
             with self._lock:
+                if fingerprint:
+                    revoked_at = datetime.now(timezone.utc).replace(tzinfo=None)
+                    for cached in self._sessions.values():
+                        if cached.credential_fingerprint == fingerprint:
+                            cached.revoked_at = revoked_at
+                            cached.revoked_reason = "logout"
                 self._sessions.pop(session_id, None)
                 self._session_checked_at.pop(session_id, None)
                 self._last_touch_at.pop(session_id, None)
@@ -842,12 +1011,21 @@ class SessionStore:
         student_accounts: set[str] = set()
         try:
             expired_rows = (
-                db.query(AppSessionModel.student_account)
+                db.query(
+                    AppSessionModel.id,
+                    AppSessionModel.student_account,
+                    AppSessionModel.credential_fingerprint,
+                )
                 .filter(AppSessionModel.last_active_at < cutoff)
                 .filter(AppSessionModel.revoked_at.is_(None))
                 .all()
             )
-            student_accounts = {str(row[0]) for row in expired_rows if row[0]}
+            student_accounts = {str(row.student_account) for row in expired_rows if row.student_account}
+            # 无长期凭据的会话过期后无法再安全关联设备；保留会造成永久推送。
+            remove_push_registrations_for_sessions(
+                db,
+                [row.id for row in expired_rows if row.credential_fingerprint is None],
+            )
             deleted = (
                 db.query(AppSessionModel)
                 .filter(AppSessionModel.last_active_at < cutoff)

@@ -3,7 +3,7 @@ import base64
 
 from fastapi.testclient import TestClient
 
-from app.database import AdminNotice, WxArticle, get_sync_session_factory
+from app.database import AdminNotice, AdminUser, WxArticle, get_sync_session_factory
 from app.main import app
 from app.routes import admin as admin_route
 from app.sessions import AppSession
@@ -35,6 +35,10 @@ def _authed_session(
     )
     monkeypatch.setattr(app.state.sessions, "get", lambda session_id, touch=True: session)
     monkeypatch.setattr(app.state.sessions, "touch", lambda session_id: None)
+    if is_admin:
+        with get_sync_session_factory()() as db:
+            db.add(AdminUser(student_id=student_id, role="admin"))
+            db.commit()
     return session
 
 
@@ -81,6 +85,46 @@ def test_notices_create_and_list(monkeypatch):
         assert img.status_code == 200
         assert img.content == b"\x89PNG\r\n\x1a\nfake-image-bytes"
         assert img.headers["content-type"] == "image/png"
+
+
+def test_unpublished_notice_image_requires_admin_preview(monkeypatch):
+    _authed_session(monkeypatch)
+    image_data = base64.b64encode(b"draft-image").decode()
+    with TestClient(app) as client:
+        created = client.post(
+            "/admin/notices",
+            json={
+                "title": "未发布校历",
+                "imageData": image_data,
+                "imageMime": "image/png",
+                "published": False,
+            },
+            headers=_auth_header(),
+        )
+        notice_id = created.json()["id"]
+        public_image = client.get(f"/admin/notices/{notice_id}/image")
+        anonymous_preview = client.get(f"/admin/notices/{notice_id}/preview")
+        admin_preview = client.get(
+            f"/admin/notices/{notice_id}/preview", headers=_auth_header()
+        )
+
+    assert created.status_code == 201
+    assert public_image.status_code == 404
+    assert anonymous_preview.status_code == 401
+    assert admin_preview.status_code == 200
+    assert admin_preview.content == b"draft-image"
+
+
+def test_notice_rejects_scriptable_image_format(monkeypatch):
+    _authed_session(monkeypatch)
+    svg_data = base64.b64encode(b"<svg xmlns='http://www.w3.org/2000/svg'/>").decode()
+    with TestClient(app) as client:
+        response = client.post(
+            "/admin/notices",
+            json={"title": "脚本图片", "imageData": svg_data, "imageMime": "image/svg+xml"},
+            headers=_auth_header(),
+        )
+    assert response.status_code == 400
 
 
 def test_notice_create_with_data_url_prefix(monkeypatch):

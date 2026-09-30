@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from datetime import date, datetime
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, JsonValue, StringConstraints, model_validator
 
 
 LEAVE_ATTACHMENT_MAX_COUNT = 5
@@ -86,6 +86,11 @@ class EcardBindingRequest(BaseModel):
     room_display: str = Field(alias="roomDisplay", min_length=1)
 
 
+ReminderTime = Annotated[
+    str, StringConstraints(pattern=r"^(?:[01][0-9]|2[0-3]):[0-5][0-9]$")
+]
+
+
 class EcardReminderRequest(BaseModel):
     enabled: bool | None = None
     low_power_threshold: float | None = Field(default=None, alias="lowPowerThreshold", ge=0)
@@ -93,7 +98,7 @@ class EcardReminderRequest(BaseModel):
         default=None, alias="lowColdWaterThreshold", ge=0
     )
     low_hot_water_threshold: float | None = Field(default=None, alias="lowHotWaterThreshold", ge=0)
-    reminder_times: list[str] | None = Field(default=None, alias="reminderTimes", max_length=2)
+    reminder_times: list[ReminderTime] | None = Field(default=None, alias="reminderTimes", max_length=2)
     reminder_items: list[str] | None = Field(default=None, alias="reminderItems")
 
 
@@ -207,6 +212,7 @@ class AuthResponse(BaseModel):
     student_name: str | None = Field(default=None, alias="studentName")
     student_id: str = Field(alias="studentId")
     credential_token: str | None = Field(default=None, alias="credentialToken")
+    session_refresh_token: str | None = Field(default=None, alias="sessionRefreshToken")
     jwxt_cookies: str | None = Field(default=None, alias="jwxtCookies")
     ehall_cookies: str | None = Field(default=None, alias="ehallCookies")
     ehall_auth_token: str | None = Field(default=None, alias="ehallAuthToken")
@@ -265,6 +271,10 @@ class WechatBindingResponse(BaseModel):
 
 class ReloginRequest(BaseModel):
     credential_token: str = Field(alias="credentialToken", min_length=1)
+
+
+class LogoutRequest(BaseModel):
+    credential_token: str | None = Field(default=None, alias="credentialToken", min_length=1)
 
 
 class StudentInfo(BaseModel):
@@ -455,6 +465,29 @@ class EhallProgressOverview(BaseModel):
     items: list[EhallProgressItem] = Field(default_factory=list)
 
 
+class LeaveScheduleOccurrence(BaseModel):
+    """带明确日期及学校课程资料的请假课程实例。"""
+
+    occurrence_date: date = Field(alias="date")
+    name: str = Field(min_length=1)
+    occurrence_key: str = Field(alias="occurrenceKey", min_length=1)
+    start_section: int = Field(alias="startSection", ge=1, le=16)
+    end_section: int = Field(alias="endSection", ge=1, le=16)
+    teacher: str | None = None
+    classroom: str | None = None
+    course_code: str | None = Field(default=None, alias="courseCode")
+    teaching_class_code: str | None = Field(default=None, alias="teachingClassCode")
+    course_nature: str | None = Field(default=None, alias="courseNature")
+    credit: str | None = None
+    raw: dict[str, JsonValue] | None = None
+
+    @model_validator(mode="after")
+    def validate_sections(self) -> "LeaveScheduleOccurrence":
+        if self.end_section < self.start_section:
+            raise ValueError("结束节次不能早于开始节次")
+        return self
+
+
 class LeavePreviewRequest(BaseModel):
     year: int
     term: int
@@ -462,8 +495,8 @@ class LeavePreviewRequest(BaseModel):
     end_date: date = Field(alias="endDate")
     first_week_start: date | None = Field(default=None, alias="firstWeekStart")
     courses: list[dict[str, Any]] = Field(default_factory=list)
-    effective_occurrences: list[dict[str, Any]] = Field(
-        default_factory=list, alias="effectiveOccurrences"
+    effective_occurrences: list[LeaveScheduleOccurrence] | None = Field(
+        default=None, alias="effectiveOccurrences"
     )
     selected_course_keys: list[str] = Field(
         default_factory=list, alias="selectedCourseKeys", max_length=100
@@ -587,12 +620,12 @@ class AutoLoginRequest(CredentialLoginRequest):
 
 
 class WebPushKeys(BaseModel):
-    p256dh: str
-    auth: str
+    p256dh: str = Field(min_length=1, max_length=300)
+    auth: str = Field(min_length=1, max_length=100)
 
 
 class WebPushSubscriptionRequest(BaseModel):
-    endpoint: str
+    endpoint: str = Field(min_length=1, max_length=500)
     keys: WebPushKeys
     expiration_time: int | None = Field(default=None, alias="expirationTime")
 
@@ -600,8 +633,7 @@ class WebPushSubscriptionRequest(BaseModel):
 class WebPushSubscriptionUnregisterRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    # 旧客户端不发送 body，服务端继续保留“注销该账号全部订阅”的兼容行为；
-    # 新客户端必须带当前浏览器 endpoint，避免误删其它设备。
+    # 旧客户端不发送 body 时只注销当前会话的订阅；新客户端发送当前浏览器 endpoint。
     endpoint: str | None = Field(default=None, min_length=1, max_length=500)
 
 
@@ -651,7 +683,7 @@ class IosLiveActivityTokenUnregisterRequest(BaseModel):
 
 
 class IosLiveActivityTokensUnregisterRequest(BaseModel):
-    """注销当前安装实例的实况令牌；无 deviceId 时兼容旧客户端全量注销。"""
+    """注销当前安装实例的实况令牌；无 deviceId 时只注销当前会话。"""
 
     model_config = ConfigDict(extra="forbid")
 

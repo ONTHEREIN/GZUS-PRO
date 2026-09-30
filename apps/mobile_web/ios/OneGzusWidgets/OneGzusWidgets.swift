@@ -1,6 +1,18 @@
 import SwiftUI
 import WidgetKit
 
+private extension View {
+    /// 声明可由系统移除的小组件背景，iOS 16 保持原有布局。
+    @ViewBuilder
+    func widgetContainerBackground() -> some View {
+        if #available(iOS 17.0, *) {
+            containerBackground(.background, for: .widget)
+        } else {
+            self
+        }
+    }
+}
+
 private let appGroupIdentifier = "group.cn.gzus.pro.6772c5tf6c"
 private let nextClassHomeScreenWidgetKind = "OneGzusNextClassHomeScreen"
 private let nextClassLockScreenWidgetKind = "OneGzusNextClassLockScreen"
@@ -113,7 +125,7 @@ private struct Provider: TimelineProvider {
     func placeholder(in context: Context) -> Entry { Entry(date: Date(), dashboard: sample()) }
     func getSnapshot(in context: Context, completion: @escaping (Entry) -> Void) { completion(Entry(date: Date(), dashboard: Dashboard.load())) }
     func getTimeline(in context: Context, completion: @escaping (Timeline<Entry>) -> Void) {
-        WidgetSnapshotStore.refreshIfNeeded {
+        WidgetSnapshotStore.refreshIfNeeded { _ in
             completion(timeline(now: Date(), dashboard: Dashboard.load()))
         }
     }
@@ -151,7 +163,7 @@ private struct NextClassProvider: TimelineProvider {
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<NextClassEntry>) -> Void) {
-        WidgetSnapshotStore.refreshIfNeeded {
+        WidgetSnapshotStore.refreshIfNeeded { _ in
             let now = Date()
             let calendar = Calendar.current
             let courses = WidgetSnapshotStore.nextClassCourses()
@@ -165,7 +177,7 @@ private struct NextClassProvider: TimelineProvider {
                     )
                 })
             let nextDay = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now)) ?? now
-            completion(Timeline(entries: entries, policy: .after(nextDay)))
+            completion(Timeline(entries: entries, policy: .after(min(nextDay, now.addingTimeInterval(30 * 60)))))
         }
     }
 
@@ -299,7 +311,7 @@ private struct NextClassHomeView: View {
 private struct NextClassHomeWidget: Widget {
     let kind = nextClassHomeScreenWidgetKind
     var body: some WidgetConfiguration {
-        StaticConfiguration(kind: kind, provider: NextClassProvider()) { NextClassHomeView(entry: $0) }
+        StaticConfiguration(kind: kind, provider: NextClassProvider()) { NextClassHomeView(entry: $0).widgetContainerBackground() }
             .configurationDisplayName("下一节课").description("查看下一节课程、时间、地点与教师。").supportedFamilies([.systemSmall, .systemMedium])
     }
 }
@@ -327,7 +339,7 @@ private struct TodayCoursesView: View {
 private struct TodayCoursesWidget: Widget {
     let kind = todayCoursesWidgetKind
     var body: some WidgetConfiguration {
-        StaticConfiguration(kind: kind, provider: Provider()) { TodayCoursesView(entry: $0) }
+        StaticConfiguration(kind: kind, provider: Provider()) { TodayCoursesView(entry: $0).widgetContainerBackground() }
             .configurationDisplayName("今日时间线").description("按时间顺序查看今天的课程。").supportedFamilies([.systemMedium, .systemLarge])
     }
 }
@@ -431,7 +443,7 @@ private struct ExamCountdownView: View {
 private struct ExamCountdownWidget: Widget {
     let kind = examCountdownWidgetKind
     var body: some WidgetConfiguration {
-        StaticConfiguration(kind: kind, provider: Provider()) { ExamCountdownView(entry: $0) }
+        StaticConfiguration(kind: kind, provider: Provider()) { ExamCountdownView(entry: $0).widgetContainerBackground() }
             .configurationDisplayName("考试倒计时").description("按首页考试卡片查看最近考试。").supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
     }
 }
@@ -459,7 +471,7 @@ private struct GradesView: View {
 private struct GradesWidget: Widget {
     let kind = gradesWidgetKind
     var body: some WidgetConfiguration {
-        StaticConfiguration(kind: kind, provider: Provider()) { GradesView(entry: $0) }
+        StaticConfiguration(kind: kind, provider: Provider()) { GradesView(entry: $0).widgetContainerBackground() }
             .configurationDisplayName("本学期成绩").description("复用首页平均绩点、平均分与成绩摘要。").supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
     }
 }
@@ -497,7 +509,7 @@ private struct UtilitiesView: View {
 private struct UtilitiesWidget: Widget {
     let kind = utilitiesWidgetKind
     var body: some WidgetConfiguration {
-        StaticConfiguration(kind: kind, provider: Provider()) { UtilitiesView(entry: $0) }
+        StaticConfiguration(kind: kind, provider: Provider()) { UtilitiesView(entry: $0).widgetContainerBackground() }
             .configurationDisplayName("水电余额").description("显示冷水、热水和电费余额。").supportedFamilies([.systemSmall, .systemMedium])
     }
 }
@@ -523,7 +535,7 @@ private struct ProgressView: View {
 private struct ProgressWidget: Widget {
     let kind = progressWidgetKind
     var body: some WidgetConfiguration {
-        StaticConfiguration(kind: kind, provider: Provider()) { ProgressView(entry: $0) }
+        StaticConfiguration(kind: kind, provider: Provider()) { ProgressView(entry: $0).widgetContainerBackground() }
             .configurationDisplayName("业务进度").description("复用首页业务分类与进度数据。").supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
     }
 }
@@ -630,7 +642,7 @@ private struct WeeklyCalendarGrid: View {
 private struct WeeklyScheduleWidget: Widget {
     let kind = weeklyScheduleWidgetKind
     var body: some WidgetConfiguration {
-        StaticConfiguration(kind: kind, provider: Provider()) { WeeklyScheduleView(entry: $0) }
+        StaticConfiguration(kind: kind, provider: Provider()) { WeeklyScheduleView(entry: $0).widgetContainerBackground() }
             .configurationDisplayName("本周课表")
             .description("按星期查看本周课程安排。")
             .supportedFamilies([.systemLarge])
@@ -672,7 +684,7 @@ private struct NextClassLockScreenView: View {
 private struct NextClassLockScreenWidget: Widget {
     let kind = nextClassLockScreenWidgetKind
     var body: some WidgetConfiguration {
-        StaticConfiguration(kind: kind, provider: NextClassProvider()) { NextClassLockScreenView(entry: $0) }
+        StaticConfiguration(kind: kind, provider: NextClassProvider()) { NextClassLockScreenView(entry: $0).widgetContainerBackground() }
             .configurationDisplayName("下一节课").description("在锁屏上查看下一节课程、时间与地点。").supportedFamilies([.accessoryInline, .accessoryCircular, .accessoryRectangular])
     }
 }

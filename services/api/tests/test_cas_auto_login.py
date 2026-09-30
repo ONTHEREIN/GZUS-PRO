@@ -1,4 +1,5 @@
 import httpx
+import logging
 
 from app.cas_auto_login import CasAutoLogin, _sanitize_response_body
 
@@ -25,9 +26,9 @@ def test_extract_cookies_for_service_host_includes_parent_domain_cookie():
     client.cookies.set("JSESSIONID", "abc", domain=".seig.edu.cn", path="/")
     client.cookies.set("sid", "ehall", domain="ehall.gzus.edu.cn", path="/")
 
-    cookies = CasAutoLogin._extract_cookies_for_hosts(
+    cookies = CasAutoLogin._extract_cookies_for_url(
         client,
-        ["jwxt.seig.edu.cn"],
+        "https://jwxt.seig.edu.cn/jwglxt/",
     )
 
     assert cookies == "JSESSIONID=abc"
@@ -45,6 +46,17 @@ def test_extract_ehall_session_reads_customsid_and_authorization():
     assert token == "token-1"
 
 
+def test_extract_jwxt_cookies_selects_academic_session_path():
+    with httpx.Client() as client:
+        client.cookies.set("JSESSIONID", "sso-session", domain="jwxt.gzus.edu.cn", path="/sso")
+        client.cookies.set("route", "node-one", domain="jwxt.gzus.edu.cn", path="/")
+        client.cookies.set("JSESSIONID", "academic-session", domain="jwxt.gzus.edu.cn", path="/jwglxt")
+        client.cookies.set("JSESSIONID", "cas-session", domain="cas.gzus.edu.cn", path="/")
+        cookies = CasAutoLogin._extract_cookies_for_url(client, "https://jwxt.gzus.edu.cn/jwglxt/")
+
+    assert cookies == "JSESSIONID=academic-session; route=node-one"
+
+
 def test_need_change_password_returns_actionable_login_result():
     result = CasAutoLogin()._handle_error_code(
         "20240001",
@@ -56,3 +68,18 @@ def test_need_change_password_returns_actionable_login_result():
     assert result.error == "首次登录必须先修改学校统一认证密码"
     assert result.error_status == 428
     assert result.error_code == "password_change_required"
+
+
+def test_service_ticket_failure_does_not_log_ticket(caplog):
+    def fail_request(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection failed", request=request)
+
+    client = httpx.Client(transport=httpx.MockTransport(fail_request))
+    with caplog.at_level(logging.WARNING):
+        CasAutoLogin()._follow_service_ticket(
+            client,
+            "https://jwxt.gzus.edu.cn/sso/lyiotlogin?ticket=ST-secret",
+        )
+
+    assert "ST-secret" not in caplog.text
+    assert "ConnectError" in caplog.text

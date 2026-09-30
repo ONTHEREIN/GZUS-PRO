@@ -11,6 +11,7 @@ from app.config import get_settings
 from app.database import (
     BackgroundNotificationProfile,
     CredentialRevocation,
+    IosLiveActivityToken,
     NotificationDelivery,
     NotificationPresentation,
     get_sync_session_factory,
@@ -22,6 +23,7 @@ from app.push import PushDeliveryResult, send_push_to_student
 from app.sessions import decrypt_credentials
 from app.school_client import AuthenticationError
 from app.school_session_service import (
+    BackgroundAuthorizationRevokedError,
     SchoolSessionLimitError,
     SchoolSessionSuspendedError,
     ensure_background_clients,
@@ -33,6 +35,7 @@ from app.live_activity_data import grade_live_fields, live_activity_priority
 logger = logging.getLogger(__name__)
 _SHANGHAI = ZoneInfo("Asia/Shanghai")
 _COURSE_REMINDER_DISPATCH_GRACE = timedelta(minutes=2)
+_LIVE_NOTIFICATION_DURATION = timedelta(minutes=15)
 _SECTION_TIMES = (
     ("09:00", "09:40"), ("09:40", "10:20"), ("10:40", "11:20"), ("11:20", "12:00"),
     ("12:30", "13:10"), ("13:10", "13:50"), ("14:00", "14:40"), ("14:40", "15:20"),
@@ -142,16 +145,30 @@ def _json_set(value: str | None) -> set[str]:
 
 
 def _transient_live_fields(notification_type: str, target_tab: str) -> dict[str, object]:
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    end_ms = now_ms + int(_LIVE_NOTIFICATION_DURATION.total_seconds() * 1000)
     return {
         "type": notification_type,
         "targetTab": target_tab,
         "liveUpdate": True,
-        "ongoing": False,
+        "liveEvent": "start",
+        "ongoing": True,
         "shortCriticalText": "新动态",
         "progress": 1,
-        "priority": live_activity_priority(notification_type, False),
-        "endTime": int((datetime.now(timezone.utc) + timedelta(minutes=30)).timestamp() * 1000),
+        "priority": live_activity_priority(notification_type, True),
+        "startTime": now_ms,
+        "endTime": end_ms,
     }
+
+
+def _delivery_deadline(now: datetime, extras: dict) -> datetime:
+    """Return the short delivery window while history keeps its 30-day TTL."""
+    raw_end = extras.get("endTime") or extras.get("endTimeMillis")
+    try:
+        end = datetime.fromtimestamp(float(raw_end) / 1000, timezone.utc)
+    except (TypeError, ValueError, OverflowError):
+        end = now + _LIVE_NOTIFICATION_DURATION
+    return min(end, now + _LIVE_NOTIFICATION_DURATION)
 
 
 def _ensure_notification_event(
@@ -166,6 +183,10 @@ def _ensure_notification_event(
     if notification_type not in _PERSISTED_EVENT_TYPES:
         return False
     now = datetime.now(timezone.utc)
+    normalized_extras = dict(extras)
+    # 事件键是跨 WebSocket、补拉、原生通知和 APNs 活动令牌的唯一身份。
+    normalized_extras["id"] = event_key
+    normalized_extras["eventKey"] = event_key
     with get_sync_session_factory()() as db:
         row = db.query(NotificationDelivery).filter_by(
             student_id=student_id,
@@ -178,16 +199,20 @@ def _ensure_notification_event(
                 notification_type=notification_type,
                 title=title,
                 body=body,
-                extras_json=json.dumps(extras, ensure_ascii=False, separators=(",", ":")),
+                extras_json=json.dumps(normalized_extras, ensure_ascii=False, separators=(",", ":")),
                 expires_at=now + timedelta(days=30),
+                delivery_expires_at=_delivery_deadline(now, normalized_extras),
             )
             db.add(row)
         else:
+            is_new_delivery = row.title is None
             row.title = title
             row.body = body
-            row.extras_json = json.dumps(extras, ensure_ascii=False, separators=(",", ":"))
+            row.extras_json = json.dumps(normalized_extras, ensure_ascii=False, separators=(",", ":"))
             if row.expires_at is None:
                 row.expires_at = now + timedelta(days=30)
+            if row.delivery_expires_at is None and is_new_delivery:
+                row.delivery_expires_at = _delivery_deadline(now, normalized_extras)
         db.commit()
     return True
 
@@ -202,6 +227,68 @@ def persist_notification_event(
 ) -> None:
     """在发送 WebSocket 或远程推送前落库，避免客户端回执先于事件写入。"""
     _ensure_notification_event(student_id, event_key, notification_type, title, body, extras)
+
+
+def end_expired_live_activities() -> int:
+    """Send an end event for expired iOS activity tokens once per notification."""
+    now = datetime.now(timezone.utc)
+    with get_sync_session_factory()() as db:
+        rows = (
+            db.query(NotificationDelivery)
+            .filter(
+                NotificationDelivery.notification_type.in_(tuple(_PERSISTED_EVENT_TYPES)),
+                NotificationDelivery.delivery_expires_at.is_not(None),
+                NotificationDelivery.delivery_expires_at <= now,
+                NotificationDelivery.live_activity_ended_at.is_(None),
+                NotificationDelivery.title.is_not(None),
+            )
+            .limit(200)
+            .all()
+        )
+        ended = 0
+        from app.apns_service import send_live_activity_to_student
+
+        for row in rows:
+            try:
+                extras = json.loads(row.extras_json or "{}")
+                if not isinstance(extras, dict):
+                    extras = {}
+                extras = {
+                    **extras,
+                    "id": row.event_key,
+                    "eventKey": row.event_key,
+                    "liveEvent": "end",
+                    "ongoing": False,
+                    "dismissImmediately": True,
+                }
+                send_live_activity_to_student(
+                    row.student_id,
+                    "end",
+                    row.title or "软帮手",
+                    row.body or "",
+                    extras,
+                )
+                # 投递函数只删除成功结束或被 APNs 判定失效的令牌；剩余令牌须下轮重试。
+                db.expire_all()
+                remaining_tokens = db.query(IosLiveActivityToken).filter_by(
+                    student_id=row.student_id,
+                    token_type="activity",
+                    activity_id=row.event_key,
+                ).count()
+                if remaining_tokens > 0:
+                    continue
+            except Exception:
+                logger.warning(
+                    "live_activity_end_failed",
+                    extra={"student_id": row.student_id, "event_key": row.event_key},
+                    exc_info=True,
+                )
+                continue
+            row.live_activity_ended_at = now
+            ended += 1
+        if rows:
+            db.commit()
+        return ended
 
 
 def _notification_event_recorded(student_id: str, event_key: str) -> bool:
@@ -325,12 +412,24 @@ def _authenticated_client(credentials: str):
 
 
 def _deliver(student_id: str, event_key: str, notification_type: str, title: str, body: str, extras: dict) -> bool:
-    _ensure_notification_event(student_id, event_key, notification_type, title, body, extras)
+    normalized_extras = {
+        **extras,
+        "id": event_key,
+        "eventKey": event_key,
+    }
+    _ensure_notification_event(
+        student_id,
+        event_key,
+        notification_type,
+        title,
+        body,
+        normalized_extras,
+    )
     if _delivery_recorded(student_id, event_key):
         return False
     failure_reason: str | None = None
     try:
-        result = send_push_to_student(student_id, title, body, extras)
+        result = send_push_to_student(student_id, title, body, normalized_extras)
         if isinstance(result, PushDeliveryResult):
             delivered = result.regular_delivered
             live_delivered = result.live_activity_delivered
@@ -522,16 +621,14 @@ def _poll_profile_once(
                     body_parts.append(f"地点：{location}")
                 if seat:
                     body_parts.append(f"座位：{seat}")
-                extras = {
+                extras = _transient_live_fields("exam_reminder", "exams")
+                extras.update({
                     "id": f"exam_reminder:{profile.student_id}:{key}",
-                    "type": "exam_reminder",
-                    "targetTab": "exams",
                     "shortCriticalText": "考试",
                     "courseName": course_name,
                     "location": location or None,
                     "seat": seat or None,
-                    "priority": live_activity_priority("exam_reminder", False),
-                }
+                })
                 if deliver_notification(profile.student_id, event_key, "exam_reminder", "考试提醒", "，".join(body_parts), extras):
                     delivered += 1
                 elif not _delivery_recorded(profile.student_id, event_key):
@@ -577,25 +674,19 @@ def _poll_profile_once(
                         "id": f"exam_reminder:{profile.student_id}:{key}",
                         "shortCriticalText": "考试",
                         "milestone": milestone,
-                        "startTime": int(current_time.timestamp() * 1000),
-                        "endTime": int(start.timestamp() * 1000),
-                        "ongoing": True,
                         "courseName": course_name,
                         "location": location or None,
                         "seat": seat or None,
-                        "priority": live_activity_priority("exam_reminder", True),
                     })
                 else:
-                    extras = {
-                        "type": "exam_reminder",
-                        "targetTab": "exams",
+                    extras = _transient_live_fields("exam_reminder", "exams")
+                    extras.update({
                         "shortCriticalText": "考试",
                         "milestone": milestone,
                         "courseName": course_name,
                         "location": location or None,
                         "seat": seat or None,
-                        "priority": live_activity_priority("exam_reminder", False),
-                    }
+                    })
                 if deliver_notification(profile.student_id, f"exam-time:{reminder_key}", "exam_reminder", "考试提醒", body, extras):
                     delivered += 1
                     delivered_exam_reminders.add(reminder_key)
@@ -697,6 +788,7 @@ def run_background_notification_poll_once() -> dict[str, int]:
         for profile in profiles:
             if db.get(CredentialRevocation, profile.credential_fingerprint) is not None:
                 db.delete(profile)
+                db.commit()
                 revoked_accounts.append(profile.student_id)
                 logger.info("background_notification_profile_removed", extra={"student_id": profile.student_id})
                 continue
@@ -709,6 +801,12 @@ def run_background_notification_poll_once() -> dict[str, int]:
             retry_due = profile.suspended_at is not None
             try:
                 delivered += _poll_profile(profile)
+            except BackgroundAuthorizationRevokedError:
+                logger.info(
+                    "background_notification_authorization_revoked",
+                    extra={"student_id": profile.student_id},
+                )
+                continue
             except SchoolSessionSuspendedError:
                 continue
             except SchoolSessionLimitError as exc:
@@ -733,6 +831,8 @@ def run_background_notification_poll_once() -> dict[str, int]:
                 profile.attendance_last_error = profile.last_error
                 poll_error = profile.last_error
                 logger.warning("background_notification_poll_failed", extra={"student_id": profile.student_id}, exc_info=True)
+            # 每个账号单独提交，避免下一账号的查询自动 flush 后持锁进入学校会话刷新。
+            db.commit()
         db.commit()
     if revoked_accounts:
         from app.school_session_service import revoke_account_school_access
@@ -776,8 +876,6 @@ def _course_reminder_candidates(profile: BackgroundNotificationProfile, now: dat
             ("start", start, profile.before_start_minutes, "即将上课", "后上课"),
             ("end", end, profile.before_end_minutes, "即将下课", "后下课"),
         ):
-            start_hour, start_minute = (int(value) for value in _SECTION_TIMES[start - 1][0].split(":"))
-            end_hour, end_minute = (int(value) for value in _SECTION_TIMES[end - 1][1].split(":"))
             hour, minute = (int(value) for value in _SECTION_TIMES[section - 1][0 if kind == "start" else 1].split(":"))
             target = current.replace(hour=hour, minute=minute, second=0, microsecond=0) - timedelta(minutes=minutes)
             if not (target <= current < target + _COURSE_REMINDER_DISPATCH_GRACE):
@@ -789,8 +887,8 @@ def _course_reminder_candidates(profile: BackgroundNotificationProfile, now: dat
                 f"course:{kind}:{course_name}:{current.date().isoformat()}"
                 f":{target.hour:02d}:{target.minute:02d}"
             )
-            class_start = current.replace(hour=start_hour, minute=start_minute, second=0, microsecond=0)
-            class_end = current.replace(hour=end_hour, minute=end_minute, second=0, microsecond=0)
+            live_start = int(current.timestamp() * 1000)
+            live_end = int((current + _LIVE_NOTIFICATION_DURATION).timestamp() * 1000)
             result.append((event_key, title, body, {
                 "id": event_key,
                 "eventKey": event_key,
@@ -801,10 +899,11 @@ def _course_reminder_candidates(profile: BackgroundNotificationProfile, now: dat
                 "priority": live_activity_priority("course_reminder", True),
                 # 本地通知只负责课程提醒；云端 APNs 还需启动实况通知，供锁屏和灵动岛显示倒计时。
                 "liveUpdate": True,
+                "liveEvent": "start",
                 "ongoing": True,
                 "shortCriticalText": "课程",
-                "startTime": int(class_start.timestamp() * 1000),
-                "endTime": int(class_end.timestamp() * 1000),
+                "startTime": live_start,
+                "endTime": live_end,
             }))
     return result
 
@@ -814,6 +913,8 @@ def run_course_reminder_dispatch_once() -> dict[str, int]:
     now = datetime.now(timezone.utc)
     delivered = 0
     processed = 0
+    # 该调度器默认每分钟运行，比五分钟的后台资料轮询更接近活动的 15 分钟结束时间。
+    end_expired_live_activities()
     with get_sync_session_factory()() as db:
         profiles = db.query(BackgroundNotificationProfile).filter_by(course_reminders_enabled=True).all()
         for profile in profiles:

@@ -339,8 +339,13 @@ class CasAutoLogin:
                 account=account, cookies="", error="验证码识别失败，请重试", error_status=503
             )
         except Exception as exc:
-            logger.exception("CAS auto-login error")
-            return CasLoginResult(account=account, cookies="", error=str(exc), error_status=502)
+            logger.error("CAS auto-login failed: error_type=%s", type(exc).__name__)
+            return CasLoginResult(
+                account=account,
+                cookies="",
+                error=f"学校统一认证请求失败（{type(exc).__name__}）",
+                error_status=502,
+            )
 
     # ------------------------------------------------------------------
     # Step 1: GET CAS login page (establishes session cookies)
@@ -566,7 +571,9 @@ class CasAutoLogin:
         else:
             redirect_url = f"{service_url}?ticket={ticket}"
 
-        jwxt_host = urlparse(self._service_url).hostname or "jwxt.seig.edu.cn"
+        jwxt_url = urlunparse(urlparse(self._service_url)._replace(
+            path="/jwglxt/", query="", fragment="",
+        ))
 
         t_finalize = time.time()
         jwxt_cookies = ""
@@ -580,13 +587,13 @@ class CasAutoLogin:
 
             def _fetch_jwxt():
                 self._follow_service_ticket(client, redirect_url)
-                cookies = self._extract_cookies_for_hosts(client, [jwxt_host])
+                cookies = self._extract_cookies_for_url(client, jwxt_url)
                 if not cookies and tgt:
                     fallback_ticket = self._request_service_ticket(client, tgt, self._service_url)
                     if fallback_ticket:
                         fallback_url = self._service_ticket_url(self._service_url, fallback_ticket)
                         self._follow_service_ticket(client, fallback_url)
-                        cookies = self._extract_cookies_for_hosts(client, [jwxt_host])
+                        cookies = self._extract_cookies_for_url(client, jwxt_url)
                 return cookies
 
             def _fetch_ehall():
@@ -604,7 +611,7 @@ class CasAutoLogin:
                     elif label == "ehall":
                         ehall_cookies, ehall_token = result
                 except Exception as exc:
-                    logger.warning("Parallel fetch failed for %s: %s", label, exc)
+                    logger.warning("Parallel fetch failed: service=%s error_type=%s", label, type(exc).__name__)
 
         logger.info("[TIMING] finalize_login (parallel jwxt+ehall): %.2fs", time.time() - t_finalize)
 
@@ -624,7 +631,7 @@ class CasAutoLogin:
             response = client.get(url, follow_redirects=True)
             response.raise_for_status()
         except Exception as exc:
-            logger.warning("Failed to follow service URL: %s", exc)
+            logger.warning("Failed to follow service URL: error_type=%s", type(exc).__name__)
 
     def _request_service_ticket(
         self,
@@ -642,7 +649,7 @@ class CasAutoLogin:
             if response.status_code == 200:
                 return response.text.strip()
         except Exception as exc:
-            logger.warning("Failed to request service ticket: %s", exc)
+            logger.warning("Failed to request service ticket: error_type=%s", type(exc).__name__)
         return ""
 
     @staticmethod
@@ -665,23 +672,9 @@ class CasAutoLogin:
         return "; ".join(cookie_parts) if cookie_parts else ""
 
     @staticmethod
-    def _extract_cookies_for_hosts(client: httpx.Client, hosts: list[str]) -> str:
-        """Extract cookies that would be sent to any target host."""
-        target_hosts = [host.lower().lstrip(".") for host in hosts if host]
-        cookie_parts: list[str] = []
-        seen: set[str] = set()
-        for cookie in client.cookies.jar:
-            domain = (cookie.domain or "").lower().lstrip(".")
-            if not domain:
-                continue
-            if not any(host == domain or host.endswith(f".{domain}") for host in target_hosts):
-                continue
-            key = cookie.name
-            if key in seen:
-                continue
-            seen.add(key)
-            cookie_parts.append(f"{cookie.name}={cookie.value}")
-        return "; ".join(cookie_parts) if cookie_parts else ""
+    def _extract_cookies_for_url(client: httpx.Client, url: str) -> str:
+        """按目标域名和路径导出 Cookie，排除 /sso 下的同名会话。"""
+        return client.build_request("GET", url).headers.get("Cookie", "")
 
     # ------------------------------------------------------------------
     # Ehall session

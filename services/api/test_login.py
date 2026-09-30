@@ -11,7 +11,7 @@ import ddddocr
 import httpx
 
 CAS_BASE = "https://cas.gzus.edu.cn"
-SERVICE_URL = "https://jwxt.seig.edu.cn/sso/lyiotlogin"
+SERVICE_URL = "https://jwxt.gzus.edu.cn/sso/lyiotlogin"
 _SENSITIVE_QUERY_KEYS = {"ticket", "token", "tgt", "password"}
 
 RSA_EXPONENT = 0x010001

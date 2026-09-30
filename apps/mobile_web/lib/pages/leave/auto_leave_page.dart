@@ -6,6 +6,7 @@ import '../../leave_attachment.dart';
 import '../../mobile_sso.dart' deferred as mobile_sso;
 import '../../models/schedule_override.dart';
 import '../../schedule_utils.dart';
+import '../../schedule_adjustment_sync.dart';
 import '../../widgets/empty_state.dart';
 import '../../widgets/icon_label.dart';
 import '../../widgets/info_tile.dart';
@@ -381,19 +382,23 @@ class _AutoLeavePageState extends State<AutoLeavePage> {
       final courses =
           scheduleResult.data.items.map((item) => item.toJson()).toList();
       final overrides = await ScheduleOverrideStore.load(
+        widget.api.namespace,
         widget.year,
         widget.term,
       );
-      List<ScheduleAdjustmentRecord> adjustments = const [];
-      try {
-        adjustments = await widget.api.fetchScheduleAdjustments(
-          year: widget.year,
-          term: widget.term,
-        );
-      } catch (error) {
-        // 兼容旧版服务端/离线请假：没有调课同步数据时仍使用原始课表。
-        debugPrint('读取日期调课失败，按原始课表预览请假: $error');
-      }
+      final remoteAdjustments = await widget.api.fetchScheduleAdjustments(
+        year: widget.year,
+        term: widget.term,
+      );
+      final pendingAdjustments = await ScheduleAdjustmentSync.loadQueue(
+        widget.api.namespace,
+        widget.year,
+        widget.term,
+      );
+      final adjustments = mergePendingScheduleAdjustments(
+        remoteAdjustments,
+        pendingAdjustments,
+      );
       final effectiveOccurrences = [
         for (final occurrence in expandEffectiveSchedule(
           courses: scheduleResult.data.items,
@@ -404,12 +409,14 @@ class _AutoLeavePageState extends State<AutoLeavePage> {
           endDate: range.$2,
         ))
           {
+            ...occurrence.course.toJson(),
             'date': dateText(occurrence.date),
             'name': occurrence.course.name,
             'occurrenceKey': occurrence.occurrenceKey,
             'courseKey': occurrence.occurrenceKey,
             'startSection': occurrence.course.startSection,
-            'endSection': occurrence.course.endSection,
+            'endSection':
+                occurrence.course.endSection ?? occurrence.course.startSection,
             'classroom': occurrence.course.classroom ?? '',
             'teacher': occurrence.course.teacher ?? '',
           },
@@ -466,6 +473,10 @@ class _AutoLeavePageState extends State<AutoLeavePage> {
       }
     });
     try {
+      final effectiveOccurrences = _effectiveOccurrences;
+      if (effectiveOccurrences == null) {
+        throw StateError('请先匹配当前请假日期的生效课程，再生成请假单');
+      }
       final result = await widget.api.fillLeave(
         year: widget.year,
         term: widget.term,
@@ -476,7 +487,7 @@ class _AutoLeavePageState extends State<AutoLeavePage> {
         attachments: attachments,
         teacherHandlers: teacherHandlers,
         courses: _scheduleCourses ?? const [],
-        effectiveOccurrences: _effectiveOccurrences ?? const [],
+        effectiveOccurrences: effectiveOccurrences,
       );
       if (!mounted || requestRevision != _draftRevision) return;
       setState(() {
@@ -537,6 +548,7 @@ class _AutoLeavePageState extends State<AutoLeavePage> {
     _fillResult = null;
     _generatedAttachments = const [];
     _scheduleCourses = null;
+    _effectiveOccurrences = null;
     _teacherSelections.clear();
     _teacherSearchResults.clear();
   }

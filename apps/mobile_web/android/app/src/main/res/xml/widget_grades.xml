@@ -7,7 +7,6 @@
     android:updatePeriodMillis="1800000"
     android:initialLayout="@layout/widget_home_card_small"
     android:description="@string/widget_desc_grades"
-    android:previewImage="@drawable/widget_preview_business_progress"
-    android:previewLayout="@layout/widget_home_card_small"
+    android:previewImage="@drawable/widget_preview_grades"
     android:resizeMode="horizontal|vertical"
     android:widgetCategory="home_screen" />

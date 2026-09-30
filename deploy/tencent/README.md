@@ -47,7 +47,16 @@ GitHub Actions 必须配置以下 Secrets：
 | `DEPLOY_HOST` | 服务器地址 |
 | `DEPLOY_USER` | 部署用户 |
 
-每个 release 先做完整性检查。API 在切换前执行数据库备份、导入预检并重启候选版本；`/health/ready` 不通过会自动恢复前一个 API 软链接。Web 发布失败不会切换 `current/web`。每类 release 保留当前版本和两个历史版本。
+每个 release 先做完整性检查。API 在切换前执行数据库备份，并用候选代码运行
+`python -m app.deployment_preflight --production --check-database`：它会确认
+`mini_program` 路由已注册、生产环境未启用演示账号、微信小程序 AppID/Secret 非空，
+再执行幂等迁移并核对所有模型表列。检查失败不会切换 `current/api`；切换后的
+`/health/ready` 不通过也会自动恢复前一个 API 软链接。Web 发布失败不会切换
+`current/web`。每类 release 保留当前版本和两个历史版本。
+
+首次部署学校链路 TLS 加固版本前，更新 `/opt/onegzus/shared/api.env`：
+`EHALL_SERVICE_URL=https://ehall.gzus.edu.cn/shiro-cas`、`ECARD_VERIFY_TLS=true`。
+候选版本会拒绝旧的 HTTP 回调或关闭一卡通证书校验的配置，不会切换线上版本。
 
 手动激活已上传的候选版本：
 

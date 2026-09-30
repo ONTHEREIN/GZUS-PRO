@@ -424,12 +424,22 @@ def fetch_article_meta(url: str) -> WechatArticle:
 
     用于管理员「粘贴链接导入」兜底：读取的是网页公开元数据，合法且无需凭据。
     """
+    parsed = urlparse(url)
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != "mp.weixin.qq.com"
+        or parsed.port is not None
+        or parsed.username is not None
+        or parsed.password is not None
+        or (parsed.path not in {"/s", "/s/"} and not parsed.path.startswith("/s/"))
+    ):
+        raise ValueError("仅支持 mp.weixin.qq.com 的 HTTPS 公众号文章链接")
     headers = {
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                       "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
         "Accept-Language": "zh-CN,zh;q=0.9",
     }
-    with httpx.Client(timeout=_TIMEOUT, headers=headers, follow_redirects=True) as client:
+    with httpx.Client(timeout=_TIMEOUT, headers=headers, follow_redirects=False) as client:
         resp = client.get(url)
         resp.raise_for_status()
         text = resp.text

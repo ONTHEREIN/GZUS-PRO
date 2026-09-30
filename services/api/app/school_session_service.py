@@ -16,7 +16,11 @@ from app.config import get_settings
 from app.database import (
     AppSessionModel,
     BackgroundNotificationProfile,
+    CredentialRevocation,
+    IosLiveActivityToken,
+    IosPushToken,
     SchoolAccountSession,
+    WebPushSubscription,
     get_sync_engine,
     get_sync_session_factory,
 )
@@ -43,6 +47,10 @@ class SchoolSessionLimitError(RuntimeError):
         self.account = account
         self.reason = reason
         super().__init__(reason)
+
+
+class BackgroundAuthorizationRevokedError(RuntimeError):
+    """后台授权已被删除或替换，旧轮询不能继续使用学校凭据。"""
 
 
 class SchoolSessionSuspendedError(RuntimeError):
@@ -238,7 +246,7 @@ def _lock_key(account: str) -> int:
 
 
 @contextmanager
-def _account_lock(student_id: str) -> Iterator[None]:
+def account_school_session_lock(student_id: str) -> Iterator[None]:
     """跨进程 PostgreSQL advisory lock；SQLite 测试使用进程内锁。"""
     account = student_id.strip()
     engine = get_sync_engine()
@@ -290,30 +298,16 @@ def ensure_background_clients(
 ) -> tuple[SchoolSdkClient, EhallClient | None, SchoolAccountSessionSnapshot]:
     """后台优先复用共享会话；失效时按账号锁只刷新一次。"""
     account = student_id.strip()
-    current = get_school_account_session(account)
-    if (
-        current is not None
-        and current.suspended_at is not None
-        and current.next_retry_at is not None
-        and current.next_retry_at > _utc_now()
-    ):
-        raise SchoolSessionSuspendedError(account, current.next_retry_at, current.suspension_reason)
-    if current is not None and current.suspended_at is not None:
-        # 到达自动恢复时间后必须重新走一次 CAS，不能继续复用导致限额的旧 cookie。
-        mark_school_session_invalid(account)
-    try:
-        reused = load_shared_school_clients(account)
-        logger.debug(
-            "school_account_session_reused",
-            extra={"account_hash": _account_hash(account), "version": reused[2].version},
-        )
-        return reused
-    except SchoolSessionSuspendedError:
-        raise
-    except (SchoolSessionUnavailableError, AuthenticationError):
-        mark_school_session_invalid(account)
+    with account_school_session_lock(account):
+        with get_sync_session_factory()() as db:
+            profile = db.query(BackgroundNotificationProfile).filter_by(student_id=account).first()
+            if (
+                profile is None
+                or profile.encrypted_credentials != encrypted_credentials
+                or db.get(CredentialRevocation, profile.credential_fingerprint) is not None
+            ):
+                raise BackgroundAuthorizationRevokedError("后台持续通知授权已撤销")
 
-    with _account_lock(account):
         current = get_school_account_session(account)
         if (
             current is not None
@@ -334,7 +328,7 @@ def ensure_background_clients(
         except SchoolSessionSuspendedError:
             raise
         except (SchoolSessionUnavailableError, AuthenticationError):
-            pass
+            mark_school_session_invalid(account)
         settings = get_settings()
         login_account, password = decrypt_credentials(
             encrypted_credentials, settings.credential_encryption_key
@@ -447,14 +441,17 @@ def revoke_account_school_access(student_id: str) -> None:
     """管理员撤销设备凭据时清理账号共享会话与所有前台会话。"""
     account = student_id.strip()
     now = _utc_now()
-    with get_sync_session_factory()() as db:
-        db.query(BackgroundNotificationProfile).filter_by(student_id=account).delete()
-        db.query(SchoolAccountSession).filter_by(student_id=account).delete()
-        db.query(AppSessionModel).filter(
-            AppSessionModel.student_account == account,
-            AppSessionModel.revoked_at.is_(None),
-        ).update({"revoked_at": now, "revoked_reason": "admin_kick"}, synchronize_session=False)
-        db.commit()
+    with account_school_session_lock(account):
+        with get_sync_session_factory()() as db:
+            db.query(BackgroundNotificationProfile).filter_by(student_id=account).delete()
+            for model in (WebPushSubscription, IosPushToken, IosLiveActivityToken):
+                db.query(model).filter(model.student_id == account).delete(synchronize_session=False)
+            db.query(SchoolAccountSession).filter_by(student_id=account).delete()
+            db.query(AppSessionModel).filter(
+                AppSessionModel.student_account == account,
+                AppSessionModel.revoked_at.is_(None),
+            ).update({"revoked_at": now, "revoked_reason": "admin_kick"}, synchronize_session=False)
+            db.commit()
 
 
 def suspension_retry_interval() -> timedelta:
