@@ -1,10 +1,12 @@
+import { fetchDatedCourses } from "../../utils/schedule-adjustments"
+import { dateText, defaultFirstWeekStart, parseScheduleDate } from "../../utils/schedule"
 import { get, requireSession } from "../../utils/api"
 import { academicPeriodLabel, periodQuery, syncAcademicPeriod } from "../../utils/academic"
 import { EcardSummary, ExamItem, ScheduleCourse, StudentInfo } from "../../utils/models"
 import {
   parseEcardSummary,
   parseExams,
-  parseScheduleCourses,
+  parseScheduleSettings,
   parseStudentInfo
 } from "../../utils/parsers"
 import { courseTimeText } from "../../utils/schedule"
@@ -46,13 +48,15 @@ Page({
 
     try {
       const period = await syncAcademicPeriod()
+      const settings = await get("/settings/schedule", parseScheduleSettings)
+      const first = parseScheduleDate(settings.firstWeeks[`${period.year}-${period.term}`] || "") || defaultFirstWeekStart(period)
       const [info, courses, exams] = await Promise.all([
         get<StudentInfo>("/me", parseStudentInfo),
-        get<ScheduleCourse[]>(`/schedule${periodQuery(period)}`, parseScheduleCourses),
+        fetchDatedCourses(period, dateText(first), false),
         get<ExamItem[]>(`/exams${periodQuery(period)}`, parseExams)
       ])
       if (this.data.requestVersion !== requestVersion) return
-      const homeCourses = courses.slice(0, 3).map((course) => ({
+      const homeCourses = courses.filter((course) => course.date >= dateText(new Date())).slice(0, 3).map((course) => ({
         ...course,
         time: courseTimeText(course)
       }))

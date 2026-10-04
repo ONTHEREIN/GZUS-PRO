@@ -5,12 +5,12 @@ import logging
 import re
 import time
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import TypeVar
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse, Response
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from app.cache_service import (
     ACADEMIC_CACHE_MAX_AGE_SECONDS,
@@ -18,6 +18,7 @@ from app.cache_service import (
     load_and_get_cached_at,
     save_cache,
 )
+from app.live_activity_data import grade_live_fields
 from app.notice_utils import merge_notices, valid_notice_items
 from app.routes.deps import require_session
 from app.routes.ecard import summary_for_student
@@ -38,7 +39,7 @@ from app.school_client import (
     MissingProxySlotError,
 )
 from app.sessions import AppSession
-from app.widget_schedule import WidgetCourse, WidgetSnapshotRequest, effective_widget_schedule
+from app.widget_schedule import WidgetCourse, WidgetOccurrence, WidgetSnapshotRequest, effective_widget_schedule
 
 logger = logging.getLogger(__name__)
 
@@ -443,6 +444,37 @@ async def schedule(
     )
 
 
+@router.get("/schedule/effective", response_model=list[WidgetOccurrence])
+async def effective_schedule(
+    year: int = Query(..., ge=2000, le=3000),
+    term: int = Query(..., ge=1, le=2),
+    first_week_start: date = Query(..., alias="firstWeekStart"),
+    refresh: bool = Query(...),
+    session: AppSession = Depends(require_session),
+) -> list[WidgetOccurrence]:
+    """各端共用日期课表，叠加账号云端调课，不修改学校课表。"""
+    from app.routes.schedule_adjustments import read_adjustments
+
+    rows = await schedule(year=str(year), term=str(term), week=None,
+                          request=None, refresh=refresh, session=session)
+    context = WidgetSnapshotRequest(year=year, term=term, firstWeekStart=first_week_start,
+                                    overrides=[], pendingAdjustments=[])
+    adapter = TypeAdapter(list[WidgetCourse])
+    try:
+        courses = (
+            adapter.validate_json(rows.body)
+            if isinstance(rows, JSONResponse)
+            else adapter.validate_python(rows)
+        )
+    except ValidationError as exc:
+        raise HTTPException(status_code=502, detail={
+            "message": "学校课表字段无效，无法生成调课后的生效课程",
+            "year": year, "term": term,
+            "errors": exc.errors(include_input=False, include_url=False, include_context=False),
+        }) from exc
+    return effective_widget_schedule(courses, context, read_adjustments(year, term, session))
+
+
 @router.get("/exams", response_model=list[ExamItem])
 async def exams(
     year: str | None = None,
@@ -473,9 +505,15 @@ async def grades(
 ) -> list[dict]:
     student_id = _get_student_id(session)
     params = {"year": year, "term": term} if year or term else None
-    return await _run_with_cache_fallback(
+    result = await _run_with_cache_fallback(
         "grades", student_id, lambda: session.client.get_grades(year, term), params, refresh=refresh,
     )
+
+    rows = json.loads(result.body) if isinstance(result, JSONResponse) else result
+    normalized = [{**item, **grade_live_fields(item)} for item in rows]
+    if isinstance(result, JSONResponse):
+        return JSONResponse(normalized, headers={key: value for key, value in result.headers.items() if key != "content-length"})
+    return normalized
 
 
 @router.get("/attendance", response_model=AttendanceResponse)
@@ -649,7 +687,7 @@ async def effective_widget_snapshot(
     session: AppSession = Depends(require_session),
 ) -> Response:
     """只读组件快照：云端调课叠加本机规则与待同步操作，不写入学校或调课表。"""
-    from app.routes.schedule_adjustments import list_adjustments
+    from app.routes.schedule_adjustments import read_adjustments
 
     payload = await dashboard(
         request=request,
@@ -687,7 +725,7 @@ async def effective_widget_snapshot(
                     ],
                 },
             ) from exc
-        remote = list_adjustments(year=context.year, term=context.term, session=session)
+        remote = read_adjustments(year=context.year, term=context.term, session=session)
         schedule = {
             **schedule,
             "data": [

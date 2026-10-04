@@ -327,11 +327,7 @@ class WechatBinding(Base):
 
 
 class ScheduleAdjustment(Base):
-    """按日期保存的整日调课记录。
-
-    occurrence keys 与课程快照由客户端生成，服务端只负责鉴权、幂等及乐观并发，
-    这样不同客户端无需重新解析教务系统的课程文本即可重放同一调整。
-    """
+    """按账号学期保存个人调课；V2 元数据与历史快照由服务端校验生成。"""
 
     __tablename__ = "schedule_adjustments"
     __table_args__ = (
@@ -345,6 +341,8 @@ class ScheduleAdjustment(Base):
     term = Column(Integer, nullable=False, index=True)
     source_date = Column(String(10), nullable=False)
     target_date = Column(String(10), nullable=False)
+    moves_json = Column(Text, nullable=False, default="[]")
+    metadata_json = Column(Text, nullable=True)
     source_occurrence_keys_json = Column(Text, nullable=False, default="[]")
     target_conflict_keys_json = Column(Text, nullable=False, default="[]")
     conflict_mode = Column(String(30), nullable=False, default="coexist")
@@ -359,6 +357,16 @@ class ScheduleAdjustment(Base):
     )
 
 
+class ScheduleAdjustmentScope(Base):
+    """账号学期事务锁；确保预览版本校验与写入不可交错。"""
+
+    __tablename__ = "schedule_adjustment_scopes"
+    student_id = Column(String(100), primary_key=True)
+    year = Column(Integer, primary_key=True)
+    term = Column(Integer, primary_key=True)
+    revision = Column(Integer, nullable=False, default=0)
+
+
 class BackgroundNotificationProfile(Base):
     """用户显式授权的后台通知配置与加密教务凭据。"""
 
@@ -368,6 +376,7 @@ class BackgroundNotificationProfile(Base):
     student_id = Column(String(100), nullable=False, unique=True, index=True)
     credential_fingerprint = Column(String(64), nullable=False, index=True)
     encrypted_credentials = Column(Text, nullable=False)
+    mobile_enabled = Column(Boolean, default=True, nullable=False)
     course_reminders_enabled = Column(Boolean, default=False, nullable=False)
     before_start_minutes = Column(Integer, default=10, nullable=False)
     before_end_minutes = Column(Integer, default=5, nullable=False)
@@ -400,6 +409,54 @@ class BackgroundNotificationProfile(Base):
         onupdate=lambda: datetime.now(timezone.utc),
         nullable=False,
     )
+
+
+
+class MiniNotificationAccess(Base):
+    """微信后台授权；与移动端配置共享检测但独立撤销。"""
+
+    __tablename__ = "mini_notification_access"
+    student_id = Column(String(100), primary_key=True)
+    openid_fingerprint = Column(String(64), nullable=False)
+    authorized_at = Column(DateTime, nullable=False)
+    first_week_start = Column(String(10), nullable=True)
+    occurrences_json = Column(Text, nullable=True)
+    course_sync_error = Column(Text, nullable=True)
+
+
+class MiniNotificationPreference(Base):
+    __tablename__ = "mini_notification_preferences"
+    openid_fingerprint = Column(String(64), primary_key=True)
+    notification_type = Column(String(40), primary_key=True)
+    student_id = Column(String(100), nullable=False, index=True)
+    enabled = Column(Boolean, nullable=False)
+    enabled_since = Column(DateTime, nullable=False)
+    credits = Column(Integer, nullable=False)
+    subscription_status = Column(String(30), nullable=False)
+    last_error = Column(Text, nullable=True)
+
+
+class MiniSubscriptionReceipt(Base):
+    """每次订阅回调只登记一次，重新播放请求不增加授权次数。"""
+
+    __tablename__ = "mini_subscription_receipts"
+    request_id = Column(String(64), primary_key=True)
+    openid_fingerprint = Column(String(64), nullable=False)
+    notification_type = Column(String(40), nullable=False)
+    created_at = Column(DateTime, nullable=False)
+
+
+class MiniNotificationDelivery(Base):
+    """微信独立投递账本；sending/unknown 永不自动重发。"""
+
+    __tablename__ = "mini_notification_deliveries"
+    openid_fingerprint = Column(String(64), primary_key=True)
+    event_key = Column(String(500), primary_key=True)
+    template_id = Column(String(200), nullable=False)
+    notification_type = Column(String(40), nullable=False)
+    status = Column(String(30), nullable=False)
+    error = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=False)
 
 
 class NotificationDelivery(Base):
@@ -828,6 +885,7 @@ def init_db():
 
     # Lightweight migration: add columns that exist in the model but might not
     # exist in the database yet (e.g., added after initial deployment).
+    _ensure_columns(engine, "schedule_adjustments", {"moves_json": "TEXT NOT NULL DEFAULT '[]'", "metadata_json": "TEXT"})
     _ensure_columns(engine, "app_sessions", _APP_SESSION_COMPAT_COLUMNS)
     _ensure_columns(engine, "web_push_subscriptions", {
         "session_id": "VARCHAR(64)",
@@ -853,6 +911,7 @@ def init_db():
         engine,
         "background_notification_profiles",
         {
+            "mobile_enabled": "BOOLEAN NOT NULL DEFAULT TRUE",
             "attendance_snapshot_json": "TEXT",
             "exam_reminder_keys_json": "TEXT",
             "course_sync_error": "TEXT",

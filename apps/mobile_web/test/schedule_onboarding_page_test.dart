@@ -23,7 +23,7 @@ void main() {
       httpClient: MockClient(
         (request) async => http.Response(
           request.url.path == '/schedule' ||
-                  request.url.path == '/settings/schedule/adjustments'
+                  request.url.path == '/settings/schedule/adjustments/v3'
               ? '[]'
               : jsonEncode(<String, Object>{}),
           200,

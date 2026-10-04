@@ -1,6 +1,7 @@
 import { strict as assert } from "node:assert"
 import { test } from "node:test"
 
+import { legalVersion } from "../utils/generated/legal"
 import { syncAcademicPeriod } from "../utils/academic"
 
 type RequestResponse = { statusCode: number; data: unknown }
@@ -9,7 +10,7 @@ type GlobalWithWx = typeof globalThis & { wx?: unknown }
 test("并发同步学期只发起一组请求", async () => {
   const requests: string[] = []
   const responses: Array<(response: RequestResponse) => void> = []
-  const store = new Map<string, unknown>()
+  const store = new Map<string, unknown>([["legal.acceptedVersion", legalVersion]])
   ;(globalThis as GlobalWithWx).wx = {
     getAccountInfoSync: () => ({ miniProgram: { envVersion: "develop" } }),
     getStorageSync: (key: string) => store.get(key) ?? "",

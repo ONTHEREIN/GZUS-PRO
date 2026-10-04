@@ -11,3 +11,7 @@
   color: #2176e8;
   font-size: 23rpx;
 }
+
+.grade-status { margin-bottom: 12rpx; color: #748094; }
+.grade-status.passed { color: #16813b; }
+.grade-status.failed { color: #c62828; }

@@ -1,3 +1,4 @@
+import { hasAcceptedLegal } from "./legal"
 import { resolveApiBaseUrl } from "./config"
 
 interface ApiFailure {
@@ -56,6 +57,7 @@ export function request<T>(
   data: object | undefined,
   parse: ResponseParser<T>
 ): Promise<T> {
+  if (!hasAcceptedLegal()) return Promise.reject(new Error("请先阅读并同意用户服务协议和隐私政策"))
   const sentSessionId = sessionId()
   const hadSession = Boolean(sentSessionId)
 
@@ -114,7 +116,7 @@ export function remove<T>(path: string, parse: ResponseParser<T>): Promise<T> {
 }
 
 export function requireSession(): boolean {
-  if (sessionId()) return true
+  if (sessionId() && hasAcceptedLegal()) return true
   wx.reLaunch({ url: "/pages/login/index" })
   return false
 }

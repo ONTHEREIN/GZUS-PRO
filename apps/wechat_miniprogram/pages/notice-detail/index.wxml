@@ -1,0 +1,14 @@
+<view class="page" id="notice-detail-page">
+  <view class="page-title" id="notice-detail-title">{{title}}</view>
+  <view class="muted">{{sourceLabel}} · {{date}}</view>
+  <view wx:if="{{loading}}" id="notice-detail-loading" class="empty">正在加载通知详情…</view>
+  <view wx:if="{{error}}" id="notice-detail-error" class="card error">{{error}}<button wx:if="{{item}}" id="notice-detail-retry" bindtap="loadDetail">重试</button></view>
+  <image wx:if="{{coverUrl}}" id="notice-detail-cover" src="{{coverUrl}}" mode="widthFix" binderror="onCoverError" />
+  <view wx:if="{{coverError}}" id="notice-detail-cover-error" class="error">{{coverError}}</view>
+  <view wx:if="{{!loading && !error}}" class="card">
+    <view class="muted">{{contentLabel}}</view>
+    <text wx:if="{{content}}" id="notice-detail-content" selectable>{{content}}</text>
+    <view wx:else id="notice-detail-empty" class="empty">暂无可展示的详情内容</view>
+  </view>
+  <button wx:if="{{item.url}}" id="notice-detail-copy" bindtap="copyOriginal">复制原文链接</button>
+</view>

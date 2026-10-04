@@ -2,6 +2,7 @@
 .test-build/
 
 node_modules/
+utils/generated/
 
 # 说明：页面回归的截图/日志与自动预览信息默认写在项目目录**之外**
 # （<project>/../onegzus-miniprogram-test-artifacts），因为开发者工具会监听项目目录，

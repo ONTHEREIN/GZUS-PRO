@@ -56,6 +56,13 @@ const LOGIN_OK = {
  * 参见 services/api/app/routes/academic.py 的 `APIRouter(tags=["academic"])`。
  */
 const BASE_RESPONSES = {
+  "GET /notifications/events": { statusCode: 200, data: { events: [] } },
+  "GET /mini/notifications/config": { statusCode: 200, data: {
+    bound: false, backgroundAuthorized: false, lastCheckedAt: null, lastError: null,
+    settings: ["exam_reminder", "grade_update", "course_reminder", "attendance_update", "ecard_reminder"].map((type) => ({
+      type, label: type, templateId: null, enabled: false, credits: 0, subscriptionStatus: "not_subscribed", lastError: null
+    }))
+  } },
   "POST /mini/auth/login": { statusCode: 200, data: LOGIN_OK },
   "POST /mini/auth/wechat-binding": { statusCode: 200, data: { status: "ok" } },
   "POST /mini/auth/wechat-login": { statusCode: 200, data: LOGIN_OK },
@@ -190,6 +197,7 @@ const BASE_RESPONSES = {
         title: "关于开展期末选课的通知",
         date: "2026-01-05",
         summary: "请在 1 月 10 日前完成选课确认。",
+        url: "https://jwxt.gzus.edu.cn/notice/1",
         source: "jwxt"
       },
       {
@@ -201,6 +209,7 @@ const BASE_RESPONSES = {
       }
     ]
   },
+  "GET /notices/detail": { statusCode: 200, data: { title: "选课通知正文", date: "2026-01-05", contentHtml: "<p>第一段 &amp; 说明</p><p>第二段</p>", url: "https://jwxt.gzus.edu.cn/notice/1" } },
   "GET /ecard/summary": {
     statusCode: 200,
     data: {
@@ -277,7 +286,21 @@ const ECARD_NOT_BOUND = {
 
 /** 基于基础夹具生成一套场景，overrides 按「方法 + 路径」整体替换。 */
 function buildScenario(overrides) {
-  return Object.assign({}, BASE_RESPONSES, overrides || {})
+  const responses = Object.assign({}, BASE_RESPONSES, overrides || {})
+  const original = responses["GET /schedule"]
+  const first = new Date("2026-09-01T00:00:00")
+  first.setDate(first.getDate() - (first.getDay() + 6) % 7)
+  const data = original.statusCode === 200 ? Array.from({ length: 30 }, (_, index) =>
+    original.data.filter((course) => index < Number(course.weeks.split("-")[1])).map((course) => {
+      const day = new Date(first)
+      day.setDate(day.getDate() + index * 7 + course.weekday - 1)
+      const date = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(day.getDate()).padStart(2, "0")}`
+      return { ...course, date, week: index + 1, itemKey: `course:${date}:${course.raw?.kch || course.name}:${course.startSection}:${course.endSection}:${course.teacher || ""}:${course.classroom || ""}` }
+    })).flat() : original.data
+  responses["GET /schedule/effective"] = overrides && overrides["GET /schedule/effective"] ? overrides["GET /schedule/effective"] : { ...original, data }
+  responses["GET /settings/schedule/adjustments"] = responses["GET /settings/schedule/adjustments"] || { statusCode: 200, data: [] }
+  responses["GET /settings/schedule/adjustments/v3"] = responses["GET /settings/schedule/adjustments/v3"] || { statusCode: 200, data: [] }
+  return responses
 }
 
 module.exports = {

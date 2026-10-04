@@ -24,6 +24,7 @@ from app.routes import (
     ehall,
     feedback,
     mini_program,
+    mini_notifications,
     notifications,
     push,
     schedule_adjustments,
@@ -63,6 +64,8 @@ async def lifespan(app: FastAPI):
     )
     from app.shiply_export_jobs import reconcile_shiply_export_jobs
 
+    from app.wechat_notifications import run_mini_notification_dispatcher
+
     init_db()
     reconcile_shiply_export_jobs()
     poller_tasks = {
@@ -72,6 +75,7 @@ async def lifespan(app: FastAPI):
         "grades": asyncio.create_task(run_grade_update_poller(app)),
         "background_notifications": asyncio.create_task(run_background_notification_poller()),
         "course_reminders": asyncio.create_task(run_course_reminder_dispatcher()),
+        "wechat_notifications": asyncio.create_task(run_mini_notification_dispatcher()),
     }
     app.state.poller_tasks = poller_tasks
     await app.state.sessions.start_cleanup_task()
@@ -230,6 +234,7 @@ def create_app() -> FastAPI:
 
     app.include_router(auth.router)
     app.include_router(mini_program.router)
+    app.include_router(mini_notifications.router)
     app.include_router(content.router)
     app.include_router(academic.router)
     app.include_router(admin.router)
@@ -240,6 +245,10 @@ def create_app() -> FastAPI:
     app.include_router(notifications.router)
     app.include_router(weather.router)
     app.include_router(settings.router)
+    from app.routes.schedule_adjustments_v3 import router as adjustments_v3_router
+    app.include_router(adjustments_v3_router)
+    from app.routes.schedule_adjustments_v2 import router as adjustments_v2_router
+    app.include_router(adjustments_v2_router)
     app.include_router(schedule_adjustments.router)
     app.include_router(ws_router)
 

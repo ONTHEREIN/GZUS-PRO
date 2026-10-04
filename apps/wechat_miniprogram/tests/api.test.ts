@@ -1,6 +1,7 @@
 import { strict as assert } from "node:assert"
 import { test } from "node:test"
 
+import { acceptLegal } from "../utils/legal"
 import { get, post, put, remove, requireSession } from "../utils/api"
 import { PRODUCTION_API_BASE_URL, TEST_API_BASE_URL } from "../utils/config"
 
@@ -66,6 +67,7 @@ function installWxMock(options: WxMockOptions = {}): WxMock {
   }
 
   ;(globalThis as GlobalWithWx).wx = wxMock
+  acceptLegal()
   return { store, removed, reLaunchUrls, captured }
 }
 
@@ -244,4 +246,15 @@ test("requireSession 在无会话时跳转登录页", () => {
 
   assert.equal(requireSession(), false)
   assert.deepEqual(mock.reLaunchUrls, ["/pages/login/index"])
+})
+
+
+test("协议版本未确认时不发送请求且已有会话不能进入业务页", async () => {
+  const mock = installWxMock({ sessionId: "mini-session" })
+  mock.store.set("legal.acceptedVersion", "previous-version")
+  await assert.rejects(get("/me", (value) => value), /请先阅读并同意/)
+  assert.equal(mock.captured.length, 0)
+  assert.equal(requireSession(), false)
+  assert.deepEqual(mock.reLaunchUrls, ["/pages/login/index"])
+  assert.equal(mock.store.get("auth.sessionId"), "mini-session")
 })

@@ -1,0 +1,70 @@
+@import "../schedule/index.wxss";
+.adjustments { padding-bottom: calc(160rpx + env(safe-area-inset-bottom)); }
+.header { display:flex; flex-wrap:wrap; align-items:center; gap:16rpx; margin-bottom:24rpx; }
+.title { font-size:32rpx; font-weight:600; margin:16rpx 0; }
+.entry { text-align:left; padding:28rpx; margin:24rpx 0; background:var(--surface,#fff); border-radius:20rpx; }
+.course-name { font-size:30rpx; font-weight:600; }
+.selectable { border:2rpx solid transparent; }
+.selected, .chosen { border:2rpx solid #3570c6; background:#e5efff; color:#174b93; }
+.date-summary { overflow-wrap:anywhere; padding:16rpx; }
+.week-controls, .actions { display:flex; align-items:center; gap:16rpx; justify-content:space-between; }
+.actions { flex-wrap:wrap; }
+.actions button { font-size:26rpx; }
+.picker { padding:24rpx; margin:12rpx 0; background:#edf2f8; border-radius:12rpx; }
+.time-block { padding:20rpx; border-left:6rpx solid #3570c6; background:#edf2f8; border-radius:10rpx; margin:12rpx 0; overflow-wrap:anywhere; }
+.impact { padding:12rpx; font-weight:600; }
+.footer { position:fixed; bottom:0; left:0; right:0; background:var(--surface,#fff); padding:20rpx 24rpx calc(20rpx + env(safe-area-inset-bottom)); z-index:10; }
+.modal-mask { position:fixed; inset:0; background:rgba(0,0,0,.4); display:flex; align-items:center; padding:20rpx; z-index:20; }
+.calendar { background:var(--surface,#fff); border-radius:24rpx; width:100%; padding:24rpx; max-height:85vh; overflow:auto; }
+.calendar-grid { display:grid; grid-template-columns:repeat(7,1fr); text-align:center; gap:4rpx; }
+.calendar-grid button { padding:0; width:100%; font-size:26rpx; min-height:72rpx; }
+.calendar-grid text { padding:12rpx 0; }
+@media(min-width:650px) { .comparison { display:flex; gap:24rpx; } .side { flex:1; min-width:0; } }
+@media(prefers-color-scheme:dark) { .entry,.footer,.calendar { background:#20252d; color:#f4f6fa; } .time-block,.picker { background:#293342; color:#f4f6fa; } .chosen,.selected { background:#1d3c69; color:#fff; } }
+
+.scope-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:12rpx}.scope-grid button{margin:0;width:100%;font-size:26rpx}.is-selected{outline:5rpx solid #111;box-sizing:border-box}.calendar-content{height:55vh}.calendar-count{font-size:18rpx;line-height:24rpx}.calendar-grid button{padding:8rpx 0;line-height:34rpx}.block-name{font-weight:600}.adjustments{padding-bottom:220rpx}.footer{z-index:20}.time-block .course-name{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+
+/* 依据 WakeUp 截图重排卡片、周次选择和时间列表。 */
+.page.adjustments { background:#f7f7f7; color:#171717; padding-left:24rpx; padding-right:24rpx; }
+.adjustments .header { flex-wrap:nowrap; gap:10rpx; margin:8rpx 0 20rpx; }
+.adjustments .header .title { flex:1; min-width:0; margin:0; text-align:center; font-size:34rpx; white-space:nowrap; }
+.adjustments .header button { flex-shrink:0; min-height:64rpx; border-radius:14rpx; }
+.adjustments .header-primary { padding:0 18rpx; background:#ff315a; color:#fff; font-weight:600; }
+.adjustments .header-primary[disabled] { opacity:.45; }
+.adjustments .mode-tabs { display:flex; gap:12rpx; padding:8rpx; margin:18rpx 0; border-radius:18rpx; background:#ececef; }
+.adjustments .mode-tab { flex:1; padding:18rpx 8rpx; border-radius:14rpx; text-align:center; font-weight:600; }
+.adjustments .mode-tab.active { background:#fff; color:#ff315a; box-shadow:0 2rpx 8rpx rgba(0,0,0,.08); }
+.adjustments .card { margin:18rpx 0; padding:24rpx; border-radius:28rpx; background:#fff; box-shadow:none; }
+.adjustments .course-summary { display:flex; align-items:stretch; gap:20rpx; }
+.adjustments .course-accent { width:10rpx; min-height:70rpx; border-radius:8rpx; background:#ff4b38; }
+.adjustments .course-summary-content { flex:1; min-width:0; }
+.adjustments .summary-row { padding-top:18rpx; color:#55565a; font-size:27rpx; }
+.adjustments .section-title { margin:30rpx 8rpx 14rpx; color:#85858a; font-size:30rpx; font-weight:500; }
+.adjustments .choice-row { display:flex; align-items:center; justify-content:space-between; width:100%; min-height:100rpx; margin:10rpx 0; padding:0 24rpx; border:0; border-radius:18rpx; background:#fff; color:#171717; font-size:30rpx; text-align:left; }
+.adjustments .choice-row text { color:#85858a; }
+.adjustments .group-switch { display:flex; align-items:center; justify-content:space-between; min-height:76rpx; padding:8rpx 16rpx; font-size:26rpx; }
+.adjustments .group-switch view { flex:1; overflow:hidden; text-align:center; text-overflow:ellipsis; white-space:nowrap; }
+.adjustments .scope-grid { gap:14rpx; padding:12rpx 0 18rpx; }
+.adjustments .scope-grid button { min-height:82rpx; border:2rpx solid #222; border-radius:16rpx; background:#fff; color:#171717; }
+.adjustments .scope-grid button.chosen { border-color:#ff315a; background:#ff315a; color:#fff; }
+.adjustments .scope-grid button[disabled] { border-color:transparent; background:#f2f2f3; color:#b6b6bb; }
+.adjustments .time-block { padding:22rpx; border:0; border-left:8rpx solid #ff4b38; border-radius:14rpx; background:#f7f7f8; }
+.adjustments .course-time { margin-bottom:8rpx; color:#77787d; font-size:24rpx; }
+.adjustments .course-name { line-height:1.45; }
+.adjustments .day-card .title { margin-top:0; }
+.adjustments .mode-hint { padding:4rpx 10rpx 12rpx; }
+.adjustments .footer { padding:18rpx 24rpx calc(18rpx + env(safe-area-inset-bottom)); background:rgba(255,255,255,.97); box-shadow:0 -4rpx 20rpx rgba(0,0,0,.05); }
+.adjustments .footer button, .adjustments .calendar > button[type="primary"] { min-height:92rpx; border-radius:18rpx; background:#ff315a; color:#fff; font-weight:600; }
+.adjustments .calendar { border-radius:28rpx; padding:28rpx; }
+.adjustments .calendar-grid button { min-height:86rpx; border-radius:14rpx; background:#f5f5f6; }
+.adjustments .calendar-grid button.chosen { background:#ff315a; color:#fff; }
+.adjustments .muted { color:#85858a; }
+@media(prefers-color-scheme:dark) {
+  .page.adjustments { background:#111216; color:#f4f4f5; }
+  .adjustments .card,.adjustments .choice-row,.adjustments .mode-tab.active,.adjustments .footer,.adjustments .calendar { background:#202126; color:#f4f4f5; }
+  .adjustments .mode-tabs,.adjustments .time-block,.adjustments .calendar-grid button { background:#292a30; }
+  .adjustments .scope-grid button { border-color:#aaa; background:#202126; color:#f4f4f5; }
+  .adjustments .scope-grid button.chosen,.adjustments .calendar-grid button.chosen { border-color:#ff5b78; background:#ff315a; color:#fff; }
+  .adjustments .scope-grid button[disabled] { border-color:transparent; background:#292a30; color:#777982; }
+  .adjustments .summary-row,.adjustments .muted,.adjustments .section-title { color:#a9aab0; }
+}

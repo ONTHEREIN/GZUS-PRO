@@ -228,3 +228,46 @@ def test_widget_post_invalid_school_sections_returns_serializable_502():
     assert (
         response.json()["detail"]["errors"][0]["message"] == "Value error, 结束节次不能早于开始节次"
     )
+
+
+def test_multi_date_section_swap_is_atomic_and_restorable():
+    client, headers = widget_client()
+    payload = adjustment("batch-section", "2026-09-07", "2026-09-15", "swap")
+    payload["moves"] = [
+        {"sourceDate": "2026-09-07", "targetDate": "2026-09-15",
+         "sourceStart": 2, "sourceEnd": 2, "targetStart": 1},
+        {"sourceDate": "2026-09-21", "targetDate": "2026-09-29",
+         "sourceStart": 2, "sourceEnd": 2, "targetStart": 1},
+    ]
+    created = client.post("/settings/schedule/adjustments", json=payload, headers=headers)
+    assert created.status_code == 201
+    assert created.json()["moves"] == payload["moves"]
+    url = "/schedule/effective?year=2026&term=1&firstWeekStart=2026-09-07&refresh=false"
+    response = client.get(url, headers=headers)
+    assert response.status_code == 200
+    courses = response.json()
+    selected = {(item["date"], item["name"], item["startSection"], item["endSection"])
+                for item in courses if item["date"] in ("2026-09-07", "2026-09-15")}
+    assert selected == {
+        ("2026-09-07", "数学", 1, 1), ("2026-09-07", "英语", 2, 2),
+        ("2026-09-15", "数学", 1, 1), ("2026-09-15", "英语", 2, 2),
+    }
+    assert any(item["date"] == "2026-09-29" and item["name"] == "数学" for item in courses)
+    assert client.post("/settings/schedule/adjustments/batch-section/restore?expectedRevision=1", headers=headers).status_code == 200
+    restored = client.get(url, headers=headers).json()
+    assert next(item for item in restored if item["date"] == "2026-09-07")["endSection"] == 2
+    assert all(item["date"] != "2026-09-29" for item in restored)
+    history = client.get("/settings/schedule/adjustments?year=2026&term=1", headers=headers).json()
+    assert len(history) == 1 and history[0]["status"] == "restored"
+
+
+def test_section_cover_preserves_unselected_target_sections():
+    client, headers = widget_client()
+    payload = adjustment("section-cover", "2026-09-07", "2026-09-15", "replaceConflicts")
+    payload["moves"] = [{"sourceDate": "2026-09-07", "targetDate": "2026-09-15",
+                         "sourceStart": 2, "sourceEnd": 2, "targetStart": 1}]
+    assert client.post("/settings/schedule/adjustments", json=payload, headers=headers).status_code == 201
+    courses = client.get("/schedule/effective?year=2026&term=1&firstWeekStart=2026-09-07&refresh=false", headers=headers).json()
+    assert next(item for item in courses if item["date"] == "2026-09-07")["endSection"] == 1
+    target = [item for item in courses if item["date"] == "2026-09-15"]
+    assert {(item["name"], item["startSection"], item["endSection"]) for item in target} == {("数学", 1, 1), ("英语", 2, 2)}

@@ -15,6 +15,7 @@ import {
   GradeItem,
   LoginResponse,
   NoticeItem,
+  NoticeDetail,
   ScheduleCourse,
   StudentInfo
 } from "./models"
@@ -145,6 +146,7 @@ export function parseGrades(value: unknown): GradeItem[] {
       credit: nullableString(item.credit),
       gradePoint: nullableString(item.gradePoint),
       term: nullableString(item.term),
+      gradeStatus: nullableString(item.gradeStatus),
       gradePassed: nullableBoolean(item.gradePassed)
     }
   })
@@ -202,7 +204,7 @@ function parseAttendanceItem(value: unknown): AttendanceItem {
     absent: item.absent === undefined ? 0 : nonNegativeInteger(item.absent, "旷课次数"),
     leave: item.leave === undefined ? 0 : nonNegativeInteger(item.leave, "请假次数"),
     total: item.total === undefined ? 0 : nonNegativeInteger(item.total, "考勤总次数"),
-    records: records.map(parseAttendanceRecord)
+    records: Array.from(records, parseAttendanceRecord)
   }
 }
 
@@ -213,7 +215,7 @@ export function parseAttendance(value: unknown): AttendanceResponse {
   }
   return {
     status: item.status,
-    items: list(item.items, "考勤").map(parseAttendanceItem)
+    items: Array.from(list(item.items, "考勤"), parseAttendanceItem)
   }
 }
 
@@ -225,6 +227,8 @@ export function parseNotices(value: unknown): NoticeItem[] {
       throw new Error("通知来源字段无效")
     }
     return {
+      url: nullableString(item.url),
+      coverUrl: nullableString(item.coverUrl),
       category: stringValue(item.category, "通知分类"),
       title: stringValue(item.title, "通知标题"),
       date: nullableString(item.date),
@@ -232,6 +236,16 @@ export function parseNotices(value: unknown): NoticeItem[] {
       source
     }
   })
+}
+
+export function parseNoticeDetail(value: unknown): NoticeDetail {
+  const item = record(value, "通知详情")
+  return {
+    title: stringValue(item.title, "通知标题"),
+    date: nullableString(item.date),
+    contentHtml: stringValue(item.contentHtml, "通知正文"),
+    url: stringValue(item.url, "通知链接")
+  }
 }
 
 export function parseEcardSummary(value: unknown): EcardSummary {

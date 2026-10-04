@@ -284,7 +284,7 @@ void main() {
     final api = _api('A', MockClient((request) async {
       final path = request.url.path;
       return http.Response(
-          path == '/schedule' || path == '/settings/schedule/adjustments'
+          path == '/schedule' || path == '/settings/schedule/adjustments' || path == '/settings/schedule/adjustments/v3'
               ? '[]'
               : '{}',
           200);

@@ -99,3 +99,18 @@ def test_schedule_adjustment_rejects_impossible_date(monkeypatch):
         )
 
     assert response.status_code == 422
+
+
+def test_batch_rejects_overlapping_dates_and_out_of_range_sections(monkeypatch):
+    session = _authed_session(monkeypatch)
+    payload = _payload()
+    move = {"sourceDate": payload["sourceDate"], "targetDate": payload["targetDate"],
+            "sourceStart": 1, "sourceEnd": 2, "targetStart": 16}
+    payload["moves"] = [move]
+    with TestClient(app) as client:
+        headers = {"X-Session-Id": session.id}
+        assert client.post("/settings/schedule/adjustments", headers=headers, json=payload).status_code == 422
+        move["targetStart"] = 1
+        payload["moves"] = [move, move]
+        assert client.post("/settings/schedule/adjustments", headers=headers, json=payload).status_code == 422
+        assert client.get("/settings/schedule/adjustments?year=2026&term=1", headers=headers).json() == []

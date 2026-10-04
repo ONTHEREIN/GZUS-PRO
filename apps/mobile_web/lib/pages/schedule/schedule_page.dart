@@ -1,6 +1,6 @@
+import 'package:flutter/services.dart';
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart'
     show defaultTargetPlatform, kIsWeb, TargetPlatform;
@@ -20,6 +20,7 @@ import '../../schedule_adjustment_sync.dart';
 import '../../widget_schedule_bridge.dart';
 import '../../responsive/spacing.dart';
 import '../../schedule_utils.dart';
+import 'schedule_course_color.dart';
 import '../../background_service.dart' deferred as background_service;
 import '../../ics_download.dart' deferred as ics_download;
 import '../../reminder_service.dart' deferred as reminder_service;
@@ -29,6 +30,7 @@ import '../../widgets/empty_state.dart';
 import '../../widgets/icon_label.dart';
 import '../../widgets/page_panel.dart';
 import 'schedule_overrides_page.dart';
+import 'schedule_adjustments_page.dart';
 
 class ScheduleOnboardingPage extends StatefulWidget {
   const ScheduleOnboardingPage({
@@ -775,6 +777,7 @@ class _SchedulePageState extends State<SchedulePage> {
   String? manageError;
   String? _reminderSyncError;
   String? _widgetSyncError;
+  String? _calendarSyncError;
   int _widgetScheduleRevision = 0;
   String? _adjustmentSyncError;
   ScheduleAdjustmentConflict? _adjustmentConflict;
@@ -793,6 +796,7 @@ class _SchedulePageState extends State<SchedulePage> {
   List<ScheduleAdjustmentRecord> _adjustments = const [];
 
   /// 最近一次叠加后的课表，供课程详情「调整此课」回调使用。
+  List<ScheduleCourse> _schoolItems = [];
   List<ScheduleCourse> _lastItems = const [];
 
   @override
@@ -1052,6 +1056,7 @@ class _SchedulePageState extends State<SchedulePage> {
         revision != _widgetScheduleRevision) {
       return ScheduleResult(items: merged, raw: result.data.raw);
     }
+    _schoolItems = result.data.items;
     unawaited(_syncWidgetSchedule(api, namespace, year, term, firstWeekStart,
         revision, result.data.items, adjustments, overrides));
     // 课表数据到位后统一配置提醒（内部均有签名守卫，重复调用无开销）；
@@ -1061,9 +1066,15 @@ class _SchedulePageState extends State<SchedulePage> {
   }
 
   Future<void> _syncWidgetSchedule(
-    ApiClient api, String namespace, int year, int term, DateTime firstWeekStart,
-    int revision, List<ScheduleCourse> courses,
-    List<ScheduleAdjustmentRecord> adjustments, List<ScheduleOverride> overrides,
+    ApiClient api,
+    String namespace,
+    int year,
+    int term,
+    DateTime firstWeekStart,
+    int revision,
+    List<ScheduleCourse> courses,
+    List<ScheduleAdjustmentRecord> adjustments,
+    List<ScheduleOverride> overrides,
   ) async {
     try {
       await updateWidgetSchedule(
@@ -1118,126 +1129,6 @@ class _SchedulePageState extends State<SchedulePage> {
       _scheduleFuture = _loadSchedule(forceRefresh: true);
     });
     await _scheduleFuture;
-  }
-
-  Future<void> _adjustDate(
-    DateTime sourceDate,
-    DateTime targetDate,
-    String conflictMode,
-  ) async {
-    final api = widget.api;
-    final namespace = api.namespace;
-    final year = widget.year;
-    final term = widget.term;
-    final sourceOccurrences = expandEffectiveSchedule(
-      courses: _lastItems,
-      firstWeekStart: widget.firstWeekStart,
-      adjustments: _adjustments,
-      overrides: _overrides,
-      startDate: sourceDate,
-      endDate: sourceDate,
-    );
-    if (sourceOccurrences.isEmpty) {
-      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-        const SnackBar(content: Text('源日期没有可调课程')),
-      );
-      return;
-    }
-    final targetOccurrences = expandEffectiveSchedule(
-      courses: _lastItems,
-      firstWeekStart: widget.firstWeekStart,
-      adjustments: _adjustments,
-      overrides: _overrides,
-      startDate: targetDate,
-      endDate: targetDate,
-    );
-    final sourceKeys = [
-      for (final item in sourceOccurrences) item.occurrenceKey
-    ];
-    final targetKeys = <String>[];
-    if (conflictMode == 'replaceConflicts') {
-      for (final source in sourceOccurrences) {
-        for (final target in targetOccurrences) {
-          final aStart = source.course.startSection ?? 0;
-          final aEnd = source.course.endSection ?? aStart;
-          final bStart = target.course.startSection ?? 0;
-          final bEnd = target.course.endSection ?? bStart;
-          if (aStart <= bEnd && bStart <= aEnd) {
-            targetKeys.add(target.occurrenceKey);
-          }
-        }
-      }
-    }
-    final adjustment = ScheduleAdjustmentRecord(
-      clientId: '${DateTime.now().microsecondsSinceEpoch}',
-      year: widget.year,
-      term: widget.term,
-      sourceDate: DateTime(sourceDate.year, sourceDate.month, sourceDate.day),
-      targetDate: DateTime(targetDate.year, targetDate.month, targetDate.day),
-      sourceOccurrenceKeys: sourceKeys,
-      targetConflictKeys: targetKeys.toSet().toList(),
-      conflictMode: conflictMode,
-      status: 'active',
-      revision: 1,
-    );
-    await ScheduleAdjustmentSync.enqueue(namespace, adjustment);
-    if (!_isCurrentScheduleScope(api, namespace, year, term)) return;
-    setState(() => _adjustments = [..._adjustments, adjustment]);
-    // 日期级调整先在本地生效，提醒和原生组件随同一份生效实例立即重排。
-    unawaited(
-        _scheduleFuture.then((result) => _applyCourseReminders(result.items)));
-    unawaited(_syncCalendarAfterAdjustment());
-    await _loadAdjustments();
-    if (!mounted) return;
-    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-      SnackBar(
-        content: Text(
-          '已将 ${dateText(sourceDate)} 调至 ${dateText(targetDate)}'
-          '${conflictMode == 'replaceConflicts' ? '，已替换冲突课程' : '，两者并存'}'
-          '${_adjustmentSyncError == null ? '' : '（已保存在本机，云端未同步）'}',
-        ),
-        duration: const Duration(seconds: 8),
-        action: SnackBarAction(
-          label: '撤回',
-          onPressed: () => unawaited(_restoreAdjustment(adjustment.clientId)),
-        ),
-      ),
-    );
-  }
-
-  Future<void> _restoreAdjustment(String clientId) async {
-    final api = widget.api;
-    final namespace = api.namespace;
-    final year = widget.year;
-    final term = widget.term;
-    final current =
-        _adjustments.where((item) => item.clientId == clientId).firstOrNull;
-    if (current == null) return;
-    final restored = ScheduleAdjustmentRecord(
-      clientId: current.clientId,
-      year: current.year,
-      term: current.term,
-      sourceDate: current.sourceDate,
-      targetDate: current.targetDate,
-      sourceOccurrenceKeys: current.sourceOccurrenceKeys,
-      targetConflictKeys: current.targetConflictKeys,
-      conflictMode: current.conflictMode,
-      status: 'restored',
-      revision: current.revision + 1,
-      id: current.id,
-    );
-    await ScheduleAdjustmentSync.enqueue(namespace, restored);
-    if (!_isCurrentScheduleScope(api, namespace, year, term)) return;
-    setState(() {
-      _adjustments = [
-        for (final item in _adjustments)
-          item.clientId == clientId ? restored : item,
-      ];
-    });
-    unawaited(
-        _scheduleFuture.then((result) => _applyCourseReminders(result.items)));
-    unawaited(_syncCalendarAfterAdjustment());
-    await _loadAdjustments();
   }
 
   Future<void> _loadViewPreferences() async {
@@ -1358,7 +1249,7 @@ class _SchedulePageState extends State<SchedulePage> {
                       currentWeek: widget.currentWeek))
               .toList();
           final todayItems = effectiveTodayOccurrences
-              .map((item) => item.course)
+              .map(courseForOccurrence)
               .toList()
             ..sort(_compareScheduleCourses);
           final displayItems = _viewMode == ScheduleViewMode.all ||
@@ -1401,8 +1292,6 @@ class _SchedulePageState extends State<SchedulePage> {
                       onShowTools: () =>
                           _showScheduleTools(result.prettyJson, result.items),
                       onAdjustCourse: _adjustCourse,
-                      onMoveToDay: _moveCourseToDay,
-                      onAdjustDate: _adjustDate,
                     );
           final scheduleContent = Column(
             children: [
@@ -1410,7 +1299,22 @@ class _SchedulePageState extends State<SchedulePage> {
                 ListTile(
                     key: const ValueKey('schedule-widget-sync-error'),
                     leading: const Icon(Icons.error_outline),
-                    title: Text(_widgetSyncError!)),
+                    title: Text(_widgetSyncError!),
+                    trailing: IconButton(
+                        key: const ValueKey('schedule-widget-sync-retry'),
+                        tooltip: '重试桌面组件同步',
+                        onPressed: _refreshSchedule,
+                        icon: const Icon(Icons.refresh))),
+              if (_calendarSyncError != null)
+                ListTile(
+                    key: const ValueKey('schedule-calendar-sync-error'),
+                    leading: const Icon(Icons.error_outline),
+                    title: Text(_calendarSyncError!),
+                    trailing: IconButton(
+                        key: const ValueKey('schedule-calendar-sync-retry'),
+                        tooltip: '重试系统日历同步',
+                        onPressed: _syncCalendarAfterAdjustment,
+                        icon: const Icon(Icons.refresh))),
               if (_hasLegacyAdjustments)
                 ListTile(
                   dense: true,
@@ -1457,11 +1361,17 @@ class _SchedulePageState extends State<SchedulePage> {
               Expanded(child: content),
             ],
           );
-          final compact = MediaQuery.sizeOf(context).width < 600;
-          if (compact) {
+          {
+            final contentWithPanel = MediaQuery.sizeOf(context).width < 600
+                ? scheduleContent
+                : PagePanel(
+                    title: '课表',
+                    icon: Icons.calendar_month,
+                    expandChild: true,
+                    child: scheduleContent);
             return Stack(
               children: [
-                scheduleContent,
+                contentWithPanel,
                 Positioned.fill(
                   child: _ScheduleFloatingMenu(
                     selected: _viewMode,
@@ -1471,6 +1381,7 @@ class _SchedulePageState extends State<SchedulePage> {
                     totalCount: result.items.length,
                     position: _floatingMenuPosition,
                     onViewChanged: _setViewMode,
+                    onAdjustmentsPressed: () => _openAdjustmentsPage(null),
                     onToolsPressed: () =>
                         _showScheduleTools(result.prettyJson, result.items),
                     onPositionChanged: _setFloatingMenuPosition,
@@ -1483,20 +1394,6 @@ class _SchedulePageState extends State<SchedulePage> {
               ],
             );
           }
-          return PagePanel(
-            title: '课表',
-            icon: Icons.calendar_month,
-            expandChild: true,
-            child: Column(
-              children: [
-                Expanded(child: scheduleContent),
-                if (showJson) ...[
-                  const SizedBox(height: 10),
-                  Flexible(child: JsonPanel(json: result.prettyJson)),
-                ],
-              ],
-            ),
-          );
         },
       ),
     );
@@ -1794,20 +1691,8 @@ class _SchedulePageState extends State<SchedulePage> {
                                 child: IconLabel(
                                   icon: Icons.swap_horiz,
                                   label: _overrides.isEmpty
-                                      ? '管理调课'
-                                      : '管理调课(${_overrides.length})',
-                                ),
-                              ),
-                              OutlinedButton.icon(
-                                onPressed: () {
-                                  Navigator.pop(sheetContext);
-                                  _showAdjustmentHistory();
-                                },
-                                icon: const Icon(Icons.history, size: 18),
-                                label: Text(
-                                  _adjustments.isEmpty
-                                      ? '调课记录'
-                                      : '调课记录(${_adjustments.length})',
+                                      ? '本机课程编辑'
+                                      : '本机课程编辑(${_overrides.length})',
                                 ),
                               ),
                             ],
@@ -1912,59 +1797,51 @@ class _SchedulePageState extends State<SchedulePage> {
     if (mounted) await _loadOverrides();
   }
 
-  /// 查看日期级调课历史，并允许长期还原已生效的记录。
-  Future<void> _showAdjustmentHistory() async {
-    await showDialog<void>(
-      context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (context, localSetState) {
-          final records = [..._adjustments]
-            ..sort((a, b) => b.targetDate.compareTo(a.targetDate));
-          return AlertDialog(
-            title: const Text('调课记录'),
-            content: SizedBox(
-              width: 420,
-              child: records.isEmpty
-                  ? const Text('本学期暂无日期级调课记录。')
-                  : ListView.separated(
-                      shrinkWrap: true,
-                      itemCount: records.length,
-                      separatorBuilder: (_, __) => const Divider(height: 1),
-                      itemBuilder: (_, index) {
-                        final item = records[index];
-                        final active = item.isActive;
-                        return ListTile(
-                          contentPadding: EdgeInsets.zero,
-                          title: Text(
-                            '${dateText(item.sourceDate)} → ${dateText(item.targetDate)}',
-                            style: const TextStyle(fontWeight: FontWeight.w700),
-                          ),
-                          subtitle: Text(
-                            '${item.conflictMode == 'replaceConflicts' ? '替换冲突课程' : '两者并存'} · ${active ? '已生效' : '已还原'}',
-                          ),
-                          trailing: active
-                              ? TextButton(
-                                  onPressed: () async {
-                                    await _restoreAdjustment(item.clientId);
-                                    if (context.mounted) localSetState(() {});
-                                  },
-                                  child: const Text('还原'),
-                                )
-                              : const Icon(Icons.check_circle_outline),
-                        );
-                      },
-                    ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(dialogContext),
-                child: const Text('关闭'),
-              ),
-            ],
-          );
-        },
-      ),
-    );
+  Future<void> _openAdjustmentsPage(ScheduleCourse? presetCourse) async {
+    final api = widget.api;
+    final namespace = api.namespace;
+    final year = widget.year;
+    final term = widget.term;
+    await Navigator.of(context).push<void>(MaterialPageRoute(
+        builder: (_) => ScheduleAdjustmentsPage(
+              api: widget.api,
+              year: widget.year,
+              term: widget.term,
+              firstWeekStart: widget.firstWeekStart,
+              courses: _schoolItems,
+              overrides: _overrides,
+              records: _adjustments,
+              currentWeek: widget.currentWeek,
+              presetCourse: presetCourse,
+              presetOccurrenceKey:
+                  presetCourse?.raw['effectiveOccurrenceKey'] as String?,
+              onSave: (record) async {
+                if (!_isCurrentScheduleScope(api, namespace, year, term)) {
+                  throw StateError('账号或学期已切换，请重新打开调课');
+                }
+                setState(() => _adjustments = [
+                      ..._adjustments
+                          .where((r) => r.clientId != record.clientId),
+                      record
+                    ]);
+                await ScheduleAdjustmentSync.saveSnapshot(
+                    namespace, year, term, _adjustments);
+                await _loadAdjustments();
+                unawaited(_applyCourseReminders(_lastItems));
+                unawaited(_syncCalendarAfterAdjustment());
+                return _adjustments;
+              },
+              onRestore: (id) async {
+                if (!_isCurrentScheduleScope(api, namespace, year, term)) {
+                  throw StateError('账号或学期已切换，请重新打开调课');
+                }
+                await _loadAdjustments();
+                unawaited(_applyCourseReminders(_lastItems));
+                unawaited(_syncCalendarAfterAdjustment());
+                return _adjustments;
+              },
+            )));
+    if (mounted) await _loadAdjustments();
   }
 
   Future<void> _syncCalendarAfterAdjustment() async {
@@ -1984,8 +1861,11 @@ class _SchedulePageState extends State<SchedulePage> {
     );
     try {
       await CalendarImportService.importEvents(events);
+      if (mounted) setState(() => _calendarSyncError = null);
     } catch (error) {
-      debugPrint('调课后同步系统日历失败: $error');
+      if (mounted) {
+        setState(() => _calendarSyncError = '调课已同步，但系统日历更新失败：$error');
+      }
     }
   }
 
@@ -2065,39 +1945,18 @@ class _SchedulePageState extends State<SchedulePage> {
   }
 
   /// 课程详情「调整此课/编辑」入口：
-  /// 学校课程 → 预填匹配信息打开调课表单；本地课程 → 找到对应条目编辑。
+  /// 云端课程打开实例调课；旧本机编辑继续使用原条目编辑器。
   void _adjustCourse(ScheduleCourse course) {
-    if (course.isLocal) {
-      final override = _overrideForLocalCourse(course);
-      if (override == null) return;
-      showScheduleOverrideEditor(
-        context,
-        items: _lastItems,
-        existing: override,
-        presetWeek: widget.currentWeek,
-        onSave: _saveOverrideFromPage,
-      );
+    final existing = _overrideForLocalCourse(course);
+    if (existing != null) {
+      showScheduleOverrideEditor(context,
+          items: _lastItems,
+          existing: existing,
+          presetWeek: widget.currentWeek,
+          onSave: _saveOverrideFromPage);
     } else {
-      showScheduleOverrideEditor(
-        context,
-        items: _lastItems,
-        presetCourse: course,
-        presetWeek: widget.currentWeek,
-        onSave: _saveOverrideFromPage,
-      );
+      _openAdjustmentsPage(course);
     }
-  }
-
-  /// 课程详情「调到另一天」入口：节次/教室/教师不变，只改星期。
-  /// 本地课程沿用其条目继续调整；学校课程生成替换条目。
-  void _moveCourseToDay(ScheduleCourse course) {
-    final existing = course.isLocal ? _overrideForLocalCourse(course) : null;
-    showMoveToDaySheet(
-      context,
-      course: course,
-      existing: existing,
-      onSave: _saveOverrideFromPage,
-    );
   }
 
   ScheduleOverride? _overrideForLocalCourse(ScheduleCourse course) {
@@ -2163,7 +2022,8 @@ class _SchedulePageState extends State<SchedulePage> {
     unawaited(_applyRemindersWhenScheduleReady(_scheduleFuture));
   }
 
-  Future<void> _applyRemindersWhenScheduleReady(Future<ScheduleResult> future) async {
+  Future<void> _applyRemindersWhenScheduleReady(
+      Future<ScheduleResult> future) async {
     try {
       final result = await future;
       if (!mounted || future != _scheduleFuture) return;
@@ -2432,6 +2292,7 @@ class _ScheduleFloatingMenu extends StatefulWidget {
     required this.position,
     required this.onViewChanged,
     required this.onToolsPressed,
+    required this.onAdjustmentsPressed,
     required this.onPositionChanged,
     required this.onPositionSettled,
   });
@@ -2444,6 +2305,7 @@ class _ScheduleFloatingMenu extends StatefulWidget {
   final Offset? position;
   final ValueChanged<ScheduleViewMode> onViewChanged;
   final VoidCallback onToolsPressed;
+  final VoidCallback onAdjustmentsPressed;
   final ValueChanged<Offset> onPositionChanged;
   final ValueChanged<Offset> onPositionSettled;
 
@@ -2453,9 +2315,8 @@ class _ScheduleFloatingMenu extends StatefulWidget {
 
 class _ScheduleFloatingMenuState extends State<_ScheduleFloatingMenu> {
   // 入口贴近拾光的右上角交换图标，不再遮挡课程网格。
-  static const _buttonSize = 36.0;
+  static const _buttonSize = 48.0;
   static const _panelWidth = 244.0;
-  static const _panelHeight = 224.0;
   bool _isOpen = false;
 
   Offset _positionFor(Size size, EdgeInsets viewPadding) {
@@ -2512,15 +2373,18 @@ class _ScheduleFloatingMenuState extends State<_ScheduleFloatingMenu> {
       builder: (context, constraints) {
         final size = constraints.biggest;
         final position = _positionFor(size, viewPadding);
+        final panelWidth = _panelWidth.clamp(0.0, size.width);
+        final panelHeight = (300.0 * MediaQuery.textScalerOf(context).scale(1))
+            .clamp(0.0, size.height - 16);
         final panelLeft = position.dx <= size.width / 2
             ? position.dx
-            : (position.dx - _panelWidth + _buttonSize)
-                .clamp(0.0, size.width - _panelWidth);
+            : (position.dx - panelWidth + _buttonSize)
+                .clamp(0.0, size.width - panelWidth);
         final panelTop = position.dy > size.height / 2
-            ? (position.dy - _panelHeight - 8)
-                .clamp(8.0, size.height - _panelHeight)
+            ? (position.dy - panelHeight - 8)
+                .clamp(8.0, size.height - panelHeight)
             : (position.dy + _buttonSize + 8)
-                .clamp(8.0, size.height - _panelHeight);
+                .clamp(8.0, size.height - panelHeight);
         return Stack(
           clipBehavior: Clip.none,
           children: [
@@ -2535,69 +2399,85 @@ class _ScheduleFloatingMenuState extends State<_ScheduleFloatingMenu> {
               Positioned(
                 left: panelLeft.toDouble(),
                 top: panelTop.toDouble(),
-                width: _panelWidth,
-                child: Material(
-                  key: const ValueKey('schedule-floating-menu-panel'),
-                  color: colorScheme.surfaceContainerHigh,
-                  borderRadius: BorderRadius.circular(20),
-                  elevation: 8,
-                  child: Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Text(
-                          '第${widget.currentWeek}周',
-                          style:
-                              Theme.of(context).textTheme.titleMedium?.copyWith(
-                                    fontWeight: FontWeight.w900,
-                                  ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          '今日 ${widget.todayCount} 节 · 本周 ${widget.weekCount} 节 · 共 ${widget.totalCount} 门',
-                          style:
-                              Theme.of(context).textTheme.bodySmall?.copyWith(
-                                    color: colorScheme.onSurfaceVariant,
-                                  ),
-                        ),
-                        const SizedBox(height: 10),
-                        Wrap(
-                          spacing: 6,
-                          runSpacing: 6,
-                          children: [
-                            for (final entry in _viewItems)
-                              ChoiceChip(
-                                key: ValueKey('schedule-menu-${entry.$1.name}'),
-                                avatar: Icon(entry.$2, size: 16),
-                                label: Text(entry.$3),
-                                // 「本周」与「周课表」展示同一套周日历；
-                                // 旧版本保存的 week 仍让周课表入口保持高亮。
-                                selected: widget.selected == entry.$1 ||
-                                    (entry.$1 == ScheduleViewMode.calendar &&
-                                        widget.selected ==
-                                            ScheduleViewMode.week),
-                                onSelected: (_) {
-                                  widget.onViewChanged(entry.$1);
-                                  setState(() => _isOpen = false);
-                                },
-                              ),
-                          ],
-                        ),
-                        const SizedBox(height: 8),
-                        OutlinedButton.icon(
-                          key: const ValueKey('schedule-menu-tools'),
-                          onPressed: () {
-                            setState(() => _isOpen = false);
-                            widget.onToolsPressed();
-                          },
-                          icon: const Icon(Icons.tune, size: 18),
-                          label: const Text('课表工具'),
-                        ),
-                      ],
+                width: panelWidth,
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(maxHeight: panelHeight),
+                  child: SingleChildScrollView(
+                      child: Material(
+                    key: const ValueKey('schedule-floating-menu-panel'),
+                    color: colorScheme.surfaceContainerHigh,
+                    borderRadius: BorderRadius.circular(20),
+                    elevation: 8,
+                    child: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Text(
+                            '第${widget.currentWeek}周',
+                            style: Theme.of(context)
+                                .textTheme
+                                .titleMedium
+                                ?.copyWith(
+                                  fontWeight: FontWeight.w900,
+                                ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            '今日 ${widget.todayCount} 节 · 本周 ${widget.weekCount} 节 · 共 ${widget.totalCount} 门',
+                            style:
+                                Theme.of(context).textTheme.bodySmall?.copyWith(
+                                      color: colorScheme.onSurfaceVariant,
+                                    ),
+                          ),
+                          const SizedBox(height: 10),
+                          Wrap(
+                            spacing: 6,
+                            runSpacing: 6,
+                            children: [
+                              for (final entry in _viewItems)
+                                ChoiceChip(
+                                  key: ValueKey(
+                                      'schedule-menu-${entry.$1.name}'),
+                                  avatar: Icon(entry.$2, size: 16),
+                                  label: Text(entry.$3),
+                                  // 「本周」与「周课表」展示同一套周日历；
+                                  // 旧版本保存的 week 仍让周课表入口保持高亮。
+                                  selected: widget.selected == entry.$1 ||
+                                      (entry.$1 == ScheduleViewMode.calendar &&
+                                          widget.selected ==
+                                              ScheduleViewMode.week),
+                                  onSelected: (_) {
+                                    widget.onViewChanged(entry.$1);
+                                    setState(() => _isOpen = false);
+                                  },
+                                ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          OutlinedButton.icon(
+                            key: const ValueKey('schedule-menu-adjustments'),
+                            onPressed: () {
+                              setState(() => _isOpen = false);
+                              widget.onAdjustmentsPressed();
+                            },
+                            icon: const Icon(Icons.swap_horiz),
+                            label: const Text('调课'),
+                          ),
+                          OutlinedButton.icon(
+                            key: const ValueKey('schedule-menu-tools'),
+                            onPressed: () {
+                              setState(() => _isOpen = false);
+                              widget.onToolsPressed();
+                            },
+                            icon: const Icon(Icons.tune, size: 18),
+                            label: const Text('课表工具'),
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
+                  )),
                 ),
               ),
             Positioned(
@@ -2605,40 +2485,51 @@ class _ScheduleFloatingMenuState extends State<_ScheduleFloatingMenu> {
               top: position.dy,
               child: Semantics(
                 button: true,
-                label: '课表视图与工具菜单',
-                child: GestureDetector(
-                  onPanStart: (_) => setState(() => _isOpen = false),
-                  onPanUpdate: (details) {
-                    final next = _clampPosition(
-                      position + details.delta,
-                      size,
-                      viewPadding,
-                    );
-                    widget.onPositionChanged(
-                        _fractionFor(next, size, viewPadding));
-                  },
-                  onPanEnd: (_) {
-                    final snapped =
-                        _snapToNearestEdge(position, size, viewPadding);
-                    widget.onPositionSettled(
-                        _fractionFor(snapped, size, viewPadding));
-                  },
-                  onTap: () => setState(() => _isOpen = !_isOpen),
-                  child: Material(
-                    key: const ValueKey('schedule-floating-menu'),
-                    color: colorScheme.primaryContainer,
-                    shape: const CircleBorder(),
-                    elevation: 5,
-                    child: SizedBox(
-                      width: _buttonSize,
-                      height: _buttonSize,
-                      child: Icon(
-                        _isOpen ? Icons.close : Icons.more_horiz,
-                        color: colorScheme.onPrimaryContainer,
+                label: '课表视图、调课与工具菜单',
+                child: CallbackShortcuts(
+                    bindings: {
+                      const SingleActivator(LogicalKeyboardKey.escape): () =>
+                          setState(() => _isOpen = false),
+                      const SingleActivator(LogicalKeyboardKey.enter): () =>
+                          setState(() => _isOpen = !_isOpen),
+                      const SingleActivator(LogicalKeyboardKey.space): () =>
+                          setState(() => _isOpen = !_isOpen),
+                    },
+                    child: Focus(
+                      child: GestureDetector(
+                        onPanStart: (_) => setState(() => _isOpen = false),
+                        onPanUpdate: (details) {
+                          final next = _clampPosition(
+                            position + details.delta,
+                            size,
+                            viewPadding,
+                          );
+                          widget.onPositionChanged(
+                              _fractionFor(next, size, viewPadding));
+                        },
+                        onPanEnd: (_) {
+                          final snapped =
+                              _snapToNearestEdge(position, size, viewPadding);
+                          widget.onPositionSettled(
+                              _fractionFor(snapped, size, viewPadding));
+                        },
+                        onTap: () => setState(() => _isOpen = !_isOpen),
+                        child: Material(
+                          key: const ValueKey('schedule-floating-menu'),
+                          color: colorScheme.primaryContainer,
+                          shape: const CircleBorder(),
+                          elevation: 5,
+                          child: SizedBox(
+                            width: _buttonSize,
+                            height: _buttonSize,
+                            child: Icon(
+                              _isOpen ? Icons.close : Icons.more_horiz,
+                              color: colorScheme.onPrimaryContainer,
+                            ),
+                          ),
+                        ),
                       ),
-                    ),
-                  ),
-                ),
+                    )),
               ),
             ),
           ],
@@ -2719,7 +2610,11 @@ class ScheduleReadableView extends StatelessWidget {
         );
       case ScheduleViewMode.all:
         return _AllReadableSchedule(
-            items: allItems,
+            items: groupScheduleOccurrences(expandEffectiveSchedule(
+                courses: allItems,
+                firstWeekStart: firstWeekStart,
+                adjustments: adjustments,
+                overrides: overrides)),
             onAdjustCourse: onAdjustCourse,
             onMoveToDay: onMoveToDay);
     }
@@ -2977,15 +2872,15 @@ class _CalendarScheduleViewState extends State<_CalendarScheduleView> {
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: const Text('目标日有冲突时如何处理？'),
-        content: const Text('源日期课程会自动停课；目标日期重叠节次可替换或并存。'),
+        content: const Text('交换会互换两天的课程；覆盖会移除目标日的冲突课程。'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(dialogContext, 'cancel'),
             child: const Text('取消'),
           ),
           OutlinedButton(
-            onPressed: () => Navigator.pop(dialogContext, 'coexist'),
-            child: const Text('两者并存'),
+            onPressed: () => Navigator.pop(dialogContext, 'swap'),
+            child: const Text('交换课程'),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(dialogContext, 'replaceConflicts'),
@@ -3012,7 +2907,7 @@ class _CalendarScheduleViewState extends State<_CalendarScheduleView> {
         startDate: date,
         endDate: date,
       ))
-        occurrence.course,
+        courseForOccurrence(occurrence),
     ]..sort(_compareScheduleCourses);
   }
 
@@ -3030,7 +2925,7 @@ class _CalendarScheduleViewState extends State<_CalendarScheduleView> {
         overrides: widget.overrides,
       ))
         // 以具体实例键去重；同一节次的「两者并存」课程不能被课程名合并掉。
-        if (seen.add(occurrence.occurrenceKey)) occurrence.course,
+        if (seen.add(occurrence.occurrenceKey)) courseForOccurrence(occurrence),
     ]..sort(_compareScheduleCourses);
   }
 
@@ -4554,7 +4449,7 @@ class _CourseBlock extends StatelessWidget {
                 Navigator.pop(context);
                 onAdjustCourse!(course);
               },
-              child: Text(course.isLocal ? '编辑' : '调整此课'),
+              child: const Text('调整这次课程'),
             ),
           if (onMoveToDay != null)
             TextButton(
@@ -4562,7 +4457,7 @@ class _CourseBlock extends StatelessWidget {
                 Navigator.pop(context);
                 onMoveToDay!(course);
               },
-              child: const Text('调到另一天'),
+              child: const Text('调整这次课程'),
             ),
           FilledButton(
             onPressed: () => Navigator.pop(context),
@@ -4694,24 +4589,7 @@ String? _cleanScheduleText(String? value) {
   return text;
 }
 
-Color _scheduleCourseColor(String name) {
-  const palette = [
-    Color(0xFFFF9CCB),
-    Color(0xFFFFE38B),
-    Color(0xFFB9FF8A),
-    Color(0xFF8EDDF3),
-    Color(0xFFF3A6E7),
-    Color(0xFFA9EFAF),
-    Color(0xFFB8D7FF),
-    Color(0xFFFFB9A8),
-    Color(0xFFD7C5FF),
-  ];
-  var hash = 0;
-  for (final unit in name.codeUnits) {
-    hash = (hash + unit) % palette.length;
-  }
-  return palette[hash];
-}
+Color _scheduleCourseColor(String name) => scheduleCourseColor(name);
 
 void _showReadableScheduleDetails(BuildContext context, ScheduleCourse course,
     [void Function(ScheduleCourse course)? onAdjustCourse,
@@ -4755,7 +4633,7 @@ void _showReadableScheduleDetails(BuildContext context, ScheduleCourse course,
               Navigator.pop(context);
               onAdjustCourse(course);
             },
-            child: Text(course.isLocal ? '编辑' : '调整此课'),
+            child: const Text('调整这次课程'),
           ),
         if (onMoveToDay != null)
           TextButton(
@@ -4763,7 +4641,7 @@ void _showReadableScheduleDetails(BuildContext context, ScheduleCourse course,
               Navigator.pop(context);
               onMoveToDay(course);
             },
-            child: const Text('调到另一天'),
+            child: const Text('调整这次课程'),
           ),
         FilledButton(
           onPressed: () => Navigator.pop(context),

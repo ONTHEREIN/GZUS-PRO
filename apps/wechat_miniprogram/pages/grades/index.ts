@@ -1,5 +1,6 @@
 import { get, requireSession } from "../../utils/api"
 import { academicPeriodLabel, periodQuery, syncAcademicPeriod } from "../../utils/academic"
+import { gradeResult } from "../../utils/grades"
 import { GradeItem } from "../../utils/models"
 import { parseGrades } from "../../utils/parsers"
 
@@ -22,7 +23,7 @@ Page({
       const period = await syncAcademicPeriod()
       const grades = await get<GradeItem[]>(`/grades${periodQuery(period)}`, parseGrades)
       if (this.data.requestVersion !== requestVersion) return
-      this.setData({ grades, periodLabel: academicPeriodLabel(period) })
+      this.setData({ grades: grades.map((grade) => ({ ...grade, ...gradeResult(grade) })), periodLabel: academicPeriodLabel(period) })
     } catch (error) {
       if (this.data.requestVersion !== requestVersion) return
       this.setData({ error: error instanceof Error ? error.message : "成绩加载失败" })

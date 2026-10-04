@@ -83,6 +83,7 @@ widget_*.focus.txt
 !apps/mobile_web/android/app/src/main/res/xml/widget_*.xml
 
 # Test / debug artifacts
+apps/onegzus-miniprogram-test-artifacts/
 login_test.json
 pair_input.txt
 leave_note.txt

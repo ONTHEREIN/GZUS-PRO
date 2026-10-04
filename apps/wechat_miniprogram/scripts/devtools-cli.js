@@ -79,7 +79,7 @@ function startAutomation(cliPath, projectPath) {
   const port = autoPort()
   const result = spawnSync(
     cliPath,
-    ["auto", "--project", projectPath, "--auto-port", String(port)],
+    ["auto", "--project", projectPath, "--auto-port", String(port), "--trust-project"],
     { encoding: "utf8", timeout: 180000 }
   )
   return {

@@ -6,10 +6,11 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.exc import IntegrityError
 
-from app.database import Base, ScheduleAdjustment, get_sync_engine, get_sync_session_factory
+from app.database import Base, ScheduleAdjustment, ScheduleAdjustmentScope, get_sync_engine, get_sync_session_factory
 from app.routes.deps import require_session
 from app.schemas import (
     ScheduleAdjustmentCreate,
+    ScheduleAdjustmentMove,
     ScheduleAdjustmentResponse,
     ScheduleAdjustmentUpdate,
 )
@@ -21,7 +22,7 @@ router = APIRouter(prefix="/settings/schedule/adjustments", tags=["schedule-adju
 def _ensure_table() -> None:
     # 测试和多进程环境可能会切换数据库引擎；create_all 本身幂等，
     # 不缓存进程级标记，避免新引擎被误判为已初始化。
-    Base.metadata.create_all(get_sync_engine(), tables=[ScheduleAdjustment.__table__])
+    Base.metadata.create_all(get_sync_engine(), tables=[ScheduleAdjustment.__table__, ScheduleAdjustmentScope.__table__])
 
 
 def _student_id(session: AppSession) -> str:
@@ -29,6 +30,13 @@ def _student_id(session: AppSession) -> str:
     if not value:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="会话已过期，请重新登录")
     return value
+
+
+def _lock_legacy_scope(db, student_id: str, year: int, term: int) -> None:
+    from app.routes.schedule_adjustments_v2 import _lock_scope
+    _lock_scope(db, student_id, year, term)
+    if db.query(ScheduleAdjustment).filter(ScheduleAdjustment.student_id == student_id, ScheduleAdjustment.year == year, ScheduleAdjustment.term == term, ScheduleAdjustment.metadata_json.isnot(None)).first() is not None:
+        raise HTTPException(status_code=409, detail="此学期包含新版调课，请升级客户端后操作")
 
 
 def _json_list(value: str | None) -> list[str]:
@@ -45,6 +53,9 @@ def _json_list(value: str | None) -> list[str]:
 
 def _to_response(row: ScheduleAdjustment) -> ScheduleAdjustmentResponse:
     return ScheduleAdjustmentResponse(
+        schemaVersion=json.loads(row.metadata_json)["request"]["schemaVersion"] if row.metadata_json else 1,
+        metadata=json.loads(row.metadata_json) if row.metadata_json else None,
+        moves=[ScheduleAdjustmentMove.model_validate(item) for item in json.loads(row.moves_json)],
         clientId=row.client_id,
         year=row.year,
         term=row.term,
@@ -71,8 +82,7 @@ def _validate_dates(source_date: str, target_date: str) -> None:
         raise HTTPException(status_code=422, detail="源日期和目标日期必须不同")
 
 
-@router.get("", response_model=list[ScheduleAdjustmentResponse])
-def list_adjustments(
+def read_adjustments(
     year: int = Query(..., ge=2000, le=3000),
     term: int = Query(..., ge=1, le=2),
     session: AppSession = Depends(require_session),
@@ -95,6 +105,18 @@ def list_adjustments(
         return [_to_response(row) for row in rows]
 
 
+@router.get("", response_model=list[ScheduleAdjustmentResponse])
+def list_adjustments(
+    year: int = Query(..., ge=2000, le=3000),
+    term: int = Query(..., ge=1, le=2),
+    session: AppSession = Depends(require_session),
+) -> list[ScheduleAdjustmentResponse]:
+    records = read_adjustments(year, term, session)
+    if any(item.metadata is not None for item in records):
+        raise HTTPException(status_code=409, detail="此学期包含新版调课，请升级客户端后查看和操作")
+    return records
+
+
 @router.post("", response_model=ScheduleAdjustmentResponse, status_code=status.HTTP_201_CREATED)
 def create_adjustment(
     payload: ScheduleAdjustmentCreate,
@@ -102,10 +124,12 @@ def create_adjustment(
 ) -> ScheduleAdjustmentResponse:
     """创建或幂等返回客户端 UUID 对应的调课记录。"""
     _ensure_table()
+    list_adjustments(payload.year, payload.term, session)
     _validate_dates(payload.source_date, payload.target_date)
     student_id = _student_id(session)
     factory = get_sync_session_factory()
     with factory() as db:
+        _lock_legacy_scope(db, student_id, payload.year, payload.term)
         existing = (
             db.query(ScheduleAdjustment)
             .filter(
@@ -119,6 +143,7 @@ def create_adjustment(
         now = datetime.now(timezone.utc)
         row = ScheduleAdjustment(
             student_id=student_id,
+            moves_json=json.dumps([item.model_dump(mode="json", by_alias=True) for item in payload.moves]),
             client_id=payload.client_id,
             year=payload.year,
             term=payload.term,
@@ -160,7 +185,7 @@ def _find_row(db, student_id: str, client_id: str) -> ScheduleAdjustment:
             ScheduleAdjustment.student_id == student_id,
             ScheduleAdjustment.client_id == client_id,
         )
-        .with_for_update()
+        .populate_existing()
         .first()
     )
     if row is None:
@@ -180,6 +205,8 @@ def update_adjustment(
     factory = get_sync_session_factory()
     with factory() as db:
         row = _find_row(db, student_id, client_id)
+        _lock_legacy_scope(db, student_id, row.year, row.term)
+        row = _find_row(db, student_id, client_id)
         if row.revision != payload.expected_revision:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -188,6 +215,14 @@ def update_adjustment(
                     "server": _to_response(row).model_dump(mode="json", by_alias=True),
                 },
             )
+        moves = json.loads(row.moves_json)
+        if payload.conflict_mode == "swap" and not moves:
+            raise HTTPException(status_code=422, detail="交换课程必须提供日期节次配对，请重新创建调课")
+        if moves and (
+            payload.source_date is not None or payload.target_date is not None
+            or payload.source_occurrence_keys is not None or payload.target_conflict_keys is not None
+        ):
+            raise HTTPException(status_code=422, detail="批量调课不能单独修改配对日期，请撤销后重新创建")
         source_date = payload.source_date or row.source_date
         target_date = payload.target_date or row.target_date
         _validate_dates(source_date, target_date)
@@ -216,6 +251,8 @@ def restore_adjustment(
     student_id = _student_id(session)
     factory = get_sync_session_factory()
     with factory() as db:
+        row = _find_row(db, student_id, client_id)
+        _lock_legacy_scope(db, student_id, row.year, row.term)
         row = _find_row(db, student_id, client_id)
         if row.revision != expected_revision:
             raise HTTPException(

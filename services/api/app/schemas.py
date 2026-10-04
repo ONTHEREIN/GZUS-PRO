@@ -4,6 +4,8 @@ from typing import Annotated, Any, Literal
 from datetime import date, datetime
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, JsonValue, StringConstraints, model_validator
+from app.schedule_adjustment_models import AdjustmentMetadata
+from app.schedule_adjustment_batch_models import BatchMetadata
 
 
 LEAVE_ATTACHMENT_MAX_COUNT = 5
@@ -819,6 +821,26 @@ class ScheduleSettings(BaseModel):
     display: ScheduleDisplaySettings | None = None
 
 
+class ScheduleAdjustmentMove(BaseModel):
+    """一对日期上的节次区间；整日调课使用 1–16 节。"""
+
+    source_date: date = Field(alias="sourceDate")
+    target_date: date = Field(alias="targetDate")
+    source_start: int = Field(alias="sourceStart", ge=1, le=16)
+    source_end: int = Field(alias="sourceEnd", ge=1, le=16)
+    target_start: int = Field(alias="targetStart", ge=1, le=16)
+
+    @model_validator(mode="after")
+    def validate_range(self) -> "ScheduleAdjustmentMove":
+        if self.source_end < self.source_start:
+            raise ValueError("结束节次不能早于开始节次")
+        if self.target_start + self.source_end - self.source_start > 16:
+            raise ValueError("目标节次超出第 16 节")
+        if self.source_date == self.target_date:
+            raise ValueError("来源与目标日期必须不同")
+        return self
+
+
 class ScheduleAdjustmentPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -833,7 +855,23 @@ class ScheduleAdjustmentPayload(BaseModel):
     target_conflict_keys: list[str] = Field(
         default_factory=list, alias="targetConflictKeys", max_length=100
     )
-    conflict_mode: Literal["replaceConflicts", "coexist"] = Field(
+    moves: list[ScheduleAdjustmentMove] = Field(default_factory=list, max_length=60)
+
+    @model_validator(mode="after")
+    def validate_moves(self) -> "ScheduleAdjustmentPayload":
+        if self.conflict_mode == "swap" and not self.moves:
+            raise ValueError("交换课程必须提供日期节次配对")
+        dates = [day for move in self.moves for day in (move.source_date, move.target_date)]
+        if len(dates) != len(set(dates)):
+            raise ValueError("两组日期不能重复或交叉，请分次调整")
+        if self.moves and (
+            self.source_date != self.moves[0].source_date.isoformat()
+            or self.target_date != self.moves[0].target_date.isoformat()
+        ):
+            raise ValueError("调课日期必须与第一组配对一致")
+        return self
+
+    conflict_mode: Literal["replaceConflicts", "coexist", "swap"] = Field(
         default="coexist", alias="conflictMode"
     )
 
@@ -857,13 +895,15 @@ class ScheduleAdjustmentUpdate(BaseModel):
     target_conflict_keys: list[str] | None = Field(
         default=None, alias="targetConflictKeys", max_length=100
     )
-    conflict_mode: Literal["replaceConflicts", "coexist"] | None = Field(
+    conflict_mode: Literal["replaceConflicts", "coexist", "swap"] | None = Field(
         default=None, alias="conflictMode"
     )
     expected_revision: int = Field(alias="expectedRevision", ge=1)
 
 
 class ScheduleAdjustmentResponse(ScheduleAdjustmentPayload):
+    schema_version: Literal[1, 2, 3] = Field(default=1, alias="schemaVersion")
+    metadata: AdjustmentMetadata | BatchMetadata | None = None
     id: int
     status: Literal["active", "restored", "archived"]
     revision: int

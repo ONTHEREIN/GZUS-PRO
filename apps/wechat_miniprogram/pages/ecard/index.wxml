@@ -3,6 +3,11 @@
   <view wx:if="{{loading}}" id="ecard-loading" class="empty">正在加载余额…</view>
   <view wx:if="{{error}}" id="ecard-error" class="card error">{{error}}</view>
 
+  <view class="card recharge-actions">
+    <button id="ecard-campus-card" bindtap="openCampusCard">校园卡充值</button>
+    <button id="ecard-hot-water-recharge" bindtap="openHotWater">热水充值</button>
+  </view>
+
   <!-- 未绑定：引导在小程序内直接绑定 -->
   <view wx:if="{{summary && summary.status === 'not_bound'}}" id="ecard-not-bound" class="card empty">
     <view>暂未绑定宿舍，绑定后即可查看水电余额。</view>

@@ -11,6 +11,8 @@
 .error { color: #c62828; }
 
 .attendance-metrics {
+  display: grid;
+  gap: 20rpx;
   grid-template-columns: repeat(3, 1fr);
   margin-top: 20rpx;
 }

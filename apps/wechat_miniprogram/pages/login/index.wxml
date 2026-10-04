@@ -8,13 +8,18 @@
   </view>
 
   <view class="card form-card">
-    <view class="field-label">学号</view>
-    <input id="login-account" class="input" placeholder="请输入学号" value="{{account}}" bindinput="onAccountInput" />
-    <view class="field-label">统一认证密码</view>
-    <input id="login-password" class="input" password placeholder="请输入密码" value="{{password}}" bindinput="onPasswordInput" />
+    <block wx:if="{{!existingSession}}">
+      <view class="field-label">学号</view>
+      <input id="login-account" class="input" placeholder="请输入学号" value="{{account}}" bindinput="onAccountInput" />
+      <view class="field-label">统一认证密码</view>
+      <input id="login-password" class="input" password placeholder="请输入密码" value="{{password}}" bindinput="onPasswordInput" />
+    </block>
+    <checkbox-group id="login-agreement" bindchange="onAgreementChange"><label><checkbox id="login-agree-checkbox" value="agree" checked="{{agreed}}" />我已阅读并同意</label></checkbox-group>
+    <view class="agreement-links"><text id="login-terms" bindtap="openTerms">《用户服务协议》</text><text id="login-privacy" bindtap="openPrivacy">《隐私政策》</text></view>
     <view wx:if="{{error}}" id="login-error" class="error">{{error}}</view>
-    <button id="login-submit" class="login-button" loading="{{submitting}}" bindtap="submit">登录</button>
-    <button id="login-wechat" class="wechat-button" loading="{{wechatSubmitting}}" bindtap="wechatLogin">微信一键登录</button>
+    <button wx:if="{{existingSession}}" id="login-continue" loading="{{submitting}}" bindtap="continueSession">同意并继续</button>
+    <button wx:if="{{!existingSession}}" id="login-submit" class="login-button" loading="{{submitting}}" bindtap="submit">登录</button>
+    <button wx:if="{{!existingSession}}" id="login-wechat" class="wechat-button" loading="{{wechatSubmitting}}" bindtap="wechatLogin">微信一键登录</button>
   </view>
 
   <view class="notice">账号密码仅用于服务端建立学校系统会话，不会在小程序中保存。</view>

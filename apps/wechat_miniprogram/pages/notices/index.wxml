@@ -1,11 +1,49 @@
 <view class="page" id="notices-page">
   <view class="page-title">通知</view>
+  <view class="notice-tabs">
+    <button id="notices-school-tab" bindtap="showSchool" class="{{section === 'school' ? 'selected' : ''}}">学校通知</button>
+    <button id="notices-personal-tab" bindtap="showPersonal" class="{{section === 'personal' ? 'selected' : ''}}">个人提醒</button>
+  </view>
+  <block wx:if="{{section === 'school'}}">
   <view wx:if="{{loading}}" id="notices-loading" class="empty">正在加载通知…</view>
   <view wx:if="{{error}}" id="notices-error" class="card error">{{error}}</view>
-  <view wx:for="{{notices}}" wx:key="index" class="card notice-card">
+  <view wx:for="{{notices}}" wx:key="index" id="notice-{{index}}" data-index="{{index}}" bindtap="openNotice" class="card notice-card">
     <view class="notice-meta"><text class="source">{{item.category}}</text><text class="muted">{{item.date || ''}}</text></view>
     <view class="notice-title">{{item.title}}</view>
     <view wx:if="{{item.summary}}" class="notice-summary">{{item.summary}}</view>
   </view>
   <view wx:if="{{!loading && notices.length === 0}}" id="notices-empty" class="empty">暂无通知</view>
+  </block>
+  <view wx:if="{{section === 'personal'}}" id="personal-reminders">
+    <button id="notification-settings-toggle" bindtap="toggleSettings">{{settingsVisible ? '收起提醒设置' : '提醒设置'}}</button>
+    <view wx:if="{{reminderError}}" id="reminders-error" class="card error">{{reminderError}}</view>
+    <view wx:if="{{settingsVisible && config}}" id="notification-settings" class="card">
+      <view class="muted">微信采用一次性订阅，发送后需重新订阅。个人提醒记录仍可持续查看。</view>
+      <button wx:if="{{!config.bound}}" id="notifications-bind" bindtap="openProfile">到“我的”绑定当前微信</button>
+      <view wx:elif="{{!config.backgroundAuthorized}}" id="notifications-authorization">
+        <input id="notifications-account" value="{{account}}" placeholder="学校学号" bindinput="onAccountInput" />
+        <input id="notifications-password" password value="{{password}}" placeholder="学校密码" bindinput="onPasswordInput" />
+        <checkbox-group bindchange="onConsentChange"><label><checkbox value="consent" checked="{{backgroundConsent}}" />授权服务端加密保存登录凭据，在退出小程序后持续检测提醒</label></checkbox-group>
+        <button id="notifications-authorize" loading="{{busy}}" disabled="{{busy}}" bindtap="authorizeBackground">开启后台检测</button>
+      </view>
+      <view wx:else>
+        <view>后台检测已授权</view>
+        <view wx:if="{{config.lastCheckedAt}}" class="muted">最近检查：{{config.lastCheckedAt}}</view>
+        <button id="notifications-disable" disabled="{{busy}}" bindtap="disableBackground">关闭微信后台授权</button>
+      </view>
+      <view wx:if="{{config.lastError}}" class="error">{{config.lastError}}</view>
+      <view wx:for="{{config.settings}}" wx:key="type" class="subscription-row">
+        <view class="notice-meta"><text>{{item.label}}提醒</text><switch id="notification-switch-{{item.type}}" checked="{{item.enabled}}" disabled="{{busy || !config.bound}}" data-type="{{item.type}}" bindchange="changePreference" /></view>
+        <view id="notification-status-{{item.type}}" class="muted">{{item.statusText}}</view>
+        <view wx:if="{{item.lastError}}" class="error">{{item.lastError}}</view>
+        <button id="notification-subscribe-{{item.type}}" data-index="{{index}}" disabled="{{busy || !config.backgroundAuthorized || !item.enabled || !item.templateId}}" bindtap="subscribe">订阅下一次提醒</button>
+      </view>
+    </view>
+    <view wx:if="{{reminderLoading}}" id="reminders-loading" class="empty">正在加载个人提醒…</view>
+    <view wx:for="{{reminders}}" wx:key="id" id="reminder-{{index}}" class="card notice-card" data-index="{{index}}" bindtap="openReminder">
+      <view class="notice-meta"><text class="source">{{item.readAt ? '已读' : '未读'}}</text><text class="muted">{{item.createdAt}}</text></view>
+      <view class="notice-title">{{item.title}}</view><view class="notice-summary">{{item.body}}</view>
+    </view>
+    <view wx:if="{{!reminderLoading && !reminderError && reminders.length === 0}}" id="reminders-empty" class="empty">暂无个人提醒</view>
+  </view>
 </view>

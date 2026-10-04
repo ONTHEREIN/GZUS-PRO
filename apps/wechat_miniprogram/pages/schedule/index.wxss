@@ -45,3 +45,9 @@
 .detail-name { margin: 4rpx 0 26rpx; color: #17243b; font-size: 38rpx; font-weight: 700; }
 .detail-row { display: flex; justify-content: space-between; gap: 24rpx; padding: 18rpx 0; border-bottom: 1rpx solid #edf0f5; color: #52627d; font-size: 26rpx; }
 .detail-row text:last-child { color: #1f2a3d; text-align: right; }
+
+.floating-mask { position:fixed; inset:0; z-index:18; }
+.floating-tools { position:fixed; right:24rpx; bottom:calc(32rpx + env(safe-area-inset-bottom)); z-index:19; }
+.floating-button { width:96rpx; min-height:96rpx; padding:0; border-radius:50%; background:#dceaff; color:#174b93; font-size:48rpx; box-shadow:0 4rpx 16rpx rgba(0,0,0,.18); }
+.floating-panel { margin-bottom:16rpx; padding:16rpx; border-radius:20rpx; background:#fff; box-shadow:0 4rpx 16rpx rgba(0,0,0,.18); }
+@media(prefers-color-scheme:dark) { .floating-panel { background:#20252d; } }

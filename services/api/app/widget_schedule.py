@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, JsonValue, model_validator
 
 from app.leave_service import SECTION_TIMES
 from app.schemas import ScheduleAdjustmentPayload, ScheduleAdjustmentResponse
+from app.schedule_adjustment_models import WidgetOccurrence
 
 
 class WidgetCourse(BaseModel):
@@ -82,20 +83,6 @@ class WidgetSnapshotRequest(BaseModel):
         if len(ids) != len(set(ids)):
             raise ValueError("待同步调课编号不能重复")
         return self
-
-
-class WidgetOccurrence(BaseModel):
-    item_key: str = Field(alias="itemKey")
-    occurrence_date: date = Field(alias="date")
-    week: int
-    weekday: int
-    start_section: int = Field(alias="startSection")
-    end_section: int = Field(alias="endSection")
-    time: str
-    name: str
-    classroom: str
-    teacher: str
-    ongoing: bool
 
 
 def _week_contains(spec: str | None, week: int) -> bool:
@@ -223,6 +210,18 @@ def effective_widget_schedule(
     for adjustment in adjustments:
         if adjustment.status != "active":
             continue
+        if isinstance(adjustment, ScheduleAdjustmentResponse) and adjustment.metadata is not None:
+            from app.schedule_adjustment_models import AdjustmentMetadata
+            from app.schedule_adjustment_v2 import apply_metadata
+            if adjustment.schema_version == 3:
+                from app.schedule_adjustment_v3 import apply_batch
+                result = apply_batch(result, adjustment.metadata.request.pairs, monday)
+            else:
+                result = apply_metadata(result, AdjustmentMetadata.model_validate(adjustment.metadata), monday)
+            continue
+        if adjustment.moves:
+            result = _apply_moves(result, adjustment, monday)
+            continue
         source = date.fromisoformat(adjustment.source_date)
         target = date.fromisoformat(adjustment.target_date)
         moved = [
@@ -265,3 +264,52 @@ def effective_widget_schedule(
                 )
             )
     return sorted(result, key=lambda item: (item.occurrence_date, item.start_section))
+
+
+def _apply_moves(
+    occurrences: list[WidgetOccurrence],
+    adjustment: ScheduleAdjustmentResponse | WidgetPendingAdjustment,
+    monday: date,
+) -> list[WidgetOccurrence]:
+    """一批配对同时生效，未选中的连堂节次留在原位。"""
+    result: list[WidgetOccurrence] = []
+    for item in occurrences:
+        move = next((move for move in adjustment.moves
+                     if item.occurrence_date in (move.source_date, move.target_date)), None)
+        if move is None:
+            result.append(item)
+            continue
+        reverse = item.occurrence_date == move.target_date
+        if reverse and adjustment.conflict_mode == "coexist":
+            result.append(item)
+            continue
+        first = move.target_start if reverse else move.source_start
+        last = first + move.source_end - move.source_start
+        cut_start = max(item.start_section, first)
+        cut_end = min(item.end_section, last)
+        if cut_start > cut_end:
+            result.append(item)
+            continue
+        if item.start_section < cut_start:
+            result.append(_segment(item, item.start_section, cut_start - 1, item.occurrence_date, monday))
+        if item.end_section > cut_end:
+            result.append(_segment(item, cut_end + 1, item.end_section, item.occurrence_date, monday))
+        if not reverse or adjustment.conflict_mode == "swap":
+            offset = move.source_start - move.target_start if reverse else move.target_start - move.source_start
+            target = move.source_date if reverse else move.target_date
+            result.append(_segment(item, cut_start + offset, cut_end + offset, target, monday))
+    return result
+
+
+def _segment(item: WidgetOccurrence, first: int, last: int, target: date, monday: date) -> WidgetOccurrence:
+    split = first != item.start_section or last != item.end_section
+    key = f"{item.item_key}:{first}-{last}" if split else item.item_key
+    if target != item.occurrence_date:
+        key += f"->{target.isoformat()}"
+    return item.model_copy(update={
+        "occurrence_date": target,
+        "week": ((target - timedelta(days=target.weekday())) - monday).days // 7 + 1,
+        "weekday": target.isoweekday(), "start_section": first, "end_section": last,
+        "time": f"{SECTION_TIMES[first - 1][0]:%H:%M}-{SECTION_TIMES[last - 1][1]:%H:%M}",
+        "item_key": key,
+    })

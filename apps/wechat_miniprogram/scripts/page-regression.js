@@ -23,6 +23,8 @@ const automator = require("miniprogram-automator")
 const { resolveCliPath, projectRoot, artifactDir, startAutomation, autoPort } = require("./devtools-cli")
 const { buildScenario, requestMock, serverErrorMock, ECARD_NOT_BOUND } = require("./automation-fixtures")
 
+const { version: LEGAL_VERSION } = require("../utils/generated/version.json")
+
 const PROJECT = projectRoot()
 /**
  * 失败现场必须写在项目目录**之外**：开发者工具会监听项目目录，往项目里写截图/日志
@@ -147,11 +149,12 @@ async function readSessionState() {
 }
 
 async function seedSession() {
-  await miniProgram.evaluate(() => {
+  await miniProgram.evaluate((version) => {
+    wx.setStorageSync("legal.acceptedVersion", version)
     wx.setStorageSync("auth.sessionId", "automation-session-id")
     wx.setStorageSync("auth.studentName", "演示同学")
     wx.setStorageSync("auth.studentId", "DEMO-2026-001")
-  })
+  }, LEGAL_VERSION)
 }
 
 async function mockScenario(overrides) {
@@ -186,7 +189,12 @@ async function verifyMockWorks() {
   )
 }
 
+async function agreeLegal(page) {
+  await (await waitForSelector(page, "#login-agreement")).trigger("change", { value: ["agree"] })
+}
+
 async function fillLoginForm(page, account, password) {
+  await agreeLegal(page)
   await (await waitForSelector(page, "#login-account")).input(account)
   await (await waitForSelector(page, "#login-password")).input(password)
   await (await waitForSelector(page, "#login-submit")).tap()
@@ -284,10 +292,116 @@ async function runCase(name, fn) {
 }
 
 async function runCases() {
+  await runCase("未同意协议时两种登录均被阻止且可阅读完整协议", async () => {
+    await clearStorage()
+    await miniProgram.mockWxMethod("login", { code: "must-not-use-code" })
+    await mockScenario({ "POST /mini/auth/login": { statusCode: 599, data: {} }, "POST /mini/auth/wechat-login": { statusCode: 599, data: {} } })
+    let page = await miniProgram.reLaunch("/pages/login/index")
+    await (await waitForSelector(page, "#login-submit")).tap()
+    assert((await (await waitForSelector(page, "#login-error")).text()).includes("请先阅读并同意"), "学校登录应要求同意协议")
+    await (await waitForSelector(page, "#login-wechat")).tap()
+    assert((await (await waitForSelector(page, "#login-error")).text()).includes("请先阅读并同意"), "微信登录应要求同意协议")
+    await (await waitForSelector(page, "#login-terms")).tap()
+    page = await waitForPage("/pages/legal/index")
+    await waitForSelector(page, "#legal-content")
+    await miniProgram.navigateBack()
+    page = await waitForPage("/pages/login/index")
+    await (await waitForSelector(page, "#login-privacy")).tap()
+    page = await waitForPage("/pages/legal/index")
+    await waitForSelector(page, "#legal-content")
+    assertEqual((await readSessionState()).sessionId, "", "阅读协议不创建会话")
+  })
+
+  await runCase("已有会话必须确认新版协议，确认后复用会话", async () => {
+    await clearStorage()
+    await seedSession()
+    await miniProgram.evaluate(() => wx.setStorageSync("legal.acceptedVersion", "previous-version"))
+    await mockScenario({ "POST /mini/auth/login": { statusCode: 599, data: {} } })
+    const page = await miniProgram.reLaunch("/pages/login/index")
+    await (await waitForSelector(page, "#login-continue")).tap()
+    assert((await (await waitForSelector(page, "#login-error")).text()).includes("请先阅读并同意"), "旧会话不能绕过新版协议")
+    await agreeLegal(page)
+    await (await waitForSelector(page, "#login-continue")).tap()
+    await waitForPage("/pages/home/index")
+    assertEqual((await readSessionState()).sessionId, "automation-session-id", "应复用已有会话")
+  })
+
+  await runCase("教务通知显示正文并提供原文链接复制", async () => {
+    await clearStorage()
+    await seedSession()
+    await mockScenario()
+    const list = await miniProgram.reLaunch("/pages/notices/index")
+    await (await waitForSelector(list, "#notice-0")).tap()
+    const detail = await waitForPage("/pages/notice-detail/index")
+    assertEqual(await (await waitForSelector(detail, "#notice-detail-content")).text(), "第一段 & 说明\n第二段", "通知正文")
+    await miniProgram.mockWxMethod("setClipboardData", { errMsg: "setClipboardData:ok" })
+    await (await waitForSelector(detail, "#notice-detail-copy")).tap()
+    await miniProgram.restoreWxMethod("setClipboardData")
+  })
+
+  await runCase("非教务来源展示摘要且不调用教务详情接口", async () => {
+    await clearStorage()
+    await seedSession()
+    for (const source of ["ehall", "wechat", "admin"]) {
+      await mockScenario({
+        "GET /notices": { statusCode: 200, data: [{ category: "通知", title: "来源通知", source, summary: "已有说明", url: "https://example.com/original" }] },
+        "GET /notices/detail": { statusCode: 599, data: { detail: "不应请求教务详情" } }
+      })
+      const list = await miniProgram.reLaunch("/pages/notices/index")
+      await (await waitForSelector(list, "#notice-0")).tap()
+      const detail = await waitForPage("/pages/notice-detail/index")
+      assertEqual(await (await waitForSelector(detail, "#notice-detail-content")).text(), "已有说明", "摘要或发布说明")
+      assert(!(await detail.$("#notice-detail-error")), "非教务通知不应加载教务详情")
+    }
+  })
+
+  await runCase("详情加载失败可重试且不把摘要当作正文", async () => {
+    await clearStorage()
+    await seedSession()
+    await mockScenario({ "GET /notices/detail": { statusCode: 503, data: { detail: "详情暂不可用" } } })
+    const list = await miniProgram.reLaunch("/pages/notices/index")
+    await (await waitForSelector(list, "#notice-0")).tap()
+    const detail = await waitForPage("/pages/notice-detail/index")
+    await waitForSelector(detail, "#notice-detail-error")
+    assert(!(await detail.$("#notice-detail-content")), "失败时不应展示摘要充当正文")
+    await mockScenario()
+    await (await waitForSelector(detail, "#notice-detail-retry")).tap()
+    await waitForSelector(detail, "#notice-detail-content")
+  })
+
+  await runCase("空正文、缺原文地址及封面失败均有明确反馈", async () => {
+    await clearStorage()
+    await seedSession()
+    await mockScenario({ "GET /notices/detail": { statusCode: 200, data: { title: "空通知", date: null, url: "https://jwxt.gzus.edu.cn/notice/1", contentHtml: "<p> </p>" } } })
+    let list = await miniProgram.reLaunch("/pages/notices/index")
+    await (await waitForSelector(list, "#notice-0")).tap()
+    let detail = await waitForPage("/pages/notice-detail/index")
+    await waitForSelector(detail, "#notice-detail-empty")
+    await mockScenario({ "GET /notices": { statusCode: 200, data: [{ category: "校历", title: "校历", source: "admin", summary: null, url: null, coverUrl: "/admin/notices/1/image" }] } })
+    list = await miniProgram.reLaunch("/pages/notices/index")
+    await (await waitForSelector(list, "#notice-0")).tap()
+    detail = await waitForPage("/pages/notice-detail/index")
+    await waitForSelector(detail, "#notice-detail-empty")
+    assert(!(await detail.$("#notice-detail-copy")), "缺地址时不应出现复制按钮")
+    await detail.callMethod("onCoverError")
+    await waitForSelector(detail, "#notice-detail-cover-error")
+  })
+
+  await runCase("详情会话失效时回到登录页", async () => {
+    await clearStorage()
+    await seedSession()
+    await mockScenario({ "GET /notices/detail": { statusCode: 401, data: { detail: "登录已过期，请重新登录" } } })
+    const list = await miniProgram.reLaunch("/pages/notices/index")
+    await (await waitForSelector(list, "#notice-0")).tap()
+    await waitForPage("/pages/login/index")
+    assertEqual((await readSessionState()).sessionId, "", "失效会话应清除")
+  })
+
   await runCase("空输入时提示学号密码必填且不写入会话", async () => {
     await clearStorage()
     await mockScenario()
     const page = await miniProgram.reLaunch("/pages/login/index")
+    await agreeLegal(page)
     await (await waitForSelector(page, "#login-submit")).tap()
 
     const error = await waitForSelector(page, "#login-error")
@@ -334,6 +448,97 @@ async function runCases() {
     assertEqual(state.sessionId, "automation-session-id", "登录后应写入会话")
     assertEqual(state.studentName, "演示同学", "登录后应写入学生姓名")
     assertEqual(state.studentId, "DEMO-2026-001", "登录后应写入学号")
+  })
+
+  await runCase("认证成功后学期同步失败可复用会话重试且清空密码", async () => {
+    await clearStorage()
+    await mockScenario({ "GET /settings/academic-period": { statusCode: 503, data: { detail: "学期服务暂不可用" } } })
+    const page = await miniProgram.reLaunch("/pages/login/index")
+    await fillLoginForm(page, "DEMO-2026-001", "automation-password")
+    assertEqual(await (await waitForSelector(page, "#login-error")).text(), "学期服务暂不可用", "同步错误应明确显示")
+    await waitForSelector(page, "#login-continue")
+    assertEqual(await page.data("password"), "", "认证成功后应清空页面密码")
+    await mockScenario({ "POST /mini/auth/login": { statusCode: 599, data: { detail: "不应再次认证" } } })
+    await (await waitForSelector(page, "#login-continue")).tap()
+    await waitForPage("/pages/home/index")
+  })
+
+  await runCase("考勤汇总在手机宽度呈三列两行", async () => {
+    await clearStorage()
+    await seedSession()
+    await mockScenario()
+    const page = await miniProgram.reLaunch("/pages/attendance/index")
+    const summary = await waitForSelector(page, "#attendance-summary")
+    const metrics = await summary.$$(".metric")
+    assertEqual(metrics.length, 6, "汇总项数量")
+    const positions = await Promise.all(metrics.map((element) => element.offset()))
+    assert(Math.abs(positions[0].top - positions[1].top) < 2 && Math.abs(positions[1].top - positions[2].top) < 2, "前三项应同一行")
+    assert(positions[3].top > positions[0].top && Math.abs(positions[3].top - positions[5].top) < 2, "后三项应位于第二行")
+    assert(positions[1].left > positions[0].left && positions[2].left > positions[1].left, "每行应为三列")
+  })
+
+  await runCase("成绩显示及格边界、文字成绩、未知和待公布", async () => {
+    await clearStorage()
+    await seedSession()
+    await mockScenario({ "GET /grades": { statusCode: 200, data: [
+      { courseName: "59分", score: "59", gradePassed: false }, { courseName: "60分", score: "60", gradePassed: true },
+      { courseName: "教务结论", score: "90", gradePassed: false }, { courseName: "文字成绩", score: "合格", gradePassed: true },
+      { courseName: "未知", score: "优秀", gradePassed: null }, { courseName: "待公布", score: "", gradePassed: null }
+    ] } })
+    const page = await miniProgram.reLaunch("/pages/grades/index")
+    for (const [index, expected] of ["不及格", "及格", "不及格", "及格", "无法判断", "待公布"].entries()) {
+      assertEqual(await (await waitForSelector(page, `#grade-status-${index}`)).text(), expected, "成绩状态")
+    }
+  })
+
+  await runCase("个人提醒已读后跳转，成绩模板待配置可见", async () => {
+    await clearStorage()
+    await seedSession()
+    await mockScenario({
+      "GET /notifications/events": { statusCode: 200, data: { events: [{ id: "grade-test", type: "grade_update", title: "成绩更新", body: "数学：合格", createdAt: "2026-10-04", readAt: null }] } },
+      "POST /notifications/events/grade-test/read": { statusCode: 200, data: { status: "ok" } }
+    })
+    const page = await miniProgram.reLaunch("/pages/notices/index")
+    await (await waitForSelector(page, "#notices-personal-tab")).tap()
+    await (await waitForSelector(page, "#notification-settings-toggle")).tap()
+    assertEqual(await (await waitForSelector(page, "#notification-status-grade_update")).text(), "模板待配置", "成绩模板状态")
+    assert((await (await waitForSelector(page, "#reminder-0")).text()).includes("未读"), "个人提醒应显示未读")
+    await (await waitForSelector(page, "#reminder-0")).tap()
+    await waitForPage("/pages/grades/index")
+  })
+
+  await runCase("生活缴费跳转使用正确 AppID 且失败明确可见", async () => {
+    await clearStorage()
+    await seedSession()
+    await mockScenario()
+    const page = await miniProgram.reLaunch("/pages/ecard/index")
+    await miniProgram.mockWxMethod("navigateToMiniProgram", (options) => {
+      wx.setStorageSync("automation.lastMiniAppId", options.appId)
+      return { errMsg: "navigateToMiniProgram:ok" }
+    })
+    try {
+      await (await waitForSelector(page, "#ecard-campus-card")).tap()
+      await waitFor(async () => (await miniProgram.evaluate(() => wx.getStorageSync("automation.lastMiniAppId"))) === "wx777061f467655121", "校园卡 AppID")
+      await (await waitForSelector(page, "#ecard-hot-water-recharge")).tap()
+      await waitFor(async () => (await miniProgram.evaluate(() => wx.getStorageSync("automation.lastMiniAppId"))) === "wxc67cd96204f3d163", "热水 AppID")
+      await miniProgram.mockWxMethod("navigateToMiniProgram", { errMsg: "navigateToMiniProgram:fail invalid appid" })
+      await (await waitForSelector(page, "#ecard-campus-card")).tap()
+      assert((await (await waitForSelector(page, "#ecard-error")).text()).includes("invalid appid"), "跳转失败应保留微信具体原因")
+    } finally { await miniProgram.restoreWxMethod("navigateToMiniProgram") }
+  })
+
+  await runCase("已有会话恢复时过期会重新显示学校登录表单", async () => {
+    await clearStorage()
+    await seedSession()
+    await miniProgram.evaluate(() => wx.setStorageSync("legal.acceptedVersion", "previous-version"))
+    await mockScenario({ "GET /settings/academic-period": { statusCode: 401, data: { detail: "学校会话已过期" } } })
+    const page = await miniProgram.reLaunch("/pages/login/index")
+    await agreeLegal(page)
+    await (await waitForSelector(page, "#login-continue")).tap()
+    await waitForSelector(page, "#login-account")
+    await waitForSelector(page, "#login-submit")
+    assertEqual(await (await waitForSelector(page, "#login-error")).text(), "学校会话已过期", "会话错误文案")
+    assertEqual((await readSessionState()).sessionId, "", "过期会话应清除")
   })
 
   await runCase("首页展示冷/热/电余额模块", async () => {
@@ -642,6 +847,208 @@ async function runCases() {
     await waitForSelectorCount(page, "#schedule-week-modal", 0)
   })
 
+  await runCase("浮动调课入口支持选课与预览撤销云端批量历史", async () => {
+    await clearStorage()
+    await seedSession()
+    const record = {
+      clientId: "batch-page", year: 2026, term: 1,
+      sourceDate: "2026-09-07", targetDate: "2026-09-15",
+      sourceOccurrenceKeys: [], targetConflictKeys: [], conflictMode: "swap",
+      status: "active", revision: 1,
+      moves: [
+        { sourceDate: "2026-09-07", targetDate: "2026-09-15", sourceStart: 2, sourceEnd: 2, targetStart: 1 },
+        { sourceDate: "2026-09-21", targetDate: "2026-09-29", sourceStart: 2, sourceEnd: 2, targetStart: 1 }
+      ]
+    }
+    await mockScenario({ "GET /settings/schedule/adjustments/v3": { statusCode: 200, data: [record] } })
+    const schedule = await miniProgram.reLaunch("/pages/schedule/index")
+    await (await waitForSelector(schedule, "#schedule-floating-menu")).tap()
+    await (await waitForSelector(schedule, "#schedule-menu-adjustments")).tap()
+    const page = await waitForPage("/pages/schedule-adjustments/index")
+    await (await waitForSelector(page, "#adjustment-entry-course")).tap()
+      await waitForSelector(page, "#adjustment-primary")
+    await (await waitForSelector(page, "#adjustment-back")).tap()
+    await (await waitForSelector(page, "#adjustment-entry-history")).tap()
+    await (await waitForSelector(page, "#adjustment-record-0")).tap()
+    const restored = { ...record, status: "restored", revision: 2 }
+    await mockScenario({
+      "GET /settings/schedule/adjustments/v3": { statusCode: 200, data: [restored] },
+      "POST /settings/schedule/adjustments/v3/batch-page/restore-preview": { statusCode: 200, data: { fingerprint: "a".repeat(64), blockers: [], before: [], after: [] } },
+      "POST /settings/schedule/adjustments/v3/batch-page/restore": { statusCode: 200, data: restored }
+    })
+    await miniProgram.mockWxMethod("showModal", { confirm: true, cancel: false })
+    await (await waitForSelector(page, "#adjustment-undo-0")).tap()
+    await (await waitForSelector(page, "#adjustment-undo-confirm")).tap()
+    await waitForSelectorCount(page, "#adjustment-undo-confirm", 0)
+    assertEqual((await page.data("records"))[0].status, "restored", "整批调课撤销后仍保留历史")
+    await miniProgram.restoreWxMethod("showModal")
+  })
+
+  await runCase("整日互换从月历多选到云端确认使用页面内预览", async () => {
+    await clearStorage()
+    await seedSession()
+    await mockScenario({})
+    const schedule = await miniProgram.reLaunch("/pages/schedule/index")
+    await waitForSelector(schedule, "#schedule-week-grid")
+    await (await waitForSelector(schedule, "#schedule-floating-menu")).tap()
+    await (await waitForSelector(schedule, "#schedule-menu-adjustments")).tap()
+    const page = await waitForPage("/pages/schedule-adjustments/index")
+    await waitFor(() => page.data("loaded"), "调课工作台加载")
+    await miniProgram.screenshot({ path: path.join(ARTIFACT_DIR, "adjustment-workbench.png") })
+    await (await waitForSelector(page, "#adjustment-entry-day")).tap()
+    await (await waitForSelector(page, "#adjustment-source-calendar")).tap()
+    await (await waitForSelector(page, "#adjustment-date-2026-08-31")).tap()
+    await (await waitForSelector(page, "#adjustment-date-confirm")).tap()
+    await (await waitForSelector(page, "#adjustment-target-calendar")).tap()
+    await (await waitForSelector(page, "#adjustment-month-next")).tap()
+    await (await waitForSelector(page, "#adjustment-date-2026-09-01")).tap()
+    await (await waitForSelector(page, "#adjustment-date-confirm")).tap()
+    const pair = { sourceDate: "2026-08-31", targetDate: "2026-09-01", sourceStart: 1, sourceEnd: 16, targetStart: 1, sourceKeys: [], action: "swap" }
+    const course = { name: "高等数学", teacher: "测试教师", classroom: "教学楼101", weekday: 1, startSection: 1, endSection: 2, week: 1, date: "2026-08-31", itemKey: "course:2026-08-31:math" }
+    const moved = { ...course, weekday: 2, date: "2026-09-01", itemKey: "course:2026-08-31:math->2026-09-01" }
+    const result = { fingerprint: "b".repeat(64), ready: true, affectedCount: 1, pairs: [{ pair, before: [course], after: [moved], conflicts: [], labels: ["目标为空，来源当天课程将移到目标日期"] }] }
+    const record = { clientId: "day-e2e", year: 2026, term: 1, sourceDate: pair.sourceDate, targetDate: pair.targetDate, sourceOccurrenceKeys: [], targetConflictKeys: [], moves: [], conflictMode: "coexist", status: "active", revision: 1, createdAt: "2026-10-01T08:00:00Z", metadata: { request: { schemaVersion: 2, year: 2026, term: 1, firstWeekStart: "2026-08-31", operation: "day", pairs: [pair] }, preview: result } }
+    await mockScenario({
+      "POST /settings/schedule/adjustments/v3/preview": { statusCode: 200, data: result },
+      "POST /settings/schedule/adjustments/v3": { statusCode: 201, data: record },
+      "GET /settings/schedule/adjustments/v3": { statusCode: 200, data: [record] }
+    })
+    await (await waitForSelector(page, "#adjustment-primary")).tap()
+    await waitForSelector(page, "#adjustments-submit")
+    await miniProgram.screenshot({ path: path.join(ARTIFACT_DIR, "adjustment-day-preview.png") })
+    await (await waitForSelector(page, "#adjustments-submit")).tap()
+    await waitForSelector(page, "#adjustment-record-0")
+    assertEqual((await page.data("records"))[0].status, "active", "确认后云端记录生效")
+    const state = await miniProgram.evaluate(() => wx.getStorageInfoSync().keys)
+    assert(!state.some((key) => key.endsWith("adjustmentDraft.2026.1")), "提交后清理草稿")
+  })
+
+  await runCase("按课程同日调课逐步选课并明确选择区间交换", async () => {
+    await clearStorage()
+    await seedSession()
+    await mockScenario({})
+    const schedule = await miniProgram.reLaunch("/pages/schedule/index")
+    await waitForSelector(schedule, "#schedule-week-grid")
+    await (await waitForSelector(schedule, "#schedule-floating-menu")).tap()
+    await (await waitForSelector(schedule, "#schedule-menu-adjustments")).tap()
+    const page = await waitForPage("/pages/schedule-adjustments/index")
+    await waitFor(() => page.data("loaded"), "调课课程加载")
+    await (await waitForSelector(page, "#adjustment-entry-course")).tap()
+    await (await waitForSelector(page, "#adjustment-course-0")).tap()
+    await (await waitForSelector(page, "#adjustment-primary")).tap()
+    await (await waitForSelector(page, "#adjustment-primary")).tap()
+    await (await waitForSelector(page, "#adjustment-target-start-0")).trigger("change", { value: "6" })
+    await waitFor(async () => (await page.data("pairs"))[0]?.targetStart === 7, "目标第7节更新")
+    const sourceKeys = await page.data("keys")
+    const source = (await page.data("courses")).find((c) => sourceKeys.includes(c.itemKey))
+    assert(source, "选择具体课程实例")
+    const pairRow = (await page.data("pairs"))[0]
+    const pair = { sourceDate: pairRow.sourceDate, targetDate: pairRow.targetDate, sourceStart: pairRow.sourceStart, sourceEnd: pairRow.sourceEnd, targetStart: pairRow.targetStart, sourceKeys: pairRow.sourceKeys, action: "choose" }
+    const duration = pair.sourceEnd - pair.sourceStart + 1
+    const before = { ...source, week: Number(source.weeks) }
+    const conflict = { ...before, name: "冲突课程", startSection: 7, endSection: 7 + duration, itemKey: "conflict-course" }
+    const initial = { fingerprint: "c".repeat(64), ready: false, affectedCount: 2, pairs: [{ pair, before: [before, conflict], after: [before, conflict], conflicts: [conflict], labels: ["请选择交换或覆盖，尚未确定调整结果"] }] }
+    await mockScenario({ "POST /settings/schedule/adjustments/v3/preview": { statusCode: 200, data: initial } })
+    await (await waitForSelector(page, "#adjustment-primary")).tap()
+    await waitForSelector(page, "#adjustment-action-0-swap")
+    const swapped = { ...initial, ready: true, pairs: [{ ...initial.pairs[0], pair: { ...pair, action: "swap" }, after: [{ ...before, startSection: 7, endSection: 6 + duration }, { ...conflict, startSection: pair.sourceStart, endSection: pair.sourceEnd }, { ...conflict, startSection: 7 + duration, endSection: 7 + duration }], labels: ["交换两侧区间全部课程", "跨区间连堂课将拆分，区间外节次保留"] }] }
+    await mockScenario({ "POST /settings/schedule/adjustments/v3/preview": { statusCode: 200, data: swapped } })
+    await (await waitForSelector(page, "#adjustment-action-0-swap")).tap()
+    await waitFor(async () => (await page.data("preview"))?.ready, "交换预览可确认")
+    await miniProgram.screenshot({ path: path.join(ARTIFACT_DIR, "adjustment-course-swap.png") })
+    assertEqual((await page.data("preview")).pairs[0].pair.action, "swap", "明确选择交换后才确认")
+  })
+
+  await runCase("跨周多门课程选择保留，周次范围和统一目标即时更新", async () => {
+    await clearStorage(); await seedSession(); await mockScenario({})
+    const page = await miniProgram.reLaunch("/pages/schedule-adjustments/index?week=1")
+    await waitFor(() => page.data("loaded"), "跨周调课加载")
+    await (await waitForSelector(page, "#adjustment-course-0")).tap()
+    await waitFor(async () => (await page.data("keys")).length === 1, "第一门课程选择")
+    const firstKey = (await page.data("keys"))[0]
+    await (await waitForSelector(page, "#adjustment-week-next")).tap()
+    await (await waitForSelector(page, "#adjustment-course-1")).tap()
+    await waitFor(async () => (await page.data("keys")).length === 2, "跨周第二门课程选择")
+    assertEqual((await page.data("keys")).length, 2, "跨周选择不丢失")
+    await (await waitForSelector(page, "#adjustment-week-prev")).tap()
+    assert((await page.data("keys")).includes(firstKey), "返回前周保留实例")
+    await miniProgram.screenshot({ path: path.join(ARTIFACT_DIR, "adjustment-v3-week-selection.png") })
+    await (await waitForSelector(page, "#adjustment-primary")).tap()
+    await (await waitForSelector(page, "#adjustment-range-0")).trigger("change", { value: "1" })
+    await (await waitForSelector(page, "#adjustment-scope-0-3")).tap()
+    await waitFor(async () => (await page.data("keys")).length === 3, "周次范围第三周更新")
+    assertEqual((await page.data("keys")).length, 3, "周次网格添加第三周实例")
+    await (await waitForSelector(page, "#adjustment-primary")).tap()
+    const groups = await page.data("groups")
+    for (let i = 0; i < groups.length; i++) {
+      const current = await page.data("currentGroup")
+      const groupIndex = await page.data("groupIndex")
+      await (await waitForSelector(page, `#adjustment-target-weekday-${groupIndex}`)).trigger("change", { value: String(current.weekday % 7) })
+      if (i + 1 < groups.length) await (await waitForSelector(page, "#adjustment-group-next")).tap()
+    }
+    await waitFor(async () => {
+      const validation = await page.data("validation")
+      if (validation) throw new Error(`各安排统一目标更新失败：${validation}；设置=${JSON.stringify(await page.data("groupSettings"))}；课程=${JSON.stringify(await page.data("pairs"))}`)
+      return validation === ""
+    }, "各安排统一目标更新")
+    assertEqual(await page.data("validation"), "", "不同安排各自设置目标")
+    assertEqual((await page.data("pairs")).length, 3, "跨周具体实例展开")
+    await miniProgram.screenshot({ path: path.join(ARTIFACT_DIR, "adjustment-v3-targets.png") })
+    await (await waitForSelector(page, "#adjustment-back")).tap()
+    await (await waitForSelector(page, "#adjustment-back")).tap()
+    assertEqual((await page.data("keys")).length, 3, "步骤返回保留全部选择")
+    const keys = await page.data("keys")
+    await miniProgram.reLaunch("/pages/schedule-adjustments/index")
+    const recovered = await waitForPage("/pages/schedule-adjustments/index")
+    await waitFor(() => recovered.data("loaded"), "跨周草稿恢复")
+    assertEqual(JSON.stringify(await recovered.data("keys")), JSON.stringify(keys), "重开恢复多门多周草稿")
+  })
+
+  await runCase("整日覆盖展示来源和目标课程，不提供逐课选择", async () => {
+    await clearStorage(); await seedSession(); await mockScenario({})
+    const page = await miniProgram.reLaunch("/pages/schedule-adjustments/index?week=1")
+    await waitFor(() => page.data("loaded"), "按天部分加载")
+    await (await waitForSelector(page, "#adjustment-entry-day")).tap()
+    await (await waitForSelector(page, "#adjustment-day-cover")).tap()
+    await (await waitForSelector(page, "#adjustment-source-calendar")).tap()
+    await (await waitForSelector(page, "#adjustment-date-2026-08-31")).tap()
+    await waitFor(async () => (await page.data("calendarCourses"))[0]?.count > 0, "日期课程清单更新")
+    assert((await page.data("calendarCourses"))[0].count > 0, "月历即时显示当天课程")
+    await miniProgram.screenshot({ path: path.join(ARTIFACT_DIR, "adjustment-v3-calendar-courses.png") })
+    await (await waitForSelector(page, "#adjustment-date-confirm")).tap()
+    await (await waitForSelector(page, "#adjustment-target-calendar")).tap()
+    await (await waitForSelector(page, "#adjustment-month-next")).tap()
+    await (await waitForSelector(page, "#adjustment-date-2026-09-01")).tap()
+    await (await waitForSelector(page, "#adjustment-date-confirm")).tap()
+    await waitFor(async () => (await page.data("validation")) === "", "整日目标配对更新")
+    assertEqual((await page.data("keys")).length, 0, "整日不要求逐门选择课程")
+    assert((await page.data("sourceDays"))[0].count > 0, "来源日期展示当天全部课程")
+    assertEqual((await page.data("pairs"))[0].action, "replace", "覆盖模式选择整日覆盖操作")
+    await miniProgram.screenshot({ path: path.join(ARTIFACT_DIR, "adjustment-v3-day-cover.png") })
+  })
+
+  await runCase("学期切换保留旧草稿并清空新学期选择", async () => {
+    await clearStorage(); await seedSession()
+    await miniProgram.evaluate(() => {
+      wx.setStorageSync("academic.period", {year:2026,term:1})
+      wx.setStorageSync("schedule.DEMO-2026-001.adjustmentDraft.2026.1", {
+        schemaVersion:3,year:2026,term:1,firstWeekStart:"2026-08-31",operation:"day",pairs:[],
+        sources:["2026-08-31"],targets:[],keys:[],groupSettings:[]
+      })
+    })
+    await mockScenario({
+      "GET /settings/academic-period": {statusCode:200,data:{year:2026,term:2}},
+      "GET /schedule/effective": {statusCode:200,data:[]}
+    })
+    const page = await miniProgram.reLaunch("/pages/schedule-adjustments/index")
+    await waitFor(() => page.data("loaded"), "新学期调课加载")
+    assertEqual((await page.data("period")).term,2,"使用云端当前学期")
+    assertEqual((await page.data("sources")).length,0,"旧日期不带入新学期")
+    assertEqual((await page.data("keys")).length,0,"旧课程不带入新学期")
+    const old = await miniProgram.evaluate(() => wx.getStorageSync("schedule.DEMO-2026-001.adjustmentDraft.2026.1"))
+    assertEqual(old.sources[0],"2026-08-31","旧学期草稿独立保留")
+  })
+
   await runCase("个人页支持微信绑定与二次确认解绑", async () => {
     await clearStorage()
     await seedSession()
@@ -668,6 +1075,7 @@ async function runCases() {
     await miniProgram.mockWxMethod("login", { code: "wechat-unbound-code" })
 
     const page = await miniProgram.reLaunch("/pages/login/index")
+    await agreeLegal(page)
     await (await waitForSelector(page, "#login-wechat")).tap()
     const error = await waitForSelector(page, "#login-error")
     assert((await error.text()).indexOf("尚未绑定") !== -1, "未绑定微信应引导学号密码登录")
@@ -736,6 +1144,7 @@ async function main() {
     return
   }
 
+  await clearStorage()
   await warmUp()
 
   try {

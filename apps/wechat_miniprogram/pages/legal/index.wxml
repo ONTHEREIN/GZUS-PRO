@@ -1,0 +1,5 @@
+<view class="page" id="legal-page">
+  <view class="page-title">{{title}}</view>
+  <view wx:if="{{error}}" id="legal-error" class="error">{{error}}</view>
+  <view class="card legal-content" id="legal-content"><rich-text nodes="{{html}}" user-select /></view>
+</view>

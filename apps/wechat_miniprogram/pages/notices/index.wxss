@@ -3,3 +3,10 @@
 .notice-title { color: #1d2b42; font-size: 31rpx; font-weight: 700; line-height: 1.45; }
 .notice-summary { display: -webkit-box; overflow: hidden; margin-top: 12rpx; color: #66758c; font-size: 25rpx; line-height: 1.55; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .error { color: #c62828; }
+
+.notice-tabs { display: flex; gap: 16rpx; margin-bottom: 24rpx; }
+.notice-tabs button { flex: 1; font-size: 28rpx; }
+.notice-tabs .selected { background: #e7f0ff; color: #2176e8; }
+.subscription-row { padding: 24rpx 0; border-top: 1rpx solid #edf0f5; }
+#notifications-authorization input { padding: 20rpx; margin: 16rpx 0; background: #f5f7fb; }
+#notifications-authorization label { font-size: 25rpx; }

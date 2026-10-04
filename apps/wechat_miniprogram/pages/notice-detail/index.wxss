@@ -1,0 +1,2 @@
+#notice-detail-cover { width: 100%; margin-top: 24rpx; }
+#notice-detail-content { display: block; white-space: pre-wrap; line-height: 1.8; margin-top: 20rpx; }

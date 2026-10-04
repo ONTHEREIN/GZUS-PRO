@@ -1,13 +1,13 @@
+import { fetchDatedCourses, groupDatedCourses } from "../../utils/schedule-adjustments"
 import { get, put, requireSession } from "../../utils/api"
 import {
   academicPeriodLabel,
   academicPeriodNow,
-  periodQuery,
   saveAcademicPeriod,
   syncAcademicPeriod
 } from "../../utils/academic"
 import { AcademicPeriod, ScheduleCourse, ScheduleSettings } from "../../utils/models"
-import { parseScheduleCourses, parseScheduleSettings } from "../../utils/parsers"
+import { parseScheduleSettings } from "../../utils/parsers"
 import {
   buildWeekDays,
   buildWeekOptions,
@@ -40,12 +40,31 @@ Page({
     periodPickerValue: [0, 0] as number[],
     requestVersion: 0,
     showWeekPicker: false,
+    floatingOpen: false,
     selectedCourse: null as ScheduleCourse | null,
     period: null as AcademicPeriod | null
   },
 
-  onLoad() {
+  onShow() {
     if (requireSession()) this.loadCourses(false)
+  },
+
+  toggleFloating() { this.setData({ floatingOpen: !this.data.floatingOpen }) },
+  closeFloating() { this.setData({ floatingOpen: false }) },
+  openAdjustments() {
+    this.setData({ floatingOpen: false })
+    wx.navigateTo({ url: `/pages/schedule-adjustments/index?week=${this.data.week}&firstWeekStart=${this.data.firstWeekStart}` })
+  },
+  adjustSelectedCourse() {
+    const course = this.data.selectedCourse
+    if (!course) return
+    this.setData({ selectedCourse: null })
+    const first = parseScheduleDate(this.data.firstWeekStart)
+    if (!first || course.weekday === null) throw new Error("课程日期缺失，请重新加载课表")
+    const date = new Date(first); date.setDate(date.getDate() + (this.data.week - 1) * 7 + course.weekday - 1)
+    const keys = course.occurrenceKeys?.[dateText(date)] || []
+    const key = this.data.mode === "week" && keys.length === 1 ? keys[0] : ""
+    wx.navigateTo({ url: `/pages/schedule-adjustments/index?week=${this.data.week}&firstWeekStart=${this.data.firstWeekStart}&key=${encodeURIComponent(key)}&name=${encodeURIComponent(course.name)}&start=${course.startSection}&weekday=${course.weekday}&teacher=${encodeURIComponent(course.teacher || "")}&classroom=${encodeURIComponent(course.classroom || "")}&all=${this.data.mode === "all" ? "1" : "0"}` })
   },
 
   async onPullDownRefresh() {
@@ -59,13 +78,10 @@ Page({
     try {
       const period = await syncAcademicPeriod()
       const fallback = defaultFirstWeekStart(period)
-      const path = `/schedule${periodQuery(period)}${refresh ? "&refresh=true" : ""}`
-      // 学期设置只影响周次显示，不能阻塞核心课表请求。首页和 App 前台同步也可能
-      // 同时触发设置请求，课表先发起自己的请求，避免首屏被非关键请求拖住。
-      const coursesPromise = get<ScheduleCourse[]>(path, parseScheduleCourses)
-      const settingsPromise = get<ScheduleSettings>("/settings/schedule", parseScheduleSettings)
-        .catch(() => null)
-      const courses = await coursesPromise
+      const settings = await get<ScheduleSettings>("/settings/schedule", parseScheduleSettings)
+      const configured = settings.firstWeeks[`${period.year}-${period.term}`]
+      const configuredFirst = mondayOf(parseScheduleDate(configured || "") || fallback)
+      const courses = groupDatedCourses(await fetchDatedCourses(period, dateText(configuredFirst), refresh))
 
       const applySchedule = (firstWeekStart: Date): boolean => {
         if (this.data.requestVersion !== requestVersion) return false
@@ -90,13 +106,7 @@ Page({
         return true
       }
 
-      // 课程接口返回后立即结束加载态；第一周配置只负责调整周次，不应挡住课表首屏。
-      if (!applySchedule(fallback)) return
-      const settings = await settingsPromise
-      if (settings === null) return
-      const configured = settings.firstWeeks[`${period.year}-${period.term}`]
-      const firstWeekStart = mondayOf(parseScheduleDate(configured || "") || fallback)
-      if (dateText(firstWeekStart) !== dateText(fallback)) applySchedule(firstWeekStart)
+      applySchedule(configuredFirst)
     } catch (error) {
       if (this.data.requestVersion !== requestVersion) return
       this.setData({ error: error instanceof Error ? error.message : "课表加载失败" })
@@ -186,14 +196,16 @@ Page({
     const monday = mondayOf(selected)
     try {
       await put("/settings/schedule", { firstWeeks: { [`${period.year}-${period.term}`]: dateText(monday) } }, parseScheduleSettings)
+      const courses = groupDatedCourses(await fetchDatedCourses(period, dateText(monday), false))
       const current = period.year === academicPeriodNow().year && period.term === academicPeriodNow().term
       const week = current ? weekFromDate(monday, new Date()) : this.data.week
       this.setData({
+        courses,
         firstWeekStart: dateText(monday),
         currentWeek: current ? week : this.data.currentWeek,
         week,
         weekTitle: `第${week}周`,
-        rows: buildWeekRows(this.data.courses, week),
+        rows: buildWeekRows(courses, week),
         days: buildWeekDays(monday, week),
         weekOptions: this.makeWeekOptions(monday, week, current ? week : this.data.currentWeek)
       })

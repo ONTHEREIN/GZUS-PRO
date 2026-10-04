@@ -20,6 +20,40 @@ class ScheduleOccurrence {
   bool get isAdjusted => sourceDate != null;
 }
 
+/// 一对日期之间的节次区间，整日为 1–16 节。
+class ScheduleAdjustmentMove {
+  const ScheduleAdjustmentMove({
+    required this.sourceDate,
+    required this.targetDate,
+    required this.sourceStart,
+    required this.sourceEnd,
+    required this.targetStart,
+  });
+  final DateTime sourceDate;
+  final DateTime targetDate;
+  final int sourceStart;
+  final int sourceEnd;
+  final int targetStart;
+  int get targetEnd => targetStart + sourceEnd - sourceStart;
+
+  factory ScheduleAdjustmentMove.fromJson(Map<String, dynamic> json) =>
+      ScheduleAdjustmentMove(
+        sourceDate: DateTime.parse(json['sourceDate'] as String),
+        targetDate: DateTime.parse(json['targetDate'] as String),
+        sourceStart: json['sourceStart'] as int,
+        sourceEnd: json['sourceEnd'] as int,
+        targetStart: json['targetStart'] as int,
+      );
+
+  Map<String, dynamic> toJson() => {
+        'sourceDate': dateText(sourceDate),
+        'targetDate': dateText(targetDate),
+        'sourceStart': sourceStart,
+        'sourceEnd': sourceEnd,
+        'targetStart': targetStart,
+      };
+}
+
 /// 账号同步的日期级整日调课记录。
 class ScheduleAdjustmentRecord {
   const ScheduleAdjustmentRecord({
@@ -34,8 +68,14 @@ class ScheduleAdjustmentRecord {
     required this.status,
     required this.revision,
     this.id,
+    this.moves,
+    this.metadata,
+    this.createdAt,
   });
 
+  final AdjustmentMetadata? metadata;
+  final DateTime? createdAt;
+  final List<ScheduleAdjustmentMove>? moves;
   final String clientId;
   final int year;
   final int term;
@@ -63,6 +103,17 @@ class ScheduleAdjustmentRecord {
     }
 
     return ScheduleAdjustmentRecord(
+      metadata: json['metadata'] == null
+          ? null
+          : AdjustmentMetadata.fromJson(
+              json['metadata'] as Map<String, dynamic>),
+      createdAt: json['createdAt'] == null
+          ? null
+          : DateTime.parse(json['createdAt'] as String),
+      moves: (json['moves'] as List?)
+          ?.map((item) =>
+              ScheduleAdjustmentMove.fromJson(item as Map<String, dynamic>))
+          .toList(),
       clientId: json['clientId']?.toString() ?? '',
       year: (json['year'] as num?)?.toInt() ?? 0,
       term: (json['term'] as num?)?.toInt() ?? 0,
@@ -78,6 +129,9 @@ class ScheduleAdjustmentRecord {
   }
 
   Map<String, dynamic> toJson() => {
+        if (metadata != null) 'metadata': metadata!.json,
+        if (createdAt != null) 'createdAt': createdAt!.toIso8601String(),
+        if (moves != null) 'moves': [for (final move in moves!) move.toJson()],
         'clientId': clientId,
         'year': year,
         'term': term,
@@ -145,6 +199,27 @@ List<ScheduleOccurrence> expandEffectiveSchedule({
 
   final result = [...base];
   for (final adjustment in adjustments.where((item) => item.isActive)) {
+    if (adjustment.metadata != null) {
+      var next = List<ScheduleOccurrence>.of(result);
+      if (adjustment.metadata!.request.schemaVersion == 3) {
+        next = applyAdjustmentBatch(
+            next, adjustment.metadata!.request.pairs, firstWeekStart);
+      } else {
+        for (final pair in adjustment.metadata!.request.pairs) {
+          next = applyAdjustmentPair(next, pair, firstWeekStart);
+        }
+      }
+      result.clear();
+      result.addAll(next);
+      continue;
+    }
+    if (adjustment.moves?.isNotEmpty == true) {
+      final next =
+          applyScheduleAdjustmentMoves(result, adjustment, firstWeekStart);
+      result.clear();
+      result.addAll(next);
+      continue;
+    }
     final moved = result
         .where((item) =>
             _sameDay(item.date, adjustment.sourceDate) &&
@@ -224,4 +299,72 @@ bool _sectionsOverlap(ScheduleCourse a, ScheduleCourse b) {
   final bStart = b.startSection ?? 0;
   final bEnd = b.endSection ?? bStart;
   return aStart <= bEnd && bStart <= aEnd;
+}
+
+/// 区间以原始快照同时计算，拆分连堂课时保留未选中的节次。
+List<ScheduleOccurrence> applyScheduleAdjustmentMoves(
+  List<ScheduleOccurrence> occurrences,
+  ScheduleAdjustmentRecord adjustment,
+  DateTime firstWeekStart,
+) {
+  final result = <ScheduleOccurrence>[];
+  for (final item in occurrences) {
+    final start = item.course.startSection!;
+    final end = item.course.endSection ?? start;
+    ScheduleAdjustmentMove? selected;
+    var reverse = false;
+    for (final move in adjustment.moves!) {
+      if (_sameDay(item.date, move.sourceDate)) {
+        selected = move;
+        break;
+      }
+      if (_sameDay(item.date, move.targetDate)) {
+        selected = move;
+        reverse = true;
+        break;
+      }
+    }
+    if (selected == null || (reverse && adjustment.conflictMode == 'coexist')) {
+      result.add(item);
+      continue;
+    }
+    final from = reverse ? selected.targetStart : selected.sourceStart;
+    final to = reverse ? selected.targetEnd : selected.sourceEnd;
+    final cutStart = start > from ? start : from;
+    final cutEnd = end < to ? end : to;
+    if (cutStart > cutEnd) {
+      result.add(item);
+      continue;
+    }
+    ScheduleOccurrence segment(int first, int last, DateTime date) {
+      final moved = date != item.date;
+      final split = first != start || last != end;
+      final key =
+          split ? '${item.occurrenceKey}:$first-$last' : item.occurrenceKey;
+      return ScheduleOccurrence(
+        course: item.course.copyWith(
+            startSection: first,
+            endSection: last,
+            weekday: date.weekday,
+            isLocal: moved || item.course.isLocal),
+        date: date,
+        week: weekFromDate(firstWeekStart, date),
+        occurrenceKey: moved ? '$key->${dateText(date)}' : key,
+        sourceDate: moved ? item.date : item.sourceDate,
+      );
+    }
+
+    if (start < cutStart) {
+      result.add(segment(start, cutStart - 1, item.date));
+    }
+    if (end > cutEnd) result.add(segment(cutEnd + 1, end, item.date));
+    if (!reverse || adjustment.conflictMode == 'swap') {
+      final date = reverse ? selected.sourceDate : selected.targetDate;
+      final offset = reverse
+          ? selected.sourceStart - selected.targetStart
+          : selected.targetStart - selected.sourceStart;
+      result.add(segment(cutStart + offset, cutEnd + offset, date));
+    }
+  }
+  return result;
 }

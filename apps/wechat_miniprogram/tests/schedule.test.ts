@@ -1,3 +1,4 @@
+import { pairedMoves } from "../utils/schedule-adjustments"
 import { strict as assert } from "node:assert"
 import { test } from "node:test"
 
@@ -73,4 +74,11 @@ test("重叠课程并排，缺少定位信息的课程不进入周网格", () =>
   const evenRows = buildWeekRows(courses, 2)
   assert.equal(evenRows[0].cells[0].blocks.length, 2)
   assert.equal(evenRows[0].cells[0].blocks.some((block) => block.name === "单双周课程"), false)
+})
+
+test("调课日期按排序配对，拒绝交叉日期和越界节次", () => {
+  assert.deepEqual(pairedMoves(["2026-09-14", "2026-09-07"], ["2026-09-16", "2026-09-09"], 2, 2, 5).map((move) => [move.sourceDate, move.targetDate]),
+    [["2026-09-07", "2026-09-09"], ["2026-09-14", "2026-09-16"]])
+  assert.throws(() => pairedMoves(["2026-09-07"], ["2026-09-07"], 1, 2, 1), /交叉/)
+  assert.throws(() => pairedMoves(["2026-09-07"], ["2026-09-09"], 1, 2, 16), /节次/)
 })

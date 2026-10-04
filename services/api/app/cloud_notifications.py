@@ -48,6 +48,7 @@ _PERSISTED_EVENT_TYPES = frozenset({
     "exam_reminder",
     "attendance_update",
     "ecard_reminder",
+    "course_reminder",
 })
 
 
@@ -179,7 +180,7 @@ def _ensure_notification_event(
     body: str,
     extras: dict,
 ) -> bool:
-    """保存动态提醒事件；课程提醒由各端本地计划负责，不写入提醒中心。"""
+    """保存跨端动态提醒事件，包括课程提醒。"""
     if notification_type not in _PERSISTED_EVENT_TYPES:
         return False
     now = datetime.now(timezone.utc)
@@ -425,6 +426,14 @@ def _deliver(student_id: str, event_key: str, notification_type: str, title: str
         body,
         normalized_extras,
     )
+    with get_sync_session_factory()() as db:
+        profile = db.query(BackgroundNotificationProfile).filter_by(student_id=student_id).first()
+        mobile_fields = {"grade_update": "grades_enabled", "exam_reminder": "exams_enabled",
+                         "attendance_update": "attendance_enabled", "course_reminder": "course_reminders_enabled"}
+        mobile_field = mobile_fields.get(notification_type)
+        if profile is not None and (not profile.mobile_enabled or
+                                    (mobile_field is not None and not getattr(profile, mobile_field))):
+            return True  # 微信独立调度器读取已持久化事件，不标记移动端投递成功。
     if _delivery_recorded(student_id, event_key):
         return False
     failure_reason: str | None = None
@@ -508,6 +517,7 @@ def _poll_profile_once(
     client: object,
     ehall_client: object | None,
 ) -> int:
+    from app.wechat_notifications import mini_type_enabled
     poll_errors: list[str] = []
     notices_ok = True
     try:
@@ -586,7 +596,7 @@ def _poll_profile_once(
                 elif not _delivery_recorded(profile.student_id, event_key):
                     saved_notice_keys.discard(key)
     saved_grade_values = dict(grade_values) if grades_ok else dict(previous_grades)
-    if profile.grades_enabled and grades_ok and previous_grades:
+    if (profile.grades_enabled or mini_type_enabled(profile.student_id, "grade_update")) and grades_ok and profile.grade_snapshot_json is not None:
         for item in grades:
             key = f"{item.get('term') or ''}|{item.get('courseName') or item.get('course_name') or ''}"
             event_key = f"grade:{key}:{grade_values.get(key)}"
@@ -600,6 +610,7 @@ def _poll_profile_once(
                 extras = _transient_live_fields("grade_update", "grades")
                 extras["id"] = f"grade_update:{profile.student_id}:{key}:{grade_values.get(key)}"
                 extras.update(live_grade)
+                extras["courseName"] = course_name
                 if deliver_notification(profile.student_id, event_key, "grade_update", title, body, extras):
                     delivered += 1
                 elif not _delivery_recorded(profile.student_id, event_key):
@@ -608,7 +619,7 @@ def _poll_profile_once(
                     else:
                         saved_grade_values.pop(key, None)
     saved_exam_keys = set(exam_keys) if exams_ok else set(previous_exams)
-    if profile.exams_enabled and exams_ok and previous_exams:
+    if (profile.exams_enabled or mini_type_enabled(profile.student_id, "exam_reminder")) and exams_ok and profile.exam_keys_json is not None:
         for item in exams:
             key = f"{item.get('courseName', '')}|{item.get('time', '')}|{item.get('location', '')}|{item.get('seat', '')}"
             event_key = f"exam:{key}"
@@ -626,6 +637,7 @@ def _poll_profile_once(
                     "id": f"exam_reminder:{profile.student_id}:{key}",
                     "shortCriticalText": "考试",
                     "courseName": course_name,
+                    "examTime": item.get("time"),
                     "location": location or None,
                     "seat": seat or None,
                 })
@@ -637,7 +649,7 @@ def _poll_profile_once(
     saved_attendance_snapshot = (
         dict(attendance_snapshot) if attendance_ok else dict(previous_attendance)
     )
-    if profile.attendance_enabled and attendance_ok and previous_attendance:
+    if (profile.attendance_enabled or mini_type_enabled(profile.student_id, "attendance_update")) and attendance_ok and profile.attendance_snapshot_json is not None:
         for key, body in _attendance_abnormal_changes(attendance, previous_attendance):
             event_key = f"attendance:{key}:{attendance_snapshot.get(key, '')}"
             extras = _transient_live_fields("attendance_update", "attendance")
@@ -650,7 +662,7 @@ def _poll_profile_once(
                     saved_attendance_snapshot[key] = previous_attendance[key]
                 else:
                     saved_attendance_snapshot.pop(key, None)
-    for item in exams if exams_ok else []:
+    for item in exams if exams_ok and (profile.exams_enabled or mini_type_enabled(profile.student_id, "exam_reminder")) else []:
         key = f"{item.get('courseName', '')}|{item.get('time', '')}|{item.get('location', '')}|{item.get('seat', '')}"
         start = _exam_start(str(item.get("time") or ""))
         if start is None or start <= current_time:
@@ -675,6 +687,7 @@ def _poll_profile_once(
                         "shortCriticalText": "考试",
                         "milestone": milestone,
                         "courseName": course_name,
+                        "examTime": item.get("time"),
                         "location": location or None,
                         "seat": seat or None,
                     })
@@ -684,6 +697,7 @@ def _poll_profile_once(
                         "shortCriticalText": "考试",
                         "milestone": milestone,
                         "courseName": course_name,
+                        "examTime": item.get("time"),
                         "location": location or None,
                         "seat": seat or None,
                     })
@@ -722,6 +736,17 @@ def _poll_profile(profile: BackgroundNotificationProfile) -> int:
     while True:
         try:
             client, ehall_client = _authenticated_client(profile.encrypted_credentials)
+            from app.mini_course_reminders import sync_mini_courses
+            from app.database import MiniNotificationAccess
+            try:
+                sync_mini_courses(profile.student_id, client)
+            except (ValueError, RuntimeError, AuthenticationError) as exc:
+                with get_sync_session_factory()() as db:
+                    access = db.get(MiniNotificationAccess, profile.student_id)
+                    if access is not None:
+                        access.course_sync_error = f"课程同步失败：{type(exc).__name__}"
+                        db.commit()
+                logger.warning("mini_course_sync_failed", extra={"error_type": type(exc).__name__})
             return _poll_profile_once(profile, client, ehall_client)
         except Exception as exc:
             if retried or not _is_authentication_failure(exc):
@@ -896,6 +921,7 @@ def _course_reminder_candidates(profile: BackgroundNotificationProfile, now: dat
                 "targetTab": "schedule",
                 "courseName": course_name,
                 "location": room,
+                "courseTime": f"{current.date().isoformat()} {_SECTION_TIMES[start - 1][0]}",
                 "priority": live_activity_priority("course_reminder", True),
                 # 本地通知只负责课程提醒；云端 APNs 还需启动实况通知，供锁屏和灵动岛显示倒计时。
                 "liveUpdate": True,
@@ -922,6 +948,8 @@ def run_course_reminder_dispatch_once() -> dict[str, int]:
             for event_key, title, body, extras in _course_reminder_candidates(profile, now):
                 if _deliver(profile.student_id, event_key, "course_reminder", title, body, extras):
                     delivered += 1
+    from app.mini_course_reminders import dispatch_mini_courses
+    processed += dispatch_mini_courses(now)
     duration = int((datetime.now(timezone.utc) - started).total_seconds() * 1000)
     record_maintenance_job_result(
         "course-reminder-dispatch", started, duration, None, processed, delivered

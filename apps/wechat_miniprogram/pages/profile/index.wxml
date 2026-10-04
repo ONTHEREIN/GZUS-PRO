@@ -18,5 +18,6 @@
     <button wx:if="{{!wechatBound && !bindingLoading}}" id="profile-wechat-bind" class="bind-button" loading="{{bindingAction}}" bindtap="bindWechat">绑定当前微信</button>
     <button wx:if="{{wechatBound}}" id="profile-wechat-unbind" class="unbind-button" loading="{{bindingAction}}" bindtap="unbindWechat">解除微信绑定</button>
   </view>
+  <view class="card"><view id="profile-terms" bindtap="openTerms">用户服务协议</view><view id="profile-privacy" bindtap="openPrivacy">隐私政策</view></view>
   <button id="profile-logout" class="logout" bindtap="logout">退出登录</button>
 </view>

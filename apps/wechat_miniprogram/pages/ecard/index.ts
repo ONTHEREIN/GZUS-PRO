@@ -43,6 +43,14 @@ Page({
     bindError: ""
   },
 
+  openCampusCard() {
+    wx.navigateToMiniProgram({ appId: "wx777061f467655121", envVersion: "release", fail: (error) => this.setData({ error: `校园卡充值打开失败：${error.errMsg}` }) })
+  },
+
+  openHotWater() {
+    wx.navigateToMiniProgram({ appId: "wxc67cd96204f3d163", envVersion: "release", fail: (error) => this.setData({ error: `热水充值打开失败：${error.errMsg}` }) })
+  },
+
   onLoad() {
     if (requireSession()) this.loadSummary()
   },

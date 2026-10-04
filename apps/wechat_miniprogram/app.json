@@ -3,12 +3,15 @@
     "pages/login/index",
     "pages/home/index",
     "pages/schedule/index",
+    "pages/schedule-adjustments/index",
     "pages/grades/index",
     "pages/attendance/index",
     "pages/exams/index",
     "pages/ecard/index",
     "pages/notices/index",
-    "pages/profile/index"
+    "pages/profile/index",
+    "pages/legal/index",
+    "pages/notice-detail/index"
   ],
   "window": {
     "navigationBarBackgroundColor": "#ffffff",

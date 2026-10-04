@@ -13,6 +13,7 @@ import {
   parseGrades,
   parseLogin,
   parseNotices,
+  parseNoticeDetail,
   parseScheduleCourses,
   parseScheduleSettings,
   parseStudentInfo
@@ -264,4 +265,13 @@ test("parseEcardRooms 空列表是合法响应", () => {
 test("parseEmpty 要求对象响应", () => {
   assert.deepEqual(parseEmpty({ status: "ok" }), {})
   assert.throws(() => parseEmpty([]), /退出登录响应格式无效/)
+})
+
+
+test("通知列表保留详情入口，详情拒绝缺失正文的响应", () => {
+  const item = parseNotices([{ category: "教务", title: "通知", source: "jwxt", url: "https://school.example/detail", coverUrl: "/admin/notices/1/image" }])[0]
+  assert.equal(item.url, "https://school.example/detail")
+  assert.equal(item.coverUrl, "/admin/notices/1/image")
+  assert.deepEqual(parseNoticeDetail({ title: "通知", date: null, contentHtml: "<p>正文</p>", url: "https://school.example/detail", ignored: true }), { title: "通知", date: null, contentHtml: "<p>正文</p>", url: "https://school.example/detail" })
+  assert.throws(() => parseNoticeDetail({ title: "通知", url: "https://school.example/detail" }), /通知正文字段无效/)
 })

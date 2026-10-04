@@ -2474,7 +2474,7 @@ ApiClient _mockApi({
             'grade': '2024',
           };
           break;
-        case '/settings/schedule/adjustments':
+        case '/settings/schedule/adjustments/v3':
           body = <Object>[];
           break;
         case '/schedule':

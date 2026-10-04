@@ -159,7 +159,7 @@ void main() {
     final api = ApiClient(
       baseUrl: 'https://api.example.test',
       httpClient: MockClient((request) async {
-        if (request.url.path == '/settings/schedule/adjustments') {
+        if (request.url.path == '/settings/schedule/adjustments/v3') {
           return http.Response('[]', 200);
         }
         if (request.url.path == '/dashboard') {
@@ -464,7 +464,7 @@ ApiClient _homeApi({
   final api = ApiClient(
     baseUrl: 'https://api.example.test',
     httpClient: MockClient((request) async {
-      if (request.url.path == '/settings/schedule/adjustments') {
+      if (request.url.path == '/settings/schedule/adjustments/v3') {
         return http.Response('[]', 200);
       }
       final body = transform(_dashboardBody(), requestIndex);

@@ -5,6 +5,7 @@
   <view wx:if="{{error}}" id="grades-error" class="card error">{{error}}</view>
   <view wx:for="{{grades}}" wx:key="index" class="card grade-card">
     <view class="grade-head"><view class="grade-name">{{item.courseName}}</view><view class="score">{{item.score || '待公布'}}</view></view>
+    <view id="grade-status-{{index}}" class="grade-status {{item.resultKind}}">{{item.resultText}}</view>
     <view class="muted">{{item.term || '学期未标注'}} · {{item.credit || '-'}} 学分 · 绩点 {{item.gradePoint || '-'}}</view>
   </view>
   <view wx:if="{{!loading && grades.length === 0}}" id="grades-empty" class="empty">暂无成绩数据</view>

@@ -212,6 +212,8 @@ def bind_wechat(
 @router.delete("/auth/wechat-binding", response_model=WechatBindingResponse)
 def unbind_wechat(session: AppSession = Depends(require_session)) -> dict[str, str]:
     student_id = student_id_of(session)
+    from app.routes.mini_notifications import revoke_mini_access
+    revoke_mini_access(student_id)
     with get_sync_session_factory()() as db:
         binding = db.query(WechatBinding).filter(WechatBinding.student_id == student_id).first()
         if binding is None:

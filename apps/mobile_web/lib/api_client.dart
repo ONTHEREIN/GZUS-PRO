@@ -26,6 +26,7 @@ import 'shiply_platform.dart';
 
 part 'api_models.dart';
 part 'models/effective_schedule.dart';
+part 'models/schedule_adjustment_v2.dart';
 
 const apiBaseUrl = String.fromEnvironment(
   'API_BASE_URL',
@@ -1120,10 +1121,57 @@ class ApiClient {
     required int year,
     required int term,
   }) async {
-    final rows =
-        await _getList('/settings/schedule/adjustments?year=$year&term=$term');
+    final rows = await _getList(
+        '/settings/schedule/adjustments/v3?year=$year&term=$term');
     return [for (final row in rows) ScheduleAdjustmentRecord.fromJson(row)];
   }
+
+  Future<List<ScheduleOccurrence>> fetchDatedSchedule(
+      int year, int term, DateTime firstWeekStart) async {
+    final rows = await _getList(
+        '/schedule/effective?year=$year&term=$term&firstWeekStart=${dateText(firstWeekStart)}&refresh=false');
+    return [for (final row in rows) occurrenceFromJson(row)];
+  }
+
+  Future<AdjustmentPreview> previewAdjustment(
+          AdjustmentRequest request) async =>
+      AdjustmentPreview.fromJson(await _postScheduleAdjustment(
+          '/settings/schedule/adjustments/v3/preview', request.toJson()));
+
+  Future<ScheduleAdjustmentRecord> commitAdjustment(AdjustmentRequest request,
+          String clientId, String fingerprint) async =>
+      ScheduleAdjustmentRecord.fromJson(await _postScheduleAdjustment(
+          '/settings/schedule/adjustments/v3', {
+        ...request.toJson(),
+        'clientId': clientId,
+        'fingerprint': fingerprint
+      }));
+
+  Future<AdjustmentRestorePreview> previewAdjustmentRestore(
+          ScheduleAdjustmentRecord record, DateTime firstWeekStart) async =>
+      AdjustmentRestorePreview.fromJson(await _postScheduleAdjustment(
+          '/settings/schedule/adjustments/v3/${Uri.encodeComponent(record.clientId)}/restore-preview',
+          {
+            'year': record.year,
+            'term': record.term,
+            'firstWeekStart': dateText(firstWeekStart),
+            'expectedRevision': record.revision,
+            'fingerprint': null
+          }));
+
+  Future<ScheduleAdjustmentRecord> restoreAdjustmentV2(
+          ScheduleAdjustmentRecord record,
+          DateTime firstWeekStart,
+          String fingerprint) async =>
+      ScheduleAdjustmentRecord.fromJson(await _postScheduleAdjustment(
+          '/settings/schedule/adjustments/v3/${Uri.encodeComponent(record.clientId)}/restore',
+          {
+            'year': record.year,
+            'term': record.term,
+            'firstWeekStart': dateText(firstWeekStart),
+            'expectedRevision': record.revision,
+            'fingerprint': fingerprint
+          }));
 
   Future<ScheduleAdjustmentRecord> createScheduleAdjustment(
       ScheduleAdjustmentRecord adjustment) async {
@@ -1132,7 +1180,9 @@ class ApiClient {
       adjustment.toJson()
         ..remove('status')
         ..remove('revision')
-        ..remove('id'),
+        ..remove('id')
+        ..remove('metadata')
+        ..remove('createdAt'),
     );
     return ScheduleAdjustmentRecord.fromJson(result);
   }

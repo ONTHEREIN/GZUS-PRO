@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from math import isfinite
 from typing import Final
 
 
@@ -22,7 +23,7 @@ _PASS_VALUES: Final[frozenset[str]] = frozenset(
     {"合格", "及格", "通过", "已通过", "pass", "passed", "qualified", "true", "1"}
 )
 _FAIL_VALUES: Final[frozenset[str]] = frozenset(
-    {"不及格", "不通过", "未通过", "挂科", "fail", "failed", "unqualified", "false", "0"}
+    {"不合格", "不及格", "不通过", "未通过", "挂科", "fail", "failed", "unqualified", "false", "0"}
 )
 _LIVE_ACTIVITY_PRIORITIES: Final[dict[str, int]] = {
     "course_reminder": 2,
@@ -57,7 +58,7 @@ def _parse_passed(value: object) -> bool | None:
         return True
     if text in _FAIL_VALUES:
         return False
-    if any(marker in text for marker in ("不及格", "不通过", "未通过", "挂科", "failed", "fail")):
+    if any(marker in text for marker in ("不合格", "不及格", "不通过", "未通过", "挂科", "failed", "fail")):
         return False
     if any(marker in text for marker in ("合格", "及格", "通过", "passed", "pass", "qualified")):
         return True
@@ -67,7 +68,8 @@ def _parse_passed(value: object) -> bool | None:
 def _score_passed(score: str) -> bool | None:
     normalized = score.removesuffix("分").strip()
     try:
-        return float(normalized) >= 60
+        numeric = float(normalized)
+        return numeric >= 60 if isfinite(numeric) else None
     except ValueError:
         return None
 
@@ -79,8 +81,14 @@ def grade_live_fields(grade: Mapping[str, object]) -> dict[str, object]:
         (grade[key] for key in _OFFICIAL_STATUS_KEYS if key in grade and grade[key] not in (None, "")),
         None,
     )
-    official_text = _text(official_value)
     official_passed = _parse_passed(official_value)
+    if official_passed is None and isinstance(grade.get("gradePassed"), bool):
+        official_passed = grade["gradePassed"]
+        if official_value is None:
+            official_value = "合格" if official_passed else "不及格"
+    official_text = _text(official_value)
+    if isinstance(official_value, bool):
+        official_text = "合格" if official_value else "不及格"
     if official_text:
         status = official_text
         passed = official_passed

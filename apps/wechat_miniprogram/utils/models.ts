@@ -30,6 +30,7 @@ export interface StudentInfo {
 }
 
 export interface ScheduleCourse {
+  occurrenceKeys?: Record<string, string[]>
   name: string
   teacher: string | null
   classroom: string | null
@@ -45,6 +46,7 @@ export interface GradeItem {
   credit: string | null
   gradePoint: string | null
   term: string | null
+  gradeStatus?: string | null
   gradePassed: boolean | null
 }
 
@@ -85,7 +87,16 @@ export interface AttendanceResponse {
   items: AttendanceItem[]
 }
 
+export interface NoticeDetail {
+  title: string
+  date: string | null
+  contentHtml: string
+  url: string
+}
+
 export interface NoticeItem {
+  url: string | null
+  coverUrl: string | null
   category: string
   title: string
   date: string | null

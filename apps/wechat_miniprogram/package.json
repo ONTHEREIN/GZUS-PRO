@@ -8,10 +8,18 @@
     "test:pages": "node scripts/page-regression.js",
     "test:live": "node scripts/live-api-check.js",
     "test:all": "npm run test && npm run test:pages",
-    "auto-preview": "node scripts/auto-preview.js"
+    "auto-preview": "node scripts/auto-preview.js",
+    "build:legal": "node scripts/build-legal.mjs",
+    "prepare": "npm run build:legal",
+    "pretypecheck": "npm run build:legal",
+    "pretest:logic": "npm run build:legal",
+    "pretest:pages": "npm run build:legal",
+    "pretest:live": "npm run build:legal",
+    "preauto-preview": "npm run build:legal"
   },
   "devDependencies": {
     "@types/node": "^26.6.2",
+    "marked": "^18.0.14",
     "miniprogram-api-typings": "^4.1.0",
     "miniprogram-automator": "^0.12.1",
     "typescript": "^5.8.3"

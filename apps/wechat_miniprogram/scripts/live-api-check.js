@@ -29,8 +29,8 @@ const ARTIFACT_DIR = artifactDir()
 const PAGE_TIMEOUT_MS = 30000
 const POLL_INTERVAL_MS = 200
 
-/** 登录后本地只允许存在这三个键；出现别的键就说明有凭据落盘了。 */
-const ALLOWED_STORAGE_KEYS = ["auth.sessionId", "auth.studentName", "auth.studentId"]
+/** 登录后只允许会话、展示身份、学期设置及协议版本落盘。 */
+const ALLOWED_STORAGE_KEYS = ["auth.sessionId", "auth.studentName", "auth.studentId", "academic.period", "legal.acceptedVersion"]
 
 const PROFILES = {
   demo: {
@@ -237,6 +237,7 @@ async function runCases(account, password, profile) {
     const page = await miniProgram.reLaunch("/pages/login/index")
     await (await waitForSelector(page, "#login-account")).input(account)
     await (await waitForSelector(page, "#login-password")).input(password)
+    await (await waitForSelector(page, "#login-agreement")).trigger("change", { value: ["agree"] })
     await (await waitForSelector(page, "#login-submit")).tap()
 
     // 登录可能成功（跳首页）也可能失败（渲染 #login-error）。
@@ -432,6 +433,23 @@ async function runCases(account, password, profile) {
     })
     if (evidence) log(`    ↳ 观测：${item.name} ${evidence}`)
   }
+
+  await check("通知详情可打开并明确展示内容或空态", async () => {
+    const page = await miniProgram.reLaunch("/pages/notices/index")
+    await waitForLoaded(page, "notices", ".notice-card", null, ["#notices-empty"])
+    const first = await page.$("#notice-0")
+    if (!first) {
+      log("    ↳ 当前账号无通知，详情真实链路待有数据时核验")
+      return
+    }
+    await first.tap()
+    const detail = await waitForPage("/pages/notice-detail/index")
+    await waitFor(async () => {
+      const error = await detail.$("#notice-detail-error")
+      if (error) throw new Error(`通知详情失败：${await error.text()}`)
+      return (await detail.$("#notice-detail-content")) || (await detail.$("#notice-detail-empty"))
+    }, "通知详情正文或空态")
+  })
 
   await check("可在小程序内搜索宿舍（只查询，不绑定）", async () => {
     const page = await miniProgram.reLaunch("/pages/ecard/index")

@@ -84,6 +84,9 @@ Page({
     }
   },
 
+  openTerms() { wx.navigateTo({ url: "/pages/legal/index?type=terms" }) },
+  openPrivacy() { wx.navigateTo({ url: "/pages/legal/index?type=privacy" }) },
+
   async logout() {
     try {
       await post<Record<string, never>>("/auth/logout", {}, parseEmpty)

@@ -107,4 +107,62 @@ void main() {
     expect(result.single.date, sourceDate);
     expect(result.single.course.name, '高等数学');
   });
+  test('多日单节交换拆分连堂课，JSON 云端往返及撤销保持一致', () {
+    final math = course(name: '数学', weekday: 1).copyWith(weeks: '1,3');
+    final english = course(name: '英语', weekday: 2).copyWith(weeks: '2');
+    final record = ScheduleAdjustmentRecord(
+      clientId: 'batch',
+      year: 2026,
+      term: 1,
+      sourceDate: DateTime(2026, 9, 7),
+      targetDate: DateTime(2026, 9, 15),
+      sourceOccurrenceKeys: const [],
+      targetConflictKeys: const [],
+      conflictMode: 'swap',
+      status: 'active',
+      revision: 1,
+      moves: [
+        ScheduleAdjustmentMove(
+            sourceDate: DateTime(2026, 9, 7),
+            targetDate: DateTime(2026, 9, 15),
+            sourceStart: 2,
+            sourceEnd: 2,
+            targetStart: 1),
+        ScheduleAdjustmentMove(
+            sourceDate: DateTime(2026, 9, 21),
+            targetDate: DateTime(2026, 9, 29),
+            sourceStart: 2,
+            sourceEnd: 2,
+            targetStart: 1),
+      ],
+    );
+    final synced = ScheduleAdjustmentRecord.fromJson(record.toJson());
+    final result = expandEffectiveSchedule(
+        courses: [math, english],
+        firstWeekStart: firstWeek,
+        adjustments: [synced]);
+    final selected = result.where((item) =>
+        [DateTime(2026, 9, 7), DateTime(2026, 9, 15)].contains(item.date));
+    expect(
+        selected
+            .map((item) =>
+                '${item.date.day}:${item.course.name}:${item.course.startSection}-${item.course.endSection}')
+            .toSet(),
+        {'7:数学:1-1', '7:英语:2-2', '15:数学:1-1', '15:英语:2-2'});
+    expect(
+        result.any((item) =>
+            item.date == DateTime(2026, 9, 29) && item.course.name == '数学'),
+        isTrue);
+    final restored = ScheduleAdjustmentRecord.fromJson(
+        {...record.toJson(), 'status': 'restored', 'revision': 2});
+    final original = expandEffectiveSchedule(
+        courses: [math, english],
+        firstWeekStart: firstWeek,
+        adjustments: [restored]);
+    expect(original, hasLength(3));
+    expect(
+        original.every((item) =>
+            item.course.startSection == 1 && item.course.endSection == 2),
+        isTrue);
+  });
 }

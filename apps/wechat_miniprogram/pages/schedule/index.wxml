@@ -68,6 +68,7 @@
   <view wx:if="{{selectedCourse}}" class="modal-mask" id="schedule-course-modal" bindtap="closeCourse">
     <view class="course-modal" catchtap="stopModalTap">
       <view class="modal-head"><view class="modal-title">课程详情</view><view id="schedule-course-close" class="modal-link" bindtap="closeCourse">关闭</view></view>
+      <button id="schedule-course-adjust" bindtap="adjustSelectedCourse">调整这次课程</button>
       <view class="detail-name">{{selectedCourse.name}}</view>
       <view class="detail-row"><text>教师</text><text>{{selectedCourse.teacher || '任课教师待定'}}</text></view>
       <view class="detail-row"><text>地点</text><text>{{selectedCourse.classroom || '地点待定'}}</text></view>
@@ -75,4 +76,6 @@
       <view class="detail-row"><text>周次</text><text>{{selectedCourse.weeks || '每周'}}</text></view>
     </view>
   </view>
+  <view wx:if="{{floatingOpen}}" class="floating-mask" id="schedule-floating-mask" bindtap="closeFloating"></view>
+  <view class="floating-tools"><view wx:if="{{floatingOpen}}" class="floating-panel"><button id="schedule-menu-adjustments" bindtap="openAdjustments">调课</button></view><button id="schedule-floating-menu" class="floating-button" aria-label="课表调课菜单" bindtap="toggleFloating">{{floatingOpen ? '×' : '⋯'}}</button></view>
 </view>

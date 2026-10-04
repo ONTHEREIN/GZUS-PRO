@@ -1,6 +1,7 @@
 import os
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlparse
 
 from pydantic import Field
@@ -84,6 +85,13 @@ class Settings(BaseSettings):
     # 微信小程序登录配置。密钥只从部署环境读取，不进入仓库或响应。
     wechat_miniprogram_app_id: str = ""
     wechat_miniprogram_app_secret: str = ""
+    # 五类私有订阅模板 ID，仅数字公共编号不能用于发送。
+    wechat_exam_template_id: str = ""
+    wechat_course_template_id: str = ""
+    wechat_attendance_template_id: str = ""
+    wechat_ecard_template_id: str = ""
+    wechat_grade_template_id: str = ""
+    wechat_notification_environment: Literal["developer", "trial", "formal"] = "formal"
 
     model_config = SettingsConfigDict(env_file=ENV_FILE, env_file_encoding="utf-8")
 

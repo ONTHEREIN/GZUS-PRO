@@ -15,6 +15,14 @@
 
 > 接口路径与后端真实路由一致：教务相关接口挂在**根路径**下（`/me`、`/schedule`、`/grades`、`/attendance`、`/exams`、`/notices`），**没有 `/academic` 前缀**；请求按当前学年学期带 `year`、`term`；共享偏好为 `/settings/academic-period` 与 `/settings/schedule`；生活缴费为 `/ecard/summary`、`/ecard/rooms`、`/ecard/binding`；登录为 `/mini/auth/login`、`/mini/auth/wechat-login`，绑定为 `/mini/auth/wechat-binding`；退出为 `/auth/logout`。写成 `/academic/*` 会得到 404。
 
+## 协议与通知详情
+
+两份完整协议以仓库 `docs/terms-of-service.md` 和 `docs/privacy-policy.md` 为唯一维护源；`npm install`、检查、页面回归与预览前自动执行 `npm run build:legal`，生成的 `utils/generated/` 不提交。直接导入开发者工具前须先安装依赖；修改协议后运行生成命令再编译。
+
+登录页和「我的」提供完整协议阅读入口。首次或协议内容更新时须确认同意；本地保存 `legal.acceptedVersion`，有效会话在确认后可继续使用，未确认不发起业务查询。协议内容没有变化时不会重写生成文件，以免触发开发者工具重编译。
+
+通知可点击打开原生详情。教务来源读取 `/notices/detail` 并显示纯文本正文；办事大厅、公众号展示已有摘要，管理员通知展示发布说明与封面。有地址时可复制原文链接；本轮不使用 `web-view` 或预览附件。详情失败可重试，空正文和封面失败有明确提示。
+
 ## 学期与周课表
 
 - 登录、会话恢复和回到前台时自动拉取共享学年学期；未初始化时按当前日期推导并写回服务端。
@@ -48,6 +56,8 @@
 
 ## 本地运行
 
+构建与测试脚本使用 Node.js 20 或更新的稳定版本。
+
 1. 在微信开发者工具中导入此目录。
 2. 当前仓库已配置测试 AppID `wx2fb65b853ae73231`；如使用其他 AppID，只修改 `project.config.json`，不要在前端配置 AppSecret。
 3. 开发者工具「设置 → 安全设置」开启服务端口（页面回归与自动预览都需要）。
@@ -57,9 +67,9 @@
 
 ```bash
 npm install
-npm test              # typecheck + 逻辑单测（45 例，零外部依赖，可在 CI 跑）
-npm run test:pages    # 开发者工具页面回归（20 例，全程 mock 请求，需开发者工具已登录）
-npm run test:live     # 真实链路检查（9 例，不 mock，打测试域名真实接口，需演示账号）
+npm test              # typecheck + 逻辑单测（可在 CI 跑）
+npm run test:pages    # 开发者工具页面回归（全程 mock 请求，需开发者工具已登录）
+npm run test:live     # 真实链路检查（不 mock，打测试域名真实接口，需测试账号）
 npm run test:all      # test + test:pages
 npm run auto-preview  # CLI 自动预览，推送真机验收包
 ```
@@ -91,7 +101,7 @@ npm run auto-preview  # CLI 自动预览，推送真机验收包
 
 ## 安全边界
 
-小程序只保存 `sessionId`、展示身份字段和学期偏好。`/mini/auth/login` 与 `/mini/auth/wechat-login` 只返回短期会话信息，会过滤学校 Cookie、办事大厅 Token 和长期自动登录凭据；不要改为调用通用 `/auth/auto-login`。微信 OpenID 服务端只保存不可逆查询指纹与加密原值，微信 code、OpenID、`session_key`、AppSecret 不写日志。
+小程序只保存 `sessionId`、展示身份字段、学期偏好及已同意的协议版本。`/mini/auth/login` 与 `/mini/auth/wechat-login` 只返回短期会话信息，会过滤学校 Cookie、办事大厅 Token 和长期自动登录凭据；不要改为调用通用 `/auth/auto-login`。微信 OpenID 服务端只保存不可逆查询指纹与加密原值，微信 code、OpenID、`session_key`、AppSecret 不写日志。
 
 请求层只在**携带过会话**的 401 上清理本地会话；登录接口自身返回的 401 属于凭据错误，本地没有需要清理的会话。错误文案优先透传服务端 `detail`（能区分「账号或密码错误」「会话已过期」「当前设备已被管理员下线」），仅在缺少 `detail` 时按是否携带会话兜底。
 

@@ -91,6 +91,12 @@ def put_schedule_settings(
     _ensure_table()
     factory = get_sync_session_factory()
     with factory() as db:
+        if payload.first_weeks:
+            from app.routes.schedule_adjustments_v2 import _initialize, _lock_scope
+            _initialize()
+            for period_key in sorted(payload.first_weeks):
+                year_text, term_text = period_key.split("-")
+                _lock_scope(db, student_id, int(year_text), int(term_text))
         row = db.query(UserSettings).filter(UserSettings.student_id == student_id).first()
         if row is None:
             row = UserSettings(student_id=student_id)

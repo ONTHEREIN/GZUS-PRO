@@ -5,9 +5,14 @@ from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+from sqlalchemy import or_
+from sqlalchemy.orm import Session
+
 from app.cache_service import ExamReminderCache, GradeUpdateCache, NoticeCache
 from app.config import get_settings
-from app.database import EcardBinding, get_sync_session_factory
+from app.database import (
+    EcardBinding, MiniNotificationAccess, MiniNotificationPreference, get_sync_session_factory,
+)
 from app.ecard_client import EcardApiError, EcardClient, EcardConfigurationError, EcardRoomRef, safe_float
 from app.ecard_history import record_water_balance_snapshots
 from app.notice_utils import merge_notices, notice_key, valid_notice_items
@@ -420,6 +425,21 @@ def _next_reminder_at(
     return min(candidates).astimezone(timezone.utc)
 
 
+def reminder_ecard_bindings(db: Session) -> list[EcardBinding]:
+    """任一渠道开启即采集；微信开关不修改移动端缴费设置。"""
+    mini_students = db.query(MiniNotificationAccess.student_id).join(
+        MiniNotificationPreference,
+        MiniNotificationPreference.openid_fingerprint == MiniNotificationAccess.openid_fingerprint,
+    ).filter(
+        MiniNotificationPreference.notification_type == "ecard_reminder",
+        MiniNotificationPreference.enabled.is_(True),
+    ).subquery()
+    return db.query(EcardBinding).filter(or_(
+        EcardBinding.reminder_enabled.is_(True),
+        EcardBinding.student_id.in_(db.query(mini_students.c.student_id)),
+    )).all()
+
+
 async def run_ecard_reminder_once(app, reminder_time: str) -> None:
     try:
         client = EcardClient()
@@ -429,7 +449,7 @@ async def run_ecard_reminder_once(app, reminder_time: str) -> None:
 
     factory = get_sync_session_factory()
     with closing(client), factory() as db:
-        bindings = db.query(EcardBinding).filter(EcardBinding.reminder_enabled.is_(True)).all()
+        bindings = reminder_ecard_bindings(db)
         # 查询完成后释放连接；学校余额接口可能耗时，期间不应占住数据库连接。
         db.commit()
         for binding in bindings:
@@ -507,6 +527,8 @@ async def run_ecard_reminder_once(app, reminder_time: str) -> None:
                 )
                 # 投递可能访问数据库并等待外部推送服务；先释放当前事务的连接。
                 db.commit()
+                if not binding.reminder_enabled:
+                    continue
                 await _send_ecard_ws(app, student_id, title, body, summary, live_payload)
                 if await asyncio.to_thread(
                     _active_push_succeeded,
@@ -554,7 +576,7 @@ async def run_ecard_reminder_poller(app) -> None:
         factory = get_sync_session_factory()
         all_times = set()
         with factory() as db:
-            bindings = db.query(EcardBinding).filter(EcardBinding.reminder_enabled.is_(True)).all()
+            bindings = reminder_ecard_bindings(db)
             for b in bindings:
                 try:
                     times = json.loads(b.reminder_times) if b.reminder_times else []
