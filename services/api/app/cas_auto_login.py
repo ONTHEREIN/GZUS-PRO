@@ -365,12 +365,23 @@ class CasAutoLogin:
                 account=account, cookies="", error="验证码识别失败，请重试", error_status=503
             )
         except Exception as exc:
-            logger.error("cas_login_failed", extra={"error_type": type(exc).__name__, "trace_id": self.request_id, "status_code": 502, "phase": self._authentication_phase, "duration_seconds": time.time() - t_start})
+            upstream_status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
+            logger.error("cas_login_failed", extra={
+                "error_type": type(exc).__name__, "trace_id": self.request_id,
+                "status_code": 502, "phase": self._authentication_phase,
+                "duration_seconds": time.time() - t_start,
+                "upstream_status_code": upstream_status,
+            })
+            if self._authentication_phase == "jwxt_ticket":
+                message = "统一认证成功，但教务票据兑换失败"
+                error_code = "jwxt_ticket_unavailable"
+            else:
+                message = "学校统一认证请求失败"
+                error_code = None
+            reason = f"HTTP {upstream_status}" if upstream_status is not None else type(exc).__name__
             return CasLoginResult(
-                account=account,
-                cookies="",
-                error=f"学校统一认证请求失败（{type(exc).__name__}）",
-                error_status=502,
+                account=account, cookies="", error=f"{message}（{reason}）",
+                error_status=502, error_code=error_code,
             )
         finally:
             if client is not None and not keep_client:

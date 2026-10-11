@@ -11,7 +11,7 @@ _EVENTS = frozenset({
 _FIELDS = (
     'trace_id', 'method', 'path', 'status_code', 'duration_ms', 'phase',
     'duration_seconds', 'elapsed_seconds', 'error_code', 'error_type',
-    'ehall_available', 'login_method',
+    'ehall_available', 'login_method', 'upstream_status_code',
 )
 
 

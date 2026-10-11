@@ -82,13 +82,14 @@ def test_month_data_errors_do_not_fabricate_usage():
             assert 'totalUsage' not in result
 
 
-@pytest.mark.parametrize('info_body,info_delay,expected_error', [
-    (b'<div id="col_xh">test-account</div>', 0, None),
-    (b'<form>login_slogin</form>', 0, 'jwxt_session_unavailable'),
-    (b'<div id="col_xh">test-account</div>', 0.4, 'jwxt_session_unavailable'),
+@pytest.mark.parametrize('info_body,info_delay,ticket_status,expected_error', [
+    (b'<div id="col_xh">test-account</div>', 0, 200, None),
+    (b'<form>login_slogin</form>', 0, 200, 'jwxt_session_unavailable'),
+    (b'<div id="col_xh">test-account</div>', 0.4, 200, 'jwxt_session_unavailable'),
+    (b'', 0, 503, 'jwxt_ticket_unavailable'),
 ])
 def test_cas_budget_includes_required_session_validation(
-    monkeypatch, info_body, info_delay, expected_error,
+    monkeypatch, caplog, info_body, info_delay, ticket_status, expected_error,
 ):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, format, *args):
@@ -109,7 +110,7 @@ def test_cas_budget_includes_required_session_validation(
                 body = info_body
             elif self.path.startswith('/ehall'):
                 time.sleep(0.4)
-            self.send_response(200)
+            self.send_response(ticket_status if self.path.startswith('/sso') else 200)
             self.send_header('Set-Cookie', 'JSESSIONID=local-session; Path=/')
             self.end_headers()
             try:
@@ -136,6 +137,13 @@ def test_cas_budget_includes_required_session_validation(
             assert result.ehall_error is not None
         else:
             assert result.error_status == 502
+            if ticket_status == 503:
+                assert "HTTP 503" in result.error
+                event = next(record for record in caplog.records if record.msg == "cas_login_failed")
+                assert event.upstream_status_code == 503
+                assert event.phase == "jwxt_ticket"
+                assert "local-ticket" not in caplog.text
+                assert "test-password" not in caplog.text
         if result.httpx_client is not None:
             result.httpx_client.close()
     finally:
