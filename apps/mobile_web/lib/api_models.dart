@@ -287,6 +287,8 @@ class LoginResult {
     this.sessionId,
     this.studentName,
     this.studentId,
+    this.deviceToken,
+    this.ehallError,
     this.credentialToken,
     this.sessionRefreshToken,
     this.jwxtCookies,
@@ -301,6 +303,8 @@ class LoginResult {
         sessionId: json['sessionId'] as String?,
         studentName: json['studentName'] as String?,
         studentId: json['studentId'] as String?,
+        deviceToken: json['deviceToken'] as String?,
+        ehallError: json['ehallError'] as String?,
         credentialToken: json['credentialToken'] as String?,
         sessionRefreshToken: json['sessionRefreshToken'] as String?,
         jwxtCookies:
@@ -317,6 +321,8 @@ class LoginResult {
   final String? studentId;
 
   /// 用于自动重新登录的凭证令牌
+  final String? deviceToken;
+  final String? ehallError;
   final String? credentialToken;
 
   /// 统一认证登录使用的设备绑定会话恢复凭据。
@@ -1514,10 +1520,27 @@ class EcardConsumptionItem {
   final String unit;
 }
 
+class EcardUnavailableMonth {
+  EcardUnavailableMonth.fromJson(Map<String, dynamic> json)
+      : month = json['month'] as String,
+        reasonCode = json['reasonCode'] as String,
+        message = json['message'] as String,
+        cachedAt = DateTime.parse(json['cachedAt'] as String);
+  final String month;
+  final String reasonCode;
+  final String message;
+  final DateTime cachedAt;
+}
+
 class EcardConsumptionOverviewResponse {
   EcardConsumptionOverviewResponse.fromJson(Map<String, dynamic> json)
       : status = json['status'] as String? ?? 'limited',
         message = json['message'] as String?,
+        unavailableMonths = (json['unavailableMonths'] as List<dynamic>? ??
+                const [])
+            .map((item) =>
+                EcardUnavailableMonth.fromJson(item as Map<String, dynamic>))
+            .toList(),
         months = (json['months'] as List<dynamic>? ?? const [])
             .whereType<Map<String, dynamic>>()
             .map((item) => EcardConsumptionMonthOverview.fromJson(item))
@@ -1534,6 +1557,7 @@ class EcardConsumptionOverviewResponse {
 
   final String status;
   final String? message;
+  final List<EcardUnavailableMonth> unavailableMonths;
   final List<EcardConsumptionMonthOverview> months;
   final List<EcardWaterMonthOverview> coldWaterMonths;
   final List<EcardWaterMonthOverview> hotWaterMonths;

@@ -332,7 +332,9 @@ class _LoginPageState extends State<LoginPage>
                                                     rememberPassword =
                                                         value ?? true),
                                           ),
-                                          const Text('记住密码并自动登录'),
+                                          const Expanded(
+                                              child: Text(
+                                                  '允许服务器加密保管学校密码，用于恢复登录（不启用后台通知）')),
                                         ],
                                       ),
                                     ),
@@ -912,7 +914,7 @@ class _LoginPageState extends State<LoginPage>
                         : (value) =>
                             setState(() => rememberPassword = value ?? true),
                   ),
-                  const Expanded(child: Text('记住密码并自动登录')),
+                  const Expanded(child: Text('允许服务器加密保管学校密码，用于恢复登录（不启用后台通知）')),
                 ],
               ),
             ),
@@ -1115,6 +1117,7 @@ class _LoginPageState extends State<LoginPage>
       final result = await widget.api.autoLogin(
         account,
         password,
+        storeSchoolPassword: rememberPassword,
       );
       TextInput.finishAutofillContext(shouldSave: false);
       // 服务端登录已经成功，本地凭据持久化失败不能把成功误报成网络失败。
@@ -1122,9 +1125,13 @@ class _LoginPageState extends State<LoginPage>
       Object? localStorageError;
       StackTrace? localStorageStackTrace;
       try {
+        await widget.api.clearRememberedPassword();
         if (rememberPassword) {
           await widget.api.rememberAccount(account);
-          await widget.api.saveRememberedPassword(password);
+          if (result.deviceToken != null) {
+            await widget.api.persistDeviceToken(result.deviceToken!);
+            await widget.api.clearSavedCredentialToken();
+          }
           if (result.credentialToken != null) {
             await widget.api.saveCredentialToken(result.credentialToken);
           } else {
@@ -1132,6 +1139,9 @@ class _LoginPageState extends State<LoginPage>
           }
           await widget.api.clearSessionRefreshToken();
         } else {
+          if (result.deviceToken != null) {
+            await widget.api.persistDeviceToken(result.deviceToken!);
+          }
           await widget.api.forgetRememberedAccount();
           await widget.api.clearSavedCredentialToken();
           await widget.api.clearSessionRefreshToken();
@@ -1149,6 +1159,8 @@ class _LoginPageState extends State<LoginPage>
       }
       unawaited(_saveAgreementState());
       widget.onLoggedIn(LoginResult(
+        deviceToken: result.deviceToken,
+        ehallError: result.ehallError,
         status: result.status,
         sessionId: result.sessionId,
         studentName: result.studentName,
@@ -1332,7 +1344,7 @@ class _AgreementContent extends StatelessWidget {
 信息仅用于展示课表、成绩、考勤、水电费等校内教务服务，遵循最小必要原则。
 
 三、信息存储
-密码不会以明文持久化存储。用户选择“记住密码并自动登录”后，密码和自动登录凭据保存在本设备系统安全存储区，用于下次填充和恢复登录；学校系统 Cookie 和认证令牌会在本机安全存储，并由服务端加密保存账号级学校会话。用户主动开启“后台持续通知”后，服务端还会保存加密的自动登录凭据和提醒配置；关闭该功能即可撤销并删除后台授权。
+密码不会以明文持久化存储。勾选密码保管授权后，服务器加密保存学校密码，仅用于学校会话失效后的登录恢复；本设备安全存储仅保存随机设备令牌。取消勾选时不保存学校密码，学校会话失效后需重新认证。统一认证登录不保存学校密码。此选项不会开启后台通知；后台持续通知需要另行授权。退出登录后撤销当前设备授权并删除对应密码密文，其他设备保持独立。旧版凭据仅在确认迁移前继续兼容。
 
 四、信息安全与权限
 所有生产通信使用HTTPS/TLS加密。日志不输出密码、Cookie等敏感信息。每位用户只能访问自己的教务数据。通知、定位、相册/相机、日历等权限仅在对应功能需要时申请，可在系统设置中关闭。

@@ -10,18 +10,17 @@ from datetime import datetime, timedelta, timezone
 from typing import Iterator
 from urllib.parse import quote
 
-from sqlalchemy import text
 
 from app.config import get_settings
 from app.database import (
     AppSessionModel,
     BackgroundNotificationProfile,
     CredentialRevocation,
+    DeviceAuthorization,
     IosLiveActivityToken,
     IosPushToken,
     SchoolAccountSession,
     WebPushSubscription,
-    get_sync_engine,
     get_sync_session_factory,
 )
 from app.ehall_client import EhallClient
@@ -36,7 +35,7 @@ from app.school_client import AuthenticationError, SchoolSdkClient
 logger = logging.getLogger(__name__)
 
 _SUSPENSION_RETRY_INTERVAL = timedelta(hours=1)
-_account_locks: dict[str, threading.Lock] = {}
+_account_locks: dict[str, threading.RLock] = {}
 _account_locks_guard = threading.Lock()
 
 
@@ -247,23 +246,10 @@ def _lock_key(account: str) -> int:
 
 @contextmanager
 def account_school_session_lock(student_id: str) -> Iterator[None]:
-    """跨进程 PostgreSQL advisory lock；SQLite 测试使用进程内锁。"""
+    """生产单 worker 内按账号串行；网络调用不占用数据库连接。"""
     account = student_id.strip()
-    engine = get_sync_engine()
-    if engine.dialect.name == "postgresql":
-        db = get_sync_session_factory()()
-        try:
-            db.execute(text("SELECT pg_advisory_lock(:key)"), {"key": _lock_key(account)})
-            yield
-        finally:
-            try:
-                db.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": _lock_key(account)})
-                db.commit()
-            finally:
-                db.close()
-        return
     with _account_locks_guard:
-        lock = _account_locks.setdefault(account, threading.Lock())
+        lock = _account_locks.setdefault(account, threading.RLock())
     with lock:
         yield
 
@@ -429,8 +415,12 @@ def release_if_unused(student_id: str) -> bool:
             )
             .first()
         )
+        has_device = db.query(DeviceAuthorization.token_digest).filter(
+            DeviceAuthorization.student_account == account,
+            DeviceAuthorization.revoked_at.is_(None),
+        ).first()
         row = db.query(SchoolAccountSession).filter_by(student_id=account).first()
-        if row is not None and has_profile is None and has_session is None:
+        if row is not None and has_profile is None and has_session is None and has_device is None:
             db.delete(row)
             db.commit()
             return True
@@ -443,6 +433,9 @@ def revoke_account_school_access(student_id: str) -> None:
     now = _utc_now()
     with account_school_session_lock(account):
         with get_sync_session_factory()() as db:
+            db.query(DeviceAuthorization).filter_by(student_account=account).update({
+                "revoked_at": now, "revoked_reason": "admin_kick", "encrypted_credentials": None,
+            }, synchronize_session=False)
             db.query(BackgroundNotificationProfile).filter_by(student_id=account).delete()
             for model in (WebPushSubscription, IosPushToken, IosLiveActivityToken):
                 db.query(model).filter(model.student_id == account).delete(synchronize_session=False)

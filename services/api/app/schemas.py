@@ -43,7 +43,27 @@ class FeedbackCreateRequest(BaseModel):
     )
 
 
-class CredentialLoginRequest(BaseModel):
+class DeviceLoginOptions(BaseModel):
+    installation_id: str | None = Field(default=None, alias="installationId", min_length=16, max_length=100)
+    store_school_password: bool | None = Field(default=None, alias="storeSchoolPassword")
+
+    @model_validator(mode="after")
+    def validate_device_options(self) -> DeviceLoginOptions:
+        if (self.installation_id is None) != (self.store_school_password is None):
+            raise ValueError("installationId 与 storeSchoolPassword 必须同时提交")
+        return self
+
+
+class DeviceRestoreRequest(BaseModel):
+    device_token: str = Field(alias="deviceToken", min_length=32, max_length=256)
+    installation_id: str = Field(alias="installationId", min_length=16, max_length=100)
+
+
+class DeviceMigrateRequest(DeviceLoginOptions):
+    credential_token: str = Field(alias="credentialToken", min_length=1)
+
+
+class CredentialLoginRequest(DeviceLoginOptions):
     account: str = Field(
         min_length=1,
         validation_alias=AliasChoices("account", "studentId", "student_id", "username"),
@@ -67,6 +87,7 @@ class CredentialLoginRequest(BaseModel):
 
 
 class SsoCompleteRequest(BaseModel):
+    installation_id: str | None = Field(default=None, alias="installationId", min_length=16, max_length=100)
     sso_code: str = Field(alias="ssoCode", min_length=1)
 
 
@@ -79,6 +100,7 @@ class NativeSsoStartResponse(BaseModel):
 
 
 class NativeSsoCompleteRequest(BaseModel):
+    installation_id: str | None = Field(default=None, alias="installationId", min_length=16, max_length=100)
     code: str = Field(min_length=32, max_length=256)
     verifier: str = Field(min_length=32, max_length=256)
 
@@ -160,7 +182,7 @@ class EcardConsumptionItem(BaseModel):
     amount: str = ""
     time: str = ""
     date: str = ""
-    usage: float | None = None
+    usage: float | None = Field(default=None, allow_inf_nan=False)
     unit: str = "度"
 
 
@@ -196,7 +218,15 @@ class EcardWaterMonthOverview(BaseModel):
     cached_at: str = Field(alias="cachedAt")
 
 
+class EcardUnavailableMonth(BaseModel):
+    month: str
+    reason_code: Literal["no_records", "incomplete_data", "invalid_data", "corrupt_cache"] = Field(alias="reasonCode")
+    message: str
+    cached_at: str = Field(alias="cachedAt")
+
+
 class EcardConsumptionOverviewResponse(BaseModel):
+    unavailable_months: list[EcardUnavailableMonth] = Field(default_factory=list, alias="unavailableMonths")
     status: Literal["ok", "limited"]
     message: str | None = None
     months: list[EcardConsumptionMonthOverview] = []
@@ -213,6 +243,8 @@ class AuthResponse(BaseModel):
     session_id: str | None = Field(default=None, alias="sessionId")
     student_name: str | None = Field(default=None, alias="studentName")
     student_id: str = Field(alias="studentId")
+    device_token: str | None = Field(default=None, alias="deviceToken")
+    ehall_error: str | None = Field(default=None, alias="ehallError")
     credential_token: str | None = Field(default=None, alias="credentialToken")
     session_refresh_token: str | None = Field(default=None, alias="sessionRefreshToken")
     jwxt_cookies: str | None = Field(default=None, alias="jwxtCookies")
@@ -276,6 +308,7 @@ class ReloginRequest(BaseModel):
 
 
 class LogoutRequest(BaseModel):
+    device_token: str | None = Field(default=None, alias="deviceToken", min_length=32, max_length=256)
     credential_token: str | None = Field(default=None, alias="credentialToken", min_length=1)
 
 

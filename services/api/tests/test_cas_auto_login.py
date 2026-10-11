@@ -1,5 +1,6 @@
 import httpx
 import logging
+import pytest
 
 from app.cas_auto_login import CasAutoLogin, _sanitize_response_body
 
@@ -75,7 +76,7 @@ def test_service_ticket_failure_does_not_log_ticket(caplog):
         raise httpx.ConnectError("connection failed", request=request)
 
     client = httpx.Client(transport=httpx.MockTransport(fail_request))
-    with caplog.at_level(logging.WARNING):
+    with caplog.at_level(logging.WARNING), pytest.raises(httpx.ConnectError):
         CasAutoLogin()._follow_service_ticket(
             client,
             "https://jwxt.gzus.edu.cn/sso/lyiotlogin?ticket=ST-secret",

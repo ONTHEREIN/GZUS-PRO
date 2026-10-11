@@ -1062,16 +1062,41 @@ class _EcardConsumptionOverviewPanelState
           if (snapshot.connectionState != ConnectionState.done) {
             return const Center(child: CircularProgressIndicator());
           }
-          if (snapshot.hasError) return const EmptyState(message: '历史总览加载失败');
+          if (snapshot.hasError) {
+            return EmptyState(message: '历史总览加载失败：${snapshot.error}');
+          }
           final data = snapshot.data;
           if (data == null ||
               (data.months.isEmpty &&
+                  data.unavailableMonths.isEmpty &&
                   data.coldWaterMonths.isEmpty &&
                   data.hotWaterMonths.isEmpty)) {
             return EmptyState(message: data?.message ?? '查询月份后会在这里生成历史总览');
           }
           return Column(
             children: [
+              for (final month in data.unavailableMonths)
+                ListTile(
+                  key: Key('ecard-unavailable-${month.month}'),
+                  title: Text('${month.month}：${month.message}'),
+                  subtitle: Text('缓存时间：${month.cachedAt.toLocal()}'),
+                  trailing: TextButton(
+                    key: Key('ecard-requery-${month.month}'),
+                    onPressed: () async {
+                      try {
+                        await widget.api.refreshEcardConsumption(month.month);
+                        if (!mounted) return;
+                        setState(() => _overviewFuture =
+                            widget.api.ecardConsumptionOverview());
+                      } catch (error) {
+                        if (!context.mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('重新查询失败：$error')));
+                      }
+                    },
+                    child: const Text('重新查询'),
+                  ),
+                ),
               _ElectricityHistoryCard(months: data.months),
               const SizedBox(height: 12),
               _WaterHistoryCard(

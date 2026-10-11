@@ -129,6 +129,7 @@ class CasLoginResult:
     error: str | None = None
     error_status: int | None = None
     error_code: str | None = None
+    ehall_error: str | None = None
     httpx_client: Any | None = None
 
 
@@ -253,6 +254,8 @@ class CasAutoLogin:
         self.ehall_url = ehall_url
         self.ehall_service_url = (ehall_service_url or "").strip()
         self.timeout = timeout
+        self.request_id: str | None = None
+        self._authentication_phase = "cas_page"
 
         parsed = urlparse(cas_url)
         self._cas_base = f"{parsed.scheme}://{parsed.netloc}"
@@ -279,19 +282,37 @@ class CasAutoLogin:
         so that proxy_request uses the already-authenticated session directly.
         """
         t_start = time.time()
+        client: httpx.Client | None = None
+        keep_client = False
         try:
-            client = httpx.Client(follow_redirects=False, timeout=self.timeout)
+            deadline = time.monotonic() + self.timeout
+
+            def apply_budget(request: httpx.Request) -> None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise httpx.TimeoutException("学校认证总预算已耗尽")
+                request.extensions["timeout"] = {
+                    phase: min(15.0, remaining / 4)
+                    for phase in ("connect", "read", "write", "pool")
+                }
+
+            client = httpx.Client(
+                follow_redirects=False, timeout=min(15, self.timeout),
+                event_hooks={"request": [apply_budget]},
+            )
             # Step 1: GET CAS login page to establish session
             # Retry on transient DNS/connection errors
             t0 = time.time()
+            self._authentication_phase = "cas_page"
             self._fetch_cas_page_with_retry(client)
-            logger.info("[TIMING] fetch_cas_page: %.2fs", time.time() - t0)
+            logger.info("cas_phase_completed", extra={"phase": "cas_page", "duration_seconds": time.time() - t0, "trace_id": self.request_id})
 
             for attempt in range(1, MAX_CAPTCHA_RETRIES + 1):
                 # Step 2: GET kaptcha (returns uid + image)
                 t1 = time.time()
+                self._authentication_phase = "captcha"
                 kaptcha_uid, captcha_bytes = self._download_kaptcha(client)
-                logger.info("[TIMING] download_kaptcha: %.2fs", time.time() - t1)
+                logger.info("cas_phase_completed", extra={"phase": "captcha", "duration_seconds": time.time() - t1, "trace_id": self.request_id})
                 if not captcha_bytes:
                     return CasLoginResult(
                         account=account, cookies="", error="无法获取验证码图片", error_status=503
@@ -300,8 +321,9 @@ class CasAutoLogin:
                 # Step 3: OCR the captcha and solve arithmetic
                 try:
                     t2 = time.time()
+                    self._authentication_phase = "ocr"
                     ocr_text = captcha_ocr.recognize(captcha_bytes)
-                    logger.info("[TIMING] ocr_recognize: %.2fs", time.time() - t2)
+                    logger.info("cas_phase_completed", extra={"phase": "ocr", "duration_seconds": time.time() - t2, "trace_id": self.request_id})
                 except RuntimeError as exc:
                     logger.error("CAPTCHA OCR unavailable: %s", exc)
                     return CasLoginResult(
@@ -318,18 +340,22 @@ class CasAutoLogin:
 
                 # Step 4: POST /v1/tickets with RSA-encrypted password
                 t3 = time.time()
+                self._authentication_phase = "authenticate"
                 result = self._submit_login(
                     client, account, password, kaptcha_uid, captcha_code
                 )
-                logger.info("[TIMING] submit_login: %.2fs", time.time() - t3)
+                logger.info("cas_phase_completed", extra={"phase": "authenticate", "duration_seconds": time.time() - t3, "trace_id": self.request_id})
                 if result is not None:
                     if result.error:
                         result.httpx_client = None
                     else:
                         # Switch to follow_redirects for authenticated requests
                         self._enable_follow_redirects(client)
+                        client.event_hooks["request"] = []
+                        client.timeout = httpx.Timeout(15)
                         result.httpx_client = client
-                    logger.info("[TIMING] auto_login total: %.2fs", time.time() - t_start)
+                        keep_client = True
+                    logger.info("cas_login_completed", extra={"duration_seconds": time.time() - t_start, "trace_id": self.request_id, "error_code": result.error_code})
                     return result
 
                 # Login returned CODEFALSE – captcha was wrong, retry
@@ -339,13 +365,16 @@ class CasAutoLogin:
                 account=account, cookies="", error="验证码识别失败，请重试", error_status=503
             )
         except Exception as exc:
-            logger.error("CAS auto-login failed: error_type=%s", type(exc).__name__)
+            logger.error("cas_login_failed", extra={"error_type": type(exc).__name__, "trace_id": self.request_id, "status_code": 502, "phase": self._authentication_phase, "duration_seconds": time.time() - t_start})
             return CasLoginResult(
                 account=account,
                 cookies="",
                 error=f"学校统一认证请求失败（{type(exc).__name__}）",
                 error_status=502,
             )
+        finally:
+            if client is not None and not keep_client:
+                client.close()
 
     # ------------------------------------------------------------------
     # Step 1: GET CAS login page (establishes session cookies)
@@ -469,8 +498,8 @@ class CasAutoLogin:
 
                 if ticket:
                     return self._finalize_login(client, account, ticket, tgt)
-            except Exception as exc:
-                logger.warning("Failed to parse login response: %s", exc)
+            except (ValueError, TypeError, AttributeError) as exc:
+                logger.warning("CAS response format invalid", extra={"error_type": type(exc).__name__, "phase": self._authentication_phase, "trace_id": self.request_id})
                 if response.status_code == 201:
                     location = response.headers.get("location", "")
                     if location:
@@ -563,7 +592,7 @@ class CasAutoLogin:
     ) -> CasLoginResult:
         """Follow the service URL with the ticket to establish session cookies.
 
-        JWXT cookies and ehall session are fetched in parallel to reduce total time.
+        必须先校验教务会话，办事大厅连接使用同一认证预算。
         """
         service_url = self._service_url
         if "?" in service_url:
@@ -580,49 +609,52 @@ class CasAutoLogin:
         ehall_cookies = None
         ehall_token = None
 
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            futures = {}
-
-            def _fetch_jwxt():
-                self._follow_service_ticket(client, redirect_url)
-                cookies = self._extract_cookies_for_url(client, jwxt_url)
-                if not cookies and tgt:
-                    fallback_ticket = self._request_service_ticket(client, tgt, self._service_url)
-                    if fallback_ticket:
-                        fallback_url = self._service_ticket_url(self._service_url, fallback_ticket)
-                        self._follow_service_ticket(client, fallback_url)
-                        cookies = self._extract_cookies_for_url(client, jwxt_url)
-                return cookies
-
-            def _fetch_ehall():
-                return self._get_ehall_session(client, tgt)
-
-            futures[executor.submit(_fetch_jwxt)] = "jwxt"
-            futures[executor.submit(_fetch_ehall)] = "ehall"
-
-            for future in as_completed(futures, timeout=min(self.timeout, 8)):
-                label = futures[future]
-                try:
-                    result = future.result(timeout=min(self.timeout, 5))
-                    if label == "jwxt":
-                        jwxt_cookies = result
-                    elif label == "ehall":
-                        ehall_cookies, ehall_token = result
-                except Exception as exc:
-                    logger.warning("Parallel fetch failed: service=%s error_type=%s", label, type(exc).__name__)
-
-        logger.info("[TIMING] finalize_login (parallel jwxt+ehall): %.2fs", time.time() - t_finalize)
-
-        if not jwxt_cookies and not ehall_cookies:
-            logger.warning("No session cookies obtained after login")
+        # 教务系统是必需连接；办事大厅独立失败不能撤销已成功的教务认证。
+        self._authentication_phase = "jwxt_ticket"
+        self._follow_service_ticket(client, redirect_url)
+        jwxt_cookies = self._extract_cookies_for_url(client, jwxt_url)
+        if not jwxt_cookies:
+            return CasLoginResult(
+                account=account, cookies="", error="统一认证成功，但教务系统未建立会话",
+                error_status=502, error_code="jwxt_session_unavailable",
+            )
+        info_url = urlunparse(urlparse(self._service_url)._replace(
+            path="/jwglxt/xsxxxggl/xsgrxxwh_cxXsgrxx.html", query="", fragment="",
+        ))
+        try:
+            self._authentication_phase = "jwxt_validate"
+            info_response = client.get(
+                info_url, params={"gnmkdm": "N100801", "su": account}, follow_redirects=True,
+            )
+            info_response.raise_for_status()
+        except httpx.HTTPError as exc:
+            logger.warning("jwxt_session_unavailable", extra={"error_type": type(exc).__name__, "phase": self._authentication_phase, "trace_id": self.request_id})
+            return CasLoginResult(
+                account=account, cookies="", error="统一认证成功，但教务系统会话校验失败",
+                error_status=502, error_code="jwxt_session_unavailable",
+            )
+        if "col_xh" not in info_response.text:
+            return CasLoginResult(
+                account=account, cookies="", error="统一认证成功，但教务系统未返回学生信息页",
+                error_status=502, error_code="jwxt_session_unavailable",
+            )
+        ehall_error = None
+        try:
+            self._authentication_phase = "ehall"
+            ehall_cookies, ehall_token = self._get_ehall_session(client, tgt)
+            if not ehall_cookies and not ehall_token:
+                ehall_error = "办事大厅暂时不可用，请单独重试"
+        except httpx.HTTPError as exc:
+            ehall_error = "办事大厅连接失败，请单独重试"
+            logger.warning("ehall_session_unavailable", extra={"error_type": type(exc).__name__, "phase": self._authentication_phase, "trace_id": self.request_id})
+        logger.info("cas_finalize_completed", extra={"elapsed_seconds": time.time() - t_finalize, "trace_id": self.request_id, "ehall_available": ehall_cookies is not None})
 
         return CasLoginResult(
             account=account,
             cookies=jwxt_cookies,
             ehall_cookies=ehall_cookies,
             ehall_auth_token=ehall_token,
+            ehall_error=ehall_error,
         )
 
     def _follow_service_ticket(self, client: httpx.Client, url: str) -> None:
@@ -632,6 +664,7 @@ class CasAutoLogin:
             response.raise_for_status()
         except Exception as exc:
             logger.warning("Failed to follow service URL: error_type=%s", type(exc).__name__)
+            raise
 
     def _request_service_ticket(
         self,
@@ -707,20 +740,20 @@ class CasAutoLogin:
                     if ehall_ticket:
                         redirect_url = f"{ehall_service_url}?ticket={ehall_ticket}"
                         logger.info("Following ehall service URL: %s", _redact_url(redirect_url))
-                        client.get(redirect_url, follow_redirects=True)
+                        client.get(redirect_url, follow_redirects=True, timeout=min(15, self.timeout))
                         ehall_cookies, ehall_token = self._extract_ehall_session(client)
                         if ehall_cookies:
                             logger.info("Got ehall session via TGT")
             except Exception as exc:
-                logger.warning("Failed to get ehall session via TGT: %s", exc)
+                logger.warning("ehall_ticket_failed", extra={"error_type": type(exc).__name__, "phase": self._authentication_phase, "trace_id": self.request_id})
 
         # Method 2: Direct navigation fallback
         if not ehall_cookies:
             try:
-                client.get(f"{self.ehall_url.rstrip('/')}/", follow_redirects=True)
+                client.get(f"{self.ehall_url.rstrip('/')}/", follow_redirects=True, timeout=min(15, self.timeout))
                 ehall_cookies, ehall_token = self._extract_ehall_session(client)
             except Exception as exc:
-                logger.debug("ehall direct navigation failed: %s", exc)
+                logger.warning("ehall_navigation_failed", extra={"error_type": type(exc).__name__, "phase": self._authentication_phase, "trace_id": self.request_id})
 
         if not ehall_cookies:
             logger.warning("Failed to obtain ehall session")

@@ -11,6 +11,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
+from app.auth_observability import configure_auth_observability
 from app.cache_service import ExamReminderCache, GradeUpdateCache, NoticeCache
 from app.config import get_settings
 from app.database import check_database_ready, get_sync_session_factory, init_db
@@ -100,6 +101,7 @@ async def lifespan(app: FastAPI):
 
 
 def create_app() -> FastAPI:
+    configure_auth_observability()
     # 注意：局部变量用 cfg 而非 settings，避免遮蔽 app.routes.settings 模块
     cfg = get_settings()
     app = FastAPI(title="软帮手 API", version="0.1.1", lifespan=lifespan)

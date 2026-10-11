@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import logging
 import re
 import threading
@@ -10,6 +11,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
+from pydantic import ValidationError
 
 from app.academic_period import now_shanghai
 from app.database import (
@@ -555,6 +557,7 @@ def update_reminder(
     response_model_exclude_none=True,
 )
 def consumption(
+    refresh: bool = Query(default=False),
     month: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}$"),
     session: AppSession = Depends(require_session),
 ) -> dict[str, Any]:
@@ -570,10 +573,10 @@ def consumption(
     with _power_consumption_lock(binding.room_id, query_month):
         cached = _power_consumption_for(binding.room_id, query_month)
         current_month = now_shanghai().strftime("%Y-%m")
-        if cached is not None and (
+        if not refresh and cached is not None and (
             query_month != current_month or _cached_on_shanghai_day(cached.cached_at)
         ):
-            return _consumption_response(cached)
+            return _validated_consumption_response(cached)
         try:
             with closing(_client()) as client:
                 data = client.consumption(EcardRoomRef.from_id(binding.room_id), query_month)
@@ -588,7 +591,8 @@ def consumption(
                 exc,
                 exc_info=True,
             )
-            return {"status": "limited", "message": "消费记录暂时不可用", "items": []}
+            raise HTTPException(502, detail={"code": "ecard_upstream_failed",
+                "message": f"消费记录查询失败：month={query_month}，{exc}"}) from exc
 
 
 @router.get("/consumption/overview", response_model=EcardConsumptionOverviewResponse)
@@ -627,9 +631,11 @@ def consumption_overview(
                 .all()
             )
             water[response_key] = monthly_water_overviews(snapshots)
+        overviews = [_monthly_overview(record) for record in records]
         return {
             "status": "ok",
-            "months": [_monthly_overview(record) for record in records],
+            "months": [item for item in overviews if "reasonCode" not in item],
+            "unavailableMonths": [item for item in overviews if "reasonCode" in item],
             **water,
         }
 
@@ -661,20 +667,47 @@ def _consumption_response(record: EcardPowerConsumption) -> dict[str, Any]:
     try:
         items = json.loads(record.items_json)
     except json.JSONDecodeError as exc:
-        raise RuntimeError(
-            f"电费消费记录缓存损坏：room_id={record.room_id} month={record.month}"
-        ) from exc
+        raise HTTPException(503, detail={"code": "corrupt_consumption_cache",
+            "message": f"电费消费记录缓存损坏，请重新查询：month={record.month}"}) from exc
     if not isinstance(items, list):
-        raise RuntimeError(f"电费消费记录缓存格式无效：room_id={record.room_id} month={record.month}")
+        raise HTTPException(503, detail={"code": "corrupt_consumption_cache",
+            "message": f"电费缓存格式无效，请重新查询：month={record.month}"})
     return {"status": "ok", "items": items, "cachedAt": record.cached_at.isoformat()}
 
 
 def _save_power_consumption(room_id: str, month: str, data: dict[str, Any]) -> dict[str, Any]:
     items = data.get("items")
     if not isinstance(items, list):
-        raise RuntimeError(f"一卡通消费记录格式无效：room_id={room_id} month={month}")
+        raise HTTPException(502, detail=f"一卡通消费记录格式无效：month={month}")
     now = datetime.now(timezone.utc)
-    serialized_items = json.dumps(items, ensure_ascii=False)
+    normalized_items = []
+    for item in items:
+        if not isinstance(item, dict):
+            raise HTTPException(502, detail=f"一卡通消费记录条目格式无效：month={month}")
+        normalized = dict(item)
+        if item.get("date"):
+            try:
+                parsed_date = datetime.fromisoformat(str(item["date"]).replace("/", "-"))
+            except ValueError as exc:
+                raise HTTPException(502, detail=f"一卡通消费日期无效：month={month}") from exc
+            if parsed_date.strftime("%Y-%m") != month:
+                raise HTTPException(502, detail=f"一卡通消费日期与查询月份不符：month={month}")
+            normalized["date"] = parsed_date.date().isoformat()
+        usage = item.get("usage")
+        if usage is not None:
+            if isinstance(usage, bool):
+                raise HTTPException(502, detail=f"一卡通用量无效：month={month}")
+            try:
+                numeric_usage = float(usage)
+            except (ValueError, TypeError) as exc:
+                raise HTTPException(502, detail=f"一卡通用量不是数值：month={month}") from exc
+            if not math.isfinite(numeric_usage) or numeric_usage < 0:
+                raise HTTPException(502, detail=f"一卡通用量不是有限非负数：month={month}")
+            normalized["usage"] = numeric_usage
+        if item.get("unit") is not None and item["unit"] != "度":
+            raise HTTPException(502, detail=f"一卡通用量单位无效：month={month}")
+        normalized_items.append(normalized)
+    serialized_items = json.dumps(normalized_items, ensure_ascii=False, allow_nan=False)
     factory = get_sync_session_factory()
     with factory() as db:
         record = (
@@ -698,23 +731,48 @@ def _save_power_consumption(room_id: str, month: str, data: dict[str, Any]) -> d
             record.cached_at = now
         db.commit()
         db.refresh(record)
-        return _consumption_response(record)
+        return _validated_consumption_response(record)
+
+
+def _validated_consumption_response(record: EcardPowerConsumption) -> dict[str, Any]:
+    response = _consumption_response(record)
+    try:
+        EcardConsumptionResponse.model_validate(response)
+    except ValidationError as exc:
+        raise HTTPException(503, detail={"code": "invalid_consumption_cache",
+            "message": f"电费用量缓存数据无效，请重新查询：month={record.month}"}) from exc
+    return response
 
 
 def _monthly_overview(record: EcardPowerConsumption) -> dict[str, Any]:
-    response = _consumption_response(record)
-    numeric_items = [
-        item
-        for item in response["items"]
-        if isinstance(item, dict)
-        and isinstance(item.get("usage"), (int, float))
-        and isinstance(item.get("date"), str)
-        and item["date"]
-    ]
-    if not numeric_items:
-        raise RuntimeError(
-            f"电费消费记录缺少可统计用电量：room_id={record.room_id} month={record.month}"
-        )
+    def unavailable(code: str, message: str) -> dict[str, Any]:
+        return {"month": record.month, "reasonCode": code, "message": message,
+                "cachedAt": record.cached_at.isoformat()}
+
+    try:
+        response = _consumption_response(record)
+    except HTTPException:
+        return unavailable("corrupt_cache", "缓存损坏，请重新查询")
+    items = response["items"]
+    if not items:
+        return unavailable("no_records", "暂无记录")
+    numeric_items = []
+    for item in items:
+        if not isinstance(item, dict):
+            return unavailable("invalid_data", "记录格式无效，请重新查询")
+        usage = item.get("usage")
+        if usage is None or not item.get("date") or not item.get("unit"):
+            return unavailable("incomplete_data", "数据不完整，缺少日期、用量或单位")
+        if (isinstance(usage, bool) or not isinstance(usage, (int, float))
+                or not math.isfinite(usage) or usage < 0 or item["unit"] != "度"):
+            return unavailable("invalid_data", "用量或单位无效，请重新查询")
+        try:
+            parsed_date = datetime.fromisoformat(item["date"])
+        except (TypeError, ValueError):
+            return unavailable("invalid_data", "日期无效，请重新查询")
+        if parsed_date.strftime("%Y-%m") != record.month:
+            return unavailable("invalid_data", "日期与月份不符，请重新查询")
+        numeric_items.append(item)
     peak = min(numeric_items, key=lambda item: (-float(item["usage"]), item["date"]))
     total_usage = sum(float(item["usage"]) for item in numeric_items)
     return {

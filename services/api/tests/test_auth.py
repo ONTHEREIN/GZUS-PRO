@@ -203,7 +203,7 @@ class CookieSchoolConnector:
         self._account: str | None = None
         self._cookies = ""
 
-    def login_with_cookies(self, cookies: str, account: str) -> str:
+    def login_with_cookies(self, cookies: str, account: str, validate: bool = True) -> str:
         self._account = account
         self._cookies = cookies
         return "自动登录学生"
@@ -279,7 +279,7 @@ def test_native_sso_handoff_hides_ticket_and_requires_verifier(
     monkeypatch.setattr(
         auth_routes,
         "_complete_sso_ticket",
-        lambda ticket, request: {
+        lambda ticket, request, installation_id: {
             "status": "ok",
             "sessionId": "native-session",
             "studentName": ticket,

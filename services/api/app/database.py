@@ -234,6 +234,23 @@ class AppSessionModel(Base):
     revoked_reason = Column(String(100), nullable=True)
 
 
+class DeviceAuthorization(Base):
+    """安装实例的独立长期授权；只保存随机令牌摘要与可选密码密文。"""
+
+    __tablename__ = "device_authorizations"
+    token_digest = Column(String(64), primary_key=True)
+    student_account = Column(String(100), nullable=False, index=True)
+    installation_id = Column(String(100), nullable=False, index=True)
+    login_method = Column(String(20), nullable=False)
+    store_school_password = Column(Boolean, nullable=False)
+    encrypted_credentials = Column(Text, nullable=True)
+    session_id = Column(String(64), nullable=True)
+    created_at = Column(DateTime, nullable=False)
+    last_used_at = Column(DateTime, nullable=False)
+    revoked_at = Column(DateTime, nullable=True)
+    revoked_reason = Column(String(100), nullable=True)
+
+
 class CredentialRevocation(Base):
     """管理员撤销某设备长期自动登录凭据的持久化记录。"""
 
@@ -1001,6 +1018,27 @@ def init_db():
                 "WHERE token_type = 'activity' AND expires_at IS NULL"
             )
         )
+
+    # 为升级前已发行且未撤销的设备凭据保留引用，避免闲置清理误删 SSO Cookie。
+    with engine.begin() as connection:
+        connection.execute(text("""
+            INSERT INTO device_authorizations
+                (token_digest, student_account, installation_id, login_method,
+                 store_school_password, encrypted_credentials, session_id,
+                 created_at, last_used_at)
+            SELECT credential_fingerprint, student_account,
+                   'legacy:' || credential_fingerprint, 'legacy', FALSE, NULL, id,
+                   created_at, last_active_at
+            FROM app_sessions
+            WHERE credential_fingerprint IS NOT NULL AND student_account IS NOT NULL
+              AND revoked_at IS NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM credential_revocations
+                  WHERE credential_revocations.credential_fingerprint =
+                        app_sessions.credential_fingerprint
+              )
+            ON CONFLICT (token_digest) DO NOTHING
+        """))
 
     if _is_sqlite(engine):
         _apply_sqlite_pragmas(engine)

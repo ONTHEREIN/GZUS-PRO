@@ -207,6 +207,19 @@ class SchoolSdkClient:
             self._student_name = name
         return name
 
+    def validate_session(self) -> None:
+        """直接校验学校会话，不能用本地身份字段或业务缓存代替认证。"""
+        response = self._proxy_response(
+            "GET", INFO_URL,
+            params={"gnmkdm": INFO_GNMKDM, "su": self._account or ""},
+        )
+        html = self._response_text(response)
+        if "col_xh" in html:
+            return
+        if self._looks_like_login_page(html):
+            raise AuthenticationError("教务系统会话已过期，请使用学号密码重新登录")
+        raise RuntimeError("教务系统会话校验未返回学生信息页，请检查学校接口响应")
+
     def get_info(self) -> dict:
         # Try SDK first
         info: dict = {}

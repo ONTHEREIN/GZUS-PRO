@@ -259,7 +259,7 @@ def test_get_expired_session_cleans_unowned_push_targets():
         assert [row.session_id for row in db.query(WebPushSubscription).all()] == [persistent.id]
         assert db.query(IosPushToken).count() == 0
         assert db.query(IosLiveActivityToken).count() == 0
-        assert db.query(SchoolAccountSession).count() == 0
+        assert db.query(SchoolAccountSession).count() == 1
     assert temporary.id not in store._sessions
     assert persistent.id not in store._sessions
 

@@ -15,6 +15,7 @@ from app.demo_data import DemoAcademicClient, DemoEhallClient, DEMO_STUDENT_ID, 
 from app.ehall_client import EhallClient
 from app.rate_limit import limiter
 from app.routes.deps import require_session
+from app.routes.device_auth import router as device_router
 from app.schemas import (
     AuthResponse,
     AutoLoginRequest,
@@ -203,7 +204,7 @@ def ly_sso_callback(ticket: str = "", state: str = "", request: Request = None):
 @router.post("/ly/complete", response_model=AuthResponse)
 @limiter.limit("10/minute")
 def ly_sso_complete(payload: SsoCompleteRequest, request: Request) -> dict:
-    return _complete_sso_ticket(payload.sso_code, request)
+    return _complete_sso_ticket(payload.sso_code, request, payload.installation_id)
 
 
 @router.post("/ly/native-complete", response_model=AuthResponse)
@@ -216,10 +217,10 @@ def ly_native_sso_complete(payload: NativeSsoCompleteRequest, request: Request) 
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="认证凭证无效或已过期")
     if not compare_digest(handoff.verifier_hash, _hash_verifier(payload.verifier)):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="认证校验失败，请重新登录")
-    return _complete_sso_ticket(handoff.ticket, request)
+    return _complete_sso_ticket(handoff.ticket, request, payload.installation_id)
 
 
-def _complete_sso_ticket(ticket: str, request: Request) -> dict:
+def _complete_sso_ticket(ticket: str, request: Request, installation_id: str | None) -> dict:
     """Complete SSO login by exchanging the CAS service ticket for JWXT cookies.
 
     The sso_code from the frontend is a CAS Service Ticket, NOT a cookie.
@@ -316,6 +317,13 @@ def _complete_sso_ticket(ticket: str, request: Request) -> dict:
         "studentId": student_id,
         "sessionRefreshToken": session_refresh_token,
     }
+    if installation_id is not None:
+        from app.device_authorization import issue_device_grant
+        with account_school_session_lock(student_id):
+            response["deviceToken"] = issue_device_grant(
+                session, installation_id, None, False, "sso", None,
+            )
+        response.pop("sessionRefreshToken", None)
     if _should_return_jwxt_cookies(request):
         response["jwxtCookies"] = client.get_jwxt_cookies_string()
     return response
@@ -397,6 +405,20 @@ def session_relogin(payload: ReloginRequest, request: Request) -> dict:
 @router.post("/relogin", response_model=AuthResponse)
 @limiter.limit("10/minute")
 def relogin(payload: ReloginRequest, request: Request) -> dict:
+    from app.sessions import decrypt_credential_payload
+    from app.school_session_service import account_school_session_lock
+    from cryptography.fernet import InvalidToken
+    try:
+        account, _, _ = decrypt_credential_payload(
+            payload.credential_token, get_settings().credential_encryption_key,
+        )
+    except (ValueError, InvalidToken) as exc:
+        raise HTTPException(401, detail="凭据已失效，请重新登录") from exc
+    with account_school_session_lock(account):
+        return _relogin_impl(payload, request)
+
+
+def _relogin_impl(payload: ReloginRequest, request: Request) -> dict:
     from app.cas_auto_login import CasAutoLogin
     from app.sessions import (
         CredentialRevokedError,
@@ -441,6 +463,7 @@ def relogin(payload: ReloginRequest, request: Request) -> dict:
         ehall_service_url=settings.ehall_service_url,
         timeout=settings.cas_login_timeout_seconds,
     )
+    cas_auto_login.request_id = getattr(request.state, "trace_id", None)
     result = cas_auto_login.auto_login(account, password)
     if result.error:
         _raise_cas_login_error(result.error, result.error_status, result.error_code)
@@ -451,7 +474,7 @@ def relogin(payload: ReloginRequest, request: Request) -> dict:
         httpx_client=result.httpx_client,
     )
     try:
-        student_name = client.login_with_cookies(result.cookies, account=result.account)
+        student_name = client.login_with_cookies(result.cookies, account=result.account, validate=False)
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="学校登录会话恢复失败") from exc
 
@@ -507,6 +530,12 @@ def relogin(payload: ReloginRequest, request: Request) -> dict:
 @router.post("/auto-login", response_model=AuthResponse)
 @limiter.limit("10/minute")
 def auto_login(payload: AutoLoginRequest, request: Request) -> dict:
+    from app.school_session_service import account_school_session_lock
+    with account_school_session_lock(payload.account):
+        return _auto_login_impl(payload, request)
+
+
+def _auto_login_impl(payload: AutoLoginRequest, request: Request) -> dict:
     try:
         password = payload.resolve_password()
     except ValueError as exc:
@@ -551,6 +580,7 @@ def auto_login(payload: AutoLoginRequest, request: Request) -> dict:
         timeout=settings.cas_login_timeout_seconds,
     )
     t1 = time.time()
+    cas_auto_login.request_id = getattr(request.state, "trace_id", None)
     result = cas_auto_login.auto_login(payload.account, password)
     logger.info("[TIMING] cas_auto_login.auto_login: %.2fs", time.time() - t1)
 
@@ -564,7 +594,7 @@ def auto_login(payload: AutoLoginRequest, request: Request) -> dict:
     )
     t2 = time.time()
     try:
-        student_name = client.login_with_cookies(result.cookies, result.account)
+        student_name = client.login_with_cookies(result.cookies, result.account, validate=False)
     except AuthenticationError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="学校登录会话建立失败") from exc
     logger.info("[TIMING] login_with_cookies: %.2fs", time.time() - t2)
@@ -620,6 +650,14 @@ def auto_login(payload: AutoLoginRequest, request: Request) -> dict:
         "ehallCookies": result.ehall_cookies,
         "ehallAuthToken": result.ehall_auth_token,
     }
+    response["ehallError"] = result.ehall_error
+    if payload.installation_id is not None:
+        from app.device_authorization import issue_device_grant
+        response["deviceToken"] = issue_device_grant(
+            session, payload.installation_id, password,
+            payload.store_school_password, "password", None,
+        )
+        response.pop("credentialToken", None)
     if _should_return_jwxt_cookies(request):
         response["jwxtCookies"] = result.cookies
     return response
@@ -670,6 +708,11 @@ async def logout(request: Request) -> dict:
 
     fingerprint: str | None = None
     account: str | None = None
+    if payload.device_token:
+        from starlette.concurrency import run_in_threadpool
+        fingerprint, account = await run_in_threadpool(
+            _revoke_device_logout, payload.device_token, request,
+        )
     if payload.credential_token:
         try:
             try:
@@ -702,3 +745,24 @@ async def logout(request: Request) -> dict:
         for revoked_id in revoked_ids:
             await request.app.state.ws_manager.revoke(revoked_id)
     return {"status": "ok"}
+
+
+def _revoke_device_logout(device_token: str, request: Request) -> tuple[str, str]:
+    """账号锁与数据库工作在工作线程执行，避免退出请求阻塞整个 API 事件循环。"""
+    from app.device_authorization import revoke_device_grant
+    from app.sessions import credential_fingerprint
+    from app.school_session_service import account_school_session_lock
+    from app.database import DeviceAuthorization, get_sync_session_factory
+    with get_sync_session_factory()() as db:
+        row = db.get(DeviceAuthorization, credential_fingerprint(device_token))
+        if row is None:
+            raise HTTPException(401, detail="设备授权不存在")
+        device_account = row.student_account
+    with account_school_session_lock(device_account):
+        return revoke_device_grant(
+            device_token, request.app.state.sessions,
+            request.headers.get("X-Session-Id") or "",
+        )
+
+
+router.include_router(device_router)

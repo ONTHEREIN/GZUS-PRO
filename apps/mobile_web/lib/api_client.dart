@@ -57,6 +57,7 @@ http.Client _createDefaultClient() {
     return http.Client();
   }
   final ioClient = HttpClient();
+  ioClient.connectionTimeout = const Duration(seconds: 10);
   ioClient.userAgent = 'GZUS-PRO/1.0';
   return IOClient(ioClient);
 }
@@ -127,6 +128,64 @@ class ApiClient {
   Future<PersistentCache>? _persistentCacheFuture;
   PersistentCache? _publicPersistentCache;
   Future<PersistentCache>? _publicPersistentCacheFuture;
+  String? _deviceToken;
+  String? _unsavedDeviceToken;
+  String? get deviceToken => _deviceToken;
+  String? ehallError;
+  int _authGeneration = 0;
+  int get authGeneration => _authGeneration;
+  Future<void> _authWrites = Future<void>.value();
+
+  void _checkAuthGeneration(int generation) {
+    if (generation != _authGeneration) {
+      throw ApiException('登录请求已取消，请重新操作', code: 'authentication_cancelled');
+    }
+  }
+
+  void assertAuthenticationGeneration(int generation) =>
+      _checkAuthGeneration(generation);
+
+  Future<void> saveLoginMetadata(LoginResult result) async {
+    final generation = _authGeneration;
+    if (result.sessionId != sessionId) {
+      throw ApiException('登录结果已取消', code: 'authentication_cancelled');
+    }
+    await _writeAuth(() async {
+      _checkAuthGeneration(generation);
+      final prefs = await SharedPreferences.getInstance();
+      _checkAuthGeneration(generation);
+      if (result.sessionId != null) {
+        await prefs.setString('auth.sessionId', result.sessionId!);
+      }
+      if (result.studentName != null) {
+        await prefs.setString('auth.studentName', result.studentName!);
+      }
+      if (result.studentId != null) {
+        await prefs.setString('auth.studentId', result.studentId!);
+      }
+      await prefs.setBool('auth.isDemo', result.isDemo);
+      await prefs.remove('auth.loginMethod');
+      _checkAuthGeneration(generation);
+    });
+  }
+
+  Future<void> _writeAuth(Future<void> Function() write) async {
+    final previous = _authWrites;
+    final completer = Completer<void>();
+    _authWrites = completer.future;
+    await previous;
+    try {
+      await write();
+    } finally {
+      completer.complete();
+    }
+  }
+
+  bool get hasLegacyCredential =>
+      _deviceToken == null &&
+      (_credentialToken != null || _sessionRefreshToken != null);
+  bool get hasDeviceCredential => _deviceToken != null;
+
   String? _credentialToken;
   String? _sessionRefreshToken;
   String? _jwxtCookies;
@@ -210,10 +269,12 @@ class ApiClient {
     if (studentId.isEmpty) {
       throw ArgumentError.value(studentId, 'studentId', '学号不能为空');
     }
+    final generation = _authGeneration;
     await PersistentCache.migrateNamespace(
       fromNamespace: sessionNamespace,
       toNamespace: studentId,
     );
+    _checkAuthGeneration(generation);
     setStudentId(studentId);
   }
 
@@ -548,8 +609,12 @@ class ApiClient {
   }
 
   Future<LoginResult> completeLySso(String ssoCode) async {
-    final response =
-        await _postWithoutRelogin('/auth/ly/complete', {'ssoCode': ssoCode});
+    final generation = ++_authGeneration;
+    final response = await _postWithoutRelogin('/auth/ly/complete', {
+      'ssoCode': ssoCode,
+      'installationId': await NotificationInstallation.id(),
+    });
+    _checkAuthGeneration(generation);
     return _applySsoLoginResponse(response);
   }
 
@@ -564,44 +629,73 @@ class ApiClient {
   }
 
   Future<LoginResult> completeNativeLySso(String code, String verifier) async {
+    final generation = ++_authGeneration;
     final response = await _postWithoutRelogin(
       '/auth/ly/native-complete',
-      {'code': code, 'verifier': verifier},
+      {
+        'code': code,
+        'verifier': verifier,
+        'installationId': await NotificationInstallation.id()
+      },
     );
+    _checkAuthGeneration(generation);
     return _applySsoLoginResponse(response);
   }
 
   Future<LoginResult> _applySsoLoginResponse(
       Map<String, dynamic> response) async {
-    final result = LoginResult.fromJson(response);
+    return _adoptSsoLoginResult(LoginResult.fromJson(response));
+  }
+
+  Future<LoginResult> _adoptSsoLoginResult(LoginResult result) async {
+    final generation = _authGeneration;
+    if (result.deviceToken != null) {
+      await persistDeviceToken(result.deviceToken!);
+      _checkAuthGeneration(generation);
+    }
     sessionId = result.sessionId;
     _isDemo = result.isDemo;
     await _adoptLoginIdentity(result);
+    _checkAuthGeneration(generation);
     _captureTransientEhallAuth(result);
     _cache.clear();
     await clearSavedCredentialToken();
+    _checkAuthGeneration(generation);
     await saveSessionRefreshToken(result.sessionRefreshToken);
     await _saveSchoolAuth(result);
+    _checkAuthGeneration(generation);
     return result;
   }
 
-  Future<LoginResult> autoLogin(String account, String password) async {
+  Future<LoginResult> autoLogin(String account, String password,
+      {required bool storeSchoolPassword}) async {
+    final generation = ++_authGeneration;
     _account = account;
     final response = await _postLoginWithFreshKeyRetry(
       '/auth/auto-login',
       account,
       password,
+      {
+        'installationId': await NotificationInstallation.id(),
+        'storeSchoolPassword': storeSchoolPassword,
+      },
     );
+    _checkAuthGeneration(generation);
     final result = LoginResult.fromJson(response);
     sessionId = result.sessionId;
     await _adoptLoginIdentity(result);
+    _checkAuthGeneration(generation);
     _captureTransientEhallAuth(result);
     _cache.clear();
     _sessionRefreshToken = null;
+    _deviceToken = result.deviceToken;
+    _credentialToken = result.credentialToken;
+    ehallError = result.ehallError;
     if (result.credentialToken != null) {
       _credentialToken = result.credentialToken;
     }
     await _saveSchoolAuth(result);
+    _checkAuthGeneration(generation);
     return result;
   }
 
@@ -609,14 +703,17 @@ class ApiClient {
     String path,
     String account,
     String password,
+    Map<String, dynamic> deviceOptions,
   ) async {
     await fetchPublicKey();
     try {
-      return await _postWithoutRelogin(path, _loginPayload(account, password));
+      return await _postWithoutRelogin(
+          path, {..._loginPayload(account, password), ...deviceOptions});
     } on ApiException catch (e) {
       if (!_isPasswordDecryptFailure(e.message)) rethrow;
       await _refreshPublicKey();
-      return _postWithoutRelogin(path, _loginPayload(account, password));
+      return _postWithoutRelogin(
+          path, {..._loginPayload(account, password), ...deviceOptions});
     }
   }
 
@@ -664,6 +761,10 @@ class ApiClient {
 
   /// 立即清除凭证，防止后续请求触发 relogin 重试
   void clearCredentials() {
+    _authGeneration++;
+    _deviceToken = null;
+    _unsavedDeviceToken = null;
+    ehallError = null;
     sessionId = null;
     _account = null;
     setStudentId(null);
@@ -679,8 +780,10 @@ class ApiClient {
 
   Future<void> clearSavedAuthState() async {
     clearCredentials();
-    await _authStorage.clear();
-    await _clearSavedAuthPreferences();
+    await _writeAuth(() async {
+      await _authStorage.clear();
+      await _clearSavedAuthPreferences();
+    });
   }
 
   Future<void> clearSessionRefreshToken() async {
@@ -693,7 +796,7 @@ class ApiClient {
     if (_offlineScheduleStudentId != null) return;
     final expiredStudentId = _studentId;
     _clearAuthenticationForReverification();
-    await _authStorage.clear();
+    await _writeAuth(_authStorage.clear);
     await _clearSavedSessionPreferencesForReverification();
     if (expiredStudentId == null || expiredStudentId.isEmpty) return;
     _offlineScheduleStudentId = expiredStudentId;
@@ -713,6 +816,8 @@ class ApiClient {
   }
 
   void _clearAuthenticationForReverification() {
+    _authGeneration++;
+    _deviceToken = null;
     sessionId = null;
     setStudentId(null);
     _offlineScheduleStudentId = null;
@@ -748,6 +853,7 @@ class ApiClient {
   }
 
   Future<LoginResult> _reloginOnce() async {
+    final generation = _authGeneration;
     try {
       await loadSavedCredentials();
     } on PlatformException catch (error, stackTrace) {
@@ -755,6 +861,8 @@ class ApiClient {
       debugPrint('[Auth] 读取本地自动登录凭据失败：${error.code}');
       rethrow;
     }
+    _checkAuthGeneration(generation);
+    if (_deviceToken != null) return _restoreDevice(generation);
     final hasCredentialToken =
         _credentialToken != null && _credentialToken!.isNotEmpty;
     final credentialStatus =
@@ -777,6 +885,7 @@ class ApiClient {
 
   Future<LoginResult> _reloginWithCredentialToken(
       String credentialToken) async {
+    final generation = _authGeneration;
     // 直接发HTTP请求，不走 _withReloginRetry，避免 relogin 自身 401 时无限递归
     final url = _requireBaseUrl();
     late final http.Response response;
@@ -785,7 +894,7 @@ class ApiClient {
           .post(Uri.parse('$url/auth/relogin'),
               headers: _headers(),
               body: jsonEncode({'credentialToken': credentialToken}))
-          .timeout(_requestTimeout);
+          .timeout(const Duration(seconds: 70));
     } on TimeoutException {
       AppLogger.warning('自动续登请求超时');
       debugPrint('[Auth] 自动续登请求超时');
@@ -801,17 +910,21 @@ class ApiClient {
     }
     AppLogger.info('自动续登响应：status=${response.statusCode}');
     debugPrint('[Auth] 自动续登响应：status=${response.statusCode}');
+    _checkAuthGeneration(generation);
     final decoded = _decode(response);
     final result = LoginResult.fromJson(decoded as Map<String, dynamic>);
     final previousSessionId = sessionId;
     sessionId = result.sessionId;
     await _adoptLoginIdentity(result);
+    _checkAuthGeneration(generation);
     _captureTransientEhallAuth(result);
     _cache.clear();
     _sessionRefreshToken = null;
 
     await saveCredentialToken(result.credentialToken ?? credentialToken);
+    _checkAuthGeneration(generation);
     await _saveSchoolAuth(result);
+    _checkAuthGeneration(generation);
     final activeSessionId = result.sessionId;
     final sessionStatus =
         '自动续登完成：sessionRotated=${activeSessionId != null && activeSessionId != previousSessionId}';
@@ -825,6 +938,7 @@ class ApiClient {
 
   Future<LoginResult> _reloginWithSessionRefreshToken(
       String sessionRefreshToken) async {
+    final generation = _authGeneration;
     final url = _requireBaseUrl();
     final response = await _http
         .post(
@@ -832,19 +946,23 @@ class ApiClient {
           headers: _headers(),
           body: jsonEncode({'credentialToken': sessionRefreshToken}),
         )
-        .timeout(_requestTimeout);
+        .timeout(const Duration(seconds: 70));
+    _checkAuthGeneration(generation);
     final decoded = _decode(response);
     final result = LoginResult.fromJson(decoded as Map<String, dynamic>);
     final previousSessionId = sessionId;
     sessionId = result.sessionId;
     await _adoptLoginIdentity(result);
+    _checkAuthGeneration(generation);
     _captureTransientEhallAuth(result);
     _cache.clear();
     await clearSavedCredentialToken();
+    _checkAuthGeneration(generation);
     await saveSessionRefreshToken(
       result.sessionRefreshToken ?? sessionRefreshToken,
     );
     await _saveSchoolAuth(result);
+    _checkAuthGeneration(generation);
     final activeSessionId = result.sessionId;
     if (activeSessionId != null && activeSessionId != previousSessionId) {
       await onSessionReplaced?.call(activeSessionId);
@@ -852,10 +970,100 @@ class ApiClient {
     return result;
   }
 
+  Future<void> persistDeviceToken(String token) async {
+    final generation = _authGeneration;
+    _unsavedDeviceToken = token;
+    await _writeAuth(() async {
+      _checkAuthGeneration(generation);
+      await _authStorage.saveDeviceToken(token);
+      _checkAuthGeneration(generation);
+      _deviceToken = token;
+      _unsavedDeviceToken = null;
+    });
+  }
+
+  Future<LoginResult> _restoreDevice(int generation) async {
+    final response = await _postWithoutRelogin('/auth/device/restore', {
+      'deviceToken': _deviceToken,
+      'installationId': await NotificationInstallation.id(),
+    });
+    return _applyDeviceResponse(response, generation);
+  }
+
+  Future<void> reconnectEhall() async {
+    final generation = _authGeneration;
+    final response = await _postWithoutRelogin('/auth/device/ehall-retry', {
+      'deviceToken': _deviceToken,
+      'installationId': await NotificationInstallation.id(),
+    });
+    await _applyDeviceResponse(response, generation);
+  }
+
+  Future<LoginResult> _applyDeviceResponse(
+      Map<String, dynamic> response, int generation) async {
+    _checkAuthGeneration(generation);
+    final result = LoginResult.fromJson(response);
+    final previous = sessionId;
+    sessionId = result.sessionId;
+    ehallError = result.ehallError;
+    await _adoptLoginIdentity(result);
+    _checkAuthGeneration(generation);
+    await saveLoginMetadata(result);
+    _checkAuthGeneration(generation);
+    _cache.clear();
+    if (result.sessionId != null && previous != result.sessionId) {
+      await onSessionReplaced?.call(result.sessionId!);
+    }
+    return result;
+  }
+
+  Future<LoginResult> migrateDeviceCredentials(bool storeSchoolPassword) async {
+    final generation = _authGeneration;
+    final response = await _postWithoutRelogin('/auth/device/migrate', {
+      'installationId': await NotificationInstallation.id(),
+      'storeSchoolPassword': storeSchoolPassword,
+      'credentialToken': _credentialToken ?? _sessionRefreshToken,
+    });
+    _checkAuthGeneration(generation);
+    final result = LoginResult.fromJson(response);
+    final token = result.deviceToken;
+    if (token == null || token.isEmpty) throw ApiException('迁移响应缺少设备令牌');
+    _deviceToken = token;
+    await persistDeviceToken(token);
+    await clearSavedCredentialToken();
+    await clearSessionRefreshToken();
+    await _authStorage.clearPassword();
+    sessionId = result.sessionId;
+    await _adoptLoginIdentity(result);
+    return result;
+  }
+
+  Future<void> queueDeviceLogout(String token, String? activeSessionId) =>
+      _authStorage.savePendingDeviceLogout(jsonEncode({
+        'deviceToken': token,
+        'sessionId': activeSessionId,
+      }));
+
+  Future<void> retryPendingDeviceLogout() async {
+    final value = await _authStorage.loadPendingDeviceLogout();
+    if (value == null) return;
+    final payload = jsonDecode(value) as Map<String, dynamic>;
+    await _postSessionCleanupWithBody(
+        '/auth/logout', payload['sessionId'] as String? ?? '', {
+      'deviceToken': payload['deviceToken'],
+    });
+    await _authStorage.savePendingDeviceLogout(null);
+  }
+
   Future<void> saveSessionRefreshToken(String? token) async {
     if (token == null || token.isEmpty) return;
-    await _authStorage.saveSessionRefreshToken(token);
-    _sessionRefreshToken = token;
+    final generation = _authGeneration;
+    await _writeAuth(() async {
+      _checkAuthGeneration(generation);
+      await _authStorage.saveSessionRefreshToken(token);
+      _checkAuthGeneration(generation);
+      _sessionRefreshToken = token;
+    });
   }
 
   Future<void> _adoptLoginIdentity(LoginResult result) async {
@@ -872,8 +1080,13 @@ class ApiClient {
 
   Future<void> saveCredentialToken(String? credentialToken) async {
     if (credentialToken == null || credentialToken.isEmpty) return;
-    await _authStorage.saveCredentialToken(credentialToken);
-    _credentialToken = credentialToken;
+    final generation = _authGeneration;
+    await _writeAuth(() async {
+      _checkAuthGeneration(generation);
+      await _authStorage.saveCredentialToken(credentialToken);
+      _checkAuthGeneration(generation);
+      _credentialToken = credentialToken;
+    });
   }
 
   Future<void> clearSavedCredentialToken() async {
@@ -909,6 +1122,13 @@ class ApiClient {
   }
 
   Future<void> _saveSchoolAuth(LoginResult result) async {
+    if (_deviceToken != null) {
+      await _authStorage.saveSchoolAuth(null, null, null);
+      _jwxtCookies = null;
+      _ehallCookies = null;
+      _ehallAuthToken = null;
+      return;
+    }
     final prefs = await SharedPreferences.getInstance();
     if (result.sessionId != null && result.sessionId!.isNotEmpty) {
       await prefs.setString('auth.sessionId', result.sessionId!);
@@ -922,10 +1142,13 @@ class ApiClient {
   }
 
   Future<void> loadSavedCredentials() async {
+    final generation = _authGeneration;
     final prefs = await SharedPreferences.getInstance();
     final sensitiveAuth = await _authStorage.load();
+    _checkAuthGeneration(generation);
     _account = prefs.getString('auth.account');
     _isDemo = prefs.getBool('auth.isDemo') ?? false;
+    _deviceToken = _unsavedDeviceToken ?? sensitiveAuth.deviceToken;
     _credentialToken = sensitiveAuth.credentialToken;
     _sessionRefreshToken = sensitiveAuth.sessionRefreshToken;
     if (_isSchoolDirectEnabled) {
@@ -1034,7 +1257,6 @@ class ApiClient {
       if (url.isEmpty) return null;
       final response = await _http
           .get(Uri.parse('$url/me'), headers: _headers())
-          .timeout(_connectTimeout)
           .timeout(_requestTimeout);
       if (response.statusCode >= 400) {
         // Silently ignore errors — this is a best-effort fetch after login.
@@ -1075,7 +1297,6 @@ class ApiClient {
       final url = _requireBaseUrl();
       final response = await _http
           .get(Uri.parse('$url/settings/schedule'), headers: _headers())
-          .timeout(_connectTimeout)
           .timeout(_requestTimeout);
       if (response.statusCode >= 400) return null;
       return ScheduleSettings.fromJson(_decodeObject(response));
@@ -1548,13 +1769,10 @@ class ApiClient {
     final location = lat != null && lon != null
         ? '${lat.toStringAsFixed(2)},${lon.toStringAsFixed(2)}'
         : 'Guangzhou';
-    final response = await _http
-        .get(
-          Uri.https('wttr.in', '/$location', {'format': 'j1'}),
-          headers: {'Accept': 'application/json', 'User-Agent': 'OneGZUS/1.0'},
-        )
-        .timeout(_connectTimeout)
-        .timeout(_requestTimeout);
+    final response = await _http.get(
+      Uri.https('wttr.in', '/$location', {'format': 'j1'}),
+      headers: {'Accept': 'application/json', 'User-Agent': 'OneGZUS/1.0'},
+    ).timeout(_requestTimeout);
     return _normalizeWttrWeather(_decodeObject(response));
   }
 
@@ -2230,6 +2448,11 @@ class ApiClient {
     return EcardSummary.fromJson(data);
   }
 
+  Future<void> refreshEcardConsumption(String month) async {
+    await _get(
+        '/ecard/consumption?month=${Uri.encodeComponent(month)}&refresh=true');
+  }
+
   Future<EcardConsumptionResponse> ecardConsumption({String? month}) async {
     try {
       final path = month == null
@@ -2763,7 +2986,6 @@ class ApiClient {
   }
 
   static const Duration _requestTimeout = Duration(seconds: 30);
-  static const Duration _connectTimeout = Duration(seconds: 10);
   static const int _maxRetries = 1;
 
   Future<Map<String, dynamic>> _get(String path) async {
@@ -2772,7 +2994,6 @@ class ApiClient {
         final url = _requireBaseUrl();
         final response = await _http
             .get(Uri.parse('$url$path'), headers: _headers())
-            .timeout(_connectTimeout)
             .timeout(_requestTimeout);
         return _decodeObject(response);
       },
@@ -2784,11 +3005,8 @@ class ApiClient {
     return _withReloginRetry(
       () async {
         final url = _requireBaseUrl();
-        final response = await _http
-            .get(Uri.parse('$url$path'),
-                headers: {..._headers(), ...extraHeaders})
-            .timeout(_connectTimeout)
-            .timeout(_requestTimeout);
+        final response = await _http.get(Uri.parse('$url$path'),
+            headers: {..._headers(), ...extraHeaders}).timeout(_requestTimeout);
         return _decodeObject(response);
       },
     );
@@ -2813,7 +3031,6 @@ class ApiClient {
         final url = _requireBaseUrl();
         final response = await _http
             .get(Uri.parse('$url$path'), headers: _headers())
-            .timeout(_connectTimeout)
             .timeout(_requestTimeout);
         return _Fetched(
           data: _decodeObject(response),
@@ -2829,7 +3046,6 @@ class ApiClient {
         final url = _requireBaseUrl();
         final response = await _http
             .get(Uri.parse('$url$path'), headers: _headers())
-            .timeout(_connectTimeout)
             .timeout(_requestTimeout);
         final decoded = _decode(response);
         if (decoded is! List<dynamic>) {
@@ -2848,7 +3064,6 @@ class ApiClient {
         final url = _requireBaseUrl();
         final response = await _http
             .get(Uri.parse('$url$path'), headers: _headers())
-            .timeout(_connectTimeout)
             .timeout(_requestTimeout);
         final decoded = _decode(response);
         if (decoded is! List<dynamic>) {
@@ -2887,8 +3102,9 @@ class ApiClient {
           headers: {..._headers(), ...extraHeaders},
           body: jsonEncode(body),
         )
-        .timeout(_connectTimeout)
-        .timeout(_requestTimeout);
+        .timeout(path.startsWith('/auth/')
+            ? const Duration(seconds: 70)
+            : _requestTimeout);
     return _decodeObject(response);
   }
 
@@ -2903,7 +3119,6 @@ class ApiClient {
               headers: _headers(),
               body: jsonEncode(body),
             )
-            .timeout(_connectTimeout)
             .timeout(_requestTimeout);
         return _decodeObject(response);
       },
@@ -2921,7 +3136,6 @@ class ApiClient {
               headers: _headers(),
               body: jsonEncode(body),
             )
-            .timeout(_connectTimeout)
             .timeout(_requestTimeout);
         return _decodeObject(response);
       },
@@ -2934,7 +3148,6 @@ class ApiClient {
         final url = _requireBaseUrl();
         final response = await _http
             .delete(Uri.parse('$url$path'), headers: _headers())
-            .timeout(_connectTimeout)
             .timeout(_requestTimeout);
         return _decodeObject(response);
       },
@@ -3016,7 +3229,8 @@ class ApiClient {
       if (e.statusCode == 401) {
         await loadSavedCredentials();
         if ((_credentialToken == null || _credentialToken!.isEmpty) &&
-            (_sessionRefreshToken == null || _sessionRefreshToken!.isEmpty)) {
+            (_sessionRefreshToken == null || _sessionRefreshToken!.isEmpty) &&
+            _deviceToken == null) {
           await enterScheduleOnlyMode();
           onReloginFailed?.call();
           throw ApiException('登录已过期，请重新登录', statusCode: 401);
