@@ -1009,7 +1009,7 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
       if (mounted) setState(() => _academicPeriod = saved);
       return saved;
     } on ApiException catch (error) {
-      if (initializing && api.hasDeviceCredential) rethrow;
+      if (initializing) rethrow;
       if (mounted) {
         setState(() {
           initializing = false;

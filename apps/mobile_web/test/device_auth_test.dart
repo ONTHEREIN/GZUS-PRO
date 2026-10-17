@@ -89,4 +89,32 @@ void main() {
     expect(find.byKey(const Key('auth-restore-retry')), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
   });
+
+  testWidgets('旧凭据启动遇到临时服务故障保留恢复页和授权', (tester) async {
+    FlutterSecureStorage.setMockInitialValues(
+        {'auth.credentialToken': 'legacy-credential-token'});
+    SharedPreferences.setMockInitialValues({
+      'auth.deviceMigrationDeclined': true,
+      'auth.sessionId': 'expired-session',
+      'auth.studentId': 'test-account',
+    });
+    final api = ApiClient(httpClient: MockClient((request) async {
+      if (request.url.path.endsWith('/settings/academic-period')) {
+        return http.Response(
+            jsonEncode({'detail': 'temporary upstream failure'}), 503);
+      }
+      return http.Response('{}', 200);
+    }));
+    await tester.pumpWidget(
+        OneGzusApp.withApi(api: api, onAuthenticationChanged: null));
+    for (var step = 0; step < 30; step++) {
+      await tester.pump(const Duration(milliseconds: 200));
+    }
+    expect(find.byType(LoginPage), findsNothing);
+    expect(find.byKey(const Key('auth-restore-retry')), findsOneWidget);
+    const storage = FlutterSecureStorage();
+    expect(await storage.read(key: 'auth.credentialToken'),
+        'legacy-credential-token');
+    await tester.pumpWidget(const SizedBox());
+  });
 }
