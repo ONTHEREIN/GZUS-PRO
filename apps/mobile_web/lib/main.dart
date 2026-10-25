@@ -138,6 +138,7 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
   bool loggedIn = false;
   bool _scheduleOnlyMode = false;
   bool initializing = true;
+  String? _restoreError;
   String? studentName;
   String? loginError;
   bool _backgroundGuideCompleted = false;
@@ -193,7 +194,7 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
     _loadFontScalePreference();
     _loadCustomBackgroundPreference();
     api.startWarmup();
-    _bootstrapLoginState();
+    unawaited(_bootstrapLoginState());
     if (kIsWeb) {
       unawaited(_initializePwaUpdateBridge());
     }
@@ -557,7 +558,23 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
         );
       },
       home: initializing
-          ? const LoadingPage()
+          ? _restoreError == null
+              ? const LoadingPage()
+              : Scaffold(
+                  body: Center(
+                      child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text('登录恢复未完成：$_restoreError'),
+                    FilledButton(
+                        key: const Key('auth-restore-retry'),
+                        onPressed: () {
+                          setState(() => _restoreError = null);
+                          unawaited(_bootstrapLoginState());
+                        },
+                        child: const Text('重试恢复')),
+                  ],
+                )))
           : _scheduleOnlyMode
               ? OfflineSchedulePage(
                   api: api,
@@ -573,7 +590,7 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
                     )
                   : !_scheduleOnboardingCompleted
                       ? _buildFirstRunOnboarding()
-                      : _buildDashboardShell(),
+                      : _withSchoolConnectionStatus(_buildDashboardShell()),
       routes: {
         '/dashboard': (context) {
           if (!loggedIn) {
@@ -618,14 +635,28 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
       await _completeSsoLogin(ssoCode, uri);
       return;
     }
-    // 添加超时保护，防止 API 响应慢导致 LoadingPage 永远卡住
     try {
-      await _restoreSession().timeout(const Duration(seconds: 8));
-    } on TimeoutException {
-      debugPrint(
-          'Session restore timed out after 8 seconds, showing login page');
+      await api.retryPendingDeviceLogout();
+      await _restoreSession();
+    } on ApiException catch (error) {
+      if (!mounted) return;
+      if (error.statusCode == 401) {
+        await api.enterScheduleOnlyMode();
+        setState(() {
+          initializing = false;
+          loginError = error.message;
+        });
+      } else if (error.statusCode == 428) {
+        setState(() {
+          initializing = false;
+          loginError = error.message;
+        });
+      } else {
+        setState(() => _restoreError = error.message);
+      }
+    } catch (error) {
       if (mounted) {
-        setState(() => initializing = false);
+        setState(() => _restoreError = '恢复失败（${error.runtimeType}），请检查网络后重试');
       }
     }
   }
@@ -683,6 +714,40 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
   Future<void> _restoreSession() async {
     final prefs = await SharedPreferences.getInstance();
     await api.loadSavedCredentials();
+    final generation = api.authGeneration;
+    if (api.hasLegacyCredential &&
+        prefs.getBool('auth.deviceMigrationDeclined') != true) {
+      if (!mounted) return;
+      final accepted = await showDialog<bool>(
+          context: _navigatorKey.currentContext!,
+          barrierDismissible: false,
+          builder: (context) => AlertDialog(
+                key: const Key('auth-device-migration'),
+                title: const Text('升级设备登录授权'),
+                content: const Text(
+                    '确认后将有效旧凭据迁移为安全设备令牌。密码登录的学校密码由服务器加密保管，用于恢复登录；统一认证不保存密码。不会开启后台通知。'),
+                actions: [
+                  TextButton(
+                      key: const Key('auth-device-migration-decline'),
+                      onPressed: () => Navigator.pop(context, false),
+                      child: const Text('保留旧机制')),
+                  FilledButton(
+                      key: const Key('auth-device-migration-confirm'),
+                      onPressed: () => Navigator.pop(context, true),
+                      child: const Text('确认迁移')),
+                ],
+              ));
+      if (accepted == true) {
+        final migrated = await api.migrateDeviceCredentials(true);
+        await _persistLogin(migrated);
+      } else {
+        await prefs.setBool('auth.deviceMigrationDeclined', true);
+      }
+    }
+    if (api.hasDeviceCredential) {
+      final restored = await api.relogin();
+      await _persistLogin(restored);
+    }
     final savedSession = prefs.getString('auth.sessionId');
     if (savedSession == null || savedSession.isEmpty) {
       if (!mounted) return;
@@ -713,6 +778,7 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
     // 优先使用云端完成标记（换设备/清缓存后不重复引导），失败回退本地
     final cloud = await _fetchCloudScheduleSettings();
     if (!mounted) return;
+    api.assertAuthenticationGeneration(generation);
     setState(() {
       initializing = false;
       loggedIn = true;
@@ -880,6 +946,7 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
   }
 
   Future<void> _finishLogin(LoginResult result) async {
+    final generation = api.authGeneration;
     await _persistLogin(result);
     final period = await _synchronizeAcademicPeriod();
     if (period == null) return;
@@ -899,6 +966,7 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
       prefs.getInt(onboardingPreferenceKey(api.namespace, 'firstRunStep')),
     );
     if (!mounted) return;
+    api.assertAuthenticationGeneration(generation);
     setState(() {
       loggedIn = true;
       _scheduleOnlyMode = false;
@@ -941,6 +1009,7 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
       if (mounted) setState(() => _academicPeriod = saved);
       return saved;
     } on ApiException catch (error) {
+      if (initializing) rethrow;
       if (mounted) {
         setState(() {
           initializing = false;
@@ -977,21 +1046,9 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
   }
 
   Future<void> _persistLogin(LoginResult result) async {
+    await api.saveLoginMetadata(result);
     _isAdmin = result.isAdmin ?? false;
     _scheduleOnlyMode = false;
-    final prefs = await SharedPreferences.getInstance();
-    if (result.sessionId != null) {
-      api.useSession(result.sessionId);
-      await prefs.setString('auth.sessionId', result.sessionId!);
-    }
-    if (result.studentName != null) {
-      await prefs.setString('auth.studentName', result.studentName!);
-    }
-    if (result.studentId != null) {
-      await prefs.setString('auth.studentId', result.studentId!);
-    }
-    await prefs.setBool('auth.isDemo', result.isDemo);
-    await prefs.remove('auth.loginMethod');
     // 登录响应只带 isAdmin 布尔；角色（owner/admin）以 /admin/me 为准。
     // 必须在写入本次登录的新会话后请求，避免沿用已失效的旧会话。
     unawaited(_checkAdminStatus());
@@ -1030,13 +1087,28 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
     _logoutInProgress = true;
     final activeSessionId = api.sessionId;
     final activeStudentId = api.studentId;
-    final logoutCredentialToken = api.logoutCredentialToken;
+    final logoutCredentialToken =
+        api.deviceToken == null ? api.logoutCredentialToken : null;
+    final deviceToken = api.deviceToken;
+    if (deviceToken != null) {
+      try {
+        await api.queueDeviceLogout(deviceToken, activeSessionId);
+      } catch (error) {
+        _logoutInProgress = false;
+        _scaffoldMessengerKey.currentState?.showSnackBar(SnackBar(
+          content: Text('退出未执行：无法保存设备撤销请求，请重试（${error.runtimeType}）'),
+        ));
+        return;
+      }
+    }
     api.clearCredentials();
     LoginRequiredServices.disconnect();
 
     if (!mounted) {
       await _performLogoutCleanup(
-        activeSessionId, activeStudentId, logoutCredentialToken,
+        activeSessionId,
+        activeStudentId,
+        logoutCredentialToken,
       );
       return;
     }
@@ -1058,7 +1130,9 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
 
     try {
       await _performLogoutCleanup(
-        activeSessionId, activeStudentId, logoutCredentialToken,
+        activeSessionId,
+        activeStudentId,
+        logoutCredentialToken,
       );
     } finally {
       if (mounted) setState(() => initializing = false);
@@ -1106,12 +1180,15 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
     try {
       if (activeSessionId != null && activeSessionId.isNotEmpty) {
         try {
-          await api.revokeSession(activeSessionId, logoutCredentialToken);
+          await api.retryPendingDeviceLogout();
+          if (logoutCredentialToken != null) {
+            await api.revokeSession(activeSessionId, logoutCredentialToken);
+          }
         } catch (error) {
           debugPrint('撤销服务端会话失败: error=${error.runtimeType}');
           if (mounted) {
             setState(() {
-              loginError = '本机已退出，但未能确认服务端下线。请联网后联系管理员处理旧会话。';
+              loginError = '本机已退出，服务端撤销未完成。联网后重新打开应用将重试撤销。';
             });
           }
         }
@@ -1213,6 +1290,35 @@ class _OneGzusAppState extends State<OneGzusApp> with WidgetsBindingObserver {
       },
       onComplete: _markFirstRunOnboardingComplete,
     );
+  }
+
+  Widget _withSchoolConnectionStatus(Widget child) {
+    final message = api.ehallError;
+    if (message == null) return child;
+    return Column(children: [
+      Material(
+          child: SafeArea(
+              bottom: false,
+              child: ListTile(
+                key: const Key('auth-ehall-unavailable'),
+                title: Text(message),
+                trailing: TextButton(
+                    key: const Key('auth-ehall-retry'),
+                    onPressed: () async {
+                      try {
+                        await api.reconnectEhall();
+                        if (mounted) setState(() {});
+                      } catch (error) {
+                        if (!mounted) return;
+                        _scaffoldMessengerKey.currentState?.showSnackBar(
+                          SnackBar(content: Text('办事大厅重试失败：$error')),
+                        );
+                      }
+                    },
+                    child: const Text('重试办事大厅')),
+              ))),
+      Expanded(child: child),
+    ]);
   }
 
   DashboardShell _buildDashboardShell() {

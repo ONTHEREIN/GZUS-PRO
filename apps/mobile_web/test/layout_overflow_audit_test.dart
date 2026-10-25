@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gzus_pro_mobile_web/api_client.dart';
 import 'package:gzus_pro_mobile_web/live_activity_service.dart';
@@ -84,6 +85,7 @@ void main() {
       tester: tester,
       viewport: _largeTextAuditViewports.first,
     );
+    FlutterSecureStorage.setMockInitialValues({});
     SharedPreferences.setMockInitialValues(<String, Object>{});
 
     await tester.pumpWidget(const OneGzusApp());

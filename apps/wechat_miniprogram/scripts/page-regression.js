@@ -47,7 +47,7 @@ function sanitize(text) {
     .replace(/automation-session-id/g, "<session-id>")
     .replace(/automation-password/g, "<password>")
     .replace(/(X-Session-Id"?\s*[:=]\s*"?)[^"',\s}]+/gi, "$1<session-id>")
-    .replace(/("?(?:password|sessionId|session_id|credentialToken|authToken)"?\s*[:=]\s*"?)[^"',\s}]+/gi, "$1<redacted>")
+    .replace(/("?(?:password|sessionId|session_id|credentialToken|authToken|receipt|verifier)"?\s*[:=]\s*"?)[^"',\s}]+/gi, "$1<redacted>")
 }
 
 function log(message) {
@@ -450,6 +450,36 @@ async function runCases() {
     assertEqual(state.studentId, "DEMO-2026-001", "登录后应写入学号")
   })
 
+  await runCase("登录页后台授权默认关闭，勾选后不重复绑定或保存本地密码", async () => {
+    await clearStorage()
+    await mockScenario({ "POST /mini/auth/wechat-binding": { statusCode: 599, data: { detail: "不应重复绑定" } } })
+    await miniProgram.mockWxMethod("login", { code: "wechat-login-consent-code" })
+    const page = await miniProgram.reLaunch("/pages/login/index")
+    assertEqual(await page.data("backgroundConsent"), false, "后台授权默认关闭")
+    await (await waitForSelector(page, "#login-background-consent")).trigger("change", { value: ["background"] })
+    await fillLoginForm(page, "DEMO-2026-001", "automation-password")
+    await waitForPage("/pages/home/index")
+    const keys = await miniProgram.evaluate(() => wx.getStorageInfoSync().keys)
+    assert(!keys.some((key) => /password|credential|openid/i.test(key)), "本地不能保存长期凭据")
+    await miniProgram.restoreWxMethod("login")
+  })
+
+  await runCase("通知页授权入口返回登录表单，不在通知页输入密码", async () => {
+    await clearStorage(); await seedSession()
+    await mockScenario({ "GET /mini/notifications/config": { statusCode: 200, data: {
+      bound: true, backgroundAuthorized: false, lastCheckedAt: null, lastError: null, settings: []
+    } } })
+    const page = await miniProgram.reLaunch("/pages/notices/index")
+    await (await waitForSelector(page, "#notices-personal-tab")).tap()
+    await (await waitForSelector(page, "#notification-settings-toggle")).tap()
+    assert(!(await page.$("#notifications-password")), "通知页不再输入密码")
+    await (await waitForSelector(page, "#notifications-authorize")).tap()
+    const login = await waitForPage("/pages/login/index")
+    await waitForSelector(login, "#login-account")
+    await waitForSelector(login, "#login-background-consent")
+    assertEqual(await login.data("existingSession"), false, "已有会话也应显示授权登录表单")
+  })
+
   await runCase("认证成功后学期同步失败可复用会话重试且清空密码", async () => {
     await clearStorage()
     await mockScenario({ "GET /settings/academic-period": { statusCode: 503, data: { detail: "学期服务暂不可用" } } })
@@ -483,10 +513,13 @@ async function runCases() {
     await mockScenario({ "GET /grades": { statusCode: 200, data: [
       { courseName: "59分", score: "59", gradePassed: false }, { courseName: "60分", score: "60", gradePassed: true },
       { courseName: "教务结论", score: "90", gradePassed: false }, { courseName: "文字成绩", score: "合格", gradePassed: true },
-      { courseName: "未知", score: "优秀", gradePassed: null }, { courseName: "待公布", score: "", gradePassed: null }
+      { courseName: "未知", score: "优秀", gradePassed: null }, { courseName: "待公布", score: "", gradePassed: null },
+      { courseName: "旧接口59", score: "59", gradePassed: null }, { courseName: "旧接口60", score: "60" },
+      { courseName: "发布状态", score: "85", gradeStatus: "成绩已发布", gradePassed: null },
+      { courseName: "教务不合格", score: "90", gradeStatus: "不合格", gradePassed: null }
     ] } })
     const page = await miniProgram.reLaunch("/pages/grades/index")
-    for (const [index, expected] of ["不及格", "及格", "不及格", "及格", "无法判断", "待公布"].entries()) {
+    for (const [index, expected] of ["不及格", "及格", "不及格", "及格", "无法判断", "待公布", "不及格", "及格", "及格", "不及格"].entries()) {
       assertEqual(await (await waitForSelector(page, `#grade-status-${index}`)).text(), expected, "成绩状态")
     }
   })
@@ -505,6 +538,33 @@ async function runCases() {
     assert((await (await waitForSelector(page, "#reminder-0")).text()).includes("未读"), "个人提醒应显示未读")
     await (await waitForSelector(page, "#reminder-0")).tap()
     await waitForPage("/pages/grades/index")
+  })
+
+  await runCase("通知状态区分绑定、认证暂停、微信接受与未知投递", async () => {
+    await clearStorage()
+    await seedSession()
+    await mockScenario({ "GET /mini/notifications/config": { statusCode: 200, data: {
+      bound: true, backgroundAuthorized: true, backgroundSuspended: true,
+      lastCheckedAt: null, lastError: "学校认证需要重新登录", settings: [
+        { type: "course_reminder", label: "课程", templateId: "course-template", enabled: true,
+          credits: 0, subscriptionStatus: "accept", lastError: null,
+          lastDelivery: { status: "sent", attemptedAt: "2026-10-18T08:00:00Z", error: null } },
+        { type: "exam_reminder", label: "考试", templateId: "exam-template", enabled: true,
+          credits: 0, subscriptionStatus: "accept", lastError: null,
+          lastDelivery: { status: "unknown", attemptedAt: "2026-10-18T08:00:00Z", error: "微信发送结果未知" } }
+      ]
+    } } })
+    const page = await miniProgram.reLaunch("/pages/notices/index")
+    await (await waitForSelector(page, "#notices-personal-tab")).tap()
+    await (await waitForSelector(page, "#notification-settings-toggle")).tap()
+    assertEqual(await (await waitForSelector(page, "#notifications-binding-state")).text(), "当前微信已绑定学校账号", "微信绑定独立展示")
+    assert((await (await waitForSelector(page, "#notifications-background-state")).text()).includes("学校认证已暂停"), "后台授权与认证暂停应区分")
+    assert((await (await waitForSelector(page, "#notification-delivery-course_reminder")).text()).includes("手机收件需实际核对"), "微信接受不等于手机收件")
+    assert((await (await waitForSelector(page, "#notification-delivery-exam_reminder")).text()).includes("发送结果未知"), "未知投递不能显示成功")
+    await (await waitForSelector(page, "#notifications-reauthorize")).tap()
+    const login = await waitForPage("/pages/login/index")
+    assertEqual(await login.data("backgroundConsent"), false, "重新授权仍需用户主动勾选")
+    await waitForSelector(login, "#login-account")
   })
 
   await runCase("生活缴费跳转使用正确 AppID 且失败明确可见", async () => {
@@ -1150,6 +1210,10 @@ async function main() {
   try {
     await runCases()
   } finally {
+    for (const method of ["login", "showModal"]) {
+      try { await miniProgram.restoreWxMethod(method) }
+      catch (error) { log(`⚠ 恢复 wx.${method} 失败：${error && error.message}`) }
+    }
     try {
       await miniProgram.restoreWxMethod("request")
     } catch (error) {

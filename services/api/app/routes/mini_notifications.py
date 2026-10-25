@@ -8,11 +8,11 @@ from sqlalchemy.exc import IntegrityError
 
 from app.config import get_settings
 from app.database import (
-    BackgroundNotificationProfile, MiniNotificationAccess, MiniNotificationPreference,
+    BackgroundNotificationProfile, MiniNotificationAccess, MiniNotificationDelivery, MiniNotificationPreference,
     MiniSubscriptionReceipt, WechatBinding, get_sync_session_factory,
 )
 from app.mini_notification_models import (
-    MiniBackgroundAuthorization, MiniNotificationConfig, MiniNotificationPreferenceRequest,
+    MiniBackgroundAuthorization, MiniDeliveryResult, MiniNotificationConfig, MiniNotificationPreferenceRequest,
     MiniNotificationSetting, MiniSubscriptionRequest,
 )
 from app.rate_limit import limiter
@@ -24,7 +24,7 @@ from app.sessions import (
     AppSession, credential_fingerprint, decrypt_credential_payload, student_id_of,
 )
 from app.wechat_identity import openid_fingerprint
-from app.wechat_notifications import MINI_NOTIFICATION_LABELS, template_ids
+from app.wechat_notifications import MINI_NOTIFICATION_LABELS, aware, template_ids
 
 router = APIRouter(prefix="/mini/notifications", tags=["mini-program"])
 
@@ -50,16 +50,22 @@ def notification_config(student_id: str) -> MiniNotificationConfig:
         settings: list[MiniNotificationSetting] = []
         for kind, label in MINI_NOTIFICATION_LABELS.items():
             preference = db.get(MiniNotificationPreference, (binding.openid_fingerprint, kind)) if binding else None
+            delivery = db.query(MiniNotificationDelivery).filter_by(
+                openid_fingerprint=binding.openid_fingerprint, notification_type=kind,
+            ).order_by(MiniNotificationDelivery.created_at.desc()).first() if binding else None
             settings.append(MiniNotificationSetting(
                 type=kind, label=label, templateId=ids[kind] or None,
                 enabled=bool(preference is not None and preference.enabled),
                 credits=preference.credits if preference is not None else 0,
                 subscriptionStatus=preference.subscription_status if preference else "not_subscribed",
                 lastError=preference.last_error if preference else None,
+                lastDelivery=MiniDeliveryResult(status=delivery.status,
+                    attemptedAt=aware(delivery.created_at), error=delivery.error) if delivery else None,
             ))
         return MiniNotificationConfig(bound=binding is not None, backgroundAuthorized=authorized,
+            backgroundSuspended=bool(authorized and profile.suspended_at is not None),
             lastCheckedAt=profile.last_checked_at if authorized else None,
-            lastError=(access.course_sync_error or profile.last_error) if authorized else None,
+            lastError=(profile.suspension_reason or access.course_sync_error or profile.last_error) if authorized else None,
             settings=settings)
 
 
@@ -109,19 +115,24 @@ def register_subscription(payload: MiniSubscriptionRequest, request: Request,
             raise HTTPException(status_code=409, detail="请先开启该类提醒")
         db.add(MiniSubscriptionReceipt(request_id=payload.request_id, openid_fingerprint=fingerprint,
                     notification_type=payload.notification_type, created_at=datetime.now(timezone.utc)))
-        row.subscription_status = payload.result
-        row.last_error = None
+        # 在数据库当前值上递增，不能用读取时的次数覆盖并发订阅或发送扣减。
+        values = {MiniNotificationPreference.subscription_status: payload.result,
+                  MiniNotificationPreference.last_error: None}
         if payload.result == "accept":
-            row.credits += 1
+            values[MiniNotificationPreference.credits] = MiniNotificationPreference.credits + 1
         elif payload.result in {"reject", "ban"}:
-            row.credits = 0
+            values[MiniNotificationPreference.credits] = 0
         try:
+            db.query(MiniNotificationPreference).filter_by(
+                openid_fingerprint=fingerprint, notification_type=payload.notification_type,
+            ).update(values, synchronize_session=False)
             db.commit()
         except IntegrityError:
             db.rollback()
             # 并发重复请求只登记一次；其他完整性错误不能当作成功。
             receipt = db.get(MiniSubscriptionReceipt, payload.request_id)
-            if receipt is None or receipt.openid_fingerprint != fingerprint:
+            if (receipt is None or receipt.openid_fingerprint != fingerprint
+                    or receipt.notification_type != payload.notification_type):
                 raise
     return notification_config(student_id)
 
@@ -139,6 +150,12 @@ def authorize_background(payload: MiniBackgroundAuthorization, request: Request,
     token = result.get("credentialToken")
     if not isinstance(token, str) or not token:
         raise HTTPException(status_code=502, detail="学校登录未生成有效的后台授权凭据")
+    save_background_authorization(student_id, fingerprint, token)
+    return notification_config(student_id)
+
+
+def save_background_authorization(student_id: str, fingerprint: str, token: str) -> None:
+    """复用已验证登录产生的加密凭据，不再次调用学校登录。"""
     account, _, device_id = decrypt_credential_payload(token, get_settings().credential_encryption_key)
     if account != student_id or device_id is None:
         raise HTTPException(status_code=502, detail="后台授权凭据账号或设备标识无效")
@@ -163,7 +180,6 @@ def authorize_background(payload: MiniBackgroundAuthorization, request: Request,
         elif access.openid_fingerprint != fingerprint:
             raise HTTPException(status_code=409, detail="微信后台授权身份已变更，请先关闭旧授权")
         db.commit()
-    return notification_config(student_id)
 
 
 def revoke_mini_access(student_id: str) -> None:

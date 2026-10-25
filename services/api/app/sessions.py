@@ -210,6 +210,8 @@ def decrypt_credential_payload(token: str, key: str) -> tuple[str, str, str | No
         ):
             return payload[0], payload[1], payload[2]
         raise ValueError("自动登录凭据格式无效")
+    if plain.startswith("{"):
+        raise ValueError("SSO 凭据不能用于密码续登")
     parts = plain.split(":", 1)
     if len(parts) == 2:
         account, password = parts
@@ -467,6 +469,18 @@ class SessionStore:
                 school_session_version=school_session_version,
             )
             db.add(row)
+            if credential_fingerprint and resolved_student_account:
+                from app.database import DeviceAuthorization
+                if db.get(DeviceAuthorization, credential_fingerprint) is None:
+                    db.add(DeviceAuthorization(
+                        token_digest=credential_fingerprint,
+                        student_account=resolved_student_account,
+                        installation_id=f"legacy:{credential_fingerprint}",
+                        login_method="legacy", store_school_password=False,
+                        encrypted_credentials=None, session_id=session.id,
+                        created_at=datetime.now(timezone.utc),
+                        last_used_at=datetime.now(timezone.utc),
+                    ))
             db.commit()
             with self._lock:
                 self._sessions[session.id] = session
@@ -835,6 +849,11 @@ class SessionStore:
             ]
             remove_push_registrations_for_sessions(db, session_ids)
             remove_push_registrations_for_credential(db, credential_fingerprint)
+            from app.database import DeviceAuthorization
+            db.query(DeviceAuthorization).filter_by(token_digest=credential_fingerprint).update({
+                "revoked_at": datetime.now(timezone.utc), "revoked_reason": reason,
+                "encrypted_credentials": None,
+            }, synchronize_session=False)
             db.commit()
         except SQLAlchemyError as exc:
             db.rollback()
@@ -958,6 +977,11 @@ class SessionStore:
             remove_push_registrations_for_sessions(db, affected_ids)
             if fingerprint:
                 remove_push_registrations_for_credential(db, fingerprint)
+                from app.database import DeviceAuthorization
+                db.query(DeviceAuthorization).filter_by(token_digest=fingerprint).update({
+                    "revoked_at": datetime.now(timezone.utc), "revoked_reason": "logout",
+                    "encrypted_credentials": None,
+                }, synchronize_session=False)
             if row is not None:
                 db.delete(row)
             db.commit()
@@ -1046,6 +1070,9 @@ class SessionStore:
                 from app.school_session_service import release_if_unused
 
                 release_if_unused(student_account)
+            from app.school_session_service import purge_expired_wechat_school_sessions
+
+            purge_expired_wechat_school_sessions()
         except SQLAlchemyError:
             db.rollback()
             raise

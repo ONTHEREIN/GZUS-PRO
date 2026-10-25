@@ -76,4 +76,5 @@
 }
 
 #login-agreement { margin-top: 28rpx; font-size: 25rpx; }
+#login-background-consent { margin-top: 28rpx; color: #4f5d73; font-size: 25rpx; line-height: 1.7; }
 .agreement-links { margin: 16rpx 0; color: #2176e8; font-size: 25rpx; line-height: 1.8; }

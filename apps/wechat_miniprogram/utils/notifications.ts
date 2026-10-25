@@ -22,11 +22,14 @@ export interface NotificationSetting {
   subscriptionStatus: string
   lastError: string | null
   statusText: string
+  deliveryText: string | null
+  deliveryError: string | null
 }
 
 export interface NotificationConfig {
   bound: boolean
   backgroundAuthorized: boolean
+  backgroundSuspended: boolean
   lastCheckedAt: string | null
   lastError: string | null
   settings: NotificationSetting[]
@@ -66,6 +69,8 @@ export function parseNotificationConfig(value: unknown): NotificationConfig {
   if (!Array.isArray(response.settings)) throw new Error("提醒设置字段无效")
   return {
     bound: boolean(response.bound), backgroundAuthorized: boolean(response.backgroundAuthorized),
+    // 兼容尚未返回投递状态的旧后端；存在的字段必须严格校验。
+    backgroundSuspended: response.backgroundSuspended === undefined ? false : boolean(response.backgroundSuspended),
     lastCheckedAt: nullableText(response.lastCheckedAt), lastError: nullableText(response.lastError),
     settings: Array.from(response.settings, (value) => {
       const row = object(value)
@@ -75,8 +80,21 @@ export function parseNotificationConfig(value: unknown): NotificationConfig {
       const statusText = !templateId ? "模板待配置" : subscriptionStatus === "ban" ? "订阅已被封禁" :
         subscriptionStatus === "reject" ? "已拒绝订阅" : subscriptionStatus === "filter" ? "模板被微信过滤" :
         row.credits > 0 ? `可提醒 ${row.credits} 次` : "请订阅下一次提醒"
+      const delivery = row.lastDelivery === undefined || row.lastDelivery === null ? null : object(row.lastDelivery)
+      const deliveryLabels: Record<string, string> = {
+        sending: "发送尝试已登记，尚无确认结果；不会自动重发",
+        sent: "微信接口已接受；手机收件需实际核对",
+        failed: "微信接口拒绝发送", unknown: "发送结果未知；请核对微信消息，不会自动重发",
+        unconfigured: "模板未配置", no_subscription: "发送时订阅次数耗尽",
+        unsupported: "该事件不支持微信投递", invalid: "事件数据不满足模板要求"
+      }
+      const deliveryStatus = delivery ? text(delivery.status) : null
+      if (deliveryStatus !== null && !Object.prototype.hasOwnProperty.call(deliveryLabels, deliveryStatus)) throw new Error("投递状态无效")
+      const deliveryText = delivery && deliveryStatus !== null
+        ? `${text(delivery.attemptedAt)}：${deliveryLabels[deliveryStatus]}` : null
       return { type: notificationType(row.type), label: text(row.label), templateId, enabled: boolean(row.enabled),
-        credits: row.credits, subscriptionStatus, lastError: nullableText(row.lastError), statusText }
+        credits: row.credits, subscriptionStatus, lastError: nullableText(row.lastError), statusText,
+        deliveryText, deliveryError: delivery ? nullableText(delivery.error) : null }
     })
   }
 }

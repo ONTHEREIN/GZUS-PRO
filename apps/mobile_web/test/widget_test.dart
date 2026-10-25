@@ -1232,7 +1232,7 @@ kwIDAQAB
 
     ApiException? exception;
     try {
-      await api.autoLogin('2024000000', 'default-password');
+      await api.autoLogin('2024000000', 'default-password', storeSchoolPassword: true);
     } on ApiException catch (error) {
       exception = error;
     }
@@ -1266,7 +1266,7 @@ kwIDAQAB
       );
 
       await expectLater(
-        api.autoLogin('2024000000', 'test-password'),
+        api.autoLogin('2024000000', 'test-password', storeSchoolPassword: true),
         throwsA(isA<ApiException>()),
       );
       expect(loginPosted, isFalse);

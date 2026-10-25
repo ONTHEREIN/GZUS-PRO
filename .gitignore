@@ -111,3 +111,7 @@ Desktop.ini
 
 # 工具目录
 .zcode/
+
+# Android 构建引用的源图标和组件预览资源
+!apps/mobile_web/android/app/src/main/res/drawable*/ic_launcher_foreground.png
+!apps/mobile_web/android/app/src/main/res/drawable/widget_preview_*.png

@@ -649,8 +649,8 @@ def test_consumption_returns_limited_when_upstream_fails(monkeypatch):
     with TestClient(app) as client:
         response = client.get("/ecard/consumption", headers={"X-Session-Id": session.id})
 
-    assert response.status_code == 200
-    assert response.json() == {"status": "limited", "message": "消费记录暂时不可用", "items": []}
+    assert response.status_code == 502
+    assert response.json()["detail"]["code"] == "ecard_upstream_failed"
 
 
 def test_consumption_persists_historical_month_and_reuses_room_cache(monkeypatch):

@@ -339,7 +339,7 @@ async def revoke_session(
     request.app.state.sessions.revoke(session_id, reason="admin_kick")
     if credential_fingerprint:
         request.app.state.sessions.revoke_credential(credential_fingerprint, reason="admin_kick")
-    if row.student_account and credential_fingerprint:
+    if row.student_account:
         from app.school_session_service import revoke_account_school_access
 
         # 管理员撤销任一设备凭据即要求该账号重新授权，清理后台配置、共享学校会话及其它前台会话。

@@ -3,6 +3,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 class SensitiveAuthState {
   const SensitiveAuthState({
+    required this.deviceToken,
     required this.credentialToken,
     required this.sessionRefreshToken,
     required this.password,
@@ -11,6 +12,7 @@ class SensitiveAuthState {
     required this.ehallAuthToken,
   });
 
+  final String? deviceToken;
   final String? credentialToken;
   final String? sessionRefreshToken;
   final String? password;
@@ -27,6 +29,20 @@ class AuthStorage {
       accessibility: KeychainAccessibility.first_unlock,
     ),
   );
+  static const String _deviceTokenKey = 'auth.deviceToken';
+  static const String _pendingDeviceLogoutKey = 'auth.pendingDeviceLogout';
+
+  Future<void> saveDeviceToken(String token) async {
+    if (token.isEmpty) throw ArgumentError('设备令牌不能为空');
+    await _secureStorage.write(key: _deviceTokenKey, value: token);
+  }
+
+  Future<void> savePendingDeviceLogout(String? value) =>
+      _writeOptional(_pendingDeviceLogoutKey, value);
+
+  Future<String?> loadPendingDeviceLogout() =>
+      _secureStorage.read(key: _pendingDeviceLogoutKey);
+
   static const String _credentialTokenKey = 'auth.credentialToken';
   static const String _sessionRefreshTokenKey = 'auth.sessionRefreshToken';
   static const String _passwordKey = 'auth.password';
@@ -113,6 +129,7 @@ class AuthStorage {
       _ehallAuthTokenKey,
     );
     return SensitiveAuthState(
+      deviceToken: await _secureStorage.read(key: _deviceTokenKey),
       credentialToken: credentialToken,
       sessionRefreshToken: sessionRefreshToken,
       password: password,
@@ -124,6 +141,7 @@ class AuthStorage {
 
   Future<void> clear() async {
     for (final key in [
+      _deviceTokenKey,
       _credentialTokenKey,
       _sessionRefreshTokenKey,
       _passwordKey,
