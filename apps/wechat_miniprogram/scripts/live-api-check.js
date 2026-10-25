@@ -234,39 +234,50 @@ async function runCases(account, password, profile) {
   })
 
   const loggedIn = await check("真实接口登录（不 mock 请求）", async () => {
-    const page = await miniProgram.reLaunch("/pages/login/index")
-    await (await waitForSelector(page, "#login-account")).input(account)
-    await (await waitForSelector(page, "#login-password")).input(password)
-    await (await waitForSelector(page, "#login-agreement")).trigger("change", { value: ["agree"] })
-    await (await waitForSelector(page, "#login-submit")).tap()
+    // 登录成功后登录页会弹「绑定微信」原生确认框；真实链路不绑定，直接选「暂不绑定」。
+    await miniProgram.mockWxMethod("showModal", { confirm: false, cancel: true })
 
-    // 登录可能成功（跳首页）也可能失败（渲染 #login-error）。
-    // 等「两者之一」，失败时把页面上的真实原因报出来。
-    const outcome = await waitFor(async () => {
-      const current = await miniProgram.currentPage()
-      if (current && pathMatches(current.path, "/pages/home/index")) return { kind: "home" }
-      const errorElement = await page.$("#login-error")
-      if (errorElement) return { kind: "error", text: await errorElement.text() }
-      return null
-    }, "登录结果（进入首页或出现错误提示）")
+    try {
+      const page = await miniProgram.reLaunch("/pages/login/index")
+      await (await waitForSelector(page, "#login-account")).input(account)
+      await (await waitForSelector(page, "#login-password")).input(password)
+      await (await waitForSelector(page, "#login-agreement")).trigger("change", { value: ["agree"] })
+      await (await waitForSelector(page, "#login-submit")).tap()
 
-    if (outcome.kind === "error") {
-      throw new Error(`登录失败，页面提示：${outcome.text}`)
+      // 登录可能成功（跳首页）也可能失败（渲染 #login-error）。
+      // 等「两者之一」，失败时把页面上的真实原因报出来。
+      const outcome = await waitFor(async () => {
+        const current = await miniProgram.currentPage()
+        if (current && pathMatches(current.path, "/pages/home/index")) return { kind: "home" }
+        const errorElement = await page.$("#login-error")
+        if (errorElement) return { kind: "error", text: await errorElement.text() }
+        return null
+      }, "登录结果（进入首页或出现错误提示）")
+
+      if (outcome.kind === "error") {
+        throw new Error(`登录失败，页面提示：${outcome.text}`)
+      }
+
+      const home = await waitForPage("/pages/home/index")
+      const greeting = await waitForSelector(home, "#home-greeting")
+      const greetingText = await greeting.text()
+      assert(greetingText.trim().length > 0, "首页问候语不应为空")
+      if (profile.studentName) {
+        assert(
+          greetingText.indexOf(profile.studentName) !== -1,
+          `首页问候语应显示「${profile.studentName}」，实际：${greetingText}`
+        )
+      }
+
+      const state = await miniProgram.evaluate(() => ({ sessionId: wx.getStorageSync("auth.sessionId") }))
+      assert(state.sessionId, "登录后应写入会话 ID")
+    } finally {
+      try {
+        await miniProgram.restoreWxMethod("showModal")
+      } catch (error) {
+        log(`⚠ 恢复 wx.showModal 失败：${error && error.message}`)
+      }
     }
-
-    const home = await waitForPage("/pages/home/index")
-    const greeting = await waitForSelector(home, "#home-greeting")
-    const greetingText = await greeting.text()
-    assert(greetingText.trim().length > 0, "首页问候语不应为空")
-    if (profile.studentName) {
-      assert(
-        greetingText.indexOf(profile.studentName) !== -1,
-        `首页问候语应显示「${profile.studentName}」，实际：${greetingText}`
-      )
-    }
-
-    const state = await miniProgram.evaluate(() => ({ sessionId: wx.getStorageSync("auth.sessionId") }))
-    assert(state.sessionId, "登录后应写入会话 ID")
   })
 
   if (!loggedIn) {
@@ -346,7 +357,11 @@ async function runCases(account, password, profile) {
       prefix: "schedule",
       items: ".course-card",
       count: profile.scheduleCount,
-      empty: ["#schedule-empty"]
+      empty: ["#schedule-empty"],
+      // 课表默认周视图，课程卡只存在于「全部课程」模式。
+      prepare: async (page) => {
+        await (await waitForSelector(page, "#schedule-mode-all")).tap()
+      }
     },
     {
       name: "成绩",
@@ -403,6 +418,7 @@ async function runCases(account, password, profile) {
     await check(`${item.name}页加载完成`, async () => {
       const page = await miniProgram.reLaunch(item.path)
       await waitForPage(item.path)
+      if (item.prepare) await item.prepare(page)
       const { items, hasEmptyState } = await waitForLoaded(
         page,
         item.prefix,
