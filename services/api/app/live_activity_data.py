@@ -89,10 +89,12 @@ def grade_live_fields(grade: Mapping[str, object]) -> dict[str, object]:
     official_text = _text(official_value)
     if isinstance(official_value, bool):
         official_text = "合格" if official_value else "不及格"
-    if official_text:
+    if official_passed is not None:
         status = official_text
         passed = official_passed
         source = "official"
+    elif official_text in {"待公布", "未公布", "待发布", "未发布", "暂未公布"}:
+        status, passed, source = official_text, None, "official"
     else:
         passed = _score_passed(score)
         status = "合格" if passed is True else "不及格" if passed is False else "成绩已发布"

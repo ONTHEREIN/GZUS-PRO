@@ -14,13 +14,15 @@ from types import SimpleNamespace
 import pytest
 
 from app.config import get_settings
-from app.database import WechatBinding, get_sync_session_factory
+from app.database import (
+    BackgroundNotificationProfile, MiniNotificationAccess, WechatBinding, get_sync_session_factory,
+)
 from app.demo_data import DEMO_ACCOUNT, DEMO_STUDENT_ID, DEMO_STUDENT_NAME
 from app.main import create_app
 from app.routes import mini_program
 from app.rate_limit import limiter
 from app.school_session_service import SchoolSessionUnavailableError
-from app.sessions import AppSession
+from app.sessions import AppSession, decrypt_credential_payload, encrypt_device_credentials
 from app.wechat_identity import WechatIdentity, openid_fingerprint
 
 # 演示账号密码只用于本地测试，真实密码只存在于服务器环境文件。
@@ -104,6 +106,53 @@ def test_mini_program_login_returns_only_short_lived_session(monkeypatch) -> Non
         "studentName": "测试同学",
         "studentId": "20260001",
     }
+    with get_sync_session_factory()() as db:
+        assert db.query(MiniNotificationAccess).count() == 0
+        assert db.query(BackgroundNotificationProfile).count() == 0
+
+
+def test_login_background_consent_reuses_credentials_and_keeps_response_safe(monkeypatch) -> None:
+    account = "20260001"
+    calls: list[str] = []
+    identity = WechatIdentity("test-app", "login-openid")
+    token = encrypt_device_credentials(account, "login-password", "login-device",
+                                       get_settings().credential_encryption_key)
+
+    def authenticated(payload, request) -> dict[str, str]:
+        calls.append(payload.account)
+        return {"sessionId": "mini-session", "studentName": "测试同学",
+                "studentId": account, "credentialToken": token}
+
+    monkeypatch.setattr(mini_program, "auto_login", authenticated)
+    monkeypatch.setattr(mini_program, "_exchange_or_raise", lambda code: identity)
+    client = TestClient(create_app())
+    response = client.post("/mini/auth/login", json={"account": account, "password": "login-password",
+                                                  "backgroundConsent": True, "code": "login-code"})
+    assert response.status_code == 200, response.text
+    assert set(response.json()) == SAFE_LOGIN_FIELDS
+    assert calls == [account]
+    assert "login-password" not in response.text and token not in response.text
+    with get_sync_session_factory()() as db:
+        access = db.get(MiniNotificationAccess, account)
+        assert access.openid_fingerprint == openid_fingerprint(identity)
+        profile = db.query(BackgroundNotificationProfile).one()
+        assert profile.mobile_enabled is False
+        assert decrypt_credential_payload(profile.encrypted_credentials,
+            get_settings().credential_encryption_key) == (account, "login-password", "login-device")
+
+
+def test_login_background_consent_requires_wechat_code_before_school_login(monkeypatch) -> None:
+    calls: list[str] = []
+
+    def unexpected_login(payload, request) -> dict[str, str]:
+        calls.append(payload.account)
+        raise AssertionError("缺少微信凭证时不应登录学校")
+
+    monkeypatch.setattr(mini_program, "auto_login", unexpected_login)
+    response = TestClient(create_app()).post("/mini/auth/login", json={
+        "account": "20260001", "password": "password", "backgroundConsent": True})
+    assert response.status_code == 422
+    assert calls == []
 
 
 def test_mini_program_password_login_is_rate_limited(monkeypatch) -> None:
@@ -342,6 +391,9 @@ class FakeWechatSchoolClient:
     def get_info(self) -> dict[str, str]:
         return {"studentId": self._account, "name": "绑定用户"}
 
+    def validate_session(self) -> None:
+        return None
+
     def get_jwxt_cookies_string(self) -> str:
         return "encrypted-test-cookie-source"
 
@@ -510,6 +562,33 @@ def test_wechat_login_creates_a_new_short_session(monkeypatch) -> None:
     assert response.json()["studentName"] == "登录用户"
     assert "openid-login-ok" not in response.text
     assert "code-login-ok" not in response.text
+
+
+def test_wechat_login_rejects_expired_school_cookie_before_creating_session(monkeypatch) -> None:
+    from app.database import AppSessionModel, SchoolAccountSession
+    from app.school_client import AuthenticationError
+
+    class ExpiredSchoolClient(FakeWechatSchoolClient):
+        def validate_session(self) -> None:
+            raise AuthenticationError("学校返回登录页")
+
+    identity = WechatIdentity(app_id="wx-test", openid="openid-expired-cookie")
+    monkeypatch.setattr(mini_program, "_exchange_or_raise", lambda code: identity)
+    monkeypatch.setattr(mini_program, "load_shared_school_clients", lambda student_id: (
+        ExpiredSchoolClient("20260004"), None, SimpleNamespace(student_name="登录用户", version=1)))
+    with get_sync_session_factory()() as db:
+        db.add(WechatBinding(student_id="20260004", openid_fingerprint=openid_fingerprint(identity),
+                             encrypted_openid="encrypted-openid", app_id=identity.app_id))
+        db.add(SchoolAccountSession(student_id="20260004", jwxt_cookies="encrypted-cookie"))
+        db.commit()
+    with TestClient(create_app()) as client:
+        response = client.post("/mini/auth/wechat-login", json={"code": "expired-cookie-code"})
+    assert response.status_code == 428, response.text
+    assert response.json()["detail"]["code"] == "school_session_expired"
+    assert "sessionId" not in response.json()
+    with get_sync_session_factory()() as db:
+        assert db.query(AppSessionModel).count() == 0
+        assert db.query(SchoolAccountSession).one().expires_at is not None
 
 
 def test_wechat_login_reports_missing_configuration(monkeypatch) -> None:

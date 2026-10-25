@@ -20,6 +20,10 @@ MINI_PROGRAM_ROUTE_PATHS: tuple[str, ...] = (
     "/mini/auth/login",
     "/mini/auth/wechat-login",
     "/mini/auth/wechat-binding",
+    "/mini/notifications/config",
+    "/mini/notifications/preference",
+    "/mini/notifications/subscription",
+    "/mini/notifications/background",
 )
 
 
@@ -35,7 +39,7 @@ def validate_registered_routes(application: FastAPI) -> None:
         missing = ", ".join(missing_paths)
         raise DeploymentPreflightError(
             f"发布前置检查失败：mini_program 路由未注册，缺少 {missing}；"
-            "请确认 app.main.include_router(mini_program.router) 未被删除。"
+            "请确认 app.main 已注册 mini_program 和 mini_notifications 路由。"
         )
 
 

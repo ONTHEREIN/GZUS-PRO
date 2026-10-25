@@ -1070,6 +1070,9 @@ class SessionStore:
                 from app.school_session_service import release_if_unused
 
                 release_if_unused(student_account)
+            from app.school_session_service import purge_expired_wechat_school_sessions
+
+            purge_expired_wechat_school_sessions()
         except SQLAlchemyError:
             db.rollback()
             raise

@@ -15,7 +15,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from app.config import get_settings
 from app.database import (
-    MiniNotificationAccess, MiniNotificationDelivery,
+    BackgroundNotificationProfile, MiniNotificationAccess, MiniNotificationDelivery,
     MiniNotificationPreference, NotificationDelivery, WechatBinding, get_sync_session_factory,
 )
 from app.mini_notification_models import MiniNotificationType, WechatAccessToken, WechatApiResult
@@ -89,6 +89,27 @@ def _thing(value: str) -> dict[str, str]:
     return {"value": value[:20]}
 
 
+def _exam_template_time(value: str) -> str:
+    """保留真实起止时间，按微信 time 字段规范用 ~ 连接时间段。"""
+    from app.cloud_notifications import _exam_start
+
+    start = _exam_start(value)
+    if start is None:
+        raise SubscribePayloadError("考试开始时间无效，应为 YYYY-MM-DD HH:MM")
+    time_range = value.strip().split(" ", 1)[1]
+    if "-" not in time_range:
+        return start.strftime("%Y-%m-%d %H:%M")
+    try:
+        end = datetime.strptime(
+            f"{start.date().isoformat()} {time_range.split('-', 1)[1]}", "%Y-%m-%d %H:%M",
+        ).replace(tzinfo=start.tzinfo)
+    except ValueError as exc:
+        raise SubscribePayloadError("考试结束时间无效，应为 HH:MM") from exc
+    if end <= start:
+        raise SubscribePayloadError("考试结束时间必须晚于开始时间")
+    return f"{start:%Y-%m-%d %H:%M}~{end:%Y-%m-%d %H:%M}"
+
+
 def subscription_data(event: NotificationDelivery) -> dict[str, dict[str, str]]:
     """字段编号与选用模板一致；不把未知时间、非数字用量伪造成有效数据。"""
     extras = MiniEventExtras.model_validate_json(event.extras_json or "{}")
@@ -99,13 +120,13 @@ def subscription_data(event: NotificationDelivery) -> dict[str, dict[str, str]]:
                 "thing2": _thing(_required(extras.location, "上课地点"))}
     if event.notification_type == "exam_reminder":
         return {"thing7": _thing(_required(extras.course_name, "考试科目")),
-                "time4": {"value": _required(extras.exam_time, "考试时间")},
+                "time4": {"value": _exam_template_time(_required(extras.exam_time, "考试时间"))},
                 "thing5": _thing(_required(extras.location, "考试地点")),
                 "thing6": _thing(event.body or "")}
     if event.notification_type == "grade_update":
-        # 待审批模板的选用顺序固定为课程名称、成绩文本、发布时间。
+        # 考核成绩发布通知只选考试名称、备注，兼容数字和文字成绩。
         return {"thing1": _thing(_required(extras.course_name, "课程名称")),
-                "thing2": _thing(_required(extras.score, "成绩文本")), "time3": {"value": timestamp}}
+                "thing4": _thing(f"成绩：{_required(extras.score, '成绩文本')}")}
     if event.notification_type == "attendance_update":
         # 聚合异常未必发生在今天，使用真实提醒时间而非伪造异常日期。
         return {"thing7": _thing(event.body or ""), "thing4": _thing("请到考勤页核对点名记录"),
@@ -183,6 +204,9 @@ def deliver_mini_event(event_id: int) -> None:
             return
         access = db.get(MiniNotificationAccess, event.student_id)
         binding = db.query(WechatBinding).filter_by(student_id=event.student_id).first()
+        profile = db.query(BackgroundNotificationProfile).filter_by(student_id=event.student_id).first()
+        if profile is None or profile.suspended_at is not None:
+            return
         if access is None or binding is None or access.openid_fingerprint != binding.openid_fingerprint:
             return
         preference = db.get(MiniNotificationPreference, (binding.openid_fingerprint, event.notification_type))
@@ -245,8 +269,11 @@ def deliver_mini_event(event_id: int) -> None:
             # 网络请求后重新确认授权，解绑或重新授权期间不能占用旧事件次数。
             current_access = db.get(MiniNotificationAccess, event.student_id, populate_existing=True)
             current_binding = db.query(WechatBinding).filter_by(student_id=event.student_id).populate_existing().first()
+            profile = db.query(BackgroundNotificationProfile).filter_by(
+                student_id=event.student_id).populate_existing().first()
             preference = db.get(MiniNotificationPreference, (fingerprint, event.notification_type), populate_existing=True)
             if (current_access is None or current_binding is None or preference is None
+                    or profile is None or profile.suspended_at is not None
                     or current_access.openid_fingerprint != fingerprint
                     or current_binding.openid_fingerprint != fingerprint or not preference.enabled
                     or aware(event.created_at) < max(aware(current_access.authorized_at), aware(preference.enabled_since))
@@ -272,6 +299,7 @@ def deliver_mini_event(event_id: int) -> None:
             page = {"exam_reminder": "exams", "grade_update": "grades", "course_reminder": "schedule",
                     "attendance_update": "attendance", "ecard_reminder": "ecard"}[event.notification_type]
             notification_type = event.notification_type
+            grant_enabled_since = preference.enabled_since
             db.commit()
         except IntegrityError:
             db.rollback()
@@ -291,13 +319,17 @@ def deliver_mini_event(event_id: int) -> None:
         if ledger is None:
             raise RuntimeError("微信投递账本丢失")
         ledger.status, ledger.error = state, error
-        preference = db.get(MiniNotificationPreference, (fingerprint, notification_type))
-        if preference is not None:
-            preference.last_error = error
-            if result is not None and result.errcode == 43101:
-                preference.credits, preference.subscription_status = 0, "reject"
-            elif result is not None and result.errcode != 0:
-                preference.credits += 1
+        values = {MiniNotificationPreference.last_error: error}
+        if result is not None and result.errcode == 43101:
+            values[MiniNotificationPreference.credits] = 0
+            values[MiniNotificationPreference.subscription_status] = "reject"
+        elif result is not None and result.errcode != 0:
+            values[MiniNotificationPreference.credits] = MiniNotificationPreference.credits + 1
+        # 迟到响应只更新原授权代次；不能恢复已撤销次数或覆盖重新开启的订阅。
+        db.query(MiniNotificationPreference).filter_by(
+            openid_fingerprint=fingerprint, notification_type=notification_type,
+            enabled=True, enabled_since=grant_enabled_since,
+        ).update(values, synchronize_session=False)
         db.commit()
     if error:
         logger.warning("wechat_delivery_failed", extra={"event_id": event_id, "state": state,

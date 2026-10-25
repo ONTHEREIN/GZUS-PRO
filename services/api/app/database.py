@@ -277,6 +277,7 @@ class SchoolAccountSession(Base):
     ehall_cookies = Column(Text, nullable=True)
     ehall_auth_token = Column(Text, nullable=True)
     version = Column(Integer, nullable=False, default=1)
+    authenticated_at = Column(DateTime, nullable=True)
     last_used_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
     expires_at = Column(DateTime, nullable=True, index=True)
     suspended_at = Column(DateTime, nullable=True)
@@ -904,6 +905,16 @@ def init_db():
     # exist in the database yet (e.g., added after initial deployment).
     _ensure_columns(engine, "schedule_adjustments", {"moves_json": "TEXT NOT NULL DEFAULT '[]'", "metadata_json": "TEXT"})
     _ensure_columns(engine, "app_sessions", _APP_SESSION_COMPAT_COLUMNS)
+    _ensure_columns(engine, "school_account_sessions", {"authenticated_at": "TIMESTAMP"})
+    # 旧记录没有最后认证时间，按最早创建时间保守计算，不在升级时延长保留期。
+    with engine.begin() as connection:
+        if not _is_sqlite(engine):
+            connection.exec_driver_sql("SET LOCAL lock_timeout = '2s'")
+            connection.exec_driver_sql("SET LOCAL statement_timeout = '10s'")
+        connection.execute(text(
+            "UPDATE school_account_sessions SET authenticated_at = created_at "
+            "WHERE authenticated_at IS NULL"
+        ))
     _ensure_columns(engine, "web_push_subscriptions", {
         "session_id": "VARCHAR(64)",
         "credential_fingerprint": "VARCHAR(64)",

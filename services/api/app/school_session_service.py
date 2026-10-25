@@ -10,6 +10,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Iterator
 from urllib.parse import quote
 
+from sqlalchemy import or_
+from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.database import (
@@ -21,6 +23,7 @@ from app.database import (
     IosPushToken,
     SchoolAccountSession,
     WebPushSubscription,
+    WechatBinding,
     get_sync_session_factory,
 )
 from app.ehall_client import EhallClient
@@ -35,6 +38,7 @@ from app.school_client import AuthenticationError, SchoolSdkClient
 logger = logging.getLogger(__name__)
 
 _SUSPENSION_RETRY_INTERVAL = timedelta(hours=1)
+_WECHAT_SCHOOL_SESSION_RETENTION = timedelta(days=30)
 _account_locks: dict[str, threading.RLock] = {}
 _account_locks_guard = threading.Lock()
 
@@ -162,6 +166,7 @@ def record_authenticated_session(
         row.ehall_cookies = _encrypt_secret(ehall_cookies)
         row.ehall_auth_token = _encrypt_secret(ehall_auth_token)
         row.last_used_at = now
+        row.authenticated_at = now
         row.expires_at = expires
         row.suspended_at = None
         row.suspension_reason = None
@@ -221,6 +226,8 @@ def load_shared_school_clients(
         now = _utc_now()
         if snapshot.expires_at is not None and snapshot.expires_at <= now:
             raise SchoolSessionUnavailableError("共享学校会话已过期")
+        if not _within_wechat_retention(row, now) and not _has_school_authorization(db, account, now):
+            raise SchoolSessionUnavailableError("学校认证已超过微信恢复保留期，请重新认证")
         client, ehall_client = _build_clients(row, account)
         row.last_used_at = now
         row.updated_at = now
@@ -400,39 +407,92 @@ def clear_school_session_suspension(student_id: str) -> None:
             db.commit()
 
 
+def _within_wechat_retention(row: SchoolAccountSession, now: datetime) -> bool:
+    """只有学校认证更新保留起点；普通读取、微信恢复和退出均不续期。"""
+    authenticated_at = _aware(row.authenticated_at)
+    expires_at = _aware(row.expires_at)
+    return (
+        authenticated_at is not None
+        and authenticated_at + _WECHAT_SCHOOL_SESSION_RETENTION > now
+        and (expires_at is None or expires_at > now)
+    )
+
+
+def _has_school_authorization(db: Session, account: str, now: datetime) -> bool:
+    """前台、设备与后台授权各自独立于微信绑定的保留期限。"""
+    cutoff = now - timedelta(seconds=get_settings().session_ttl_seconds)
+    has_profile = db.query(BackgroundNotificationProfile.id).filter_by(student_id=account).first()
+    has_session = db.query(AppSessionModel.id).filter(
+        AppSessionModel.student_account == account,
+        AppSessionModel.revoked_at.is_(None),
+        AppSessionModel.last_active_at >= cutoff,
+    ).first()
+    has_device = db.query(DeviceAuthorization.token_digest).filter(
+        DeviceAuthorization.student_account == account,
+        DeviceAuthorization.revoked_at.is_(None),
+    ).first()
+    return has_profile is not None or has_session is not None or has_device is not None
+
+
 def release_if_unused(student_id: str) -> bool:
-    """没有有效前台会话且后台授权关闭时删除账号共享会话。"""
+    """删除无其他有效授权且无认证后 30 天内微信绑定引用的共享学校会话。"""
     account = student_id.strip()
-    cutoff = _utc_now() - timedelta(seconds=get_settings().session_ttl_seconds)
-    with get_sync_session_factory()() as db:
-        has_profile = db.query(BackgroundNotificationProfile.id).filter_by(student_id=account).first()
-        has_session = (
-            db.query(AppSessionModel.id)
-            .filter(
-                AppSessionModel.student_account == account,
-                AppSessionModel.revoked_at.is_(None),
-                AppSessionModel.last_active_at >= cutoff,
-            )
-            .first()
-        )
-        has_device = db.query(DeviceAuthorization.token_digest).filter(
-            DeviceAuthorization.student_account == account,
-            DeviceAuthorization.revoked_at.is_(None),
-        ).first()
+    now = _utc_now()
+    with account_school_session_lock(account), get_sync_session_factory()() as db:
         row = db.query(SchoolAccountSession).filter_by(student_id=account).first()
-        if row is not None and has_profile is None and has_session is None and has_device is None:
-            db.delete(row)
-            db.commit()
-            return True
-    return False
+        if row is None or _has_school_authorization(db, account, now):
+            return False
+        has_binding = db.query(WechatBinding.id).filter_by(student_id=account).first()
+        if has_binding is not None and _within_wechat_retention(row, now):
+            return False
+        db.delete(row)
+        db.commit()
+        return True
+
+
+def purge_expired_wechat_school_sessions() -> None:
+    """即使前台会话已全部清理，也在现有定时任务中释放到期的微信独占 Cookie。"""
+    now = _utc_now()
+    with get_sync_session_factory()() as db:
+        accounts = [row.student_id for row in db.query(SchoolAccountSession.student_id).filter(or_(
+            SchoolAccountSession.authenticated_at.is_(None),
+            SchoolAccountSession.authenticated_at <= now - _WECHAT_SCHOOL_SESSION_RETENTION,
+            SchoolAccountSession.expires_at <= now,
+        )).all()]
+    for account in accounts:
+        release_if_unused(account)
 
 
 def revoke_account_school_access(student_id: str) -> None:
-    """管理员撤销设备凭据时清理账号共享会话与所有前台会话。"""
+    """管理员撤销学校访问时保留微信关联，清理共享会话与所有前台授权。"""
     account = student_id.strip()
     now = _utc_now()
     with account_school_session_lock(account):
         with get_sync_session_factory()() as db:
+            fingerprints = {
+                row.token_digest for row in db.query(DeviceAuthorization.token_digest).filter_by(
+                    student_account=account,
+                ).all()
+            }
+            fingerprints.update(
+                row.credential_fingerprint
+                for row in db.query(AppSessionModel.credential_fingerprint).filter(
+                    AppSessionModel.student_account == account,
+                    AppSessionModel.credential_fingerprint.is_not(None),
+                ).all()
+            )
+            fingerprints.update(
+                row.credential_fingerprint
+                for row in db.query(BackgroundNotificationProfile.credential_fingerprint).filter_by(
+                    student_id=account,
+                ).all()
+            )
+            # 所有已发行凭据都要持久撤销，不能在账号重新认证后借旧凭据恢复。
+            for fingerprint in fingerprints:
+                if db.get(CredentialRevocation, fingerprint) is None:
+                    db.add(CredentialRevocation(
+                        credential_fingerprint=fingerprint, revoked_at=now, reason="admin_kick",
+                    ))
             db.query(DeviceAuthorization).filter_by(student_account=account).update({
                 "revoked_at": now, "revoked_reason": "admin_kick", "encrypted_credentials": None,
             }, synchronize_session=False)

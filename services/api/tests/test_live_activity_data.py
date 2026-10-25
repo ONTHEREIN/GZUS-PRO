@@ -71,3 +71,9 @@ def test_live_activity_priority_is_unified_and_display_only():
     assert live_activity_priority("ecard_reminder", False) == 5
     assert live_activity_priority("new_notice", False) == 4
     assert live_activity_priority("unknown", False) == 5
+
+
+def test_grade_publication_status_does_not_replace_pass_judgement():
+    assert grade_live_fields({"score": "60", "gradeStatus": "成绩已发布", "gradePassed": None})["gradePassed"] is True
+    assert grade_live_fields({"score": "59", "gradeStatus": "成绩已发布", "gradePassed": None})["gradePassed"] is False
+    assert grade_live_fields({"score": "90", "gradeStatus": "待公布"})["gradePassed"] is None

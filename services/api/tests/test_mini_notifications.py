@@ -18,7 +18,9 @@ from app.routes import mini_notifications
 from app.sessions import SessionStore, encrypt_device_credentials
 from app.demo_data import DemoAcademicClient
 from app.wechat_identity import WechatIdentity, encrypt_openid, openid_fingerprint
-from app.wechat_notifications import WechatSubscribeClient, deliver_mini_event
+from app.wechat_notifications import (
+    SubscribePayloadError, WechatSubscribeClient, deliver_mini_event, subscription_data,
+)
 
 
 @pytest.fixture
@@ -126,6 +128,30 @@ def create_course_event():
         row.delivery_status = "delivered"
         db.commit()
         return row.id
+
+
+@pytest.mark.parametrize("score", ["85", "合格", "优秀"])
+def test_persisted_grade_uses_text_remark_template(score):
+    cloud_notifications.persist_notification_event(
+        "20260001", f"grade:英语:{score}", "grade_update", "成绩更新", f"英语：{score}",
+        {"courseName": "英语", "score": score},
+    )
+    with get_sync_session_factory()() as db:
+        event = db.query(NotificationDelivery).one()
+        assert subscription_data(event) == {
+            "thing1": {"value": "英语"}, "thing4": {"value": f"成绩：{score}"},
+        }
+
+
+def test_persisted_grade_without_score_is_not_fabricated():
+    cloud_notifications.persist_notification_event(
+        "20260001", "grade:英语:missing", "grade_update", "成绩更新", "英语成绩更新",
+        {"courseName": "英语"},
+    )
+    with get_sync_session_factory()() as db:
+        event = db.query(NotificationDelivery).one()
+        with pytest.raises(SubscribePayloadError, match="微信提醒缺少成绩文本"):
+            subscription_data(event)
 
 
 @pytest.mark.parametrize("outcome,expected,credits", [("sent", "sent", 0), ("timeout", "unknown", 0), ("reject", "failed", 0), ("invalid", "failed", 1)])
@@ -300,3 +326,95 @@ def test_revocation_during_token_request_prevents_delivery(client, monkeypatch):
     deliver_mini_event(event_id)
     with get_sync_session_factory()() as db:
         assert db.query(MiniNotificationDelivery).count() == 0
+
+
+def test_suspended_background_does_not_consume_subscription(client, monkeypatch):
+    authorize(client, monkeypatch)
+    enable_course(client)
+    subscribe(client, "accept", "receipt-0000000001")
+    event_id = create_course_event()
+    with get_sync_session_factory()() as db:
+        profile = db.query(BackgroundNotificationProfile).one()
+        profile.suspended_at = datetime.now(timezone.utc)
+        profile.suspension_reason = "学校认证需要重新登录"
+        db.commit()
+    monkeypatch.setattr(WechatSubscribeClient, "token", lambda self: pytest.fail("暂停期间不能投递"))
+    deliver_mini_event(event_id)
+    response = client.get("/mini/notifications/config")
+    assert response.json()["backgroundAuthorized"] is True
+    assert response.json()["backgroundSuspended"] is True
+    assert response.json()["lastError"] == "学校认证需要重新登录"
+    assert course_setting(response)["credits"] == 1
+
+
+def test_delivery_config_distinguishes_acceptance_from_receipt(client, monkeypatch):
+    authorize(client, monkeypatch)
+    enable_course(client)
+    subscribe(client, "accept", "receipt-0000000001")
+    event_id = create_course_event()
+    monkeypatch.setattr(WechatSubscribeClient, "token", lambda self: "token")
+    monkeypatch.setattr(WechatSubscribeClient, "send", lambda *args: WechatApiResult(errcode=0, errmsg="ok"))
+    deliver_mini_event(event_id)
+    setting = course_setting(client.get("/mini/notifications/config"))
+    assert setting["lastDelivery"]["status"] == "sent"
+    assert setting["lastDelivery"]["attemptedAt"]
+    assert setting["lastDelivery"]["error"] is None
+    assert "test-openid" not in str(setting)
+
+
+@pytest.mark.parametrize("end_time,expected_status", [("11:00", "sent"), ("无效", "invalid")])
+def test_exam_delivery_uses_wechat_time_range_format(client, monkeypatch, end_time, expected_status):
+    monkeypatch.setenv("WECHAT_EXAM_TEMPLATE_ID", "exam-template")
+    get_settings.cache_clear()
+    authorize(client, monkeypatch)
+    assert client.put("/mini/notifications/preference", json={
+        "type": "exam_reminder", "enabled": True, "code": "code"}).status_code == 200
+    assert client.post("/mini/notifications/subscription", json={
+        "type": "exam_reminder", "templateId": "exam-template", "requestId": "exam-receipt-0000001",
+        "result": "accept", "code": "code"}).status_code == 200
+    exam_date = (datetime.now(ZoneInfo("Asia/Shanghai")) + timedelta(days=1)).date().isoformat()
+    cloud_notifications.persist_notification_event("20260001", "exam:math:tomorrow", "exam_reminder",
+        "考试提醒", "数学考试安排", {"courseName": "数学", "location": "A101",
+        "examTime": f"{exam_date} 09:00-{end_time}"})
+    with get_sync_session_factory()() as db:
+        event_id = db.query(NotificationDelivery).one().id
+    calls = []
+    monkeypatch.setattr(WechatSubscribeClient, "token", lambda self: "token")
+
+    def send(self, token, openid, template_id, page, data):
+        calls.append(data)
+        assert page == "pages/exams/index"
+        assert data["time4"]["value"] == f"{exam_date} 09:00~{exam_date} 11:00"
+        return WechatApiResult(errcode=0, errmsg="ok")
+
+    monkeypatch.setattr(WechatSubscribeClient, "send", send)
+    deliver_mini_event(event_id)
+    deliver_mini_event(event_id)
+    with get_sync_session_factory()() as db:
+        assert db.query(MiniNotificationDelivery).one().status == expected_status
+        assert db.query(MiniNotificationPreference).one().credits == (0 if expected_status == "sent" else 1)
+    assert len(calls) == (1 if expected_status == "sent" else 0)
+
+
+@pytest.mark.parametrize("reauthorize", [False, True])
+def test_failed_send_after_revocation_does_not_restore_credits(client, monkeypatch, reauthorize):
+    authorize(client, monkeypatch)
+    enable_course(client)
+    subscribe(client, "accept", "receipt-0000000001")
+    event_id = create_course_event()
+    monkeypatch.setattr(WechatSubscribeClient, "token", lambda self: "token")
+
+    def send(*args):
+        mini_notifications.revoke_mini_access("20260001")
+        if reauthorize:
+            authorize(client, monkeypatch)
+            enable_course(client)
+            subscribe(client, "accept", "receipt-0000000002")
+        return WechatApiResult(errcode=47003, errmsg="invalid data")
+
+    monkeypatch.setattr(WechatSubscribeClient, "send", send)
+    deliver_mini_event(event_id)
+    setting = course_setting(client.get("/mini/notifications/config"))
+    assert setting["credits"] == int(reauthorize)
+    assert setting["enabled"] is reauthorize
+    assert setting["lastError"] is None
