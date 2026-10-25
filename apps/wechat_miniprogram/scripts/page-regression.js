@@ -1041,9 +1041,15 @@ async function runCases() {
     await (await waitForSelector(page, "#adjustment-primary")).tap()
     const groups = await page.data("groups")
     for (let i = 0; i < groups.length; i++) {
-      const current = await page.data("currentGroup")
-      const groupIndex = await page.data("groupIndex")
-      await (await waitForSelector(page, `#adjustment-target-weekday-${groupIndex}`)).trigger("change", { value: String(current.weekday % 7) })
+      const target = groups[i]
+      // 切组后页面数据可能滞后：同时等 groupIndex 与 currentGroup 名称到位，避免读到上一组。
+      await waitFor(async () => {
+        const group = await page.data("currentGroup")
+        return (await page.data("groupIndex")) === i && group && group.name === target.name
+      }, `切到第 ${i + 1} 组`)
+      // groupChange 里 weekday = picker 索引 + 1。整体后移一天，避免目标与来源同日重叠。
+      await (await waitForSelector(page, `#adjustment-target-weekday-${i}`)).trigger("change", { value: String(target.weekday % 7) })
+      await sleep(200)
       if (i + 1 < groups.length) await (await waitForSelector(page, "#adjustment-group-next")).tap()
     }
     await waitFor(async () => {
