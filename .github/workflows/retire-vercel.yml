@@ -1,0 +1,50 @@
+name: Retire Vercel Legacy Deployment
+
+# 一次性：核查并删除旧 Vercel 项目（gzus-pro / api 等），随后分支即删除。
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "list 只列出账号下的项目；remove 删除 allowlist 中的旧项目"
+        required: true
+        default: list
+        type: choice
+        options: [list, remove]
+
+permissions:
+  contents: read
+
+jobs:
+  vercel:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect Vercel account
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          MODE: ${{ inputs.mode }}
+        run: |
+          set -u
+          auth="Authorization: Bearer $VERCEL_TOKEN"
+          echo "== whoami =="
+          curl -sS -H "$auth" https://api.vercel.com/v2/user | jq -r '.user.username // .error.message // .'
+          echo "== projects =="
+          curl -sS -H "$auth" "https://api.vercel.com/v9/projects?limit=100" -o /tmp/projects.json
+          jq -r '.projects[]? | "\(.name)\t\(.id)\t\(.framework // "-")\t\(.updatedAt)"' /tmp/projects.json || cat /tmp/projects.json
+          echo "== project domains =="
+          for pid in $(jq -r '.projects[]?.id' /tmp/projects.json 2>/dev/null); do
+            echo "-- $pid"
+            curl -sS -H "$auth" "https://api.vercel.com/v9/projects/$pid/domains" | jq -r '.domains[]? | "   \(.name)"'
+          done
+          if [ "$MODE" = "remove" ]; then
+            echo "== remove legacy projects =="
+            for name in $(jq -r '.projects[]?.name' /tmp/projects.json 2>/dev/null); do
+              case "$name" in
+                gzus-pro|api|api-one-zeta-dc0jrazxzq)
+                  echo "removing $name"
+                  curl -sS -X DELETE -H "$auth" "https://api.vercel.com/v9/projects/$name" | jq -r '.error.message? // "removed"' ;;
+                *) echo "keep $name" ;;
+              esac
+            done
+          else
+            echo "list-only mode; nothing removed"
+          fi
