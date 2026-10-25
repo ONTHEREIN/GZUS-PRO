@@ -59,7 +59,7 @@
 构建与测试脚本使用 Node.js 20 或更新的稳定版本。
 
 1. 在微信开发者工具中导入此目录。
-2. 当前仓库已配置测试 AppID `wx2fb65b853ae73231`；如使用其他 AppID，只修改 `project.config.json`，不要在前端配置 AppSecret。
+2. 当前仓库已配置正式 AppID `wx2fb65b853ae73231`（原始 ID `gh_a0c613258490`，已备案）；如使用其他 AppID，只修改 `project.config.json`，不要在前端配置 AppSecret。
 3. 开发者工具「设置 → 安全设置」开启服务端口（页面回归与自动预览都需要）。
 4. 启动 `services/api`（测试环境见仓库 `deploy/tencent/TEST_ENV.md`）。
 
