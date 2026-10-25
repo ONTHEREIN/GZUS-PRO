@@ -1,11 +1,12 @@
 name: Retire Vercel Legacy Deployment
 
-# 一次性：核查并删除旧 Vercel 项目（gzus-pro / api 等），随后分支即删除。
+# 一次性：核查并删除旧 Vercel 项目（gzus-pro / api），完成后本工作流即被删除。
+# token 来自仓库 Secret VERCEL_TOKEN，不会出现在日志里。
 on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "list 只列出账号下的项目；remove 删除 allowlist 中的旧项目"
+        description: "list 只列出项目；remove 删除 allowlist 中的旧项目"
         required: true
         default: list
         type: choice
@@ -33,13 +34,13 @@ jobs:
           echo "== project domains =="
           for pid in $(jq -r '.projects[]?.id' /tmp/projects.json 2>/dev/null); do
             echo "-- $pid"
-            curl -sS -H "$auth" "https://api.vercel.com/v9/projects/$pid/domains" | jq -r '.domains[]? | "   \(.name)"'
+            curl -sS -H "$auth" "https://api.vercel.com/v9/projects/$pid/domains" | jq -r '.domains[]? | "   \(.name)"' 2>/dev/null || true
           done
           if [ "$MODE" = "remove" ]; then
             echo "== remove legacy projects =="
             for name in $(jq -r '.projects[]?.name' /tmp/projects.json 2>/dev/null); do
               case "$name" in
-                gzus-pro|api|api-one-zeta-dc0jrazxzq)
+                gzus-pro|api)
                   echo "removing $name"
                   curl -sS -X DELETE -H "$auth" "https://api.vercel.com/v9/projects/$name" | jq -r '.error.message? // "removed"' ;;
                 *) echo "keep $name" ;;
