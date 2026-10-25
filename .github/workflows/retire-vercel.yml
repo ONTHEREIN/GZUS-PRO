@@ -1,6 +1,6 @@
 name: Retire Vercel Legacy Deployment
 
-# 一次性：核查并删除旧 Vercel 项目（gzus-pro / api），完成后本工作流即被删除。
+# 一次性：核查并删除旧 Vercel 项目（gzus-pro / api / web），完成后本工作流即被删除。
 # token 来自仓库 Secret VERCEL_TOKEN，不会出现在日志里。
 on:
   workflow_dispatch:
@@ -40,7 +40,7 @@ jobs:
             echo "== remove legacy projects =="
             for name in $(jq -r '.projects[]?.name' /tmp/projects.json 2>/dev/null); do
               case "$name" in
-                gzus-pro|api)
+                gzus-pro|api|web)
                   echo "removing $name"
                   curl -sS -X DELETE -H "$auth" "https://api.vercel.com/v9/projects/$name" | jq -r '.error.message? // "removed"' ;;
                 *) echo "keep $name" ;;
