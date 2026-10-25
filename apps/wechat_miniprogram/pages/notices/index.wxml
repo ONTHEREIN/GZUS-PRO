@@ -19,15 +19,15 @@
     <view wx:if="{{reminderError}}" id="reminders-error" class="card error">{{reminderError}}</view>
     <view wx:if="{{settingsVisible && config}}" id="notification-settings" class="card">
       <view class="muted">微信采用一次性订阅，发送后需重新订阅。个人提醒记录仍可持续查看。</view>
+      <view id="notifications-binding-state">{{config.bound ? '当前微信已绑定学校账号' : '当前微信尚未绑定'}}</view>
       <button wx:if="{{!config.bound}}" id="notifications-bind" bindtap="openProfile">到“我的”绑定当前微信</button>
       <view wx:elif="{{!config.backgroundAuthorized}}" id="notifications-authorization">
-        <input id="notifications-account" value="{{account}}" placeholder="学校学号" bindinput="onAccountInput" />
-        <input id="notifications-password" password value="{{password}}" placeholder="学校密码" bindinput="onPasswordInput" />
-        <checkbox-group bindchange="onConsentChange"><label><checkbox value="consent" checked="{{backgroundConsent}}" />授权服务端加密保存登录凭据，在退出小程序后持续检测提醒</label></checkbox-group>
-        <button id="notifications-authorize" loading="{{busy}}" disabled="{{busy}}" bindtap="authorizeBackground">开启后台检测</button>
+        <view class="muted">请在学号密码登录时勾选后台提醒授权，无需在此重复输入密码。</view>
+        <button id="notifications-authorize" disabled="{{busy}}" bindtap="openAuthorizationLogin">前往登录并授权</button>
       </view>
       <view wx:else>
-        <view>后台检测已授权</view>
+        <view id="notifications-background-state">{{config.backgroundSuspended ? '后台检测已授权，但学校认证已暂停' : '后台检测已授权'}}</view>
+        <button wx:if="{{config.backgroundSuspended}}" id="notifications-reauthorize" bindtap="openAuthorizationLogin">重新登录学校账号并授权</button>
         <view wx:if="{{config.lastCheckedAt}}" class="muted">最近检查：{{config.lastCheckedAt}}</view>
         <button id="notifications-disable" disabled="{{busy}}" bindtap="disableBackground">关闭微信后台授权</button>
       </view>
@@ -36,6 +36,8 @@
         <view class="notice-meta"><text>{{item.label}}提醒</text><switch id="notification-switch-{{item.type}}" checked="{{item.enabled}}" disabled="{{busy || !config.bound}}" data-type="{{item.type}}" bindchange="changePreference" /></view>
         <view id="notification-status-{{item.type}}" class="muted">{{item.statusText}}</view>
         <view wx:if="{{item.lastError}}" class="error">{{item.lastError}}</view>
+        <view wx:if="{{item.deliveryText}}" id="notification-delivery-{{item.type}}" class="muted">最近投递：{{item.deliveryText}}</view>
+        <view wx:if="{{item.deliveryError}}" class="error">{{item.deliveryError}}</view>
         <button id="notification-subscribe-{{item.type}}" data-index="{{index}}" disabled="{{busy || !config.backgroundAuthorized || !item.enabled || !item.templateId}}" bindtap="subscribe">订阅下一次提醒</button>
       </view>
     </view>

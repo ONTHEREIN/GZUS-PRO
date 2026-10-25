@@ -1,0 +1,38 @@
+name: CI Mini Program
+
+on:
+  pull_request:
+    paths:
+      - 'apps/wechat_miniprogram/**'
+      - 'docs/terms-of-service.md'
+      - 'docs/privacy-policy.md'
+      - '.github/workflows/ci-miniprogram.yml'
+  push:
+    branches: [master]
+    paths:
+      - 'apps/wechat_miniprogram/**'
+      - 'docs/terms-of-service.md'
+      - 'docs/privacy-policy.md'
+      - '.github/workflows/ci-miniprogram.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  type-and-logic:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: apps/wechat_miniprogram/package-lock.json
+      - name: Install locked dependencies
+        working-directory: apps/wechat_miniprogram
+        run: npm ci
+      # 开发者工具页面测试和真机收件需要独立环境，不能计入此检查。
+      - name: Typecheck and logic tests
+        working-directory: apps/wechat_miniprogram
+        run: npm test

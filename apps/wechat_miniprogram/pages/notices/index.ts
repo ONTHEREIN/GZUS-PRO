@@ -9,7 +9,7 @@ Page({
   data: { loading: true, error: "", notices: [] as NoticeItem[],
     section: "school", reminders: [] as PersonalReminder[], reminderLoading: false, reminderError: "",
     config: null as NotificationConfig | null, settingsVisible: false, busy: false,
-    account: "", password: "", backgroundConsent: false },
+  },
 
   onShow() {
     if (requireSession()) {
@@ -22,15 +22,13 @@ Page({
   showPersonal() { this.setData({ section: "personal" }) },
   toggleSettings() { this.setData({ settingsVisible: !this.data.settingsVisible }) },
   openProfile() { wx.switchTab({ url: "/pages/profile/index" }) },
-  onAccountInput(event: WechatMiniprogram.Input) { this.setData({ account: event.detail.value }) },
-  onPasswordInput(event: WechatMiniprogram.Input) { this.setData({ password: event.detail.value }) },
-  onConsentChange(event: WechatMiniprogram.CheckboxGroupChange) { this.setData({ backgroundConsent: event.detail.value.includes("consent") }) },
+  openAuthorizationLogin() { wx.reLaunch({ url: "/pages/login/index?authorizeBackground=1" }) },
 
   async loadReminders() {
     this.setData({ reminderLoading: true, reminderError: "" })
     try {
       const [reminders, config] = await Promise.all([get("/notifications/events", parseReminders), loadNotificationConfig()])
-      this.setData({ reminders, config, account: wx.getStorageSync("auth.studentId") || "" })
+      this.setData({ reminders, config })
     } catch (error) {
       this.setData({ reminderError: error instanceof Error ? error.message : "个人提醒加载失败" })
     } finally { this.setData({ reminderLoading: false }) }
@@ -71,20 +69,6 @@ Page({
     try { this.setData({ config: await subscribeNext(setting) }) }
     catch (error) { this.setData({ reminderError: error instanceof Error ? error.message : "订阅失败" }) }
     finally { this.setData({ busy: false }) }
-  },
-
-  async authorizeBackground() {
-    if (this.data.busy) return
-    if (!this.data.backgroundConsent) { this.setData({ reminderError: "请先同意后台检测授权" }); return }
-    const account = this.data.account.trim()
-    const password = this.data.password
-    if (!account || !password) { this.setData({ reminderError: "请输入学校学号和密码以授权后台检测" }); return }
-    this.setData({ busy: true, password: "", reminderError: "" })
-    try {
-      const code = await requestWechatCode()
-      this.setData({ config: await post("/mini/notifications/background", { account, password, code, consent: true }, parseNotificationConfig) })
-    } catch (error) { this.setData({ reminderError: error instanceof Error ? error.message : "后台授权失败" }) }
-    finally { this.setData({ busy: false, password: "" }) }
   },
 
   async disableBackground() {

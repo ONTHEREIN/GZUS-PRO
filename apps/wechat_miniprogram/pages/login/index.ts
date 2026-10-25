@@ -8,6 +8,8 @@ import { confirmWechatBinding, requestWechatCode } from "../../utils/wechat"
 Page({
   data: {
     agreed: false,
+    backgroundConsent: false,
+    authorizationRequested: false,
     existingSession: false,
     account: "",
     password: "",
@@ -16,9 +18,15 @@ Page({
     error: ""
   },
 
+  onLoad(options: Record<string, string | undefined>) {
+    if (options.authorizeBackground === "1") {
+      this.setData({ authorizationRequested: true, account: wx.getStorageSync("auth.studentId") || "" })
+    }
+  },
+
   onShow() {
-    this.setData({ agreed: hasAcceptedLegal(), existingSession: Boolean(wx.getStorageSync("auth.sessionId")) })
-    if (wx.getStorageSync("auth.sessionId") && hasAcceptedLegal()) {
+    this.setData({ agreed: hasAcceptedLegal(), existingSession: !this.data.authorizationRequested && Boolean(wx.getStorageSync("auth.sessionId")) })
+    if (!this.data.authorizationRequested && wx.getStorageSync("auth.sessionId") && hasAcceptedLegal()) {
       wx.switchTab({ url: "/pages/home/index" })
     }
   },
@@ -33,6 +41,10 @@ Page({
 
   onAgreementChange(event: WechatMiniprogram.CheckboxGroupChange) {
     this.setData({ agreed: event.detail.value.includes("agree"), error: "" })
+  },
+
+  onBackgroundConsentChange(event: WechatMiniprogram.CheckboxGroupChange) {
+    this.setData({ backgroundConsent: event.detail.value.includes("background"), error: "" })
   },
 
   openTerms() { wx.navigateTo({ url: "/pages/legal/index?type=terms" }) },
@@ -72,18 +84,20 @@ Page({
     acceptLegal()
     this.setData({ submitting: true, error: "" })
     try {
-      const result = await post<LoginResponse>("/mini/auth/login", { account, password }, parseLogin)
+      const backgroundConsent = this.data.backgroundConsent
+      const code = backgroundConsent ? await requestWechatCode() : undefined
+      const result = await post<LoginResponse>("/mini/auth/login", { account, password, backgroundConsent, code }, parseLogin)
       wx.setStorageSync("auth.sessionId", result.sessionId)
       wx.setStorageSync("auth.studentName", result.studentName)
       wx.setStorageSync("auth.studentId", result.studentId)
       this.setData({ existingSession: true, password: "" })
       await syncAcademicPeriod()
-      await this.offerWechatBinding()
+      if (!backgroundConsent) await this.offerWechatBinding()
       wx.switchTab({ url: "/pages/home/index" })
     } catch (error) {
-      this.setData({ existingSession: Boolean(wx.getStorageSync("auth.sessionId")), error: error instanceof Error ? error.message : "登录失败，请稍后重试" })
+      this.setData({ existingSession: !this.data.authorizationRequested && Boolean(wx.getStorageSync("auth.sessionId")), error: error instanceof Error ? error.message : "登录失败，请稍后重试" })
     } finally {
-      this.setData({ submitting: false })
+      this.setData({ submitting: false, password: "" })
     }
   },
 
@@ -91,6 +105,10 @@ Page({
     if (this.data.submitting || this.data.wechatSubmitting) return
     if (!this.data.agreed) {
       this.setData({ error: "请先阅读并同意用户服务协议和隐私政策" })
+      return
+    }
+    if (this.data.backgroundConsent) {
+      this.setData({ error: "首次保存或重新授权后台检测，请使用学号密码登录" })
       return
     }
     acceptLegal()

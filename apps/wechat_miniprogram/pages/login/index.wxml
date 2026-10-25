@@ -13,6 +13,7 @@
       <input id="login-account" class="input" placeholder="请输入学号" value="{{account}}" bindinput="onAccountInput" />
       <view class="field-label">统一认证密码</view>
       <input id="login-password" class="input" password placeholder="请输入密码" value="{{password}}" bindinput="onPasswordInput" />
+      <checkbox-group id="login-background-consent" bindchange="onBackgroundConsentChange"><label><checkbox id="login-background-checkbox" value="background" checked="{{backgroundConsent}}" />绑定当前微信，并授权服务端加密保存登录凭据，用于退出小程序后的后台提醒（可在提醒设置中撤销）</label></checkbox-group>
     </block>
     <checkbox-group id="login-agreement" bindchange="onAgreementChange"><label><checkbox id="login-agree-checkbox" value="agree" checked="{{agreed}}" />我已阅读并同意</label></checkbox-group>
     <view class="agreement-links"><text id="login-terms" bindtap="openTerms">《用户服务协议》</text><text id="login-privacy" bindtap="openPrivacy">《隐私政策》</text></view>
@@ -22,5 +23,5 @@
     <button wx:if="{{!existingSession}}" id="login-wechat" class="wechat-button" loading="{{wechatSubmitting}}" bindtap="wechatLogin">微信一键登录</button>
   </view>
 
-  <view class="notice">账号密码仅用于服务端建立学校系统会话，不会在小程序中保存。</view>
+  <view class="notice">密码不会保存在小程序本地。勾选后台提醒授权后，登录凭据仅在服务端加密保存；微信消息仍需另行订阅。</view>
 </view>
