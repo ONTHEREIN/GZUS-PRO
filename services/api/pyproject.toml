@@ -31,6 +31,10 @@ dev = [
   "pytest-cov>=6.0.0",
   "ruff>=0.5.0",
 ]
+# 智能体测试对象（AgentLens 接入）。可选依赖：不进生产部署的主依赖集。
+agent = [
+  "openai>=1.40.0",
+]
 
 [tool.uv]
 default-groups = []
