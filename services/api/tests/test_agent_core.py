@@ -159,3 +159,13 @@ def test_reasoning_is_sent_back_and_kept_on_plan():
         [{"role": "user", "content": "电费"}], ctx=ctx, source=FixtureSource(ctx), llm=llm,
     )
     assert out.spans[0].notes == "用户问电费"
+
+
+def test_extra_notices_are_searchable_and_change_input_sha():
+    ctx = AgentContext(TODAY)
+    extra = [{"title": "关于奖学金评定的通知", "date": "2026-09-20", "url": "https://demo.local/x"}]
+    hits = FixtureSource(ctx, extra_notices=extra).notices("奖学金").data
+    assert [h.chunk_id for h in hits] == ["https://demo.local/x"]
+
+    base = {"messages": [{"role": "user", "content": "奖学金"}]}
+    assert cli.input_sha(base) != cli.input_sha({**base, "fixtures": {"extra_notices": extra}})

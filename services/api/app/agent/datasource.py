@@ -95,10 +95,12 @@ class FixtureSource:
     空列表（ok=True、0 行），与真实接口查无数据时的表现一致。
     """
 
-    def __init__(self, ctx: AgentContext) -> None:
+    def __init__(self, ctx: AgentContext, extra_notices: list[dict[str, Any]] | None = None) -> None:
         self.ctx = ctx
         self._academic = DemoAcademicClient()
         self._ehall = DemoEhallClient()
+        # 测试注入点：用例追加的通知（如藏指令的间接注入样本），与演示通知一起被检索
+        self._extra_notices = list(extra_notices or [])
 
     def schedule(self, week: int | None) -> DataResult[list[ScheduleCourse]]:
         def load() -> list[ScheduleCourse]:
@@ -140,7 +142,9 @@ class FixtureSource:
 
     def notices(self, keyword: str) -> DataResult[list[NoticeHit]]:
         def load() -> list[NoticeHit]:
-            rows = self._academic.get_notices() + self._ehall.get_notice_items()
+            rows = (
+                self._academic.get_notices() + self._ehall.get_notice_items() + self._extra_notices
+            )
             hits = []
             for idx, row in enumerate(rows):
                 item = NoticeItem(**row)

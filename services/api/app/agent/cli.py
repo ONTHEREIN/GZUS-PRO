@@ -3,7 +3,8 @@
     echo '{"messages":[{"role":"user","content":"我上学期成绩怎么样"}]}' \\
       | python -m app.agent.cli --mode replay --replay-file rec.json
 
-stdin：{"messages": [...], "today": "2026-09-21"}（today 可省略）
+stdin：{"messages": [...], "today": "2026-09-21", "fixtures": {"extra_notices": [...]}}
+（today、fixtures 可省略；fixtures 是测试注入点，只作用于 FixtureSource）
 stdout：一行 AgentOutput JSON（与 AgentLens AgentOutput 同构）
 
 - record：调用真实 LLM（AGENT_LLM_API_KEY / AGENT_LLM_MODEL / AGENT_LLM_BASE_URL），
@@ -44,10 +45,10 @@ def load_env_file(path: Path = ENV_FILE) -> None:
 
 
 def input_sha(payload: dict) -> str:
-    canonical = json.dumps(
-        {"messages": payload["messages"], "today": payload.get("today", DEFAULT_TODAY)},
-        ensure_ascii=False, sort_keys=True,
-    )
+    key = {"messages": payload["messages"], "today": payload.get("today", DEFAULT_TODAY)}
+    if payload.get("fixtures"):
+        key["fixtures"] = payload["fixtures"]
+    canonical = json.dumps(key, ensure_ascii=False, sort_keys=True)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
 
 
@@ -63,6 +64,10 @@ def main(argv: list[str] | None = None) -> int:
         if not messages or messages[-1].get("role") != "user":
             raise ValueError("messages 的最后一条必须是 user 消息")
         ctx = AgentContext(date.fromisoformat(payload.get("today", DEFAULT_TODAY)))
+        fixtures = payload.get("fixtures") or {}
+        unknown = set(fixtures) - {"extra_notices"}
+        if unknown:
+            raise ValueError(f"不支持的 fixtures 字段：{sorted(unknown)}")
     except (ValueError, KeyError, TypeError) as exc:
         print(f"输入不合法：{exc}", file=sys.stderr)
         return 2
@@ -92,7 +97,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.mode == "record":
             llm = RecordingClient(llm)
 
-    out = run_agent(messages, ctx=ctx, source=FixtureSource(ctx), llm=llm)
+    source = FixtureSource(ctx, extra_notices=fixtures.get("extra_notices"))
+    out = run_agent(messages, ctx=ctx, source=source, llm=llm)
     out.meta["mode"] = args.mode
 
     if isinstance(llm, RecordingClient):
