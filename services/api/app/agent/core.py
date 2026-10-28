@@ -65,7 +65,13 @@ def run_agent(
     """执行一轮对话。messages 为历史 + 本轮用户消息（最后一条必须是 user）。"""
     tracer = Tracer()
     tokens = TokenUsage()
-    meta: dict[str, Any] = {"model": llm.model, "today": ctx.today.isoformat()}
+    # 与 system prompt 一致的时间上下文，供 AgentLens 裁判核对「上学期」「第几周」等推算
+    meta: dict[str, Any] = {
+        "model": llm.model,
+        "today": ctx.today.isoformat(),
+        "current_term": ctx.current.label,
+        "week": ctx.week,
+    }
 
     def finish(status: str, answer: str = "", **extra: Any) -> AgentOutput:
         return AgentOutput(

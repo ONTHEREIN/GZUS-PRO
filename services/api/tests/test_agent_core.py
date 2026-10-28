@@ -56,6 +56,7 @@ def test_grades_happy_path_emits_full_span_chain():
     assert obs.parent == call.span_id and obs.ok and obs.row_count == 5
     assert out.tokens.prompt == 30
     assert out.latency_ms >= 300
+    assert out.meta["current_term"] == "2026-2027-1" and out.meta["week"] == 4
 
 
 def test_missing_period_defaults_to_current_term_like_real_api():
