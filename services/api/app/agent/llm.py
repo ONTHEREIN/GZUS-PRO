@@ -26,12 +26,16 @@ class ToolCallReq:
 class LLMReply:
     content: str | None
     tool_calls: list[ToolCallReq] = field(default_factory=list)
+    # 思考模式模型（如 DeepSeek）的推理文本：同一轮工具调用中必须原样回传
+    reasoning: str | None = None
     prompt_tokens: int = 0
     completion_tokens: int = 0
     latency_ms: float = 0.0
 
     def as_message(self) -> dict[str, Any]:
         msg: dict[str, Any] = {"role": "assistant", "content": self.content}
+        if self.reasoning is not None:
+            msg["reasoning_content"] = self.reasoning
         if self.tool_calls:
             msg["tool_calls"] = [
                 {"id": c.id, "type": "function", "function": {"name": c.name, "arguments": c.arguments}}
@@ -80,6 +84,7 @@ class OpenAIClient:
                 ToolCallReq(id=c.id, name=c.function.name, arguments=c.function.arguments or "{}")
                 for c in (msg.tool_calls or [])
             ],
+            reasoning=getattr(msg, "reasoning_content", None),
             prompt_tokens=usage.prompt_tokens if usage else 0,
             completion_tokens=usage.completion_tokens if usage else 0,
             latency_ms=round(latency, 1),
@@ -117,6 +122,7 @@ class ReplayClient:
             LLMReply(
                 content=r["content"],
                 tool_calls=[ToolCallReq(**c) for c in r["tool_calls"]],
+                reasoning=r.get("reasoning"),
                 prompt_tokens=r["prompt_tokens"],
                 completion_tokens=r["completion_tokens"],
                 latency_ms=r["latency_ms"],

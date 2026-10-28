@@ -16,7 +16,7 @@ from app.agent.spans import AgentOutput, RetrieveSpan, TokenUsage
 from app.agent.tools import TOOLS, openai_tools, run_tool
 from app.agent.tracer import Tracer
 
-MAX_ROUNDS = 6
+MAX_ROUNDS = 8
 _WEEKDAYS = "一二三四五六日"
 
 PLAN_TOOL = {
@@ -90,22 +90,12 @@ def run_agent(
         convo.append(reply.as_message())
         return reply
 
+    # make_plan 与业务工具一起提供，由 prompt 要求先规划，不强制 tool_choice：
+    # 部分模型（如 DeepSeek 思考模式）不支持指定函数。模型跳过规划时就没有
+    # plan span，这是真实的被测行为，由 AgentLens 归到 L1。
+    tools = [PLAN_TOOL, *openai_tools()]
+    plan_id = None
     try:
-        # ---- 规划：强制先调 make_plan，把「意图 + 步骤」落成 plan span
-        reply = ask([PLAN_TOOL], {"type": "function", "function": {"name": "make_plan"}})
-        plan_id = None
-        for call in reply.tool_calls:
-            if call.name == "make_plan":
-                plan = _loads(call.arguments)
-                span = tracer.add(
-                    "plan", latency_ms=reply.latency_ms, intent=str(plan.get("intent", "")),
-                    steps=[str(s) for s in plan.get("steps") or []],
-                )
-                plan_id = span.span_id
-            convo.append({"role": "tool", "tool_call_id": call.id, "content": "计划已记录，请开始执行。"})
-
-        # ---- 执行：tool-calling 循环，直到模型给出不带工具调用的回答
-        tools = openai_tools()
         for _ in range(MAX_ROUNDS):
             reply = ask(tools, "auto")
             if not reply.tool_calls:
@@ -115,12 +105,27 @@ def run_agent(
                     citations=_citations(tracer, answer),
                 )
                 return finish("ok", answer)
-            # 本轮的 LLM 决策耗时记在 tool_call 之前
-            tracer.advance(reply.latency_ms)
+            # 本轮的 LLM 决策耗时：有规划就记在 plan span 上，否则记在 tool_call 之前
+            decided = False
             for call in reply.tool_calls:
-                content = run_tool(
-                    call.name, call.arguments, source=source, ctx=ctx, tracer=tracer, parent=plan_id,
-                )
+                if call.name == "make_plan":
+                    plan = _loads(call.arguments)
+                    span = tracer.add(
+                        "plan", latency_ms=0 if decided else reply.latency_ms,
+                        intent=str(plan.get("intent", "")),
+                        steps=[str(s) for s in plan.get("steps") or []],
+                        notes=reply.reasoning,
+                    )
+                    plan_id = plan_id or span.span_id
+                    content = "计划已记录，请开始执行。"
+                else:
+                    if not decided:
+                        tracer.advance(reply.latency_ms)
+                    content = run_tool(
+                        call.name, call.arguments, source=source, ctx=ctx, tracer=tracer,
+                        parent=plan_id,
+                    )
+                decided = True
                 convo.append({"role": "tool", "tool_call_id": call.id, "content": content})
         return finish("error", error="max_rounds", detail=f"{MAX_ROUNDS} 轮内未给出最终回答")
     except ReplayExhausted as exc:

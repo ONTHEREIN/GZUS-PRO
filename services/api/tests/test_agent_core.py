@@ -136,3 +136,26 @@ def test_cli_replay_roundtrip_and_input_guard(tmp_path, monkeypatch, capsys):
     changed = {"messages": [{"role": "user", "content": "水费还剩多少"}]}
     monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(changed)))
     assert cli.main(["--mode", "replay", "--replay-file", str(path)]) == 2
+
+
+def test_skipped_plan_leaves_no_plan_span_and_tools_still_run():
+    out = _run(
+        "电费还剩多少",
+        _reply(calls=[("get_card_balance", {})]),
+        _reply(content="电费还剩 68.4 度。"),
+    )
+    assert [s.span for s in out.spans] == ["tool_call", "observation", "generate"]
+    assert out.spans[0].parent is None
+
+
+def test_reasoning_is_sent_back_and_kept_on_plan():
+    llm = _scripted(
+        {**_reply(calls=[("make_plan", {"intent": "查电费", "steps": ["get_card_balance"]})]),
+         "reasoning": "用户问电费"},
+        _reply(content="68.4 度。"),
+    )
+    ctx = AgentContext(TODAY)
+    out = run_agent(
+        [{"role": "user", "content": "电费"}], ctx=ctx, source=FixtureSource(ctx), llm=llm,
+    )
+    assert out.spans[0].notes == "用户问电费"
