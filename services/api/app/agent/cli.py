@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import sys
 from datetime import date
 from pathlib import Path
@@ -28,6 +29,18 @@ from app.agent.datasource import AgentContext, FixtureSource
 from app.agent.llm import OpenAIClient, RecordingClient, ReplayClient
 
 DEFAULT_TODAY = "2026-09-21"
+# LLM 配置也可写在这里（KEY=VALUE 每行一条），被 services/api/.gitignore 的 .env* 忽略
+ENV_FILE = Path(__file__).resolve().parents[2] / ".env.agent"
+
+
+def load_env_file(path: Path = ENV_FILE) -> None:
+    """把 .env.agent 里的 AGENT_LLM_* 补进环境变量；已存在的环境变量优先。"""
+    if not path.exists():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        key, sep, value = line.strip().partition("=")
+        if sep and key.startswith("AGENT_LLM_") and key not in os.environ:
+            os.environ[key] = value.strip().strip('"').strip("'")
 
 
 def input_sha(payload: dict) -> str:
@@ -70,6 +83,11 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         llm = ReplayClient(recording)
     else:
+        load_env_file()
+        missing = [k for k in ("AGENT_LLM_API_KEY", "AGENT_LLM_MODEL") if not os.environ.get(k)]
+        if missing:
+            print(f"缺少 LLM 配置：{', '.join(missing)}（环境变量或 {ENV_FILE}）", file=sys.stderr)
+            return 2
         llm = OpenAIClient()
         if args.mode == "record":
             llm = RecordingClient(llm)
