@@ -2176,6 +2176,17 @@ class ApiClient {
         'attachments': attachments,
       });
 
+  /// 智能体对话（仅演示账号）。messages 为完整对话历史，最后一条是本轮用户消息；
+  /// 返回 answer 与执行链路 spans（plan / tool_call / observation / generate 等）。
+  Future<Map<String, dynamic>> agentChat({
+    required List<Map<String, String>> messages,
+    String? conversationId,
+  }) async =>
+      _post('/agent/chat', {
+        'messages': messages,
+        if (conversationId != null) 'conversationId': conversationId,
+      });
+
   Future<List<EhallAffairItem>> ehallAffairs(
           {bool forceRefresh = false}) async =>
       (await _cacheFirstList<EhallAffairItem>(
@@ -3102,7 +3113,7 @@ class ApiClient {
           headers: {..._headers(), ...extraHeaders},
           body: jsonEncode(body),
         )
-        .timeout(path.startsWith('/auth/')
+        .timeout(path.startsWith('/auth/') || path.startsWith('/agent/')
             ? const Duration(seconds: 70)
             : _requestTimeout);
     return _decodeObject(response);
