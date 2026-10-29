@@ -1,2 +1,4 @@
 .vercel
 .env*
+# 智能体对话 trace 落盘目录
+data/

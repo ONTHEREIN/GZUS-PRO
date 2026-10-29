@@ -36,6 +36,8 @@ class Settings(BaseSettings):
     ws_heartbeat_seconds: int = 30
     debug: bool = False
     demo_account_enabled: bool = False
+    # 智能体对话（POST /agent/chat）：仅本地演示使用，默认关闭；数据源为演示账号虚构数据
+    agent_enabled: bool = False
     demo_account: str = "demo_screenshot_2026"
     demo_password: str = ""
     demo_student_id: str = "DEMO-2026-001"

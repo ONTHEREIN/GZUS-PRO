@@ -18,6 +18,7 @@ from app.database import check_database_ready, get_sync_session_factory, init_db
 from app.rate_limit import limiter
 from app.routes import (
     academic,
+    agent,
     admin,
     auth,
     content,
@@ -127,7 +128,11 @@ def create_app() -> FastAPI:
         request.state.trace_id = trace_id
         started_at = time.perf_counter()
         blocked_demo_write = False
-        if request.method in {"POST", "PUT", "PATCH", "DELETE"} and request.url.path != "/auth/logout":
+        # /agent/chat 是只读查询（POST 只为承载对话历史），不改动任何账号数据
+        if (
+            request.method in {"POST", "PUT", "PATCH", "DELETE"}
+            and request.url.path not in {"/auth/logout", "/agent/chat"}
+        ):
             session_id = request.headers.get("X-Session-Id")
             if session_id:
                 try:
@@ -246,6 +251,7 @@ def create_app() -> FastAPI:
     app.include_router(push.router)
     app.include_router(notifications.router)
     app.include_router(weather.router)
+    app.include_router(agent.router)
     app.include_router(settings.router)
     from app.routes.schedule_adjustments_v3 import router as adjustments_v3_router
     app.include_router(adjustments_v3_router)
