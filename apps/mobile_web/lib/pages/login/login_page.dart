@@ -558,7 +558,12 @@ class _LoginPageState extends State<LoginPage>
                 borderRadius: BorderRadius.circular(GzusRadii.xl),
                 material: LiquidGlassMaterial.regular,
                 semanticsLabel: '登录表单',
-                child: _buildLoginForm(context, compact),
+                // 分栏布局的高度固定为 620，表单内容（如出现错误提示）超出时在面板内滚动
+                child: split
+                    ? SingleChildScrollView(
+                        child: _buildLoginForm(context, compact),
+                      )
+                    : _buildLoginForm(context, compact),
               );
               return SafeArea(
                 child: SingleChildScrollView(

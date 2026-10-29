@@ -1553,6 +1553,29 @@ kwIDAQAB
     expect(find.byType(TextField), findsNWidgets(2));
   });
 
+  testWidgets('login split layout does not overflow when showing an error',
+      (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    tester.view.physicalSize = const Size(1200, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: LoginPage(
+          api: _loginPageApi(),
+          onLoggedIn: (_) {},
+          initialError: '演示账号仅支持查看',
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('login-split-layout')), findsOneWidget);
+    expect(find.text('演示账号仅支持查看'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('login page keeps password controls available on mobile',
       (tester) async {
     SharedPreferences.setMockInitialValues({});
