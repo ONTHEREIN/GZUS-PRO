@@ -20,6 +20,7 @@ import '../../widgets/scale_tap.dart';
 import '../../widgets/seed_color_picker.dart';
 import '../../update_service.dart' deferred as update_service;
 import '../admin/admin_page.dart';
+import '../agent/agent_chat_page.dart';
 import 'feedback_page.dart';
 
 class MorePage extends StatefulWidget {
@@ -456,6 +457,20 @@ class _MorePageState extends State<MorePage> {
                         subtitle: const Text('设置后台保活和推送'),
                         trailing: const Icon(Icons.chevron_right),
                         onTap: widget.onShowBackgroundGuide,
+                      ),
+                    // 智能助手目前只接演示账号的虚构数据，与后端 /agent/chat 的开放范围一致
+                    if (widget.api.isDemo)
+                      ListTile(
+                        key: const ValueKey('agent-chat-entry-tile'),
+                        leading: const Icon(Icons.auto_awesome_outlined),
+                        title: const Text('智能助手'),
+                        subtitle: const Text('用一句话查课表、成绩、考勤和通知'),
+                        trailing: const Icon(Icons.chevron_right),
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (context) => AgentChatPage(api: widget.api),
+                          ),
+                        ),
                       ),
                     ListTile(
                       key: const ValueKey('feedback-entry-tile'),
