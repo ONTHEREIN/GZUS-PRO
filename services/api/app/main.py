@@ -128,10 +128,13 @@ def create_app() -> FastAPI:
         request.state.trace_id = trace_id
         started_at = time.perf_counter()
         blocked_demo_write = False
+        # /auth/* 是登录、登出等会话管理：带着旧演示会话的请求头重新登录不应被拦；
         # /agent/chat 是只读查询（POST 只为承载对话历史），不改动任何账号数据
+        path = request.url.path
         if (
             request.method in {"POST", "PUT", "PATCH", "DELETE"}
-            and request.url.path not in {"/auth/logout", "/agent/chat"}
+            and not path.startswith("/auth/")
+            and path != "/agent/chat"
         ):
             session_id = request.headers.get("X-Session-Id")
             if session_id:

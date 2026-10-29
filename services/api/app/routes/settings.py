@@ -7,6 +7,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
+from app.academic_period import academic_period_of, now_shanghai
 from app.database import Base, UserSettings, get_sync_engine, get_sync_session_factory
 from app.routes.deps import require_session
 from app.schemas import (
@@ -141,7 +142,12 @@ def get_academic_period(
     _ensure_table()
     with get_sync_session_factory()() as db:
         row = db.query(UserSettings).filter(UserSettings.student_id == student_id).first()
-        return _period_from_row(row)
+        period = _period_from_row(row)
+    if period["year"] is None and session.is_demo:
+        # 演示账号只读、无法保存偏好；返回按当前日期推算的学期，避免客户端登录后回写被拦而登录失败
+        year, term = academic_period_of(now_shanghai())
+        return {"year": year, "term": term}
+    return period
 
 
 @router.put("/academic-period", response_model=AcademicPeriodPreference)

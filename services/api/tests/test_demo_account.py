@@ -83,3 +83,33 @@ def test_demo_account_is_rejected_when_disabled(monkeypatch) -> None:
         )
 
     assert response.status_code == 401
+
+
+def test_demo_account_gets_derived_academic_period_without_writing(monkeypatch) -> None:
+    _enable_demo_account(monkeypatch)
+    app = create_app()
+
+    with TestClient(app) as client:
+        login = client.post(
+            "/auth/auto-login", json={"account": DEMO_ACCOUNT, "password": DEMO_PASSWORD},
+        ).json()
+        headers = {"X-Session-Id": login["sessionId"]}
+
+        period = client.get("/settings/academic-period", headers=headers).json()
+        assert period["year"] is not None and period["term"] in (1, 2)
+        assert client.put(
+            "/settings/academic-period", headers=headers, json=period,
+        ).status_code == 403
+
+
+def test_demo_account_can_log_in_again_with_stale_demo_session_header(monkeypatch) -> None:
+    _enable_demo_account(monkeypatch)
+    app = create_app()
+
+    with TestClient(app) as client:
+        credentials = {"account": DEMO_ACCOUNT, "password": DEMO_PASSWORD}
+        first = client.post("/auth/auto-login", json=credentials).json()
+        again = client.post(
+            "/auth/auto-login", json=credentials, headers={"X-Session-Id": first["sessionId"]},
+        )
+        assert again.status_code == 200
