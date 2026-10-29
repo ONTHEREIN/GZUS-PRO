@@ -34,6 +34,33 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('智能助手卡片只对演示账号显示在更多页顶部', (tester) async {
+    await tester.pumpWidget(_morePage(
+      onConfigChanged: () {},
+      onNavigate: (_) {},
+      onFontScaleChanged: (_) {},
+    ));
+    expect(find.byKey(const ValueKey('agent-chat-entry-card')), findsNothing);
+
+    final demoApi = ApiClient(baseUrl: 'https://api.example.test')
+      ..setStudentId('DEMO-2026-001');
+    await tester.pumpWidget(_morePage(
+      onConfigChanged: () {},
+      onNavigate: (_) {},
+      onFontScaleChanged: (_) {},
+      api: demoApi,
+    ));
+    final entry = find.byKey(const ValueKey('agent-chat-entry-card'));
+    expect(entry, findsOneWidget);
+    // 位于所有分区之上
+    expect(tester.getTopLeft(entry).dy,
+        lessThan(tester.getTopLeft(find.text('快捷设置')).dy));
+
+    await tester.tap(entry);
+    await tester.pumpAndSettle();
+    expect(find.text('问我课表、成绩、考勤、考试、水电余额或学校通知。'), findsOneWidget);
+  });
+
   testWidgets('编辑导航可添加应用并保存配置', (tester) async {
     var configChanged = 0;
     await tester.pumpWidget(_morePage(
@@ -241,12 +268,13 @@ Widget _morePage({
   Future<void> Function()? onClearCustomBackground,
   Future<void> Function(double value)? onCustomBackgroundBlurChanged,
   Future<void> Function(double value)? onCustomBackgroundDarknessChanged,
+  ApiClient? api,
 }) {
   return MaterialApp(
     theme: gzusTheme(Brightness.light),
     home: Scaffold(
       body: MorePage(
-        api: ApiClient(baseUrl: 'https://api.example.test'),
+        api: api ?? ApiClient(baseUrl: 'https://api.example.test'),
         navBarTabs: [
           NavTabConfig.all[0],
           NavTabConfig.all[1],

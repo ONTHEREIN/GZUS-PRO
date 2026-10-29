@@ -458,20 +458,6 @@ class _MorePageState extends State<MorePage> {
                         trailing: const Icon(Icons.chevron_right),
                         onTap: widget.onShowBackgroundGuide,
                       ),
-                    // 智能助手目前只接演示账号的虚构数据，与后端 /agent/chat 的开放范围一致
-                    if (widget.api.isDemo)
-                      ListTile(
-                        key: const ValueKey('agent-chat-entry-tile'),
-                        leading: const Icon(Icons.auto_awesome_outlined),
-                        title: const Text('智能助手'),
-                        subtitle: const Text('用一句话查课表、成绩、考勤和通知'),
-                        trailing: const Icon(Icons.chevron_right),
-                        onTap: () => Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (context) => AgentChatPage(api: widget.api),
-                          ),
-                        ),
-                      ),
                     ListTile(
                       key: const ValueKey('feedback-entry-tile'),
                       leading: const Icon(Icons.feedback_outlined),
@@ -581,43 +567,84 @@ class _MorePageState extends State<MorePage> {
           );
           final settings = _buildSettingsSection(context);
           final account = _buildAccountSection(context);
+          // 智能助手目前只接演示账号的虚构数据，与后端 /agent/chat 的开放范围一致
+          final agent = widget.api.isDemo ? _buildAgentCard(context) : null;
+          final sections = wide
+              ? Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(child: navigation),
+                    const SizedBox(width: GzusSpacing.l),
+                    Expanded(
+                      flex: 2,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          settings,
+                          if (account != null) ...[
+                            const SizedBox(height: GzusSpacing.l),
+                            account,
+                          ],
+                        ],
+                      ),
+                    ),
+                  ],
+                )
+              : Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    navigation,
+                    const SizedBox(height: GzusSpacing.l),
+                    settings,
+                    if (account != null) ...[
+                      const SizedBox(height: GzusSpacing.l),
+                      account,
+                    ],
+                  ],
+                );
           return SingleChildScrollView(
             padding: const EdgeInsets.only(bottom: GzusSpacing.xl),
-            child: wide
-                ? Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(child: navigation),
-                      const SizedBox(width: GzusSpacing.l),
-                      Expanded(
-                        flex: 2,
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            settings,
-                            if (account != null) ...[
-                              const SizedBox(height: GzusSpacing.l),
-                              account,
-                            ],
-                          ],
-                        ),
-                      ),
-                    ],
-                  )
-                : Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      navigation,
-                      const SizedBox(height: GzusSpacing.l),
-                      settings,
-                      if (account != null) ...[
-                        const SizedBox(height: GzusSpacing.l),
-                        account,
-                      ],
-                    ],
-                  ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (agent != null) ...[
+                  agent,
+                  const SizedBox(height: GzusSpacing.l),
+                ],
+                sections,
+              ],
+            ),
           );
         },
+      ),
+    );
+  }
+
+  Widget _buildAgentCard(BuildContext context) {
+    return _sectionCard(
+      context: context,
+      title: '智能助手',
+      icon: Icons.auto_awesome_outlined,
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              '用一句话查课表、成绩、考勤、考试和通知，每条回答都能展开查看执行链路。',
+              style: GzusTextStyles.cardSubtitle(context),
+            ),
+          ),
+          const SizedBox(width: GzusSpacing.m),
+          FilledButton.icon(
+            key: const ValueKey('agent-chat-entry-card'),
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (context) => AgentChatPage(api: widget.api),
+              ),
+            ),
+            icon: const Icon(Icons.chat_bubble_outline),
+            label: const Text('开始对话'),
+          ),
+        ],
       ),
     );
   }
