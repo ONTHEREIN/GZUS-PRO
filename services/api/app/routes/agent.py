@@ -69,7 +69,10 @@ async def chat(payload: ChatRequest, session: AppSession = Depends(require_sessi
 
     conversation_id = payload.conversation_id or uuid.uuid4().hex[:12]
     turn = sum(1 for m in messages if m["role"] == "user")
-    _append_trace(out.model_dump(mode="json"), conversation_id, turn, now.strftime("%Y%m%d"))
+    record = out.model_dump(mode="json")
+    # 审计需要知道用户问了什么：完整对话（含历史）随 trace 落盘
+    record["meta"]["input"] = messages
+    _append_trace(record, conversation_id, turn, now.strftime("%Y%m%d"))
     return {
         "conversationId": conversation_id,
         "turn": turn,

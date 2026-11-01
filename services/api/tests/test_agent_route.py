@@ -63,6 +63,7 @@ def test_chat_answers_and_writes_agentlens_trace(monkeypatch, tmp_path):
     trace = json.loads(trace_file.read_text(encoding="utf-8"))
     assert trace["conversation_id"] == "c1" and trace["case_id"] == "c1#1"
     assert trace["adapter"] == "onegzus" and trace["schema_version"] == "0.2"
+    assert trace["meta"]["input"] == [{"role": "user", "content": "电费还剩多少"}]
 
 
 def test_chat_is_hidden_when_disabled(monkeypatch, tmp_path):
