@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../api_client.dart';
 import '../../app_logger.dart';
 import '../../gzus_design.dart';
+import '../../widgets/simple_markdown.dart';
 import '../../widgets/floating_page_scaffold.dart';
 
 const _suggestions = <String>[
@@ -251,7 +252,11 @@ class _MessageBubble extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  SelectableText(entry.text),
+                  // 助手回答多为 Markdown（表格、列表、加粗），渲染后显示；整段仍可选中复制
+                  if (isUser || entry.failed)
+                    SelectableText(entry.text)
+                  else
+                    SelectionArea(child: SimpleMarkdown(entry.text)),
                   if (entry.spans.isNotEmpty)
                     _TraceView(spans: entry.spans, latencyMs: entry.latencyMs),
                 ],
@@ -272,8 +277,9 @@ class _TraceView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final seconds =
-        latencyMs == null ? '' : ' · ${(latencyMs! / 1000).toStringAsFixed(1)}s';
+    final seconds = latencyMs == null
+        ? ''
+        : ' · ${(latencyMs! / 1000).toStringAsFixed(1)}s';
     return Theme(
       data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
       child: ExpansionTile(
@@ -343,7 +349,8 @@ class _SpanRow extends StatelessWidget {
           Icon(_icons[span['span']] ?? Icons.circle_outlined, size: 16),
           const SizedBox(width: 6),
           Expanded(
-            child: Text(_describe(), style: Theme.of(context).textTheme.bodySmall),
+            child:
+                Text(_describe(), style: Theme.of(context).textTheme.bodySmall),
           ),
           if (latency > 0)
             Text('${latency}ms', style: GzusTextStyles.cardSubtitle(context)),
