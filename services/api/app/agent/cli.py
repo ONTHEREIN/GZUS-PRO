@@ -3,8 +3,9 @@
     echo '{"messages":[{"role":"user","content":"我上学期成绩怎么样"}]}' \\
       | python -m app.agent.cli --mode replay --replay-file rec.json
 
-stdin：{"messages": [...], "today": "2026-09-21", "fixtures": {"extra_notices": [...]}}
-（today、fixtures 可省略；fixtures 是测试注入点，只作用于 FixtureSource）
+stdin：{"messages": [...], "today": "2026-09-21", "fixtures": {"extra_notices": [...], "faults": [...]}}
+（today、fixtures 可省略；fixtures 是测试注入点：extra_notices 追加通知，
+faults 经 FaultySource 让指定数据源报错或篡改返回，见 datasource.Fault）
 stdout：一行 AgentOutput JSON（与 AgentLens AgentOutput 同构）
 
 - record：调用真实 LLM（AGENT_LLM_API_KEY / AGENT_LLM_MODEL / AGENT_LLM_BASE_URL），
@@ -26,7 +27,7 @@ from datetime import date
 from pathlib import Path
 
 from app.agent.core import run_agent
-from app.agent.datasource import AgentContext, FixtureSource
+from app.agent.datasource import AgentContext, Fault, FaultySource, FixtureSource
 from app.agent.llm import OpenAIClient, RecordingClient, ReplayClient
 
 DEFAULT_TODAY = "2026-09-21"
@@ -65,9 +66,10 @@ def main(argv: list[str] | None = None) -> int:
             raise ValueError("messages 的最后一条必须是 user 消息")
         ctx = AgentContext(date.fromisoformat(payload.get("today", DEFAULT_TODAY)))
         fixtures = payload.get("fixtures") or {}
-        unknown = set(fixtures) - {"extra_notices"}
+        unknown = set(fixtures) - {"extra_notices", "faults"}
         if unknown:
             raise ValueError(f"不支持的 fixtures 字段：{sorted(unknown)}")
+        faults = [Fault.parse(f) for f in fixtures.get("faults") or []]
     except (ValueError, KeyError, TypeError) as exc:
         print(f"输入不合法：{exc}", file=sys.stderr)
         return 2
@@ -98,6 +100,8 @@ def main(argv: list[str] | None = None) -> int:
             llm = RecordingClient(llm)
 
     source = FixtureSource(ctx, extra_notices=fixtures.get("extra_notices"))
+    if faults:
+        source = FaultySource(source, faults)
     out = run_agent(messages, ctx=ctx, source=source, llm=llm)
     out.meta["mode"] = args.mode
 

@@ -14,7 +14,9 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import Any, Callable, Generic, Literal, Protocol, TypeVar
+from typing import Any, Callable, Generic, Literal, Protocol, TypeVar, get_args
+
+from pydantic import BaseModel
 
 from app.academic_period import SHANGHAI_TZ, academic_period_of, default_first_week_start
 from app.demo_data import DemoAcademicClient, DemoEhallClient, demo_ecard_summary
@@ -154,6 +156,75 @@ class FixtureSource:
             return sorted(hits, key=lambda h: h.score, reverse=True)
 
         return _timed(load)
+
+
+FAULT_SOURCES = ("schedule", "grades", "attendance", "exams", "card_balance", "notices")
+
+
+@dataclass(frozen=True)
+class Fault:
+    """一处注入：让某个数据源返回错误（error_kind 之一），或静默篡改返回的字段（patch）。
+
+    patch 用对外 JSON 字段名（如 powerBalance、score）；where 为空时作用于全部条目。
+    """
+
+    source: str
+    kind: str
+    set: dict[str, Any] = field(default_factory=dict)
+    where: dict[str, Any] = field(default_factory=dict)
+    latency_ms: float = 0.0
+
+    @classmethod
+    def parse(cls, raw: dict[str, Any]) -> "Fault":
+        fault = cls(**raw)
+        if fault.source not in FAULT_SOURCES:
+            raise ValueError(f"未知数据源：{fault.source}")
+        if fault.kind not in (*get_args(ErrorKind), "patch"):
+            raise ValueError(f"未知故障类型：{fault.kind}")
+        if fault.kind == "patch" and not fault.set:
+            raise ValueError("patch 故障需要 set")
+        return fault
+
+
+class FaultySource:
+    """故障注入：包在任意数据源外面，按 Fault 列表改写指定数据源的返回。
+
+    给 AgentLens 测「数据面出问题时 agent 怎么说」：接口报错时是否如实告知、
+    数据被篡改时答案是否仍忠实于观测（此时根因在 L5 数据源，而非 L4 解读）。
+    """
+
+    def __init__(self, inner: AgentDataSource, faults: list[Fault]) -> None:
+        self._inner = inner
+        self._faults = {f.source: f for f in faults}
+
+    def __getattr__(self, name: str) -> Any:
+        method = getattr(self._inner, name)
+        fault = self._faults.get(name)
+        if fault is None:
+            return method
+
+        def wrapped(*args: Any) -> DataResult[Any]:
+            result = method(*args)
+            latency = result.latency_ms + fault.latency_ms
+            if fault.kind != "patch":
+                return DataResult(ok=False, error_kind=fault.kind, latency_ms=latency)  # type: ignore[arg-type]
+            return DataResult(ok=result.ok, data=_patch(result.data, fault), latency_ms=latency)
+
+        return wrapped
+
+
+def _patch(data: Any, fault: Fault) -> Any:
+    if isinstance(data, list):
+        return [_patch(d, fault) for d in data]
+    if isinstance(data, NoticeHit):
+        return NoticeHit(item=_patch(data.item, fault), score=data.score, chunk_id=data.chunk_id)
+    if isinstance(data, AttendanceResponse):
+        return data.model_copy(update={"items": [_patch(i, fault) for i in data.items]})
+    if isinstance(data, BaseModel):
+        row = data.model_dump(by_alias=True)
+        if all(row.get(k) == v for k, v in fault.where.items()):
+            return type(data).model_validate({**row, **fault.set})
+    return data
 
 
 def _timed(load: Callable[[], Any]) -> DataResult[Any]:

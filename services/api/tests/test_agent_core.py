@@ -4,7 +4,7 @@ from datetime import date
 
 from app.agent import cli, policy
 from app.agent.core import run_agent
-from app.agent.datasource import AgentContext, FixtureSource
+from app.agent.datasource import AgentContext, Fault, FaultySource, FixtureSource, Period
 from app.agent.llm import REPLAY_FORMAT, ReplayClient
 
 TODAY = date(2026, 9, 21)  # 2026-2027 学年第 1 学期第 4 周
@@ -170,3 +170,39 @@ def test_extra_notices_are_searchable_and_change_input_sha():
 
     base = {"messages": [{"role": "user", "content": "奖学金"}]}
     assert cli.input_sha(base) != cli.input_sha({**base, "fixtures": {"extra_notices": extra}})
+
+
+def test_faulty_source_error_kind_reaches_observation():
+    ctx = AgentContext(TODAY)
+    source = FaultySource(FixtureSource(ctx), [Fault.parse({"source": "grades", "kind": "upstream_timeout"})])
+    out = run_agent(
+        [{"role": "user", "content": "上学期成绩"}], ctx=ctx, source=source,
+        llm=_scripted(
+            _reply(calls=[("get_grades", {"year": "2025", "term": "2"})]),
+            _reply(content="成绩系统超时了。"),
+        ),
+    )
+    obs = out.spans[1]
+    assert not obs.ok and obs.error == "upstream_timeout"
+    # 未注入的数据源不受影响
+    assert source.card_balance().ok
+
+
+def test_faulty_source_patch_rewrites_only_matching_rows():
+    ctx = AgentContext(TODAY)
+    clean = FixtureSource(ctx).grades(Period(2025, 2)).data
+    target = clean[0].course_name
+    fault = Fault.parse({"source": "grades", "kind": "patch", "set": {"score": "12"},
+                         "where": {"courseName": target}})
+    patched = FaultySource(FixtureSource(ctx), [fault]).grades(Period(2025, 2)).data
+    assert patched[0].score == "12"
+    assert [g.score for g in patched[1:]] == [g.score for g in clean[1:]]
+
+
+def test_fault_spec_is_validated():
+    import pytest
+
+    for bad in ({"source": "dorm", "kind": "empty"}, {"source": "grades", "kind": "boom"},
+                {"source": "grades", "kind": "patch"}):
+        with pytest.raises(ValueError):
+            Fault.parse(bad)
