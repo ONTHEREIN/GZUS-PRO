@@ -1,9 +1,10 @@
 """智能体对话端点：agent core 的 HTTP 薄封装。
 
-- 默认关闭（AGENT_ENABLED=false 时 404），只在本地演示时打开；
-- 只对演示账号会话开放：数据源是演示账号的虚构数据，给真实学生用会答非所问；
-- 每轮对话的 trace 追加写入 data/traces/<YYYYMMDD>.jsonl，字段对齐 AgentLens Trace，
-  可直接用 AgentLens 回看。
+- 默认关闭（AGENT_ENABLED=false 时 404），只在本地运行时打开；
+- 演示账号查虚构数据（FixtureSource），真实账号用本人会话只读查询学校数据（SchoolSource）；
+- 每轮对话的 trace 追加写入 data/traces/<YYYYMMDD>.jsonl（data/ 不进仓库），字段对齐
+  AgentLens Trace，可直接用 AgentLens 回看。真实账号的 trace 含本人真实数据，
+  meta.account 记为 "real"，只留本地，不得提交或外传。
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ from starlette.concurrency import run_in_threadpool
 from app.academic_period import now_shanghai
 from app.agent.cli import load_env_file
 from app.agent.core import run_agent
-from app.agent.datasource import AgentContext, FixtureSource
+from app.agent.datasource import AgentContext, AgentDataSource, FixtureSource, SchoolSource
 from app.agent.llm import LLMClient, OpenAIClient
 from app.agent.spans import SCHEMA_VERSION
 from app.config import get_settings
@@ -49,12 +50,18 @@ def make_llm() -> LLMClient:
     return OpenAIClient()
 
 
+def make_source(ctx: AgentContext, session: AppSession) -> AgentDataSource:
+    if session.is_demo:
+        return FixtureSource(ctx)
+    return SchoolSource(ctx, session.client, session.ehall_client, session.student_account or "")
+
+
 @router.post("/chat")
 async def chat(payload: ChatRequest, session: AppSession = Depends(require_session)) -> dict[str, Any]:
     if not get_settings().agent_enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
-    if not session.is_demo:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="智能体当前仅对演示账号开放")
+    if not session.is_demo and session.client is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="会话已过期，请重新登录")
     if payload.messages[-1].role != "user":
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="最后一条消息必须来自用户")
 
@@ -65,13 +72,14 @@ async def chat(payload: ChatRequest, session: AppSession = Depends(require_sessi
         llm = make_llm()
     except KeyError:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="智能体未配置模型")
-    out = await run_in_threadpool(run_agent, messages, ctx=ctx, source=FixtureSource(ctx), llm=llm)
+    out = await run_in_threadpool(run_agent, messages, ctx=ctx, source=make_source(ctx, session), llm=llm)
 
     conversation_id = payload.conversation_id or uuid.uuid4().hex[:12]
     turn = sum(1 for m in messages if m["role"] == "user")
     record = out.model_dump(mode="json")
     # 审计需要知道用户问了什么：完整对话（含历史）随 trace 落盘
     record["meta"]["input"] = messages
+    record["meta"]["account"] = "demo" if session.is_demo else "real"
     _append_trace(record, conversation_id, turn, now.strftime("%Y%m%d"))
     return {
         "conversationId": conversation_id,

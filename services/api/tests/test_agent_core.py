@@ -215,3 +215,65 @@ def test_fault_spec_is_validated():
                 {"source": "grades", "kind": "patch"}, {"source": "grades", "kind": "slow"}):
         with pytest.raises(ValueError):
             Fault.parse(bad)
+
+
+class _FakeSchoolClient:
+    """真实教务客户端的替身：按 year/term 记录调用，可指定抛出的异常。"""
+
+    def __init__(self, raises=None):
+        self.raises = raises
+        self.calls = []
+
+    def _maybe_raise(self):
+        if self.raises is not None:
+            raise self.raises
+
+    def get_grades(self, year, term):
+        self.calls.append(("grades", year, term))
+        self._maybe_raise()
+        return [{"courseName": "数据结构", "score": "88", "credit": "4", "term": f"{year}-{int(year) + 1}-{term}"}]
+
+    def get_schedule(self, year, term):
+        self.calls.append(("schedule", year, term))
+        self._maybe_raise()
+        return [
+            {"name": "操作系统", "weekday": 1, "startSection": 1, "endSection": 2, "weeks": "1-8"},
+            {"name": "编译原理", "weekday": 2, "startSection": 3, "endSection": 4, "weeks": "9-16"},
+        ]
+
+    def get_notices(self):
+        self._maybe_raise()
+        return [{"category": "教务通知", "title": "期末考试安排", "date": "2026-09-12", "url": "https://x/exam"}]
+
+
+def test_school_source_queries_session_client_by_period():
+    from app.agent.datasource import SchoolSource
+
+    ctx = AgentContext(TODAY)
+    client = _FakeSchoolClient()
+    source = SchoolSource(ctx, client, None, "S001")
+    grades = source.grades(Period(2025, 2))
+    assert grades.ok and [g.course_name for g in grades.data] == ["数据结构"]
+    schedule = source.schedule(None)  # 第 4 周：只剩 1-8 周的课
+    assert [c.name for c in schedule.data] == ["操作系统"]
+    assert client.calls == [("grades", "2025", "2"), ("schedule", "2026", "1")]
+    hits = source.notices("考试安排").data
+    assert hits and hits[0].chunk_id == "https://x/exam"
+
+
+def test_school_source_maps_upstream_failures_to_error_kinds():
+    import httpx
+
+    from app.agent.datasource import SchoolSource
+    from app.school_client import AuthenticationError
+
+    ctx = AgentContext(TODAY)
+    cases = {
+        AuthenticationError("expired"): "auth_expired",
+        httpx.ReadTimeout("slow"): "upstream_timeout",
+        NotImplementedError(): "not_implemented",
+        RuntimeError("boom"): "upstream_error",
+    }
+    for exc, kind in cases.items():
+        result = SchoolSource(ctx, _FakeSchoolClient(raises=exc), None, "S001").grades(Period(2025, 2))
+        assert not result.ok and result.error_kind == kind and result.data is None

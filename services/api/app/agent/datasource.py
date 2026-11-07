@@ -2,7 +2,7 @@
 
 `AgentDataSource` 是 agent 能看到的全部数据面。三态实现：
 - `FixtureSource`：本文件，包 `app.demo_data` 的虚构演示数据，确定性、零网络；
-- `SchoolSource`：生产态，包真实学校客户端（未实现，阶段一不接真实系统）；
+- `SchoolSource`：本文件，包当前登录会话的真实学校客户端，只读查询本人数据；
 - `FaultySource`：故障注入，包任意 source（M3）。
 
 返回值统一为 `DataResult`，`error_kind` 是有限枚举：归因要按错误类型区分，
@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass, field
 from datetime import date, datetime
@@ -31,7 +32,7 @@ from app.schemas import (
 )
 
 ErrorKind = Literal[
-    "auth_expired", "upstream_timeout", "empty", "not_implemented", "schema_mismatch",
+    "auth_expired", "upstream_timeout", "upstream_error", "empty", "not_implemented", "schema_mismatch",
 ]
 
 T = TypeVar("T")
@@ -158,6 +159,67 @@ class FixtureSource:
         return _timed(load)
 
 
+class SchoolSource:
+    """真实学校数据：用当前登录会话的教务 / 办事大厅客户端只读查询本人数据。
+
+    与 FixtureSource 同一接口。学期过滤交给学校接口本身（按 year/term 查询），
+    上游异常按 ErrorKind 归类成 DataResult 返回，不往上抛：agent 要能如实告诉用户「查不到」。
+    一卡通只读已绑定宿舍的缓存摘要，不请求一卡通上游，与 GET /ecard/summary 一致。
+    """
+
+    def __init__(self, ctx: AgentContext, academic: Any, ehall: Any | None, student_id: str) -> None:
+        self.ctx = ctx
+        self._academic = academic
+        self._ehall = ehall
+        self._student_id = student_id
+
+    def schedule(self, week: int | None) -> DataResult[list[ScheduleCourse]]:
+        def load() -> list[ScheduleCourse]:
+            target = week or self.ctx.week
+            cur = self.ctx.current
+            rows = self._academic.get_schedule(str(cur.year), str(cur.term))
+            return [ScheduleCourse(**r) for r in rows if _in_weeks(target, str(r.get("weeks")))]
+
+        return _guarded(load)
+
+    def grades(self, period: Period) -> DataResult[list[GradeItem]]:
+        return _guarded(lambda: [
+            GradeItem(**r) for r in self._academic.get_grades(str(period.year), str(period.term))
+        ])
+
+    def attendance(self, period: Period) -> DataResult[AttendanceResponse]:
+        return _guarded(lambda: AttendanceResponse(
+            status="ok", items=self._academic.get_attendance(str(period.year), str(period.term)),
+        ))
+
+    def exams(self, period: Period) -> DataResult[list[ExamItem]]:
+        return _guarded(lambda: [
+            ExamItem(**r) for r in self._academic.get_exams(str(period.year), str(period.term))
+        ])
+
+    def card_balance(self) -> DataResult[EcardSummary]:
+        from app.routes.ecard import summary_for_student
+
+        return _guarded(lambda: EcardSummary(**summary_for_student(self._student_id)))
+
+    def notices(self, keyword: str) -> DataResult[list[NoticeHit]]:
+        def load() -> list[NoticeHit]:
+            from app.notice_utils import merge_notices, valid_notice_items
+
+            rows = self._academic.get_notices()
+            if self._ehall is not None:
+                rows = merge_notices(rows, self._ehall.get_notice_items())
+            hits = []
+            for idx, row in enumerate(valid_notice_items(rows)):
+                item = NoticeItem(**row)
+                score = _overlap(keyword, f"{item.title} {item.summary or ''}")
+                if score > 0:
+                    hits.append(NoticeHit(item=item, score=score, chunk_id=item.url or f"n{idx}"))
+            return sorted(hits, key=lambda h: h.score, reverse=True)
+
+        return _guarded(load)
+
+
 FAULT_SOURCES = ("schedule", "grades", "attendance", "exams", "card_balance", "notices")
 
 
@@ -236,6 +298,31 @@ def _timed(load: Callable[[], Any]) -> DataResult[Any]:
     start = time.perf_counter()
     data = load()
     return DataResult(ok=True, data=data, latency_ms=(time.perf_counter() - start) * 1000)
+
+
+def _guarded(load: Callable[[], Any]) -> DataResult[Any]:
+    """真实上游的异常归类；归不了类的记为 upstream_error，细节进日志，不进回答。"""
+    import httpx
+    from pydantic import ValidationError
+
+    from app.ehall_client import EhallAuthenticationError
+    from app.school_client import AuthenticationError
+
+    start = time.perf_counter()
+    try:
+        return _timed(load)
+    except (AuthenticationError, EhallAuthenticationError):
+        kind: ErrorKind = "auth_expired"
+    except (httpx.TimeoutException, TimeoutError):
+        kind = "upstream_timeout"
+    except NotImplementedError:
+        kind = "not_implemented"
+    except ValidationError:
+        kind = "schema_mismatch"
+    except Exception:
+        logging.getLogger(__name__).exception("agent school source failed")
+        kind = "upstream_error"
+    return DataResult(ok=False, error_kind=kind, latency_ms=(time.perf_counter() - start) * 1000)
 
 
 def _in_weeks(week: int, spec: str) -> bool:
