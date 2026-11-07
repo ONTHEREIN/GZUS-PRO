@@ -163,7 +163,8 @@ FAULT_SOURCES = ("schedule", "grades", "attendance", "exams", "card_balance", "n
 
 @dataclass(frozen=True)
 class Fault:
-    """一处注入：让某个数据源返回错误（error_kind 之一），或静默篡改返回的字段（patch）。
+    """一处注入：让某个数据源返回错误（error_kind 之一）、静默篡改返回的字段（patch），
+    或照常返回但变慢（slow，只叠加 latency_ms，不真的 sleep）。
 
     patch 用对外 JSON 字段名（如 powerBalance、score）；where 为空时作用于全部条目。
     """
@@ -179,10 +180,12 @@ class Fault:
         fault = cls(**raw)
         if fault.source not in FAULT_SOURCES:
             raise ValueError(f"未知数据源：{fault.source}")
-        if fault.kind not in (*get_args(ErrorKind), "patch"):
+        if fault.kind not in (*get_args(ErrorKind), "patch", "slow"):
             raise ValueError(f"未知故障类型：{fault.kind}")
         if fault.kind == "patch" and not fault.set:
             raise ValueError("patch 故障需要 set")
+        if fault.kind == "slow" and fault.latency_ms <= 0:
+            raise ValueError("slow 故障需要 latency_ms > 0")
         return fault
 
 
@@ -206,6 +209,8 @@ class FaultySource:
         def wrapped(*args: Any) -> DataResult[Any]:
             result = method(*args)
             latency = result.latency_ms + fault.latency_ms
+            if fault.kind == "slow":
+                return DataResult(ok=result.ok, data=result.data, error_kind=result.error_kind, latency_ms=latency)
             if fault.kind != "patch":
                 return DataResult(ok=False, error_kind=fault.kind, latency_ms=latency)  # type: ignore[arg-type]
             return DataResult(ok=result.ok, data=_patch(result.data, fault), latency_ms=latency)

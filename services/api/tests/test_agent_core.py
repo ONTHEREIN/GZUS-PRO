@@ -199,10 +199,19 @@ def test_faulty_source_patch_rewrites_only_matching_rows():
     assert [g.score for g in patched[1:]] == [g.score for g in clean[1:]]
 
 
+def test_faulty_source_slow_keeps_data_and_adds_latency():
+    ctx = AgentContext(TODAY)
+    clean = FixtureSource(ctx).grades(Period(2025, 2))
+    fault = Fault.parse({"source": "grades", "kind": "slow", "latency_ms": 9000})
+    slow = FaultySource(FixtureSource(ctx), [fault]).grades(Period(2025, 2))
+    assert slow.ok and slow.data == clean.data
+    assert slow.latency_ms >= 9000
+
+
 def test_fault_spec_is_validated():
     import pytest
 
     for bad in ({"source": "dorm", "kind": "empty"}, {"source": "grades", "kind": "boom"},
-                {"source": "grades", "kind": "patch"}):
+                {"source": "grades", "kind": "patch"}, {"source": "grades", "kind": "slow"}):
         with pytest.raises(ValueError):
             Fault.parse(bad)
