@@ -169,7 +169,6 @@
         return;
       }
       const hint = {
-        403: "（智能体只对演示账号开放）",
         404: "（后端没有开启智能体：启动时需设置 AGENT_ENABLED=true）",
         503: "（后端未配置模型：检查 services/api/.env.agent）",
       }[error.status] || "";
